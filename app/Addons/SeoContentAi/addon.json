@@ -1,0 +1,8 @@
+{
+    "name": "SEO Content AI",
+    "slug": "seo-content-ai",
+    "version": "1.0.0",
+    "description": "Tự động tạo bài viết chuẩn SEO bằng công nghệ GPT-4o.",
+    "icon": "heroicon-o-sparkles",
+    "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider"
+}
