@@ -24,7 +24,17 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin' => \App\Http\Middleware\AdminMiddleware::class, // Thay bằng class middleware của bạn
         ]);
 
-        //
+        $middleware->validateCsrfTokens(except: [
+            // Tạm thời để trống hoặc thêm các route nếu cần
+        ]);
+
+        $middleware->statefulApi(); // Đảm bảo session được giữ cho các request API/Livewire
+    
+    })
+    ->withMiddleware(function (Middleware $middleware) {
+        $middleware->validateCsrfTokens(except: [
+            'admin/wp-headless/connect/*', // Cho phép các route này bỏ qua CSRF
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //

@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\CustomLogin;
 use App\Filament\Pages\ManageServices;
+use App\Models\Service;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -13,18 +14,19 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Widgets;
+use File;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
-// use App\Addons\SeoContentAi\Filament\Pages\SeoDashboard;
+use Schema;
 class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
     {
-        return $panel
+        $panel
             ->default()
             ->id('admin')
             ->path('admin')
@@ -60,5 +62,61 @@ class AdminPanelProvider extends PanelProvider
             ->authMiddleware([
                 Authenticate::class,
             ]);
+
+        return $this->discover_addons($panel);
+    }
+
+    // 2. LOGIC TỰ ĐỘNG KHÁM PHÁ ADDONS (DYNAMIC DISCOVERY)
+    private function discover_addons(Panel $panel)
+    {
+        // 2. LOGIC TỰ ĐỘNG KHÁM PHÁ ADDONS (DYNAMIC DISCOVERY)
+        try {
+            // Chỉ quét nếu bảng services đã tồn tại (tránh lỗi khi migrate)
+            if (Schema::hasTable('services')) {
+                // Chỉ lấy những Addon đang ở trạng thái kích hoạt (Active)
+                $activeServices = Service::where('is_active', true)->get();
+
+                foreach ($activeServices as $service) {
+                    // Chuyển slug thành tên thư mục PascalCase (ví dụ: wp-headless -> WpHeadless)
+                    $folderName = str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $service->slug)));
+                    $addonPath = app_path("Addons/{$folderName}");
+                    if (File::isDirectory($addonPath)) {
+
+                        /**
+                         * TỰ ĐỘNG NẠP VIEW:
+                         * Lệnh này thay thế cho việc khai báo thủ công ở từng Provider.
+                         * Namespace sẽ là chính slug của service (vd: @wp-headless).
+                         */
+                        $viewsPath = "{$addonPath}/resources/views";
+                        if (File::isDirectory($viewsPath)) {
+                            $this->loadViewsFrom($viewsPath, $service->slug);
+                        }
+
+                        // Tự động quét và nạp các Pages của Addon
+                        $pagesPath = "{$addonPath}/Filament/Pages";
+                        if (File::isDirectory($pagesPath)) {
+                            $panel->discoverPages(
+                                in: $pagesPath,
+                                for: "App\\Addons\\{$folderName}\\Filament\\Pages"
+                            );
+                        }
+
+                        // Tự động quét và nạp các Resources của Addon
+                        $resourcesPath = "{$addonPath}/Filament/Resources";
+                        if (File::isDirectory($resourcesPath)) {
+                            $panel->discoverResources(
+                                in: $resourcesPath,
+                                for: "App\\Addons\\{$folderName}\\Filament\\Resources"
+                            );
+                        }
+                    }
+                }
+            }
+        } catch (\Exception $e) {
+            // Ghi log lỗi nếu cần thiết nhưng không làm sập Panel
+            report($e);
+        }
+        return $panel;
     }
 }
+

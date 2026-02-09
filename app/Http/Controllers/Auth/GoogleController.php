@@ -5,7 +5,6 @@ use App\Http\Controllers\Controller;
 use Laravel\Socialite\Facades\Socialite;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
-use Exception;
 
 class GoogleController extends Controller
 {
@@ -17,29 +16,32 @@ class GoogleController extends Controller
     public function handleGoogleCallback()
     {
         try {
-            $user = Socialite::driver('google')->stateless()->user();
-            $finduser = User::where('google_id', $user->id)->orWhere('email', $user->email)->first();
+            // Thêm setHttpClient để tắt verify SSL
+            $client = new \GuzzleHttp\Client(['verify' => false]);
 
-            if ($finduser) {
-                if (!$finduser->google_id) {
-                    $finduser->update(['google_id' => $user->id, 'avatar' => $user->avatar]);
-                }
-                Auth::login($finduser);
-            } else {
-                $newUser = User::create([
-                    'name' => $user->name ?? $user->email,
-                    'email' => $user->email,
-                    'google_id' => $user->id,
-                    'avatar' => $user->avatar,
-                    'password' => encrypt('my-google-auth-pass'), // Mật khẩu giả
-                    'role' => 'owner' // Mặc định là chủ tài khoản
-                ]);
-                Auth::login($newUser);
-            }
+            $gUser = Socialite::driver('google')
+                ->setHttpClient($client) // Ép dùng client không check SSL
+                ->stateless()
+                ->user();
+
+            $user = User::updateOrCreate(['email' => $gUser->email], [
+                'name' => $gUser->name,
+                'google_id' => $gUser->id,
+                'avatar' => $gUser->avatar,
+                // Tránh ghi đè password nếu user đã tồn tại
+                'password' => \App\Models\User::where('email', $gUser->email)->exists()
+                    ? \App\Models\User::where('email', $gUser->email)->first()->password
+                    : bcrypt(str()->random(16)),
+            ]);
+
+            Auth::login($user, true);
             request()->session()->regenerate();
+
             return redirect()->intended('/admin');
-        } catch (Exception $e) {
-            return redirect('admin/login')->with('error', 'Có lỗi xảy ra khi đăng nhập bằng Google');
+        } catch (\Exception $e) {
+            // Log lỗi để debug nếu cần
+            \Illuminate\Support\Facades\Log::error('Google Login Error: ' . $e->getMessage());
+            return redirect('/admin/login');
         }
     }
 }
