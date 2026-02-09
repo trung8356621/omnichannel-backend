@@ -23,4 +23,12 @@ class WpHeadlessDashboard extends Page
     {
         return 'Quản lý WP Headless Build';
     }
+    /**
+     * PHÂN QUYỀN HIỂN THỊ MENU (SIDEBAR):
+     * Mặc định ẩn hết với mọi người, trừ Admin.
+     */
+    public static function shouldRegisterNavigation(): bool
+    {
+        return auth()->user()?->role === 'admin';
+    }
 }

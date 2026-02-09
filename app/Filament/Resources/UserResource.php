@@ -9,6 +9,8 @@ use Filament\Forms\Form;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Database\Eloquent\Builder;
 
 class UserResource extends Resource
 {
@@ -137,6 +139,20 @@ class UserResource extends Resource
         return [
             //
         ];
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        // Nếu không phải admin, chỉ xem được Site của chính mình
+        $query = parent::getEloquentQuery();
+
+        if (auth()->user()->role !== 'admin') {
+            return $query->where('id', auth()->id())->orWhere('parent_id', auth()->id());
+        }
+
+        return $query->withoutGlobalScopes([
+            SoftDeletingScope::class,
+        ]);
     }
 
     public static function getPages(): array

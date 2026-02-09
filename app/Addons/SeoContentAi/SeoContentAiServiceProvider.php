@@ -1,6 +1,7 @@
 <?php
 namespace App\Addons\SeoContentAi;
 
+use App\Models\Service;
 use Filament\Navigation\NavigationItem;
 use Filament\Panel;
 use Illuminate\Support\ServiceProvider;
@@ -18,17 +19,27 @@ class SeoContentAiServiceProvider extends ServiceProvider
     public function boot(): void
     {
         // Đăng ký views cho addon
-        // Tự động thêm trang của Addon vào Filament Panel nếu addon đang active
+        $this->loadViewsFrom(__DIR__ . '/resources/views', 'seo-content-ai');
 
+        // 2. Chỉ đăng ký vào giao diện nếu Addon đang Active trong DB
         Filament::serving(function () {
-            $panel = Filament::getCurrentPanel();
-            if ($panel && $panel->getId() === 'admin') {
-                $panel->pages([
-                    SeoDashboard::class,
-                ]);
+            $service = Service::where('slug', 'seo-content-ai')->first();
+
+            if ($service && $service->is_active) {
+                $panel = Filament::getCurrentPanel();
+
+                // Tự động quét và nạp các thành phần cục bộ của Addon
+                $panel->discoverPages(
+                    in: __DIR__ . '/Filament/Pages',
+                    for: 'App\\Addons\\SeoContentAi\\Filament\\Pages'
+                )->discoverResources(
+                        in: __DIR__ . '/Filament/Resources',
+                        for: 'App\\Addons\\SeoContentAi\\Filament\\Resources'
+                    );
             }
         });
-        $this->loadViewsFrom(__DIR__ . '/resources/views', 'seo-content-ai');
+
+
         $this->registerRoutes();
     }
 

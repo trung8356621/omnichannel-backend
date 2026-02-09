@@ -6,5 +6,11 @@
     "Wallet balance": "Số dư ví",
     "Managed by": "Quản lý bởi",
     "created_at": "Ngày tạo",
-    "Filter by rule": "Lọc theo vai trò"
+    "Filter by rule": "Lọc theo vai trò",
+    "Owner":"Người dùng",
+    "Domain":"Tên miền",
+    "Admin url (use for headless)":"Tên miền quản lý (dùng trong headless)",
+    "User":"Người dùng",
+    "Sites":"Tên miền",
+    "Activated Services":"Dịch vụ"
 }

@@ -16,7 +16,7 @@ return new class extends Migration {
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->foreignId('subscription_id')->nullable()->constrained()->onDelete('set null');
             $table->string('domain')->unique()->index();
-            $table->string('url');
+            $table->string('url')->nullable();
             $table->enum('status', ['active', 'inactive', 'maintenance'])->default('active');
             $table->softDeletes();
             $table->timestamps();

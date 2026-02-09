@@ -31,4 +31,15 @@ class ManageServices extends Page
         $this->services = Service::all()->toArray();
         Notification::make()->title('Cập nhật trạng thái thành công')->success()->send();
     }
+
+    public static function shouldRegisterNavigation(): bool
+    {
+        return auth()->user()?->role === 'admin';
+    }
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->role === 'admin';
+    }
+
 }

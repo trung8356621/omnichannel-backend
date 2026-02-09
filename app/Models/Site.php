@@ -20,6 +20,11 @@ class Site extends Model
         return $this->hasMany(TaskJob::class);
     }
 
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
+
     // Helper để lấy nhanh một giá trị meta
     public function getMeta($key, $default = null)
     {

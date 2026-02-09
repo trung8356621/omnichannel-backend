@@ -49,4 +49,5 @@ class WpHeadlessServiceProvider extends ServiceProvider
                 ->group(__DIR__ . '/routes/web.php');
         }
     }
+
 }
