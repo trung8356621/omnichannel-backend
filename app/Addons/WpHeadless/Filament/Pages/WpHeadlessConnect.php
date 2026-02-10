@@ -25,7 +25,6 @@ class WpHeadlessConnect extends Page
      */
     public function mount(): void
     {
-
         // 1. Kiểm tra xác thực (Dành cho trường hợp SameSite Cookie bị chặn)
         if (!Auth::check()) {
             // Nếu người dùng bị văng ra login dù đã đăng nhập,
@@ -39,8 +38,7 @@ class WpHeadlessConnect extends Page
             return;
         }
 
-        $user = Auth::user();
-        dd($user);
+
 
         // // 1. Lấy thông tin từ URL (WordPress gửi sang)
         // $siteUrl = request()->query('site_url');
