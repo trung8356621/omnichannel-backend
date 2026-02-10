@@ -7,6 +7,7 @@ use App\Models\Service;
 use App\Models\SiteService;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Auth;
+use Str;
 
 class WpHeadlessConnect extends Page
 {
@@ -29,63 +30,69 @@ class WpHeadlessConnect extends Page
         if (!Auth::check()) {
             // Nếu người dùng bị văng ra login dù đã đăng nhập,
             // Laravel sẽ lưu URL hiện tại (kèm query string) vào 'intended'
-            Notification::make()
-                ->title('Yêu cầu xác thực')
-                ->body('Vui lòng đăng nhập để hoàn tất kết nối WordPress.')
-                ->warning()
-                ->send();
+            $this->redirect('admin/login?return_url=' . urlencode(request()->fullUrl()));
+            return;
+        }
+        $admin_email = request()->query('admin_email');
+        $siteUrl = request()->query('site_url');
+        $returnUrl = request()->query('return_url');
+        $user = Auth::user();
+        //1.Check user
+        if ($user->email != $admin_email) {
+            Auth::logout(); // Clears the authentication information in the user's session
+            $this->redirect('admin/login?email=' . $admin_email);
+            return;
+        }
+        //#1.Check user
 
+
+        //2.Site url
+
+        if (!$siteUrl) {
+            Notification::make()->title('Thiếu dữ liệu')->danger()->send();
+            $this->redirect('/admin');
             return;
         }
 
+        // 3. Logic xử lý kết nối
+        $domain = parse_url($siteUrl, PHP_URL_HOST);
 
+        $site = Site::updateOrCreate(
+            ['domain' => $domain],
+            [
+                'user_id' => $user->id,
+                'status' => 'active',
+                'ssl' => str_starts_with($siteUrl, 'https'),
+            ]
+        );
+        //#2.Site url
 
-        // // 1. Lấy thông tin từ URL (WordPress gửi sang)
-        // $siteUrl = request()->query('site_url');
-        // $siteName = request()->query('name');
-        // $appToken = request()->query('token');
+        $migration_token = Str::random(32);
+        $read_token = Str::random(32);
 
-        // if (!$siteUrl) {
-        //     Notification::make()->title('Dữ liệu không hợp lệ')->danger()->send();
-        //     $this->redirect('/admin/sites');
-        //     return;
-        // }
+        $service = Service::where('slug', 'wp-headless')->first();
+        if ($service) {
+            SiteService::updateOrCreate(
+                ['site_id' => $site->id, 'service_id' => $service->id],
+                [
+                    'status' => 'inactive',
+                    'settings' => [
+                        'MIGRATION_TOKEN' => $migration_token,
+                        'READ_TOKEN' => $read_token,
+                        'connected_at' => now()->toDateTimeString(),
 
-        // // 2. Xử lý logic tạo Site & Kích hoạt Service
-        // $domain = parse_url($siteUrl, PHP_URL_HOST);
+                    ]
+                ]
+            );
+        }
 
-        // $site = Site::updateOrCreate(
-        //     ['domain' => $domain],
-        //     [
-        //         'user_id' => $user->id,
-        //         'url' => $siteUrl,
-        //         'status' => 'active',
-        //         'ssl' => str_starts_with($siteUrl, 'https'),
-        //     ]
-        // );
+        Notification::make()
+            ->title('Kết nối thành công')
+            ->success()
+            ->send();
 
-        // $service = Service::where('slug', 'wp-headless')->first();
-        // if ($service) {
-        //     SiteService::updateOrCreate(
-        //         ['site_id' => $site->id, 'service_id' => $service->id],
-        //         [
-        //             'status' => 'active',
-        //             'settings' => [
-        //                 'wp_token' => $appToken,
-        //                 'wp_admin_name' => $siteName,
-        //                 'connected_at' => now()->toDateTimeString(),
-        //             ]
-        //         ]
-        //     );
-        // }
+        // Chuyển về trang danh sách site
+        $this->redirect($returnUrl . '?read_token=' . $read_token . '&write_token=' . $migration_token);
 
-        // Notification::make()
-        //     ->title('Kết nối thành công!')
-        //     ->body("Website {$domain} đã được đồng bộ.")
-        //     ->success()
-        //     ->send();
-
-        // // 3. Chuyển hướng về trang Dashboard của Addon
-        // $this->redirect(WpHeadlessDashboard::getUrl(['site_id' => $site->id]));
     }
 }
