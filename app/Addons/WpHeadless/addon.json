@@ -1,8 +1,9 @@
 {
-    "name": "WP Headless Build",
-    "slug": "wp-headless",
-    "version": "1.0.5",
-    "description": "Quản lý kết nối WordPress Headless và đồng bộ dữ liệu tự động.",
-    "icon": "heroicon-o-cloud-arrow-up",
-    "provider": "App\\Addons\\WpHeadless\\WpHeadlessServiceProvider"
+  "name": "WP Headless Build",
+  "slug": "wp-headless",
+  "version": "1.0.5",
+  "description": "Quản lý kết nối WordPress Headless và đồng bộ dữ liệu tự động.",
+  "icon": "heroicon-o-cloud-arrow-up",
+  "provider": "App\\Addons\\WpHeadless\\WpHeadlessServiceProvider",
+  "database": "omi_wp_headless"
 }

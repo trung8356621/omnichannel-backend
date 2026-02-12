@@ -67,8 +67,8 @@ class WpHeadlessConnect extends Page
         );
         //#2.Site url
 
-        $migration_token = Str::random(32);
-        $read_token = Str::random(32);
+        $migration_token = 'mig_' . Str::random(32);
+        $read_token = 'mig_' . Str::random(32);
 
         $service = Service::where('slug', 'wp-headless')->first();
         if ($service) {
@@ -92,7 +92,7 @@ class WpHeadlessConnect extends Page
             ->send();
 
         // Chuyển về trang danh sách site
-        $this->redirect($returnUrl . '?read_token=' . $read_token . '&write_token=' . $migration_token);
+        $this->redirect($returnUrl . '&read_token=' . $read_token . '&write_token=' . $migration_token);
 
     }
 }

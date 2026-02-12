@@ -1,6 +1,8 @@
 <?php
+
 namespace App\Addons\WpHeadless;
 
+use App\Addons\RegistersAddonDatabase;
 use App\Addons\WpHeadless\Console\SyncWpSiteDataCommand;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessConnect;
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
@@ -9,6 +11,11 @@ use Route;
 
 class WpHeadlessServiceProvider extends ServiceProvider
 {
+    use RegistersAddonDatabase;
+
+    /** Tên connection (trùng với addon slug, dùng trong Models/Migrations). */
+    public const DB_CONNECTION = 'wp_headless';
+
     public function register(): void
     {
     }
@@ -16,7 +23,9 @@ class WpHeadlessServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->registerRoutes();
+        $this->registerApiRoutes();
         $this->registerCommands();
+        $this->registerAddonDatabase(__DIR__, self::DB_CONNECTION, __DIR__ . '/database/migrations');
     }
 
     private function registerCommands(): void
@@ -30,22 +39,17 @@ class WpHeadlessServiceProvider extends ServiceProvider
 
     protected function registerRoutes(): void
     {
-        /**
-         * QUAN TRỌNG:
-         * Chúng ta phải dùng middleware 'web' để Laravel khởi tạo Session,
-         * và dùng WpHeadlessCors để cho phép WordPress truy cập.
-         */
-        Route::middleware([
-            'web',
-            WpHeadlessCors::class
-        ])
+        Route::middleware(['web', WpHeadlessCors::class])
             ->group(function () {
-                // Route xử lý kết nối: /admin/wp-headless/connect
-                // Route này sẽ được dùng trong WordPress Plugin của bạn
                 Route::get('/admin/wp-headless/connect', WpHeadlessConnect::class)
                     ->name('wp-headless.wp-connect');
             });
     }
 
-
+    protected function registerApiRoutes(): void
+    {
+        Route::middleware('api')
+            ->prefix('api')
+            ->group(__DIR__ . '/routes/api.php');
+    }
 }

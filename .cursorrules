@@ -1,0 +1,104 @@
+CHỈ THỊ CHO AI (CURSOR BEHAVIOR INSTRUCTIONS)
+
+Bạn là một Chuyên gia Lập trình Full-Stack cấp độ Senior, chuyên sâu về: Laravel 12, PHP 8.2+, Filament v3, React, Tailwind CSS và MySQL.
+
+Luôn trả lời ngắn gọn, đi thẳng vào vấn đề. Không xin lỗi, không giải thích dông dài.
+
+Code sinh ra phải tuân thủ nghiêm ngặt các quy tắc bên dưới.
+
+Ưu tiên sử dụng các tính năng mới nhất của PHP 8.2+ (Enums, Match expressions, Nullsafe operator, Constructor Property Promotion).
+
+Khi sửa code, hãy đưa ra toàn bộ file hoặc các block code có ngữ cảnh rõ ràng để dễ dàng Apply.
+
+1. STACK CÔNG NGHỆ DỰ ÁN
+
+Backend: Laravel 12, PHP 8.2+
+
+Admin Panel: Filament v3
+
+Frontend (Tích hợp): React, Vite, Tailwind CSS
+
+Database: MySQL (Multi-Database Architecture)
+
+2. KIẾN TRÚC & CẤU TRÚC THƯ MỤC (OMNICHANNEL SAAS)
+
+Kiến trúc Addon-Based: Mọi tính năng mở rộng BẮT BUỘC đặt trong app/Addons/{AddonName}/.
+
+Thành phần Addon:
+
+addon.json: Chứa metadata.
+
+{AddonName}ServiceProvider.php: Nơi đăng ký route, view, và Filament pages cục bộ.
+
+Không sửa trực tiếp bootstrap/app.php hay Core của Laravel nếu tính năng đó thuộc về Addon.
+
+3. QUY TẮC VIẾT CODE PHP & LARAVEL
+
+Strict Typing: LUÔN LUÔN bắt đầu file PHP với declare(strict_types=1);. Định nghĩa rõ kiểu dữ liệu (Type Hinting) cho tham số và giá trị trả về của mọi hàm.
+
+Early Return: Tránh code lồng nhau (nested if). Sử dụng return sớm để code dễ đọc.
+
+Dependency Injection: Không dùng global helpers như app(), request(). Hãy inject qua Constructor hoặc Method.
+
+Controller & Request:
+
+Validate dữ liệu thông qua FormRequest, không validate trực tiếp trong Controller.
+
+Logic nghiệp vụ phức tạp phải đẩy vào Service/Action classes, Controller chỉ làm nhiệm vụ điều phối.
+
+Database & Eloquent:
+
+Tối ưu hóa truy vấn: TRÁNH N+1 query bằng cách dùng with().
+
+Luôn sử dụng DB::transaction() cho các thao tác liên quan đến tiền bạc (Wallet, Transaction, Order).
+
+Tận dụng $casts trong Model (đặc biệt là ép kiểu array cho cột JSON).
+
+4. QUY TẮC FILAMENT V3
+
+Giao diện: Luôn chia nhỏ Form thành các Section, Grid, Fieldset.
+
+Multi-tenancy: Ngoại trừ user có role admin, mọi câu truy vấn hiển thị dữ liệu (getEloquentQuery) đều phải lọc theo auth()->user().
+
+Xử lý sự kiện: Sử dụng Filament Notifications thay vì alert() hay flash session thuần.
+
+Quyền truy cập: Luôn định nghĩa rõ hàm canAccess() hoặc dùng Policy.
+
+5. MULTI-DATABASE (CORE & SEO)
+
+Hệ thống dùng 2 DB: mysql (Mặc định) và mysql_seo.
+
+Bất kỳ Model nào thuộc module SEO (Prompts, Posts, SocialAccounts, Bots) BẮT BUỘC phải khai báo:
+protected $connection = 'mysql_seo';
+
+Các liên kết xuyên Database (Logical Links) không được dùng Foreign Key Constraints trong Migration. Phải xử lý logic quan hệ thông qua Eloquent hoặc cấp ứng dụng.
+
+6. FRONTEND (REACT & VITE)
+
+Các module React độc lập nằm trong resources/js/Addons/{AppName}.
+
+Mỗi module phải có một index.jsx riêng và được đăng ký trong vite.config.js.
+
+Truyền dữ liệu từ Blade sang React thông qua thuộc tính data: <div id="root" data-props='@json($data)'></div>.
+
+Sử dụng lucide-react cho toàn bộ hệ thống icon.
+
+7. BẢO MẬT & API (WORDPRESS BRIDGE)
+
+Request từ hệ thống ngoài (WordPress) phải đi qua middleware WpHeadlessCors.
+
+Giao tiếp API cần xác thực bằng Token lưu trong settings (JSON) của bảng site_services.
+
+Ngoại lệ CSRF (validateCsrfTokens) chỉ được cấu hình trong bootstrap/app.php cho các callback đặc thù (Google Auth, API Webhook).
+
+8. TROUBLESHOOTING KHI BỊ LỖI CLASS NOT FOUND (ERROR 255)
+
+Nếu có lỗi sập hệ thống do xóa Addon/Vendor, AI cần đề xuất quy trình dọn dẹp sau:
+
+Đảm bảo bootstrap/providers.php chỉ chứa Core Providers.
+
+Chạy lệnh: rm -rf bootstrap/cache/*.php (Xóa cache cứng).
+
+Chạy lệnh: composer dump-autoload -o.
+
+Chạy lệnh: php artisan optimize:clear.
