@@ -1,23 +1,31 @@
 <?php
 namespace App\Addons\WpHeadless;
 
+use App\Addons\WpHeadless\Console\SyncWpSiteDataCommand;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessConnect;
-use Illuminate\Support\ServiceProvider;
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
+use Illuminate\Support\ServiceProvider;
 use Route;
 
 class WpHeadlessServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-
     }
-
 
     public function boot(): void
     {
-        // 1. Đăng ký Route và gắn Middleware CORS vào
         $this->registerRoutes();
+        $this->registerCommands();
+    }
+
+    private function registerCommands(): void
+    {
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                SyncWpSiteDataCommand::class,
+            ]);
+        }
     }
 
     protected function registerRoutes(): void
