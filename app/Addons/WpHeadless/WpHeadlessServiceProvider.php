@@ -6,7 +6,9 @@ use App\Addons\RegistersAddonDatabase;
 use App\Addons\WpHeadless\Console\SyncWpSiteDataCommand;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessConnect;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessSitePage;
+use App\Addons\WpHeadless\Http\Controllers\SiteProxyController;
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
+use App\Models\FrontendProject;
 use Illuminate\Support\ServiceProvider;
 use Route;
 
@@ -19,6 +21,7 @@ class WpHeadlessServiceProvider extends ServiceProvider
 
     public function register(): void
     {
+        $this->mergeConfigFrom(__DIR__ . '/config/wp-headless.php', 'wp-headless');
     }
 
     public function boot(): void
@@ -27,6 +30,32 @@ class WpHeadlessServiceProvider extends ServiceProvider
         $this->registerApiRoutes();
         $this->registerCommands();
         $this->registerAddonDatabase(__DIR__, self::DB_CONNECTION, __DIR__ . '/database/migrations');
+        $this->registerFrontendProject();
+    }
+
+    /**
+     * Đăng ký project Next.js vào bảng frontend_projects (chức năng quản lý NPM ở project chính).
+     * Cấu hình trong addon.json: "frontend_project": { "name": "WP Headless", "path": "assets/wp-headless" }
+     */
+    private function registerFrontendProject(): void
+    {
+        $meta = $this->getAddonMetaFromPath(__DIR__);
+        $frontend = $meta['frontend_project'] ?? null;
+        if (!is_array($frontend) || empty($frontend['path'])) {
+            return;
+        }
+
+        $pathFromAddon = str_replace('\\', '/', trim($frontend['path'], " \t\n\r\0\x0B/\\"));
+        $pathFromBase = 'app/Addons/WpHeadless/' . $pathFromAddon;
+        $name = $frontend['name'] ?? 'WP Headless';
+
+        FrontendProject::updateOrCreate(
+            ['package_json_path' => $pathFromBase],
+            [
+                'name' => $name,
+                'type' => FrontendProject::TYPE_NEXTJS,
+            ]
+        );
     }
 
     private function registerCommands(): void
@@ -50,6 +79,12 @@ class WpHeadlessServiceProvider extends ServiceProvider
                 Route::get('/admin/wp-headless/site', WpHeadlessSitePage::class)
                     ->name('wp-headless.site');
             });
+
+        // Public proxy tới Next.js wp-headless: /site/{slug} và /site/{slug}/{path}
+        Route::middleware('web')
+            ->get('/site/{slug}/{path?}', SiteProxyController::class)
+            ->where('path', '.*')
+            ->name('wp-headless.site-proxy');
     }
 
     protected function registerApiRoutes(): void

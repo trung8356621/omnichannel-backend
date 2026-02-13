@@ -22,6 +22,19 @@ class WpHeadlessSite extends Model
         'settings' => 'array',
     ];
 
+    /**
+     * Slug dùng cho route /site/{slug}: host từ public_url, dấu chấm đổi thành gạch ngang.
+     * VD: https://myblog.com -> myblog-com
+     */
+    public function getPublicUrlSlugAttribute(): string
+    {
+        $host = $this->public_url ? parse_url($this->public_url, PHP_URL_HOST) : null;
+        if ($host === null || $host === '') {
+            return 'site-' . $this->id;
+        }
+        return str_replace('.', '-', $host);
+    }
+
     public function styles()
     {
         return $this->hasMany(WpHeadlessStyle::class, 'site_id', 'id');

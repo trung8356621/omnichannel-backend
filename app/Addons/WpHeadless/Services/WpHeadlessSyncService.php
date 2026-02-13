@@ -208,11 +208,11 @@ GQL;
             ? $type
             : 'unknown';
 
-        $publicUrl = WpHeadlessSite::where('id', $site->id)->first()->public_url ?? (Str::kebab($site->domain).'-' . Str::random(16));
+        $existing = WpHeadlessSite::where('id', $site->id)->first();
+        $publicUrl = $existing->public_url ?? (Str::kebab($site->domain) . '-' . Str::random(16));
         $settings = isset($templates['settings']) && is_array($templates['settings'])
             ? $templates['settings']
             : null;
-
 
         WpHeadlessSite::updateOrCreate(
             ['id' => $site->id],

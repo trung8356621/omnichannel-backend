@@ -5,5 +5,9 @@
   "description": "Quản lý kết nối WordPress Headless và đồng bộ dữ liệu tự động.",
   "icon": "heroicon-o-cloud-arrow-up",
   "provider": "App\\Addons\\WpHeadless\\WpHeadlessServiceProvider",
-  "database": "omi_wp_headless"
+  "database": "omi_wp_headless",
+  "frontend_project": {
+    "name": "WP Headless",
+    "path": "assets/wp-headless"
+  }
 }
