@@ -6,6 +6,7 @@ namespace App\Addons\WpHeadless\Services;
 
 use App\Addons\WpHeadless\Models\WpHeadlessSite;
 use App\Addons\WpHeadless\Models\WpHeadlessStyle;
+use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Models\Site;
 use App\Models\SiteMeta;
 use App\Models\SiteService;
@@ -13,13 +14,12 @@ use App\Models\Service;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 final class WpHeadlessSyncService
 {
     private const META_PLUGINS_THEMES = 'wp_plugins_themes';
     private const META_POST_TYPE_STYLES = 'wp_post_type_styles';
-    private const TEMPLATE_DIR = 'wp-headless/sites';
 
     public function sync(Site $site): array
     {
@@ -62,7 +62,7 @@ final class WpHeadlessSyncService
         $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
         if ($postTypeStyles !== null) {
             $this->setMeta($site, self::META_POST_TYPE_STYLES, $postTypeStyles);
-            $this->syncStylesToAddonDb($site->id, $postTypeStyles);
+            $this->syncStylesToAddonDb($site, $postTypeStyles);
             $result['synced'][] = self::META_POST_TYPE_STYLES;
         } else {
             Log::warning('WpHeadlessSync: headlessPostTypeStyles failed', ['site_id' => $site->id]);
@@ -99,7 +99,8 @@ GQL;
 
         $response = Http::timeout(30)->withHeaders($headers)->post($url, ['query' => $query]);
         if (!$response->successful()) {
-            return null;
+            dd($response->body());
+        return null;
         }
         $data = $response->json('data.headlessPluginsAndThemes');
         if ($data === null) {
@@ -149,21 +150,56 @@ GQL;
         return is_array($decoded) ? $decoded : null;
     }
 
-    /** Lưu header.html, footer.html cho postType global. */
+    /** Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML). */
     private function saveTemplateFiles(Site $site, array $templates): void
     {
-        $dir = self::TEMPLATE_DIR . '/' . $site->id;
-        $header = $templates['header'] ?? '';
-        $footer = $templates['footer'] ?? '';
-        if ($header !== '') {
-            Storage::disk('local')->put($dir . '/header.html', $header);
-        }
-        if ($footer !== '') {
-            Storage::disk('local')->put($dir . '/footer.html', $footer);
+        $siteId = $site->id;
+        $parts = [
+            'header'  => $templates['header'] ?? '',
+            'footer'  => $templates['footer'] ?? '',
+            ...($templates['sidebars'] ?? [])
+        ];
+        foreach ($parts as $type => $html) {
+            if ($html === '') {
+                continue;
+            }
+            $parsed = $this->parseTemplateHtml($html);
+            WpHeadlessTemplate::updateOrCreate(
+                ['site_id' => $siteId, 'type' => $type],
+                [
+                    'template' => $html,
+                    'classes'  => $parsed['classes'],
+                    'styles'   => $parsed['styles'],
+                ]
+            );
         }
     }
 
-    /** Upsert bảng wp_headless_sites (addon DB): id = site_id, type từ theme. */
+    /** Bóc tách toàn bộ class và inline style từ HTML template. */
+    private function parseTemplateHtml(string $html): array
+    {
+        $classes = [];
+
+        if (preg_match_all('/\bclass\s*=\s*["\']([^"\']+)["\']/i', $html, $classMatches)) {
+            foreach ($classMatches[1] as $classAttr) {
+                foreach (preg_split('/\s+/', trim($classAttr), -1, PREG_SPLIT_NO_EMPTY) as $c) {
+                    $c = trim($c);
+                    if ($c !== '') {
+                        $classes[$c] = true;
+                    }
+                }
+            }
+        }
+        $classes = array_keys($classes);
+        sort($classes);
+
+        return [
+            'classes' => $classes,
+            'styles'  => [],
+        ];
+    }
+
+    /** Upsert bảng wp_headless_sites (addon DB): id = site_id, type. Domain/slug lấy từ bảng sites (DB chính). */
     private function upsertWpHeadlessSite(Site $site, array $templates): void
     {
         $theme = $templates['theme'] ?? [];
@@ -172,17 +208,45 @@ GQL;
             ? $type
             : 'unknown';
 
+        $publicUrl = WpHeadlessSite::where('id', $site->id)->first()->public_url ?? (Str::kebab($site->domain).'-' . Str::random(16));
+        $settings = isset($templates['settings']) && is_array($templates['settings'])
+            ? $templates['settings']
+            : null;
+
+
         WpHeadlessSite::updateOrCreate(
             ['id' => $site->id],
-            ['type' => $type]
+            [
+                'type' => $type,
+                'public_url' => $publicUrl,
+                'settings' => $settings,
+            ]
         );
     }
 
+    /** Tên miền CDN font phổ biến → dùng style_type = font thay vì css. */
+    private const FONT_CDN_HOSTS = [
+        'fonts.googleapis.com',
+        'fonts.gstatic.com',
+        'cdnjs.cloudflare.com',
+        'use.typekit.net',
+        'fast.fonts.net',
+        'fonts.adobe.com',
+        'fonts.bunny.net',
+        'cdn.jsdelivr.net',
+        'unpkg.com',
+        'fonts.cdnfonts.com',
+        'fontawesome.com',
+        'kit.fontawesome.com',
+    ];
+
     /** Đồng bộ styles từ headlessPostTypeStyles vào bảng wp_headless_styles (addon DB). */
-    private function syncStylesToAddonDb(int $siteId, array $postTypeStyles): void
+    private function syncStylesToAddonDb(Site $site, array $postTypeStyles): void
     {
+        $siteId = $site->id;
+        $siteHost = $this->normalizeHost($site->domain ?? '');
         try {
-            DB::connection('wp_headless')->transaction(function () use ($siteId, $postTypeStyles) {
+            DB::connection('wp_headless')->transaction(function () use ($siteId, $siteHost, $postTypeStyles) {
                 foreach ($postTypeStyles as $item) {
                     $postType = $item['postType'] ?? 'global';
                     $styles = $item['styles'] ?? [];
@@ -192,17 +256,45 @@ GQL;
                     $sortOrder = 0;
                     foreach ($styles as $s) {
                         $url = $s['url'] ?? '';
-                        $name = $s['name'] ?? basename(parse_url($url, PHP_URL_PATH) ?: '') ?: ('style-' . $sortOrder);
-                        $styleType = ($url !== '' && !str_starts_with($url, 'data:')) ? 'file' : 'inline';
+                        $content = $s['content'] ?? null;
+                        $isInline = $content !== null && $content !== '';
+
+                        if ($isInline) {
+                            $name = $s['name'] ?? ('inline-' . $sortOrder);
+                            $styleType = 'inline';
+                            $styleUrl = null;
+                            $styleContent = $content;
+                            $external = false;
+                        } else {
+                            $name = $s['name'] ?? basename(parse_url($url, PHP_URL_PATH) ?: '') ?: ('style-' . $sortOrder);
+                            if ($url === '' || str_starts_with($url, 'data:')) {
+                                $styleType = 'inline';
+                                $styleUrl = null;
+                                $styleContent = $url;
+                                $external = false;
+                            } else {
+                                $host = parse_url($url, PHP_URL_HOST);
+                                $hostNorm = $this->normalizeHost($host ?? '');
+                                $external = $hostNorm !== '' && $hostNorm !== $siteHost;
+                                if ($this->isFontCdnHost($hostNorm)) {
+                                    $styleType = 'font';
+                                } else {
+                                    $styleType = 'file';
+                                }
+                                $styleUrl = $url;
+                                $styleContent = null;
+                            }
+                        }
 
                         WpHeadlessStyle::create([
                             'site_id'    => $siteId,
                             'post_type'  => $postType,
                             'style_type' => $styleType,
                             'name'       => $name,
-                            'url'        => $styleType === 'file' ? $url : null,
-                            'content'    => $styleType === 'inline' ? $url : null,
+                            'url'        => $styleUrl,
+                            'content'    => $styleContent,
                             'sort_order' => $sortOrder++,
+                            'external'   => $external,
                         ]);
                     }
                 }
@@ -210,6 +302,25 @@ GQL;
         } catch (\Throwable $e) {
             Log::warning('WpHeadlessSync: syncStylesToAddonDb failed', ['site_id' => $siteId, 'error' => $e->getMessage()]);
         }
+    }
+
+    private function normalizeHost(string $host): string
+    {
+        $host = strtolower(trim($host));
+        if (str_starts_with($host, 'www.')) {
+            $host = substr($host, 4);
+        }
+        return $host;
+    }
+
+    private function isFontCdnHost(string $normalizedHost): bool
+    {
+        foreach (self::FONT_CDN_HOSTS as $cdn) {
+            if ($normalizedHost === $cdn || str_ends_with($normalizedHost, '.' . $cdn)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private function setMeta(Site $site, string $metaKey, array $value): void

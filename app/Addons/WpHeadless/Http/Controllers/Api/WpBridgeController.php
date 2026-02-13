@@ -88,20 +88,55 @@ class WpBridgeController extends Controller
     /**
      * Đồng bộ plugin/theme và CSS theo post_type từ WordPress (WPGraphQL + teamviahe-graphql) vào site_meta.
      * Endpoint: POST /api/wp-bridge/sync-site-data
+     * Body: site_id (int) HOẶC site_url (string). Xác thực: header X-GraphQL-Secret hoặc Authorization: Bearer = READ_TOKEN của site.
      */
     public function syncSiteData(Request $request): JsonResponse
     {
-        $request->validate([
-            'site_id' => 'required|integer|exists:sites,id',
-        ]);
+        $siteId = $request->input('site_id');
+        $siteUrl = $request->input('site_url');
 
-        $site = Site::findOrFail($request->input('site_id'));
+        if ($siteId !== null) {
+            $request->validate(['site_id' => 'required|integer|exists:sites,id']);
+            $site = Site::findOrFail((int) $siteId);
+        } elseif ($siteUrl !== null && $siteUrl !== '') {
+            $request->validate(['site_url' => 'required|string']);
+            $domain = parse_url($siteUrl, PHP_URL_HOST);
+            if (!$domain) {
+                return response()->json(['success' => false, 'message' => 'Invalid site_url.'], 422);
+            }
+            $site = Site::where('domain', $domain)->first();
+            if (!$site) {
+                return response()->json(['success' => false, 'message' => 'Site not found for domain.'], 404);
+            }
+        } else {
+            return response()->json(['success' => false, 'message' => 'Provide site_id or site_url.'], 422);
+        }
+
+        $token = $request->header('X-GraphQL-Secret') ?: $request->bearerToken();
+        $siteService = $this->getWpHeadlessSiteService($site);
+        if (!$siteService) {
+            return response()->json(['success' => false, 'message' => 'WP Headless not activated for this site.'], 403);
+        }
+        $readToken = $siteService->settings['READ_TOKEN'] ?? '';
+        if ($token === '' || $token !== $readToken) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized: invalid or missing token.'], 401);
+        }
+
         $result = app(WpHeadlessSyncService::class)->sync($site);
-
         if (!$result['success']) {
             return response()->json($result, 422);
         }
-
         return response()->json($result);
+    }
+
+    private function getWpHeadlessSiteService(Site $site): ?SiteService
+    {
+        $service = Service::where('slug', 'wp-headless')->first();
+        if (!$service) {
+            return null;
+        }
+        return SiteService::where('site_id', $site->id)
+            ->where('service_id', $service->id)
+            ->first();
     }
 }

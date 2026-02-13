@@ -5,6 +5,7 @@ namespace App\Addons\WpHeadless;
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\WpHeadless\Console\SyncWpSiteDataCommand;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessConnect;
+use App\Addons\WpHeadless\Filament\Pages\WpHeadlessSitePage;
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
 use Illuminate\Support\ServiceProvider;
 use Route;
@@ -43,6 +44,11 @@ class WpHeadlessServiceProvider extends ServiceProvider
             ->group(function () {
                 Route::get('/admin/wp-headless/connect', WpHeadlessConnect::class)
                     ->name('wp-headless.wp-connect');
+            });
+        Route::middleware(['web', 'auth'])
+            ->group(function () {
+                Route::get('/admin/wp-headless/site', WpHeadlessSitePage::class)
+                    ->name('wp-headless.site');
             });
     }
 

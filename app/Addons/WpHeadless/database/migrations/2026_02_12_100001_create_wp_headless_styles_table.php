@@ -14,7 +14,7 @@ return new class extends Migration
             $table->id();
             $table->unsignedBigInteger('site_id')->comment('id wp_headless_sites ( = main sites.id)');
             $table->string('post_type', 64)->comment('global, post, page, product, ...');
-            $table->string('style_type', 16)->comment('file | inline');
+            $table->string('style_type', 16)->comment('file | inline | font');
             $table->string('name')->nullable();
             $table->string('url', 1024)->nullable()->comment('URL file CSS khi style_type=file');
             $table->longText('content')->nullable()->comment('Nội dung CSS khi style_type=inline');

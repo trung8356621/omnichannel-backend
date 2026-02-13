@@ -6,26 +6,23 @@ namespace App\Addons\WpHeadless\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class WpHeadlessStyle extends Model
+class WpHeadlessTemplate extends Model
 {
     protected $connection = 'wp_headless';
 
-    protected $table = 'wp_headless_styles';
+    protected $table = 'wp_headless_templates';
 
     protected $fillable = [
         'site_id',
-        'post_type',
-        'style_type',
-        'name',
-        'url',
-        'content',
-        'sort_order',
-        'external',
+        'type',
+        'template',
+        'classes',
+        'styles',
     ];
 
     protected $casts = [
-        'sort_order' => 'integer',
-        'external'   => 'boolean',
+        'classes' => 'array',
+        'styles'  => 'array',
     ];
 
     public function wpHeadlessSite()

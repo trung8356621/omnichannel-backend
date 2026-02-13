@@ -16,10 +16,19 @@ class WpHeadlessSite extends Model
 
     protected $keyType = 'int';
 
-    protected $fillable = ['id', 'type'];
+    protected $fillable = ['id', 'type', 'public_url', 'settings'];
+
+    protected $casts = [
+        'settings' => 'array',
+    ];
 
     public function styles()
     {
         return $this->hasMany(WpHeadlessStyle::class, 'site_id', 'id');
+    }
+
+    public function templates()
+    {
+        return $this->hasMany(WpHeadlessTemplate::class, 'site_id', 'id');
     }
 }
