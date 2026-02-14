@@ -27,27 +27,14 @@
         </x-filament::section>
 
         @if($project)
-        <div class="flex">
-            {{-- Layout 2 cột: trái = lệnh NPM, phải = terminal đen (log real-time) --}}
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6 min-h-0">
-                {{-- Cột trái: npm install + danh sách scripts --}}
-                <x-filament::section class="overflow-auto">
+            {{-- Layout 2 cột: trái = scripts, phải = terminal (log real-time) --}}
+            <div class="flex gap-6 w-full">
+                {{-- Cột trái: danh sách scripts --}}
+                <x-filament::section class="overflow-auto" style="width: 30%;order:2">
                     <x-slot name="heading">Lệnh NPM – {{ $project->name }}</x-slot>
                     <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">
                         Scripts từ <code class="rounded bg-gray-100 dark:bg-gray-800 px-1">package.json</code>. Bấm nút để chạy; log hiển thị real-time bên phải.
                     </p>
-
-                    <div class="mb-6">
-                        <button
-                            type="button"
-                            wire:click="runNpmInstall"
-                            wire:loading.attr="disabled"
-                            class="fi-btn relative grid-flow-col items-center justify-center font-semibold outline-none transition duration-75 focus:ring-2 rounded-lg fi-btn-color-primary fi-btn-size-md gap-x-2 inline-grid shadow-sm bg-primary-600 text-white hover:bg-primary-500 dark:bg-primary-500 dark:hover:bg-primary-400 border border-transparent dark:border-white/20 px-4 py-2 text-sm"
-                        >
-                            <span wire:loading.remove wire:target="runNpmInstall">npm install</span>
-                            <span wire:loading wire:target="runNpmInstall">Đang chạy...</span>
-                        </button>
-                    </div>
 
                     <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Scripts trong package.json</h3>
                     @if(count($scripts) > 0)
@@ -97,15 +84,15 @@
                 </x-filament::section>
 
                 {{-- Cột phải: màn hình đen capture log real-time --}}
-                <x-filament::section class="flex flex-col min-h-[420px] xl:min-h-[520px]">
+                <x-filament::section class="flex flex-col flex-1" style="width: 70%;">
                     <x-slot name="heading">Output (real-time)</x-slot>
-                    <div class="flex-1 rounded-lg bg-[#1e1e1e] dark:bg-black border border-gray-700 overflow-hidden flex flex-col">
+                    <div class="flex-1 rounded-lg bg-[#1e1e1e] dark:bg-black border border-gray-700 overflow-hidden flex flex-col min-h-0">
                         <pre
                             wire:stream="terminalOutput"
                             class="flex-1 p-4 text-sm text-gray-100 font-mono whitespace-pre-wrap break-words overflow-auto min-h-0 m-0"
-                        ></pre>
+                        >{{ $terminalOutput ?? '' }}</pre>
                     </div>
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">Log từ lệnh npm sẽ xuất hiện ở đây khi bạn bấm Chạy hoặc npm install.</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-2">Log hiển thị khi bấm Chạy / Chạy nền.</p>
                 </x-filament::section>
             </div>
 

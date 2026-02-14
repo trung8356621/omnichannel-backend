@@ -150,28 +150,45 @@ GQL;
         return is_array($decoded) ? $decoded : null;
     }
 
-    /** Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML). */
+    /**
+     * Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML).
+     * Lọc trùng theo classes: nếu danh sách class giống bản ghi đã lưu → gán parent_id trỏ tới bản gốc.
+     */
     private function saveTemplateFiles(Site $site, array $templates): void
     {
         $siteId = $site->id;
         $parts = [
             'header'  => $templates['header'] ?? '',
             'footer'  => $templates['footer'] ?? '',
-            ...($templates['sidebars'] ?? [])
+            ...($templates['sidebars'] ?? []),
+            ...($templates['postTypes'] ?? []),
+            ...($templates['taxonomies'] ?? [])
         ];
+
+        /** key (classes json) => id bản ghi gốc (parent_id = null) */
+        $canonicalIdByClassesKey = [];
+
         foreach ($parts as $type => $html) {
             if ($html === '') {
                 continue;
             }
             $parsed = $this->parseTemplateHtml($html);
-            WpHeadlessTemplate::updateOrCreate(
+            $classesKey = json_encode($parsed['classes']);
+            $parentId = $canonicalIdByClassesKey[$classesKey] ?? null;
+
+            $row = WpHeadlessTemplate::updateOrCreate(
                 ['site_id' => $siteId, 'type' => $type],
                 [
-                    'template' => $html,
-                    'classes'  => $parsed['classes'],
-                    'styles'   => $parsed['styles'],
+                    'parent_id' => $parentId,
+                    'template'  => $html,
+                    'classes'   => $parsed['classes'],
+                    'styles'    => $parsed['styles'],
                 ]
             );
+
+            if ($parentId === null) {
+                $canonicalIdByClassesKey[$classesKey] = $row->id;
+            }
         }
     }
 
@@ -240,20 +257,26 @@ GQL;
         'kit.fontawesome.com',
     ];
 
-    /** Đồng bộ styles từ headlessPostTypeStyles vào bảng wp_headless_styles (addon DB). */
+    /**
+     * Đồng bộ styles từ headlessPostTypeStyles vào bảng wp_headless_styles (addon DB).
+     * Lọc trùng: cùng url (file) hoặc cùng content (inline) → gán parent_id trỏ tới bản ghi gốc đầu tiên.
+     */
     private function syncStylesToAddonDb(Site $site, array $postTypeStyles): void
     {
         $siteId = $site->id;
         $siteHost = $this->normalizeHost($site->domain ?? '');
         try {
             DB::connection('wp_headless')->transaction(function () use ($siteId, $siteHost, $postTypeStyles) {
+                WpHeadlessStyle::where('site_id', $siteId)->delete();
+
+                /** key (url hoặc inline:md5) => id bản ghi gốc (parent_id = null) */
+                $canonicalIdByKey = [];
+
                 foreach ($postTypeStyles as $item) {
                     $postType = $item['postType'] ?? 'global';
                     $styles = $item['styles'] ?? [];
-
-                    WpHeadlessStyle::where('site_id', $siteId)->where('post_type', $postType)->delete();
-
                     $sortOrder = 0;
+
                     foreach ($styles as $s) {
                         $url = $s['url'] ?? '';
                         $content = $s['content'] ?? null;
@@ -265,6 +288,7 @@ GQL;
                             $styleUrl = null;
                             $styleContent = $content;
                             $external = false;
+                            $styleKey = 'inline:' . md5((string) $styleContent);
                         } else {
                             $name = $s['name'] ?? basename(parse_url($url, PHP_URL_PATH) ?: '') ?: ('style-' . $sortOrder);
                             if ($url === '' || str_starts_with($url, 'data:')) {
@@ -272,6 +296,7 @@ GQL;
                                 $styleUrl = null;
                                 $styleContent = $url;
                                 $external = false;
+                                $styleKey = 'inline:' . md5((string) $url);
                             } else {
                                 $host = parse_url($url, PHP_URL_HOST);
                                 $hostNorm = $this->normalizeHost($host ?? '');
@@ -283,19 +308,39 @@ GQL;
                                 }
                                 $styleUrl = $url;
                                 $styleContent = null;
+                                $styleKey = 'url:' . $url;
                             }
                         }
 
-                        WpHeadlessStyle::create([
-                            'site_id'    => $siteId,
-                            'post_type'  => $postType,
-                            'style_type' => $styleType,
-                            'name'       => $name,
-                            'url'        => $styleUrl,
-                            'content'    => $styleContent,
-                            'sort_order' => $sortOrder++,
-                            'external'   => $external,
-                        ]);
+                        $parentId = $canonicalIdByKey[$styleKey] ?? null;
+                        if ($parentId === null) {
+                            // Bản ghi gốc (lần đầu gặp CSS này)
+                            $row = WpHeadlessStyle::create([
+                                'site_id'    => $siteId,
+                                'parent_id'  => null,
+                                'post_type'  => $postType,
+                                'style_type' => $styleType,
+                                'name'       => $name,
+                                'url'        => $styleUrl,
+                                'content'    => $styleContent,
+                                'sort_order' => $sortOrder++,
+                                'external'   => $external,
+                            ]);
+                            $canonicalIdByKey[$styleKey] = $row->id;
+                        } else {
+                            // Trùng CSS → trỏ về bản gốc
+                            WpHeadlessStyle::create([
+                                'site_id'    => $siteId,
+                                'parent_id'  => $parentId,
+                                'post_type'  => $postType,
+                                'style_type' => $styleType,
+                                'name'       => $name,
+                                'url'        => $styleUrl,
+                                'content'    => '',//Empty content
+                                'sort_order' => $sortOrder++,
+                                'external'   => $external,
+                            ]);
+                        }
                     }
                 }
             });

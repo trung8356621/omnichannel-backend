@@ -10,7 +10,11 @@ class FrontendProject extends Model
 {
     protected $table = 'frontend_projects';
 
-    protected $fillable = ['name', 'type', 'package_json_path'];
+    protected $fillable = ['name', 'type', 'package_json_path', 'router', 'proxy_auto', 'port'];
+
+    protected $casts = [
+        'proxy_auto' => 'boolean',
+    ];
 
     public const TYPE_NEXTJS = 'nextjs';
     public const TYPE_REACT = 'react';

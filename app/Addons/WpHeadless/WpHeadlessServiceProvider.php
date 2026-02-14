@@ -54,6 +54,9 @@ class WpHeadlessServiceProvider extends ServiceProvider
             [
                 'name' => $name,
                 'type' => FrontendProject::TYPE_NEXTJS,
+                'router' => $frontend['router'] ?? 'wp-headless',
+                'port' => (int) ($frontend['port'] ?? 3000),
+                'proxy_auto' => $frontend['proxy_auto'] ?? true,
             ]
         );
     }

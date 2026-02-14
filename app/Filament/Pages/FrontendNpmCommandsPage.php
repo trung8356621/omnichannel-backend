@@ -31,6 +31,8 @@ class FrontendNpmCommandsPage extends Page
     /** @var array<string, string> */
     public array $scripts = [];
 
+    public ?string $terminalOutput = null;
+
     public bool $running = false;
 
     public ?string $lastOutput = null;
@@ -78,12 +80,7 @@ class FrontendNpmCommandsPage extends Page
             return;
         }
         
-        $this->scripts = ["debug" => "debug",...app(FrontendProjectNpmService::class)->getScripts($this->project)];
-    }
-
-    public function runNpmInstall(): void
-    {
-        $this->runCommandWithStream('npm install', 900); // 15 phút cho npm install
+        $this->scripts = app(FrontendProjectNpmService::class)->getScripts($this->project);
     }
 
     public function runScript(string $scriptName): void
@@ -121,14 +118,17 @@ class FrontendNpmCommandsPage extends Page
             Notification::make()->title('Chưa chọn project')->danger()->send();
             return;
         }
-        $this->running = true;
-        set_time_limit(0); // Bỏ giới hạn 300s để npm install / build chạy đủ lâu
-        try {
-            $header = '> ' . $command . "\n";
-            $this->stream(to: 'terminalOutput', content: e($header), replace: true);
+        // Chỉ reset log khi bắt đầu chạy tiến trình mới; khi thoát giữ nguyên log cũ
+        $header = '> ' . $command . "\n";
+        $this->terminalOutput = $header;
+        $this->stream(to: 'terminalOutput', content: e($header), replace: true);
 
+        $this->running = true;
+        set_time_limit(0);
+        try {
             $service = app(FrontendProjectNpmService::class);
             $result = $service->runCommandStreaming($this->project, $command, $timeout, function (string $chunk) {
+                $this->terminalOutput .= $chunk;
                 $this->stream(to: 'terminalOutput', content: e($chunk), replace: false);
             });
 
@@ -138,7 +138,9 @@ class FrontendNpmCommandsPage extends Page
                 Notification::make()->title('Lệnh thoát với mã ' . ($result['exit_code'] ?? 'null'))->danger()->send();
             }
         } catch (\Throwable $e) {
-            $this->stream(to: 'terminalOutput', content: e("\n[Exception] " . $e->getMessage() . "\n"), replace: false);
+            $err = "\n[Exception] " . $e->getMessage() . "\n";
+            $this->terminalOutput .= $err;
+            $this->stream(to: 'terminalOutput', content: e($err), replace: false);
             Notification::make()->title('Lỗi: ' . $e->getMessage())->danger()->send();
         } finally {
             $this->running = false;

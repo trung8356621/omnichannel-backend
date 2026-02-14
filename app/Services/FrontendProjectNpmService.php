@@ -70,6 +70,7 @@ final class FrontendProjectNpmService
 
     /**
      * Chạy lệnh và gọi callback với từng chunk output (stdout + stderr) để stream real-time.
+     * Có heartbeat khi npm buffer (Windows): mỗi vài giây không có output thì gửi "." để UI không treo.
      *
      * @param callable(string): void $onChunk
      * @return array{success: bool, exit_code: int|null}
@@ -78,7 +79,6 @@ final class FrontendProjectNpmService
     {
         $dir = $project->getAbsolutePath();
 
-        // Debug: in ra thư mục và câu lệnh trước khi chạy
         $onChunk("[DEBUG] Thư mục: " . $dir . "\n");
         $onChunk("[DEBUG] Lệnh: " . $command . "\n");
 
@@ -93,26 +93,58 @@ final class FrontendProjectNpmService
             return ['success' => false, 'exit_code' => null];
         }
 
-        $onChunk("[DEBUG] Exec: " . implode(' ', array_map(function ($a) {
-            return str_contains($a, ' ') ? '"' . str_replace('"', '\\"', $a) . '"' : $a;
-        }, $args)) . "\n");
+        $onChunk("[DEBUG] Exec: " . implode(' ', $args) . "\n");
         $onChunk(str_repeat('-', 60) . "\n");
 
-        $process = Process::path($dir)->timeout($timeout)->start($args);
+        // Trên Windows dùng npm.cmd để tránh không tìm thấy npm
+        if (str_starts_with(strtoupper(PHP_OS), 'WIN')) {
+            if (isset($args[0]) && $args[0] === 'npm') {
+                $args[0] = 'npm.cmd';
+            }
+        }
+
+        $env = [];
+        $path = getenv('PATH') ?: '';
+        if (str_starts_with(strtoupper(PHP_OS), 'WIN')) {
+            $nodeDir = 'C:\Program Files\nodejs';
+            if (is_dir($nodeDir)) {
+                $env['PATH'] = $nodeDir . ';' . $path;
+            }
+        }
+        // Giảm buffer: npm trong CI thường flush sớm hơn
+        $env['CI'] = '1';
+        $env['NPM_CONFIG_LOGLEVEL'] = 'info';
+        // Next.js khi chạy từ process con (Laravel) trên Windows lỗi bind 0.0.0.0:3000 → ép listen 127.0.0.1
+        $env['HOST'] = '127.0.0.1';
+
+        $builder = Process::path($dir)->timeout($timeout)->input(null);
+        if ($env !== []) {
+            $builder = $builder->env($env);
+        }
+        $process = $builder->start($args);
+
+        $lastOutputTime = time();
+        $heartbeatInterval = 2; // mỗi 2 giây không có output thì gửi heartbeat
 
         while ($process->running()) {
             $out = $process->latestOutput();
             $err = $process->latestErrorOutput();
             if ($out !== '') {
                 $onChunk($out);
+                $lastOutputTime = time();
             }
             if ($err !== '') {
                 $onChunk($err);
+                $lastOutputTime = time();
             }
-            usleep(50_000); // 50ms
+            // Heartbeat: npm thường buffer khi tải package → gửi hint để user biết vẫn đang chạy
+            if (time() - $lastOutputTime >= $heartbeatInterval) {
+                $onChunk("\n[running... npm đang tải package, lần đầu có thể 2–5 phút]\n");
+                $lastOutputTime = time();
+            }
+            usleep(200_000); // 200ms
         }
 
-        // Đọc phần output còn lại sau khi process kết thúc
         $out = $process->latestOutput();
         $err = $process->latestErrorOutput();
         if ($out !== '') {
@@ -144,8 +176,18 @@ final class FrontendProjectNpmService
             return ['success' => false, 'message' => 'Thư mục hoặc package.json không tồn tại.'];
         }
 
+        $env = ['HOST' => '127.0.0.1'];
+        if (str_starts_with(strtoupper(PHP_OS), 'WIN')) {
+            $nodeDir = 'C:\Program Files\nodejs';
+            if (is_dir($nodeDir)) {
+                $env['PATH'] = $nodeDir . ';' . (getenv('PATH') ?: '');
+            }
+        }
+
         $process = Process::path($dir)
             ->timeout(null)
+            ->input(null)
+            ->env($env)
             ->start(['npm', 'run', $scriptName]);
 
         return [
@@ -163,11 +205,8 @@ final class FrontendProjectNpmService
         if ($command === '') {
             return null;
         }
-        if($command === 'debug') {
-            return ['where', 'npm'];
-        }
         if (strtolower($command) === 'install' || $command === 'npm install') {
-            return ['npm', 'install'];
+            return ['npm', 'install', '--no-audit', '--no-fund', '--loglevel', 'info'];
         }
         if (str_starts_with(strtolower($command), 'npm run ')) {
             $script = trim(substr($command, 8));

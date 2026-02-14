@@ -14,6 +14,7 @@ class WpHeadlessTemplate extends Model
 
     protected $fillable = [
         'site_id',
+        'parent_id',
         'type',
         'template',
         'classes',
@@ -21,12 +22,23 @@ class WpHeadlessTemplate extends Model
     ];
 
     protected $casts = [
-        'classes' => 'array',
-        'styles'  => 'array',
+        'parent_id' => 'integer',
+        'classes'   => 'array',
+        'styles'    => 'array',
     ];
 
     public function wpHeadlessSite()
     {
         return $this->belongsTo(WpHeadlessSite::class, 'site_id', 'id');
+    }
+
+    public function parent()
+    {
+        return $this->belongsTo(self::class, 'parent_id', 'id');
+    }
+
+    public function children()
+    {
+        return $this->hasMany(self::class, 'parent_id', 'id');
     }
 }

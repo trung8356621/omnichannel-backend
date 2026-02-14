@@ -49,10 +49,28 @@ class FrontendProjectResource extends Resource
                     ->native(false),
                 Forms\Components\TextInput::make('package_json_path')
                     ->label('Đường dẫn thư mục chứa package.json')
-                    ->helperText('Tương đối từ thư mục gốc project (vd: app/Addons/WpHeadless/wp-headless) hoặc đường dẫn tuyệt đối. Mọi addon đều có thể khai báo project con.')
+                    ->helperText('Tương đối từ thư mục gốc project (vd: app/Addons/WpHeadless/assets/wp-headless) hoặc đường dẫn tuyệt đối.')
                     ->required()
                     ->maxLength(1024)
                     ->columnSpanFull(),
+                Forms\Components\TextInput::make('router')
+                    ->label('Router (proxy path)')
+                    ->helperText('Slug dùng cho URL proxy: /frontend/{router}. VD: wp-headless → truy cập /frontend/wp-headless')
+                    ->maxLength(128)
+                    ->nullable(),
+                Forms\Components\TextInput::make('port')
+                    ->label('Port Next.js')
+                    ->helperText('Port app chạy (mặc định 3000). Next.js tự nhận port khi chạy dev.')
+                    ->numeric()
+                    ->minValue(1)
+                    ->maxValue(65535)
+                    ->default(3000)
+                    ->nullable(),
+                Forms\Components\Toggle::make('proxy_auto')
+                    ->label('Ép proxy tự động')
+                    ->helperText('Bật = Laravel proxy /frontend/{router} tới Next.js. Tắt = dùng proxy thủ công (nginx, v.v.).')
+                    ->default(true)
+                    ->inline(false),
             ]);
     }
 
@@ -75,6 +93,15 @@ class FrontendProjectResource extends Resource
                 Tables\Columns\IconColumn::make('valid_path')
                     ->label('package.json')
                     ->getStateUsing(fn(FrontendProject $r): bool => $r->hasValidPath())
+                    ->boolean(),
+                Tables\Columns\TextColumn::make('router')
+                    ->label('Router')
+                    ->placeholder('—'),
+                Tables\Columns\TextColumn::make('port')
+                    ->label('Port')
+                    ->placeholder('3000'),
+                Tables\Columns\IconColumn::make('proxy_auto')
+                    ->label('Proxy auto')
                     ->boolean(),
             ])
             ->actions([
