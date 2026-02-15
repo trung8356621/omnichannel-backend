@@ -816,7 +816,7 @@ h1,h2,h3,h4,h5,h6,.heading-font,.banner h1,.banner h2 {font-weight: 700;font-sty
 .header:not(.transparent) .header-bottom-nav.nav > li > a{color: #ffffff;}
 .header:not(.transparent) .header-bottom-nav.nav > li > a:hover,.header:not(.transparent) .header-bottom-nav.nav > li.active > a,.header:not(.transparent) .header-bottom-nav.nav > li.current > a,.header:not(.transparent) .header-bottom-nav.nav > li > a.active,.header:not(.transparent) .header-bottom-nav.nav > li > a.current{color: #115426;}
 .header-bottom-nav.nav-line-bottom > li > a:before,.header-bottom-nav.nav-line-grow > li > a:before,.header-bottom-nav.nav-line > li > a:before,.header-bottom-nav.nav-box > li > a:hover,.header-bottom-nav.nav-box > li.active > a,.header-bottom-nav.nav-pills > li > a:hover,.header-bottom-nav.nav-pills > li.active > a{color:#FFF!important;background-color: #115426;}
-.label-new.menu-item > a:after{content:"New";}
-.label-hot.menu-item > a:after{content:"Hot";}
-.label-sale.menu-item > a:after{content:"Sale";}
-.label-popular.menu-item > a:after{content:"Popular";}
+.label-new.menu-item > a:after{content:"Mới";}
+.label-hot.menu-item > a:after{content:"Nổi bật";}
+.label-sale.menu-item > a:after{content:"Giảm giá";}
+.label-popular.menu-item > a:after{content:"Phổ biến";}

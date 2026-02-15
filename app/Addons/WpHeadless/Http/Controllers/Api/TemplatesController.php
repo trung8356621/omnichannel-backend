@@ -29,7 +29,10 @@ class TemplatesController extends Controller
 
         $templates = [];
         foreach ($rows as $row) {
-            $templates[$row->type] = $row->template ?? '';
+            $templates[$row->type] = [
+                'template'  => $row->template ?? '',
+                'bodyClass' => is_array($row->body_class) ? $row->body_class : [],
+            ];
         }
 
         return response()->json([

@@ -63,10 +63,13 @@ class OptimizedCssForUrlController extends Controller
             $urls = $existing->map(fn ($row) => $row->public_url)->filter()->values()->all();
         }
 
+        $bodyClass = $this->resolver->getBodyClassForPostType($site, $postType);
+
         return response()->json([
             'success'          => true,
             'data'             => $data,
             'post_type'        => $postType,
+            'bodyClass'        => $bodyClass,
             'optimizedCssUrls' => $urls,
         ]);
     }

@@ -98,6 +98,7 @@ final class WpHeadlessStylesOptimizerService
 
     /**
      * Gom classes từ template post_type + header + footer (layout chung).
+     * Bao gồm cả body_class từ template (get_body_class() WordPress) để CSS tối ưu giữ selector .body-class.
      */
     private function collectTemplateClasses(int $siteId, string $postType): array
     {
@@ -105,8 +106,19 @@ final class WpHeadlessStylesOptimizerService
         $allClasses = [];
         foreach ($types as $type) {
             $t = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $type)->first();
-            if ($t && !empty($t->classes) && is_array($t->classes)) {
+            if (!$t) {
+                continue;
+            }
+            if (!empty($t->classes) && is_array($t->classes)) {
                 foreach ($t->classes as $c) {
+                    $c = trim((string) $c);
+                    if ($c !== '') {
+                        $allClasses[$c] = true;
+                    }
+                }
+            }
+            if (!empty($t->body_class) && is_array($t->body_class)) {
+                foreach ($t->body_class as $c) {
                     $c = trim((string) $c);
                     if ($c !== '') {
                         $allClasses[$c] = true;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Services;
 
+use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Models\Site;
 use App\Models\SiteService;
 use App\Models\Service;
@@ -132,6 +133,19 @@ GQL;
 
         $node = $response->json('data.nodeByUri');
         return \is_array($node) ? $node : null;
+    }
+
+    /**
+     * Lấy bodyClass (get_body_class từ WordPress) cho post_type từ wp_headless_templates.
+     * Next.js dùng để gán class cho <body>.
+     */
+    public function getBodyClassForPostType(Site $site, string $postType): array
+    {
+        $t = WpHeadlessTemplate::where('site_id', $site->id)->where('type', $postType)->first();
+        if ($t === null || !is_array($t->body_class)) {
+            return [];
+        }
+        return array_values($t->body_class);
     }
 
     /** Chuẩn hóa URL đầy đủ hoặc path thành path (bắt đầu bằng /). */

@@ -19,12 +19,14 @@ class WpHeadlessTemplate extends Model
         'template',
         'classes',
         'styles',
+        'body_class',
     ];
 
     protected $casts = [
-        'parent_id' => 'integer',
-        'classes'   => 'array',
-        'styles'    => 'array',
+        'parent_id'  => 'integer',
+        'classes'    => 'array',
+        'styles'     => 'array',
+        'body_class' => 'array',
     ];
 
     public function wpHeadlessSite()

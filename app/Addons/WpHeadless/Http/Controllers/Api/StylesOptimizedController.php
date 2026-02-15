@@ -43,6 +43,9 @@ class StylesOptimizedController extends Controller
             ], 422);
         }
 
-        return response()->json($result);
+        $urls = $result['urls'] ?? [];
+        $message = !empty($urls) ? implode(', ', $urls) : '';
+
+        return response()->json(array_merge($result, ['message' => $message]));
     }
 }

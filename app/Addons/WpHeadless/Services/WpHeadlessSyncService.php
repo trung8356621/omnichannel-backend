@@ -168,21 +168,28 @@ GQL;
         /** key (classes json) => id bản ghi gốc (parent_id = null) */
         $canonicalIdByClassesKey = [];
 
-        foreach ($parts as $type => $html) {
+        foreach ($parts as $type => $part) {
+            $html = is_array($part) ? ($part['template'] ?? '') : $part;
+            $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
+            $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
+
             if ($html === '') {
                 continue;
             }
             $parsed = $this->parseTemplateHtml($html);
-            $classesKey = json_encode($parsed['classes']);
+            $classes = $parsed['classes'];
+
+            $classesKey = json_encode($classes);
             $parentId = $canonicalIdByClassesKey[$classesKey] ?? null;
 
             $row = WpHeadlessTemplate::updateOrCreate(
                 ['site_id' => $siteId, 'type' => $type],
                 [
-                    'parent_id' => $parentId,
-                    'template'  => $html,
-                    'classes'   => $parsed['classes'],
-                    'styles'    => $parsed['styles'],
+                    'parent_id'  => $parentId,
+                    'template'   => $html,
+                    'classes'    => $classes,
+                    'styles'     => $parsed['styles'],
+                    'body_class' => $bodyClass,
                 ]
             );
 

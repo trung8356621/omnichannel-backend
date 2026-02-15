@@ -126,6 +126,7 @@ class WpBridgeController extends Controller
         if (!$result['success']) {
             return response()->json($result, 422);
         }
+        $result['site_id'] = $site->id;
         return response()->json($result);
     }
 
