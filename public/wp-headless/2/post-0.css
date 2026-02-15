@@ -1,3 +1,4 @@
+*,*::before,*::after{box-sizing:border-box;}html{line-height:1.15;-webkit-text-size-adjust:100%;margin:0;}body{margin:0;}
 .col,.columns,.gallery-item{margin:0;padding:0 15px 30px;position:relative;width:100%}
 .col-inner{background-position:50% 50%;background-repeat:no-repeat;background-size:cover;flex:1 0 auto;margin-left:auto;margin-right:auto;position:relative;width:100%}
 @media screen and (min-width:850px){.col:first-child .col-inner{margin-left:auto;margin-right:0}.col+.col .col-inner{margin-left:0;margin-right:auto}}
@@ -816,7 +817,7 @@ h1,h2,h3,h4,h5,h6,.heading-font,.banner h1,.banner h2 {font-weight: 700;font-sty
 .header:not(.transparent) .header-bottom-nav.nav > li > a{color: #ffffff;}
 .header:not(.transparent) .header-bottom-nav.nav > li > a:hover,.header:not(.transparent) .header-bottom-nav.nav > li.active > a,.header:not(.transparent) .header-bottom-nav.nav > li.current > a,.header:not(.transparent) .header-bottom-nav.nav > li > a.active,.header:not(.transparent) .header-bottom-nav.nav > li > a.current{color: #115426;}
 .header-bottom-nav.nav-line-bottom > li > a:before,.header-bottom-nav.nav-line-grow > li > a:before,.header-bottom-nav.nav-line > li > a:before,.header-bottom-nav.nav-box > li > a:hover,.header-bottom-nav.nav-box > li.active > a,.header-bottom-nav.nav-pills > li > a:hover,.header-bottom-nav.nav-pills > li.active > a{color:#FFF!important;background-color: #115426;}
-.label-new.menu-item > a:after{content:"Mới";}
-.label-hot.menu-item > a:after{content:"Nổi bật";}
-.label-sale.menu-item > a:after{content:"Giảm giá";}
-.label-popular.menu-item > a:after{content:"Phổ biến";}
+.label-new.menu-item > a:after{content:"New";}
+.label-hot.menu-item > a:after{content:"Hot";}
+.label-sale.menu-item > a:after{content:"Sale";}
+.label-popular.menu-item > a:after{content:"Popular";}

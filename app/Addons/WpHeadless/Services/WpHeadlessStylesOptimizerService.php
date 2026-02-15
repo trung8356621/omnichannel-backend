@@ -8,6 +8,7 @@ use App\Addons\WpHeadless\Models\WpHeadlessStyle;
 use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Models\Site;
+use App\Models\WpOption;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
@@ -17,17 +18,32 @@ final class WpHeadlessStylesOptimizerService
 {
     private const MAX_CHUNK_BYTES = 100 * 1024; // 100 KB
 
+    /** CSS reset mặc định: luôn đặt đầu output (*, ::before, ::after, html). */
+    private const DEFAULT_CSS_RESET = '*,*::before,*::after{box-sizing:border-box;}html{line-height:1.15;-webkit-text-size-adjust:100%;margin:0;}body{margin:0;}';
+
+    /** Khoảng thời gian (giây) tối thiểu giữa hai lần chạy optimize global. */
+    private const GLOBAL_OPTIMIZE_THROTTLE_SECONDS = 3600;
+
+    /** Prefix option name lưu thời gian chạy global cuối (main DB wp_options). */
+    private const OPTION_LAST_GLOBAL_RUN = 'wp_headless_optimize_global_last_run_';
+
     /** Thư mục public chứa file CSS tối ưu (relative từ public_path). */
     public const PUBLIC_CSS_DIR = 'wp-headless';
 
     /**
      * Tạo CSS đã tối ưu cho post_type: lấy classes từ templates, lọc rules trong CSS (post_type + global),
      * ghi ra file public (WordPress lấy trực tiếp qua URL), lưu path vào wp_headless_styles_optimized.
+     * Mặc định chạy global trước (nếu cần), lưu thời gian chạy cuối vào wp_options và throttle.
      * Nếu tổng size > 100 KB thì tách thành nhiều file (chunk_index 0, 1, ...).
      */
     public function optimize(Site $site, string $postType): array
     {
         $siteId = $site->id;
+
+        // Luôn chạy global trước khi optimize bất kỳ post_type nào; throttle theo thời gian
+        if ($postType !== 'global') {
+            $this->ensureGlobalOptimized($site);
+        }
         $classes = $this->collectTemplateClasses($siteId, $postType);
         if (empty($classes)) {
             return ['success' => false, 'message' => 'No template classes found for post_type.', 'chunks' => 0, 'urls' => []];
@@ -39,52 +55,80 @@ final class WpHeadlessStylesOptimizerService
         }
 
         $filtered = $this->filterCssByClasses($rawCss, $classes);
-        $optimizedCss = implode("\n", $filtered['blocks']);
+        $blocks = $filtered['blocks'];
+        array_unshift($blocks, self::DEFAULT_CSS_RESET);
+        $optimizedCss = implode("\n", $blocks);
         $size = strlen($optimizedCss);
-        $chunks = $this->chunkBlocksBySize($filtered['blocks'], self::MAX_CHUNK_BYTES);
+        $chunks = $this->chunkBlocksBySize($blocks, self::MAX_CHUNK_BYTES);
+
+        $isGlobal = ($postType === 'global');
 
         try {
-            $dir = public_path(self::PUBLIC_CSS_DIR . '/' . $siteId);
-            $existing = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->get();
-            foreach ($existing as $row) {
-                $p = $row->path ? public_path($row->path) : null;
-                if ($p && File::isFile($p)) {
-                    File::delete($p);
+            if (!$isGlobal) {
+                $dir = public_path(self::PUBLIC_CSS_DIR . '/' . $siteId);
+                $existing = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->get();
+                foreach ($existing as $row) {
+                    $p = $row->path ? public_path($row->path) : null;
+                    if ($p && File::isFile($p)) {
+                        File::delete($p);
+                    }
                 }
             }
 
-            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks, $dir) {
+            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks, $isGlobal) {
                 WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->delete();
+
+                if ($isGlobal) {
+                    foreach ($chunks as $index => $cssContent) {
+                        WpHeadlessStyleOptimized::create([
+                            'site_id'     => $siteId,
+                            'post_type'   => $postType,
+                            'chunk_index' => $index,
+                            'path'        => null,
+                            'content'     => $cssContent,
+                            'size'        => strlen($cssContent),
+                        ]);
+                    }
+                    return;
+                }
+
+                $dir = public_path(self::PUBLIC_CSS_DIR . '/' . $siteId);
                 if (!File::isDirectory($dir)) {
                     File::makeDirectory($dir, 0755, true);
                 }
-                foreach ($chunks as $index => $content) {
+                foreach ($chunks as $index => $cssContent) {
                     $filename = $postType . '-' . $index . '.css';
                     $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . $filename;
                     $fullPath = $dir . '/' . $filename;
-                    File::put($fullPath, $content);
+                    File::put($fullPath, $cssContent);
                     WpHeadlessStyleOptimized::create([
                         'site_id'     => $siteId,
                         'post_type'   => $postType,
                         'chunk_index' => $index,
                         'path'        => $relativePath,
                         'content'     => null,
-                        'size'        => strlen($content),
+                        'size'        => strlen($cssContent),
                     ]);
                 }
             });
 
-            $urls = WpHeadlessStyleOptimized::where('site_id', $siteId)
-                ->where('post_type', $postType)
-                ->orderBy('chunk_index')
-                ->get()
-                ->pluck('public_url')
-                ->filter()
-                ->values()
-                ->all();
+            $urls = $isGlobal
+                ? []
+                : WpHeadlessStyleOptimized::where('site_id', $siteId)
+                    ->where('post_type', $postType)
+                    ->orderBy('chunk_index')
+                    ->get()
+                    ->pluck('public_url')
+                    ->filter()
+                    ->values()
+                    ->all();
         } catch (\Throwable $e) {
             Log::warning('WpHeadlessStylesOptimizer: save failed', ['site_id' => $siteId, 'post_type' => $postType, 'error' => $e->getMessage()]);
             return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => []];
+        }
+
+        if ($isGlobal) {
+            WpOption::set(self::OPTION_LAST_GLOBAL_RUN . $siteId, (string) time(), 'no');
         }
 
         return [
@@ -94,6 +138,22 @@ final class WpHeadlessStylesOptimizerService
             'chunks'    => count($chunks),
             'urls'      => $urls ?? [],
         ];
+    }
+
+    /**
+     * Đảm bảo đã chạy optimize global gần đây; nếu quá throttle thì chạy lại và lưu thời gian vào wp_options.
+     */
+    private function ensureGlobalOptimized(Site $site): void
+    {
+        $siteId = $site->id;
+        $optionName = self::OPTION_LAST_GLOBAL_RUN . $siteId;
+        $lastRun = WpOption::get($optionName);
+        $now = time();
+        $threshold = $now - self::GLOBAL_OPTIMIZE_THROTTLE_SECONDS;
+        if ($lastRun !== null && is_numeric($lastRun) && (int) $lastRun > $threshold) {
+            return;
+        }
+        $this->optimize($site, 'global');
     }
 
     /**

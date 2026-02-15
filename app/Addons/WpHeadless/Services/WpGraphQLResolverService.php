@@ -72,6 +72,13 @@ GQL;
     /**
      * Lấy toàn bộ dữ liệu node từ WordPress theo URI (post, page, category, tag, ...) để gửi cho Next.js.
      * Trả về mảng dữ liệu node (title, content, excerpt, uri, featuredImage, ...) hoặc null.
+     *
+     * Với Post/Page, nếu theme (Flatsome, ...) có header/footer theo từng trang thì node sẽ có:
+     * - _header (int|null): ID block header
+     * - _footer (int|null): ID block footer
+     * - _headerTemplate (string): HTML đã render của header
+     * - _footerTemplate (string): HTML đã render của footer
+     * Dùng hasCustomHeaderFooter($node) để kiểm tra trường hợp đặc biệt → thêm template, optimize CSS, đẩy Next.js.
      */
     public function fetchNodeByUri(Site $site, string $urlOrPath): ?array
     {
@@ -94,6 +101,10 @@ query GetNodeByUri($uri: String!) {
       excerpt
       date
       featuredImage { node { sourceUrl altText } }
+      _header
+      _footer
+      _headerTemplate
+      _footerTemplate
     }
     ... on Page {
       databaseId
@@ -102,6 +113,10 @@ query GetNodeByUri($uri: String!) {
       content
       excerpt
       featuredImage { node { sourceUrl altText } }
+      _header
+      _footer
+      _headerTemplate
+      _footerTemplate
     }
     ... on Category {
       databaseId
@@ -133,6 +148,115 @@ GQL;
 
         $node = $response->json('data.nodeByUri');
         return \is_array($node) ? $node : null;
+    }
+
+    /**
+     * Kiểm tra node có header/footer tùy chỉnh theo theme (Flatsome _header_block, _footer_block, ...).
+     *
+     * @param array<string, mixed> $node Mảng node trả về từ fetchNodeByUri (Post/Page).
+     */
+    public function hasCustomHeaderFooter(array $node): bool
+    {
+        $header = $node['_header'] ?? null;
+        $footer = $node['_footer'] ?? null;
+        return ($header !== null && (int) $header > 0) || ($footer !== null && (int) $footer > 0);
+    }
+
+    /**
+     * Lưu header/footer tùy chỉnh (từ _headerTemplate, _footerTemplate) vào wp_headless_templates.
+     * Type = header_{databaseId}, footer_{databaseId} để Next.js lấy theo post.
+     *
+     * @param array<string, mixed> $node Node từ fetchNodeByUri (có databaseId, _headerTemplate, _footerTemplate).
+     */
+    public function saveCustomHeaderFooterToDatabase(Site $site, array $node): void
+    {
+        $databaseId = (int) ($node['databaseId'] ?? 0);
+        if ($databaseId <= 0) {
+            return;
+        }
+
+        $headerHtml = trim((string) ($node['_headerTemplate'] ?? ''));
+        $footerHtml = trim((string) ($node['_footerTemplate'] ?? ''));
+
+        $siteId = $site->id;
+
+        if ($headerHtml !== '') {
+            $parsed = $this->parseTemplateHtmlForSave($headerHtml);
+            WpHeadlessTemplate::updateOrCreate(
+                ['site_id' => $siteId, 'type' => 'header_' . $databaseId],
+                [
+                    'parent_id'  => null,
+                    'global'     => false,
+                    'template'   => $headerHtml,
+                    'classes'    => $parsed['classes'],
+                    'body_class' => [],
+                ]
+            );
+        }
+
+        if ($footerHtml !== '') {
+            $parsed = $this->parseTemplateHtmlForSave($footerHtml);
+            WpHeadlessTemplate::updateOrCreate(
+                ['site_id' => $siteId, 'type' => 'footer_' . $databaseId],
+                [
+                    'parent_id'  => null,
+                    'global'     => false,
+                    'template'   => $footerHtml,
+                    'classes'    => $parsed['classes'],
+                    'body_class' => [],
+                ]
+            );
+        }
+    }
+
+    /**
+     * Gửi payload (templates + data) tới Next.js API để lưu template.
+     * Gọi sau khi đã save DB và chạy optimize.
+     *
+     * @param array<string, mixed> $payload site_id, templates (key = header_{id}/footer_{id}, value = HTML), data, post_type, optimizedCssUrls, bodyClass.
+     */
+    public function pushTemplatesToNextjs(Site $site, array $payload): bool
+    {
+        $nextjsUrl = config('wp-headless.nextjs_url', '');
+        if ($nextjsUrl === '') {
+            Log::debug('WpGraphQLResolver: pushTemplatesToNextjs skipped, no nextjs_url');
+            return false;
+        }
+
+        $endpoint = rtrim($nextjsUrl, '/') . '/api/wp-templates/receive';
+        try {
+            $response = Http::timeout(10)->post($endpoint, $payload);
+            if (!$response->successful()) {
+                Log::warning('WpGraphQLResolver: pushTemplatesToNextjs failed', [
+                    'status' => $response->status(),
+                    'body'   => $response->body(),
+                ]);
+                return false;
+            }
+            return true;
+        } catch (\Throwable $e) {
+            Log::warning('WpGraphQLResolver: pushTemplatesToNextjs error', ['error' => $e->getMessage()]);
+            return false;
+        }
+    }
+
+    /** Bóc class từ HTML (dùng khi lưu template). */
+    private function parseTemplateHtmlForSave(string $html): array
+    {
+        $classes = [];
+        if (preg_match_all('/\bclass\s*=\s*["\']([^"\']+)["\']/i', $html, $m)) {
+            foreach ($m[1] as $classAttr) {
+                foreach (preg_split('/\s+/', trim($classAttr), -1, PREG_SPLIT_NO_EMPTY) as $c) {
+                    $c = trim($c);
+                    if ($c !== '') {
+                        $classes[$c] = true;
+                    }
+                }
+            }
+        }
+        $classes = array_keys($classes);
+        sort($classes);
+        return ['classes' => $classes];
     }
 
     /**

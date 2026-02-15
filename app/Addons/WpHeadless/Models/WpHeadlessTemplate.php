@@ -16,16 +16,16 @@ class WpHeadlessTemplate extends Model
         'site_id',
         'parent_id',
         'type',
+        'global',
         'template',
         'classes',
-        'styles',
         'body_class',
     ];
 
     protected $casts = [
         'parent_id'  => 'integer',
+        'global'     => 'boolean',
         'classes'    => 'array',
-        'styles'     => 'array',
         'body_class' => 'array',
     ];
 

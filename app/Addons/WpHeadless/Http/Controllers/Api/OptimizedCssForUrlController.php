@@ -65,6 +65,33 @@ class OptimizedCssForUrlController extends Controller
 
         $bodyClass = $this->resolver->getBodyClassForPostType($site, $postType);
 
+        // Trường hợp đặc biệt: có _header/_footer theo theme → lưu DB, đã chạy optimize, gửi template cho Next.js
+        if ($data !== null && $this->resolver->hasCustomHeaderFooter($data)) {
+            $this->resolver->saveCustomHeaderFooterToDatabase($site, $data);
+            $databaseId = (int) ($data['databaseId'] ?? 0);
+            $templates = [];
+            if ($databaseId > 0) {
+                $headerHtml = trim((string) ($data['_headerTemplate'] ?? ''));
+                $footerHtml = trim((string) ($data['_footerTemplate'] ?? ''));
+                if ($headerHtml !== '') {
+                    $templates['header_' . $databaseId] = $headerHtml;
+                }
+                if ($footerHtml !== '') {
+                    $templates['footer_' . $databaseId] = $footerHtml;
+                }
+            }
+            if ($templates !== []) {
+                $this->resolver->pushTemplatesToNextjs($site, [
+                    'site_id'           => $site->id,
+                    'templates'         => $templates,
+                    'data'              => $data,
+                    'post_type'         => $postType,
+                    'optimizedCssUrls'  => $urls,
+                    'bodyClass'         => $bodyClass,
+                ]);
+            }
+        }
+
         return response()->json([
             'success'          => true,
             'data'             => $data,

@@ -157,13 +157,17 @@ GQL;
     private function saveTemplateFiles(Site $site, array $templates): void
     {
         $siteId = $site->id;
+        $sidebars = $templates['sidebars'] ?? [];
         $parts = [
             'header'  => $templates['header'] ?? '',
             'footer'  => $templates['footer'] ?? '',
-            ...($templates['sidebars'] ?? []),
+            ...$sidebars,
             ...($templates['postTypes'] ?? []),
             ...($templates['taxonomies'] ?? [])
         ];
+
+        /** Các type là global (không phải post_type / taxonomy): header, footer, sidebars */
+        $globalTypes = array_merge(['header', 'footer'], array_keys($sidebars));
 
         /** key (classes json) => id bản ghi gốc (parent_id = null) */
         $canonicalIdByClassesKey = [];
@@ -182,13 +186,15 @@ GQL;
             $classesKey = json_encode($classes);
             $parentId = $canonicalIdByClassesKey[$classesKey] ?? null;
 
+            $isGlobal = in_array($type, $globalTypes, true);
+
             $row = WpHeadlessTemplate::updateOrCreate(
                 ['site_id' => $siteId, 'type' => $type],
                 [
                     'parent_id'  => $parentId,
+                    'global'     => $isGlobal,
                     'template'   => $html,
                     'classes'    => $classes,
-                    'styles'     => $parsed['styles'],
                     'body_class' => $bodyClass,
                 ]
             );
@@ -217,10 +223,7 @@ GQL;
         $classes = array_keys($classes);
         sort($classes);
 
-        return [
-            'classes' => $classes,
-            'styles'  => [],
-        ];
+        return ['classes' => $classes];
     }
 
     /** Upsert bảng wp_headless_sites (addon DB): id = site_id, type. Domain/slug lấy từ bảng sites (DB chính). */
