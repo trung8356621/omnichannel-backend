@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Models;
 
+use App\Models\Site;
 use Illuminate\Database\Eloquent\Model;
 
 class WpHeadlessSite extends Model
@@ -16,11 +17,46 @@ class WpHeadlessSite extends Model
 
     protected $keyType = 'int';
 
-    protected $fillable = ['id', 'type', 'public_url', 'settings'];
+    protected $fillable = ['id', 'type', 'public_url', 'headless_next_dev', 'is_dev', 'settings'];
 
     protected $casts = [
+        'is_dev'   => 'boolean',
         'settings' => 'array',
     ];
+
+    /**
+     * Site chính (bảng sites trong DB mặc định), cùng id.
+     * Query trên connection mặc định vì bảng sites không nằm trong DB wp_headless.
+     */
+    public function getMainSite(): ?Site
+    {
+        return Site::on(config('database.default'))->find($this->id);
+    }
+
+    /**
+     * URL gốc Next.js để proxy / gửi webhook.
+     * is_dev = true → domain chính từ bảng sites (url).
+     * is_dev = false → headless_next_dev.
+     */
+    public function getNextjsBaseUrl(): string
+    {
+        if (!$this->is_dev) {
+            $site = $this->getMainSite();
+            if ($site && !empty($site->url)) {
+                return rtrim(trim((string) $site->url), '/');
+            }
+            if ($site && !empty($site->domain)) {
+                $d = trim((string) $site->domain);
+                return preg_match('#^https?://#i', $d) ? $d : 'https://' . $d;
+            }
+        }
+        $url = $this->headless_next_dev ?? '';
+        $url = rtrim(trim($url), '/');
+        if ($url !== '' && !preg_match('#^https?://#i', $url)) {
+            $url = 'http://' . $url;
+        }
+        return $url;
+    }
 
     /**
      * Slug dùng cho route /site/{slug}: host từ public_url, dấu chấm đổi thành gạch ngang.

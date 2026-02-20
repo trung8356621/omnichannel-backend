@@ -8,6 +8,7 @@ use App\Addons\WpHeadless\Models\WpHeadlessSite;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
+
 class SiteProxyController
 {
     /**
@@ -21,7 +22,10 @@ class SiteProxyController
             abort(404, 'Site not found');
         }
 
-        $baseUrl = rtrim(config('wp-headless.nextjs_url', 'http://127.0.0.1:3000'), '/');
+        $baseUrl = $wpSite->getNextjsBaseUrl();
+        if ($baseUrl === '') {
+            abort(502, 'Next.js URL not configured for this site');
+        }
         $requestPath = 'site/' . $slug . ($path !== null ? '/' . $path : '');
         $targetUrl = $baseUrl . '/' . $requestPath;
 
@@ -59,8 +63,14 @@ class SiteProxyController
     private function forwardHeaders(Request $request): array
     {
         $allowed = [
-            'accept', 'accept-language', 'content-type', 'cookie',
-            'x-requested-with', 'x-csrf-token', 'referer', 'user-agent',
+            'accept',
+            'accept-language',
+            'content-type',
+            'cookie',
+            'x-requested-with',
+            'x-csrf-token',
+            'referer',
+            'user-agent',
         ];
         $out = [];
         foreach ($request->headers() as $name => $values) {

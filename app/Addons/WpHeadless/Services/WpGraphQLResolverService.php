@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Services;
 
+use App\Addons\WpHeadless\Models\WpHeadlessSite;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Models\Site;
 use App\Models\SiteService;
@@ -100,11 +101,8 @@ query GetNodeByUri($uri: String!) {
       content
       excerpt
       date
+      templatePath
       featuredImage { node { sourceUrl altText } }
-      _header
-      _footer
-      _headerTemplate
-      _footerTemplate
     }
     ... on Page {
       databaseId
@@ -112,23 +110,22 @@ query GetNodeByUri($uri: String!) {
       title
       content
       excerpt
+      templatePath
       featuredImage { node { sourceUrl altText } }
-      _header
-      _footer
-      _headerTemplate
-      _footerTemplate
     }
     ... on Category {
       databaseId
       uri
       name
       description
+      templatePath
     }
     ... on Tag {
       databaseId
       uri
       name
       description
+      templatePath
     }
   }
 }
@@ -217,9 +214,10 @@ GQL;
      */
     public function pushTemplatesToNextjs(Site $site, array $payload): bool
     {
-        $nextjsUrl = config('wp-headless.nextjs_url', '');
+        $wpSite = WpHeadlessSite::find($site->id);
+        $nextjsUrl = $wpSite ? $wpSite->getNextjsBaseUrl() : '';
         if ($nextjsUrl === '') {
-            Log::debug('WpGraphQLResolver: pushTemplatesToNextjs skipped, no nextjs_url');
+            Log::debug('WpGraphQLResolver: pushTemplatesToNextjs skipped, no nextjs URL for site');
             return false;
         }
 

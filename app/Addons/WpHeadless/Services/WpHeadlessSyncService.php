@@ -99,8 +99,11 @@ GQL;
 
         $response = Http::timeout(30)->withHeaders($headers)->post($url, ['query' => $query]);
         if (!$response->successful()) {
-            dd($response->body());
-        return null;
+            Log::warning('WpHeadlessSync: headlessPluginsAndThemes failed', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
+            return null;
         }
         $data = $response->json('data.headlessPluginsAndThemes');
         if ($data === null) {
@@ -110,6 +113,10 @@ GQL;
         return is_array($decoded) ? $decoded : null;
     }
 
+    /**
+     * Lấy templates từ WordPress qua GraphQL headlessTemplates (plugin WP hiện chỉ expose field này).
+     * Trả về: theme, header, footer, sidebars, postTypes, taxonomies.
+     */
     private function queryTemplates(string $url, array $headers): ?array
     {
         $query = <<<'GQL'
@@ -120,14 +127,29 @@ GQL;
 
         $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
         if (!$response->successful()) {
+            Log::warning('WpHeadlessSync: headlessTemplates request failed', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
             return null;
         }
-        $data = $response->json('data.headlessTemplates');
-        if ($data === null) {
+        $raw = $response->json('data.headlessTemplates');
+        if ($raw === null) {
             return null;
         }
-        $decoded = json_decode($data, true);
-        return is_array($decoded) ? $decoded : null;
+        $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($decoded)) {
+            return null;
+        }
+        return [
+            'theme'      => $decoded['theme'] ?? [],
+            'header'     => $decoded['header'] ?? '',
+            'footer'     => $decoded['footer'] ?? '',
+            'sidebars'   => $decoded['sidebars'] ?? [],
+            'settings'   => $decoded['settings'] ?? null,
+            'postTypes'  => $decoded['postTypes'] ?? [],
+            'taxonomies' => $decoded['taxonomies'] ?? [],
+        ];
     }
 
     private function queryPostTypeStyles(string $url, array $headers): ?array
@@ -173,14 +195,22 @@ GQL;
         $canonicalIdByClassesKey = [];
 
         foreach ($parts as $type => $part) {
-            $html = is_array($part) ? ($part['template'] ?? '') : $part;
+            // postTypes: WordPress gửi full_html (full page) + template (rỗng). Taxonomies: chỉ template (loop placeholders).
+            $html = is_array($part)
+                ? (trim((string) ($part['full_html'] ?? '')) !== '' ? $part['full_html'] : ($part['template'] ?? ''))
+                : $part;
+            $html = is_string($html) ? trim($html) : '';
             $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
             $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
+            $templatePath = is_array($part) ? (trim((string) ($part['template_path'] ?? ''))) : '';
+            $templatePath = $templatePath !== '' ? $templatePath : null;
 
             if ($html === '') {
                 continue;
             }
-            $parsed = $this->parseTemplateHtml($html);
+            $forStaticWithScript = in_array($type, ['header', 'footer'], true)
+                || (isset($sidebars[$type]) && $type !== '');
+            $parsed = $this->parseTemplateHtml($html, $forStaticWithScript);
             $classes = $parsed['classes'];
 
             $classesKey = json_encode($classes);
@@ -191,11 +221,12 @@ GQL;
             $row = WpHeadlessTemplate::updateOrCreate(
                 ['site_id' => $siteId, 'type' => $type],
                 [
-                    'parent_id'  => $parentId,
-                    'global'     => $isGlobal,
-                    'template'   => $html,
-                    'classes'    => $classes,
-                    'body_class' => $bodyClass,
+                    'parent_id'     => $parentId,
+                    'template_path' => $templatePath,
+                    'global'        => $isGlobal,
+                    'template'      => $html,
+                    'classes'       => $classes,
+                    'body_class'    => $bodyClass,
                 ]
             );
 
@@ -205,8 +236,12 @@ GQL;
         }
     }
 
-    /** Bóc tách toàn bộ class và inline style từ HTML template. */
-    private function parseTemplateHtml(string $html): array
+    /**
+     * Bóc tách toàn bộ class từ HTML template.
+     * Khi $includeDescendantClasses = true (template tĩnh có script: header, footer, sidebar): lấy thêm mọi class
+     * từ phần tử con của phần tử có class chính. VD phần tử .sticky-jump chứa .stuck → thêm .stuck.
+     */
+    private function parseTemplateHtml(string $html, bool $includeDescendantClasses = false): array
     {
         $classes = [];
 
@@ -220,10 +255,74 @@ GQL;
                 }
             }
         }
+
+        if ($includeDescendantClasses) {
+            $this->collectDescendantClasses($html, $classes);
+        }
+
         $classes = array_keys($classes);
         sort($classes);
 
         return ['classes' => $classes];
+    }
+
+    /**
+     * Với mỗi phần tử có class nằm trong $classes (class chính), lấy thêm mọi class từ phần tử con.
+     * VD .sticky-jump .stuck → thêm "stuck" vào $classes.
+     */
+    private function collectDescendantClasses(string $html, array &$classes): void
+    {
+        $mainClasses = array_keys($classes);
+        if ($mainClasses === []) {
+            return;
+        }
+
+        $wrap = '<div id="__wp_headless_parse_root">' . $html . '</div>';
+        $useErrors = libxml_use_internal_errors(true);
+        try {
+            $dom = new \DOMDocument();
+            $flags = LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD;
+            @$dom->loadHTML('<?xml encoding="UTF-8">' . $wrap, $flags);
+            libxml_clear_errors();
+            $xpath = new \DOMXPath($dom);
+            foreach ($mainClasses as $mainClass) {
+                $safeClass = str_replace("'", "''", $mainClass);
+                $nodes = @$xpath->query(
+                    "//*[contains(concat(' ', normalize-space(@class), ' '), ' " . $safeClass . " ')]"
+                );
+                if ($nodes === false || $nodes->length === 0) {
+                    continue;
+                }
+                foreach ($nodes as $node) {
+                    $this->collectClassesFromNodeAndDescendants($node, $classes);
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::debug('WpHeadlessSync: collectDescendantClasses failed', ['message' => $e->getMessage()]);
+        } finally {
+            libxml_use_internal_errors($useErrors);
+        }
+    }
+
+    private function collectClassesFromNodeAndDescendants(\DOMNode $node, array &$classes): void
+    {
+        if ($node->nodeType !== XML_ELEMENT_NODE) {
+            return;
+        }
+        if ($node instanceof \DOMElement && $node->hasAttribute('class')) {
+            $classAttr = $node->getAttribute('class');
+            foreach (preg_split('/\s+/', trim($classAttr), -1, PREG_SPLIT_NO_EMPTY) as $c) {
+                $c = trim($c);
+                if ($c !== '') {
+                    $classes[$c] = true;
+                }
+            }
+        }
+        if ($node->childNodes !== null) {
+            foreach ($node->childNodes as $child) {
+                $this->collectClassesFromNodeAndDescendants($child, $classes);
+            }
+        }
     }
 
     /** Upsert bảng wp_headless_sites (addon DB): id = site_id, type. Domain/slug lấy từ bảng sites (DB chính). */
@@ -346,7 +445,7 @@ GQL;
                                 'style_type' => $styleType,
                                 'name'       => $name,
                                 'url'        => $styleUrl,
-                                'content'    => '',//Empty content
+                                'content'    => '', //Empty content
                                 'sort_order' => $sortOrder++,
                                 'external'   => $external,
                             ]);

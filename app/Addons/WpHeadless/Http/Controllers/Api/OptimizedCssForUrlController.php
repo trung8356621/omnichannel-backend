@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
 use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
+use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Services\WpGraphQLResolverService;
 use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
 use App\Http\Controllers\Controller;
@@ -51,6 +52,12 @@ class OptimizedCssForUrlController extends Controller
             $postType = 'global';
         }
 
+        $templatePath = $data['templatePath'] ?? null;
+        $templatePath = $templatePath !== null && $templatePath !== '' ? (string) $templatePath : null;
+
+        $templateRow = WpHeadlessTemplate::where('site_id', $site->id)->where('type', $postType)->first();
+        $storedTemplatePath = $templateRow?->template_path;
+
         $existing = WpHeadlessStyleOptimized::where('site_id', $site->id)
             ->where('post_type', $postType)
             ->orderBy('chunk_index')
@@ -60,50 +67,30 @@ class OptimizedCssForUrlController extends Controller
             $result = $this->optimizer->optimize($site, $postType);
             $urls = ($result['success'] ?? false) ? ($result['urls'] ?? []) : [];
         } else {
-            $urls = $existing->map(fn ($row) => $row->public_url)->filter()->values()->all();
+            $urls = $existing->map(fn($row) => $row->public_url)->filter()->values()->all();
         }
 
         $bodyClass = $this->resolver->getBodyClassForPostType($site, $postType);
 
-        // Trường hợp đặc biệt: có _header/_footer theo theme → lưu DB, đã chạy optimize, gửi template cho Next.js
-        if ($data !== null && $this->resolver->hasCustomHeaderFooter($data)) {
-            $this->resolver->saveCustomHeaderFooterToDatabase($site, $data);
-            $databaseId = (int) ($data['databaseId'] ?? 0);
-            $templates = [];
-            if ($databaseId > 0) {
-                $headerHtml = trim((string) ($data['_headerTemplate'] ?? ''));
-                $footerHtml = trim((string) ($data['_footerTemplate'] ?? ''));
-                if ($headerHtml !== '') {
-                    $templates['header_' . $databaseId] = $headerHtml;
-                }
-                if ($footerHtml !== '') {
-                    $templates['footer_' . $databaseId] = $footerHtml;
-                }
-            }
-            if ($templates !== []) {
-                $this->resolver->pushTemplatesToNextjs($site, [
-                    'site_id'           => $site->id,
-                    'templates'         => $templates,
-                    'data'              => $data,
-                    'post_type'         => $postType,
-                    'optimizedCssUrls'  => $urls,
-                    'bodyClass'         => $bodyClass,
-                ]);
-            }
-        }
-
         return response()->json([
-            'success'          => true,
-            'data'             => $data,
-            'post_type'        => $postType,
-            'bodyClass'        => $bodyClass,
-            'optimizedCssUrls' => $urls,
+            'success'           => true,
+            'data'              => $data,
+            'post_type'         => $postType,
+            'templatePath'      => $templatePath,
+            'template_path'     => $storedTemplatePath,
+            'bodyClass'         => $bodyClass,
+            'optimizedCssUrls'  => $urls,
         ]);
     }
 
     private const TYPENAME_TO_POST_TYPE = [
-        'Post' => 'post', 'Page' => 'page', 'Category' => 'category',
-        'Tag' => 'post_tag', 'PostTag' => 'post_tag', 'Product' => 'product',
-        'ProductCategory' => 'product_cat', 'ProductTag' => 'product_tag',
+        'Post' => 'post',
+        'Page' => 'page',
+        'Category' => 'category',
+        'Tag' => 'post_tag',
+        'PostTag' => 'post_tag',
+        'Product' => 'product',
+        'ProductCategory' => 'product_cat',
+        'ProductTag' => 'product_tag',
     ];
 }

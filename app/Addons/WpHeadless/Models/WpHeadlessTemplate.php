@@ -16,6 +16,7 @@ class WpHeadlessTemplate extends Model
         'site_id',
         'parent_id',
         'type',
+        'template_path',
         'global',
         'template',
         'classes',
