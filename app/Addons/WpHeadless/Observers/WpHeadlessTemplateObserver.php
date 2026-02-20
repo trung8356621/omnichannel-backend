@@ -37,6 +37,7 @@ class WpHeadlessTemplateObserver
             $fileKey = ($row->template_path !== null && trim((string) $row->template_path) !== '')
                 ? trim((string) $row->template_path)
                 : $row->type;
+            // Giữ nguyên HTML (kể cả thuộc tính style inline) khi đẩy sang Next.js.
             $templates[$fileKey] = is_string($html) ? $html : '';
         }
 

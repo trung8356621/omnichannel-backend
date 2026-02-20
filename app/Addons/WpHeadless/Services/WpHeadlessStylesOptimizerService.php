@@ -167,7 +167,11 @@ final class WpHeadlessStylesOptimizerService
                 }
             }
         }
-        return array_keys($allClasses);
+        // Bỏ toàn bộ class icon-* để CSS tối ưu không giữ rule cho icon (icon dùng React/Lucide ở Next.js)
+        $allClasses = array_filter(array_keys($allClasses), static function ($c) {
+            return strpos($c, 'icon-') !== 0;
+        });
+        return array_values($allClasses);
     }
 
     /**

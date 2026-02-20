@@ -71,6 +71,65 @@ final class WpHeadlessSyncService
         return $result;
     }
 
+    /**
+     * Chạy một bước đồng bộ (dùng khi WordPress gọi sync-site-data theo từng bước).
+     * step 1 = plugin & theme, 2 = templates, 3 = post type styles.
+     */
+    public function syncStep(Site $site, int $step): array
+    {
+        $siteService = $this->getWpHeadlessSiteService($site);
+        if ($siteService === null) {
+            return ['success' => false, 'message' => 'Site chưa kích hoạt WP Headless.'];
+        }
+
+        $settings = $siteService->settings ?? [];
+        $readToken = $settings['READ_TOKEN'] ?? '';
+        if ($readToken === '') {
+            return ['success' => false, 'message' => 'Thiếu READ_TOKEN trong cấu hình site.'];
+        }
+
+        $graphqlUrl = $this->graphqlUrl($site);
+        $headers = [
+            'Content-Type'     => 'application/json',
+            'X-GraphQL-Secret' => $readToken,
+        ];
+
+        $result = ['success' => true, 'step' => $step, 'synced' => []];
+
+        if ($step === 1) {
+            $pluginsThemes = $this->queryPluginsAndThemes($graphqlUrl, $headers);
+            if ($pluginsThemes !== null) {
+                $this->setMeta($site, self::META_PLUGINS_THEMES, $pluginsThemes);
+                $result['synced'][] = self::META_PLUGINS_THEMES;
+            } else {
+                Log::warning('WpHeadlessSync: headlessPluginsAndThemes failed', ['site_id' => $site->id]);
+            }
+        } elseif ($step === 2) {
+            $templates = $this->queryTemplates($graphqlUrl, $headers);
+            if ($templates !== null) {
+                $this->saveTemplateFiles($site, $templates);
+                $this->upsertWpHeadlessSite($site, $templates);
+                $result['synced'][] = 'templates';
+            } else {
+                Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
+            }
+        } elseif ($step === 3) {
+            $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
+            if ($postTypeStyles !== null) {
+                $this->setMeta($site, self::META_POST_TYPE_STYLES, $postTypeStyles);
+                $this->syncStylesToAddonDb($site, $postTypeStyles);
+                $result['synced'][] = self::META_POST_TYPE_STYLES;
+            } else {
+                Log::warning('WpHeadlessSync: headlessPostTypeStyles failed', ['site_id' => $site->id]);
+            }
+        } else {
+            return ['success' => false, 'message' => 'Invalid step.', 'step' => $step];
+        }
+
+        $result['site_id'] = $site->id;
+        return $result;
+    }
+
     private function getWpHeadlessSiteService(Site $site): ?SiteService
     {
         $service = Service::where('slug', 'wp-headless')->first();
@@ -179,6 +238,10 @@ GQL;
     private function saveTemplateFiles(Site $site, array $templates): void
     {
         $siteId = $site->id;
+
+        // Xóa hết bản ghi wp_headless_templates cũ cùng site_id trước khi đồng bộ (tránh type cũ tồn khi WP không còn gửi).
+        WpHeadlessTemplate::where('site_id', $siteId)->delete();
+
         $sidebars = $templates['sidebars'] ?? [];
         $parts = [
             'header'  => $templates['header'] ?? '',
@@ -195,10 +258,18 @@ GQL;
         $canonicalIdByClassesKey = [];
 
         foreach ($parts as $type => $part) {
-            // postTypes: WordPress gửi full_html (full page) + template (rỗng). Taxonomies: chỉ template (loop placeholders).
-            $html = is_array($part)
-                ? (trim((string) ($part['full_html'] ?? '')) !== '' ? $part['full_html'] : ($part['template'] ?? ''))
-                : $part;
+            // Home: lưu full_html. Còn lại: lưu template; nếu template rỗng thì fallback full_html.
+            if (is_array($part)) {
+                $fullHtml = trim((string) ($part['full_html'] ?? ''));
+                $template = trim((string) ($part['template'] ?? ''));
+                if ($type === 'home') {
+                    $html = $fullHtml !== '' ? $fullHtml : $template;
+                } else {
+                    $html = $template !== '' ? $template : $fullHtml;
+                }
+            } else {
+                $html = $part;
+            }
             $html = is_string($html) ? trim($html) : '';
             $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
             $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
@@ -206,6 +277,11 @@ GQL;
             $templatePath = $templatePath !== '' ? $templatePath : null;
 
             if ($html === '') {
+                continue;
+            }
+            // Không lưu nếu giống post_content (chỉ nội dung bài) — tránh ghi đè template đúng.
+            $isPostTypeOrTaxonomy = ! \in_array($type, $globalTypes, true);
+            if ($isPostTypeOrTaxonomy && ! $this->looksLikeFullTemplate($html)) {
                 continue;
             }
             $forStaticWithScript = in_array($type, ['header', 'footer'], true)
@@ -234,6 +310,41 @@ GQL;
                 $canonicalIdByClassesKey[$classesKey] = $row->id;
             }
         }
+    }
+
+    /**
+     * Kiểm tra HTML có phải full template (layout đầy đủ) hay chỉ giống post_content.
+     * Tránh lưu nhầm post_content vào wp_headless_templates.
+     */
+    private function looksLikeFullTemplate(string $html): bool
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return false;
+        }
+        $markers = [
+            '{{get_header}}',
+            '{{get_footer}}',
+            '{{content}}',
+            'content-area',
+            'section',
+            'class="content',
+            'id="content"',
+            'id=\'content\'',
+            'entry-content',
+            'col-inner',
+            'main',
+            'role="main"',
+            'class="post',
+            'single-post',
+            'page-content',
+        ];
+        foreach ($markers as $marker) {
+            if (stripos($html, $marker) !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
