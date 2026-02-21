@@ -52,8 +52,8 @@ final class WpHeadlessSyncService
 
         $templates = $this->queryTemplates($graphqlUrl, $headers);
         if ($templates !== null) {
-            $this->saveTemplateFiles($site, $templates);
             $this->upsertWpHeadlessSite($site, $templates);
+            $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
             $result['synced'][] = 'templates';
         } else {
             Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
@@ -107,8 +107,8 @@ final class WpHeadlessSyncService
         } elseif ($step === 2) {
             $templates = $this->queryTemplates($graphqlUrl, $headers);
             if ($templates !== null) {
-                $this->saveTemplateFiles($site, $templates);
                 $this->upsertWpHeadlessSite($site, $templates);
+                $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
                 $result['synced'][] = 'templates';
             } else {
                 Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
@@ -232,15 +232,151 @@ GQL;
     }
 
     /**
-     * Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML).
-     * Lọc trùng theo classes: nếu danh sách class giống bản ghi đã lưu → gán parent_id trỏ tới bản gốc.
+     * Gọi GraphQL headlessHeaderFooter(header: Int, footer: Int) lấy HTML của header/footer block.
+     *
+     * @return array{headerHtml: string, footerHtml: string}
      */
-    private function saveTemplateFiles(Site $site, array $templates): void
+    private function queryHeaderFooterHtml(string $url, array $headers, ?int $headerId, ?int $footerId): array
+    {
+        $headerId = $headerId > 0 ? $headerId : null;
+        $footerId = $footerId > 0 ? $footerId : null;
+        if ($headerId === null && $footerId === null) {
+            return ['headerHtml' => '', 'footerHtml' => ''];
+        }
+        $vars = [];
+        if ($headerId !== null) {
+            $vars['header'] = $headerId;
+        }
+        if ($footerId !== null) {
+            $vars['footer'] = $footerId;
+        }
+        $query = <<<'GQL'
+query HeadlessHeaderFooter($header: Int, $footer: Int) {
+  headlessHeaderFooter(header: $header, footer: $footer) {
+    headerHtml
+    footerHtml
+  }
+}
+GQL;
+        $response = Http::timeout(30)->withHeaders($headers)->post($url, [
+            'query'     => $query,
+            'variables' => $vars,
+        ]);
+        if (!$response->successful()) {
+            Log::warning('WpHeadlessSync: headlessHeaderFooter request failed', [
+                'status' => $response->status(),
+                'header' => $headerId,
+                'footer' => $footerId,
+            ]);
+            return ['headerHtml' => '', 'footerHtml' => ''];
+        }
+        $node = $response->json('data.headlessHeaderFooter');
+        if (!is_array($node)) {
+            return ['headerHtml' => '', 'footerHtml' => ''];
+        }
+        return [
+            'headerHtml' => (string) ($node['headerHtml'] ?? ''),
+            'footerHtml' => (string) ($node['footerHtml'] ?? ''),
+        ];
+    }
+
+    /**
+     * Thu thập mọi header_id / footer_id từ postTypes và taxonomies, gọi HeadlessHeaderFooter cho từng ID rồi lưu wp_headless_templates (type header_{id} / footer_{id}).
+     */
+    private function ensureHeaderFooterBlocksSaved(int $siteId, array $templates, string $graphqlUrl, array $headers): void
+    {
+        $headerIds = [];
+        $footerIds = [];
+        if (is_numeric($templates['header'] ?? null) && (int) $templates['header'] > 0) {
+            $headerIds[(int) $templates['header']] = true;
+        }
+        if (is_numeric($templates['footer'] ?? null) && (int) $templates['footer'] > 0) {
+            $footerIds[(int) $templates['footer']] = true;
+        }
+        foreach ($templates['postTypes'] ?? [] as $part) {
+            if (is_array($part)) {
+                $h = $part['header'] ?? null;
+                $f = $part['footer'] ?? null;
+                if (is_numeric($h) && (int) $h > 0) {
+                    $headerIds[(int) $h] = true;
+                }
+                if (is_numeric($f) && (int) $f > 0) {
+                    $footerIds[(int) $f] = true;
+                }
+            }
+        }
+        foreach ($templates['taxonomies'] ?? [] as $part) {
+            if (is_array($part)) {
+                $h = $part['header'] ?? null;
+                $f = $part['footer'] ?? null;
+                if (is_numeric($h) && (int) $h > 0) {
+                    $headerIds[(int) $h] = true;
+                }
+                if (is_numeric($f) && (int) $f > 0) {
+                    $footerIds[(int) $f] = true;
+                }
+            }
+        }
+        $headerIds = array_keys($headerIds);
+        $footerIds = array_keys($footerIds);
+
+        foreach ($headerIds as $id) {
+            $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, $id, null);
+            $html = trim($out['headerHtml']);
+            $html = $this->stripHtmlComments($html);
+            if ($html === '') {
+                continue;
+            }
+            $type = 'header_' . $id;
+            $parsed = $this->parseTemplateHtml($html, true);
+            WpHeadlessTemplate::updateOrCreate(
+                ['site_id' => $siteId, 'type' => $type],
+                [
+                    'parent_id'     => null,
+                    'template_path' => null,
+                    'global'        => true,
+                    'template'      => $html,
+                    'classes'       => $parsed['classes'],
+                    'body_class'    => [],
+                ]
+            );
+        }
+        foreach ($footerIds as $id) {
+            $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, null, $id);
+            $html = trim($out['footerHtml']);
+            $html = $this->stripHtmlComments($html);
+            if ($html === '') {
+                continue;
+            }
+            $type = 'footer_' . $id;
+            $parsed = $this->parseTemplateHtml($html, true);
+            WpHeadlessTemplate::updateOrCreate(
+                ['site_id' => $siteId, 'type' => $type],
+                [
+                    'parent_id'     => null,
+                    'template_path' => null,
+                    'global'        => true,
+                    'template'      => $html,
+                    'classes'       => $parsed['classes'],
+                    'body_class'    => [],
+                ]
+            );
+        }
+    }
+
+    /**
+     * Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML).
+     * Header/footer block (theo ID từ postTypes/taxonomies): nếu chưa có thì gọi HeadlessHeaderFooter để lấy HTML rồi lưu.
+     */
+    private function saveTemplateFiles(Site $site, array $templates, string $graphqlUrl, array $headers): void
     {
         $siteId = $site->id;
 
-        // Xóa hết bản ghi wp_headless_templates cũ cùng site_id trước khi đồng bộ (tránh type cũ tồn khi WP không còn gửi).
+        // Xóa hết bản ghi wp_headless_templates cũ cùng site_id trước khi đồng bộ.
         WpHeadlessTemplate::where('site_id', $siteId)->delete();
+
+        // Thu thập header_id, footer_id từ postTypes và taxonomies; gọi HeadlessHeaderFooter cho từng ID chưa có, lưu type header_{id} / footer_{id}.
+        $this->ensureHeaderFooterBlocksSaved($siteId, $templates, $graphqlUrl, $headers);
 
         $sidebars = $templates['sidebars'] ?? [];
         $parts = [
@@ -271,6 +407,7 @@ GQL;
                 $html = $part;
             }
             $html = is_string($html) ? trim($html) : '';
+            $html = $this->stripHtmlComments($html);
             $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
             $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
             $templatePath = is_array($part) ? (trim((string) ($part['template_path'] ?? ''))) : '';
@@ -310,6 +447,12 @@ GQL;
                 $canonicalIdByClassesKey[$classesKey] = $row->id;
             }
         }
+    }
+
+    /** Xóa mọi HTML comment <!-- ... --> trước khi lưu template. */
+    private function stripHtmlComments(string $html): string
+    {
+        return preg_replace('/<!--.*?-->/s', '', $html);
     }
 
     /**

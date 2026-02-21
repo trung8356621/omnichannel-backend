@@ -57,8 +57,8 @@ final class WpHeadlessStylesOptimizerService
         $filtered = $this->filterCssByClasses($rawCss, $classes);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $classBlocks = $filtered['blocks'];
-        // Nối CSS đặc biệt (HTML_TAGS, :root, *, @font-face, @keyframes) vào đầu ở cuối quá trình tối ưu
         $allBlocks = array_merge($specialBlocks, [self::DEFAULT_CSS_RESET], $classBlocks);
+        $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $allBlocks);
         $optimizedCss = implode("\n", $allBlocks);
         $size = strlen($optimizedCss);
         $chunks = $this->chunkBlocksBySize($allBlocks, self::MAX_CHUNK_BYTES);
@@ -71,24 +71,14 @@ final class WpHeadlessStylesOptimizerService
                 if (!File::isDirectory($dir)) {
                     File::makeDirectory($dir, 0755, true);
                 }
+                $this->ensureDirectoryWritable($dir);
 
                 $ds = DIRECTORY_SEPARATOR;
                 foreach ($chunks as $index => $cssContent) {
                     $filename = $postType . '-' . $index . '.css';
-                    $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . $filename;
                     $fullPath = $dir . $ds . $filename;
-
-                    // Ghi vào file tạm rồi rename; trên Windows nếu đích tồn tại có thể rename thất bại → xóa đích trước hoặc ghi đè trực tiếp
-                    $tmpPath = $dir . $ds . $filename . '.tmp.' . uniqid('', true);
-                    File::put($tmpPath, $cssContent);
-                    @unlink($fullPath);
-                    if (!@rename($tmpPath, $fullPath)) {
-                        if (@file_put_contents($fullPath, $cssContent) === false) {
-                            @unlink($tmpPath);
-                            throw new \RuntimeException('Failed to write CSS file: ' . $fullPath);
-                        }
-                        @unlink($tmpPath);
-                    }
+                    $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
 
                     WpHeadlessStyleOptimized::create([
                         'site_id'     => $siteId,
@@ -338,7 +328,7 @@ final class WpHeadlessStylesOptimizerService
     ];
 
     /**
-     * Giữ lại: (1) rule có selector chứa class → blocks; (2) CSS đặc biệt (thẻ HTML, :root, *, @font-face, @keyframes) → specialBlocks, nối vào đầu ở cuối quá trình.
+     * Giữ lại: (1) rule có selector chứa class → blocks; (2) CSS đặc biệt (thẻ HTML, :root, *, @font-face, @keyframes) → specialBlocks.
      * @return array{blocks: list<string>, specialBlocks: list<string>}
      */
     private function filterCssByClasses(string $css, array $classes): array
@@ -363,7 +353,12 @@ final class WpHeadlessStylesOptimizerService
             $selTrim = trim($selector);
 
             if (str_starts_with($selTrim, '@')) {
-                if (preg_match('/^@(?:font-face|keyframes|charset|import)\b/i', $selTrim)) {
+                if (preg_match('/^@(?:font-face|(?:-\w+-)?keyframes|charset|import)\b/i', $selTrim)) {
+                    if (preg_match('/^@font-face\b/i', $selTrim) && preg_match('/fl-icons/i', $full)) {
+                        continue;
+                    }
+                    $specialBlocks[] = $full;
+                } elseif (preg_match('/^@(?:media|supports)\b/i', $selTrim) && preg_match('/@(?:-\w+-)?keyframes\b/i', $body)) {
                     $specialBlocks[] = $full;
                 } elseif ($selectorClassRegex !== null && preg_match($selectorClassRegex, $body)) {
                     $classBlocks[] = $full;
@@ -538,5 +533,75 @@ final class WpHeadlessStylesOptimizerService
             $chunks[] = implode("\n", $current);
         }
         return $chunks;
+    }
+
+    /**
+     * Minify một block CSS: bỏ comment, gộp khoảng trắng, bỏ space thừa quanh { } : ; ,
+     */
+    private function minifyCss(string $css): string
+    {
+        $css = preg_replace('/\/\*[\s\S]*?\*\//u', '', $css);
+        $css = preg_replace('/[\r\n]+/u', ' ', $css);
+        $css = preg_replace('/\s+/u', ' ', $css);
+        $css = trim($css);
+        $css = preg_replace('/\s*([{}:;,])\s*/u', '$1', $css);
+        return $css;
+    }
+
+    /**
+     * Đảm bảo thư mục có quyền ghi (Windows dev hay báo Permission denied).
+     */
+    private function ensureDirectoryWritable(string $dir): void
+    {
+        clearstatcache(true, $dir);
+        if (!is_writable($dir)) {
+            @chmod($dir, 0777);
+            clearstatcache(true, $dir);
+        }
+    }
+
+    /**
+     * Ghi CSS: (1) ghi đè file, (2) không được thì xóa file cũ rồi ghi, (3) không được thì tạo file mới (tên unique) và trả về đường dẫn mới để lưu DB.
+     */
+    private function writeCssFileSafe(string $fullPath, string $cssContent): string
+    {
+        $dir = \dirname($fullPath);
+        $this->ensureDirectoryWritable($dir);
+
+        $written = $this->tryPut($fullPath, $cssContent);
+        if ($written !== null) {
+            return $written;
+        }
+
+        if (file_exists($fullPath)) {
+            @chmod($fullPath, 0666);
+            @unlink($fullPath);
+            clearstatcache(true, $fullPath);
+        }
+        $written = $this->tryPut($fullPath, $cssContent);
+        if ($written !== null) {
+            return $written;
+        }
+
+        $base = pathinfo($fullPath, PATHINFO_FILENAME);
+        $newPath = $dir . \DIRECTORY_SEPARATOR . $base . '.' . uniqid('', true) . '.css';
+        $written = $this->tryPut($newPath, $cssContent);
+        if ($written !== null) {
+            return $written;
+        }
+
+        throw new \RuntimeException('Failed to write CSS file (tried overwrite, delete+write, and new file): ' . $fullPath);
+    }
+
+    private function tryPut(string $path, string $content): ?string
+    {
+        try {
+            if (@file_put_contents($path, $content) !== false) {
+                return $path;
+            }
+        } catch (\Throwable $e) {
+            // Permission denied etc. → fallback
+        }
+        return null;
     }
 }

@@ -19,11 +19,13 @@ class WpHeadlessTemplateObserver
     {
         $site = $template->wpHeadlessSite;
         if (!$site) {
+            Log::debug('WpHeadlessTemplateObserver: skip (no wpHeadlessSite for site_id ' . $template->site_id . ')');
             return;
         }
 
         $baseUrl = $site->getNextjsBaseUrl();
         if ($baseUrl === '') {
+            Log::debug('WpHeadlessTemplateObserver: skip (getNextjsBaseUrl empty for site_id ' . $template->site_id . ')');
             return;
         }
 
@@ -35,7 +37,7 @@ class WpHeadlessTemplateObserver
         foreach ($rows as $row) {
             $html = $row->template ?? '';
             $fileKey = ($row->template_path !== null && trim((string) $row->template_path) !== '')
-                ? trim((string) $row->template_path)
+                ? $row->type . '-' . trim((string) $row->template_path)
                 : $row->type;
             // Giữ nguyên HTML (kể cả thuộc tính style inline) khi đẩy sang Next.js.
             $templates[$fileKey] = is_string($html) ? $html : '';

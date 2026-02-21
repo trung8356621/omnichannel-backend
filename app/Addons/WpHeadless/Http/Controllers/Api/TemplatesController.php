@@ -43,7 +43,10 @@ class TemplatesController extends Controller
         $rows = WpHeadlessTemplate::where('site_id', $siteId)->get();
         $templates = [];
         foreach ($rows as $row) {
-            $templates[$row->type] = [
+            $key = ($row->template_path !== null && trim((string) $row->template_path) !== '')
+                ? $row->type . '-' . trim((string) $row->template_path)
+                : $row->type;
+            $templates[$key] = [
                 'template_path' => $row->template_path ?? '',
                 'template'      => $row->template ?? '',
                 'bodyClass'     => is_array($row->body_class) ? $row->body_class : [],
