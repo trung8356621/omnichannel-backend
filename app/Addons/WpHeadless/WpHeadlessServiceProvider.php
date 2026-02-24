@@ -4,6 +4,7 @@ namespace App\Addons\WpHeadless;
 
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\WpHeadless\Console\SyncWpSiteDataCommand;
+use App\Addons\WpHeadless\Console\TemplateColumnToJsonCommand;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessConnect;
 use App\Addons\WpHeadless\Filament\Pages\WpHeadlessSitePage;
 use App\Addons\WpHeadless\Http\Controllers\SiteProxyController;
@@ -69,6 +70,7 @@ class WpHeadlessServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 SyncWpSiteDataCommand::class,
+                TemplateColumnToJsonCommand::class,
             ]);
         }
     }

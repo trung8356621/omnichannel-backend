@@ -44,6 +44,9 @@ class OptimizedCssForUrlController extends Controller
         $urlOrPath = $request->input('url');
 
         $data = $this->resolver->fetchNodeByUri($site, $urlOrPath);
+        if ($data === null) {
+            $this->resolver->clearCachedNode($site, $urlOrPath);
+        }
         $postType = $data !== null
             ? (self::TYPENAME_TO_POST_TYPE[$data['__typename'] ?? ''] ?? strtolower((string) ($data['__typename'] ?? 'post')))
             : $this->resolver->resolveUriToPostType($site, $urlOrPath);
@@ -52,7 +55,7 @@ class OptimizedCssForUrlController extends Controller
             $postType = 'global';
         }
 
-        $templatePath = $data['templatePath'] ?? null;
+        $templatePath = $data !== null ? ($data['templatePath'] ?? null) : null;
         $templatePath = $templatePath !== null && $templatePath !== '' ? (string) $templatePath : null;
 
         $templateRow = WpHeadlessTemplate::where('site_id', $site->id)->where('type', $postType)->first();

@@ -42,15 +42,23 @@ class TemplatesController extends Controller
 
         $rows = WpHeadlessTemplate::where('site_id', $siteId)->get();
         $templates = [];
+        $idToFileKey = [];
         foreach ($rows as $row) {
             $key = ($row->template_path !== null && trim((string) $row->template_path) !== '')
                 ? $row->type . '-' . trim((string) $row->template_path)
                 : $row->type;
+            $idToFileKey[$row->id] = $key;
             $templates[$key] = [
                 'template_path' => $row->template_path ?? '',
-                'template'      => $row->template ?? '',
+                'template'      => is_array($row->template) ? json_encode($row->template) : (string) ($row->template ?? ''),
                 'bodyClass'     => is_array($row->body_class) ? $row->body_class : [],
             ];
+        }
+        $templateRelations = [];
+        foreach ($rows as $row) {
+            if ($row->parent_id !== null && isset($idToFileKey[$row->parent_id])) {
+                $templateRelations[$idToFileKey[$row->id]] = $idToFileKey[$row->parent_id];
+            }
         }
 
         $globalChunks = WpHeadlessStyleOptimized::where('site_id', $siteId)
@@ -82,9 +90,10 @@ class TemplatesController extends Controller
         $globalCssChunks = $globalChunks->map(fn ($r) => (string) ($r->content ?? ''))->filter()->values()->all();
 
         return response()->json([
-            'success'         => true,
-            'templates'       => $templates,
-            'globalCssChunks' => $globalCssChunks,
+            'success'            => true,
+            'templates'          => $templates,
+            'template_relations' => $templateRelations,
+            'globalCssChunks'    => $globalCssChunks,
         ]);
     }
 }

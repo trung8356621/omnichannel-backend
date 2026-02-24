@@ -75,7 +75,7 @@ class TemplateReceiveController extends Controller
                     [
                         'parent_id'  => null,
                         'global'     => $global,
-                        'template'   => $html,
+                        'template'   => WpHeadlessTemplate::normalizeTemplateValue($html),
                         'classes'    => $parsed['classes'],
                         'body_class' => $bodyClass,
                     ]

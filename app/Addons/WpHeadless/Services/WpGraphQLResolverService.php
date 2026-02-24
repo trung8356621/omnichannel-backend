@@ -75,8 +75,8 @@ GQL;
      * Trả về mảng dữ liệu node (title, content, excerpt, uri, featuredImage, ...) hoặc null.
      *
      * Với Post/Page, nếu theme (Flatsome, ...) có header/footer theo từng trang thì node sẽ có:
-     * - _header (int|null): ID block header
-     * - _footer (int|null): ID block footer
+     * - tmHeader (int|null): ID block header
+     * - tmFooter (int|null): ID block footer
      * - _headerTemplate (string): HTML đã render của header
      * - _footerTemplate (string): HTML đã render của footer
      * Dùng hasCustomHeaderFooter($node) để kiểm tra trường hợp đặc biệt → thêm template, optimize CSS, đẩy Next.js.
@@ -90,6 +90,12 @@ GQL;
             return null;
         }
 
+        // Nếu có cache còn hạn thì trả về cache cho Next.js.
+        $cached = $this->getCachedNode($site, $path);
+        if ($cached !== null) {
+            return $cached;
+        }
+
         $query = <<<'GQL'
 query GetNodeByUri($uri: String!) {
   nodeByUri(uri: $uri) {
@@ -98,20 +104,24 @@ query GetNodeByUri($uri: String!) {
       databaseId
       uri
       title
-      content
+      contentTemplateJson
       excerpt
       date
       templatePath
       featuredImage { node { sourceUrl altText } }
+      tmHeader
+      tmFooter
     }
     ... on Page {
       databaseId
       uri
       title
-      content
+      contentTemplateJson
       excerpt
       templatePath
       featuredImage { node { sourceUrl altText } }
+      tmHeader
+      tmFooter
     }
     ... on Category {
       databaseId
@@ -119,6 +129,8 @@ query GetNodeByUri($uri: String!) {
       name
       description
       templatePath
+      tmHeader
+      tmFooter
     }
     ... on Tag {
       databaseId
@@ -126,6 +138,8 @@ query GetNodeByUri($uri: String!) {
       name
       description
       templatePath
+      tmHeader
+      tmFooter
     }
   }
 }
@@ -144,7 +158,162 @@ GQL;
         }
 
         $node = $response->json('data.nodeByUri');
-        return \is_array($node) ? $node : null;
+        if (!\is_array($node) || empty($node)) {
+            return null;
+        }
+
+        // So sánh class trong contentTemplateJson với merged_classes; xóa class không tồn tại.
+        if (!empty($node['contentTemplateJson']) && is_string($node['contentTemplateJson'])) {
+            $merged = $this->getMergedClassesForSite($site);
+            $decoded = json_decode($node['contentTemplateJson'], true);
+            if (is_array($decoded)) {
+                $node['contentTemplateJson'] = json_encode($this->stripClassesInContentTemplateJson($decoded, $merged));
+            }
+            // Có contentTemplateJson thì bỏ content (Next.js dùng JSON để render, không cần HTML).
+            unset($node['content']);
+        }
+
+        // Chỉ cache khi có node hợp lệ (có __typename); không bao giờ cache null/empty.
+        if (!empty($node['__typename'])) {
+            $this->setCachedNode($site, $path, $node);
+        }
+
+        return $node;
+    }
+
+    /**
+     * Thời gian cache node (giây). Lấy từ wp_headless_sites.settings['node_cache_ttl_seconds'].
+     */
+    public function getNodeCacheTtlSeconds(Site $site): int
+    {
+        $wpSite = WpHeadlessSite::find($site->id);
+        if ($wpSite === null || !is_array($wpSite->settings)) {
+            return 300;
+        }
+        $ttl = $wpSite->settings['node_cache_ttl_seconds'] ?? null;
+        return is_numeric($ttl) && (int) $ttl > 0 ? (int) $ttl : 300;
+    }
+
+    /**
+     * Đọc danh sách class đã merge của site (từ file lưu sau sync template).
+     *
+     * @return array<int, string>
+     */
+    public function getMergedClassesForSite(Site $site): array
+    {
+        $path = storage_path('app/wp_headless/sites/' . $site->id . '/merged_classes.json');
+        if (!is_file($path)) {
+            return [];
+        }
+        $json = file_get_contents($path);
+        $decoded = json_decode($json, true);
+        return is_array($decoded) ? array_values($decoded) : [];
+    }
+
+    /**
+     * Xóa class trong cây template JSON không nằm trong danh sách allowed (merged_classes).
+     *
+     * @param array<string, mixed> $json Cấu trúc { children: [...], classes?: [...] }
+     * @param array<int, string> $allowedClasses
+     * @return array<string, mixed>
+     */
+    public function stripClassesInContentTemplateJson(array $json, array $allowedClasses): array
+    {
+        $set = array_flip($allowedClasses);
+
+        $filterInTree = function (array $nodes) use (&$filterInTree, $set): array {
+            $out = [];
+            foreach ($nodes as $node) {
+                if (!is_array($node)) {
+                    $out[] = $node;
+                    continue;
+                }
+                if (isset($node['type']) && $node['type'] === 'element' && isset($node['attrs']['class'])) {
+                    $classStr = $node['attrs']['class'];
+                    $filtered = [];
+                    foreach (preg_split('/\s+/', trim($classStr), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $c) {
+                        $c = trim($c);
+                        if ($c !== '' && isset($set[$c])) {
+                            $filtered[] = $c;
+                        }
+                    }
+                    $node['attrs']['class'] = implode(' ', $filtered);
+                    if ($node['attrs']['class'] === '') {
+                        unset($node['attrs']['class']);
+                    }
+                    if (empty($node['attrs'])) {
+                        unset($node['attrs']);
+                    }
+                }
+                if (isset($node['children']) && is_array($node['children'])) {
+                    $node['children'] = $filterInTree($node['children']);
+                }
+                $out[] = $node;
+            }
+            return $out;
+        };
+
+        if (isset($json['children']) && is_array($json['children'])) {
+            $json['children'] = $filterInTree($json['children']);
+        }
+        if (isset($json['classes']) && is_array($json['classes'])) {
+            $json['classes'] = array_values(array_intersect($json['classes'], $allowedClasses));
+            sort($json['classes']);
+        }
+
+        return $json;
+    }
+
+    private function getCachedNode(Site $site, string $uri): ?array
+    {
+        $ttl = $this->getNodeCacheTtlSeconds($site);
+        $dir = storage_path('app/wp_headless/cache/nodes');
+        if (!is_dir($dir)) {
+            return null;
+        }
+        $key = md5($site->id . '_' . $uri);
+        $path = $dir . '/' . $key . '.json';
+        if (!is_file($path)) {
+            return null;
+        }
+        $mtime = filemtime($path);
+        if ($mtime === false || time() - $mtime > $ttl) {
+            return null;
+        }
+        $raw = file_get_contents($path);
+        $decoded = json_decode($raw, true);
+        // Chỉ trả về cache khi decode ra array hợp lệ (có __typename); nếu file chứa null hoặc không hợp lệ thì xóa file và coi như cache miss.
+        if (is_array($decoded) && !empty($decoded['__typename'])) {
+            return $decoded;
+        }
+        @unlink($path);
+        return null;
+    }
+
+    private function setCachedNode(Site $site, string $uri, array $node): void
+    {
+        $dir = storage_path('app/wp_headless/cache/nodes');
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $key = md5($site->id . '_' . $uri);
+        $path = $dir . '/' . $key . '.json';
+        file_put_contents($path, json_encode($node, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Xóa cache node cho path (để lần sau fetchNodeByUri gọi lại GraphQL).
+     * Gọi khi data = null để tránh dùng lại cache cũ không hợp lệ.
+     */
+    public function clearCachedNode(Site $site, string $urlOrPath): void
+    {
+        $path = $this->normalizeUriToPath($urlOrPath, $site);
+        $dir = storage_path('app/wp_headless/cache/nodes');
+        $key = md5($site->id . '_' . $path);
+        $filePath = $dir . '/' . $key . '.json';
+        if (is_file($filePath)) {
+            @unlink($filePath);
+        }
     }
 
     /**
@@ -154,8 +323,8 @@ GQL;
      */
     public function hasCustomHeaderFooter(array $node): bool
     {
-        $header = $node['_header'] ?? null;
-        $footer = $node['_footer'] ?? null;
+        $header = $node['tmHeader'] ?? null;
+        $footer = $node['tmFooter'] ?? null;
         return ($header !== null && (int) $header > 0) || ($footer !== null && (int) $footer > 0);
     }
 
@@ -184,7 +353,7 @@ GQL;
                 [
                     'parent_id'  => null,
                     'global'     => false,
-                    'template'   => $headerHtml,
+                    'template'   => WpHeadlessTemplate::normalizeTemplateValue($headerHtml),
                     'classes'    => $parsed['classes'],
                     'body_class' => [],
                 ]
@@ -198,7 +367,7 @@ GQL;
                 [
                     'parent_id'  => null,
                     'global'     => false,
-                    'template'   => $footerHtml,
+                    'template'   => WpHeadlessTemplate::normalizeTemplateValue($footerHtml),
                     'classes'    => $parsed['classes'],
                     'body_class' => [],
                 ]

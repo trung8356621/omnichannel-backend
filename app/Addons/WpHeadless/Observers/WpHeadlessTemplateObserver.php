@@ -15,6 +15,14 @@ use Illuminate\Support\Facades\Log;
  */
 class WpHeadlessTemplateObserver
 {
+    private static function fileKeyForRow(WpHeadlessTemplate $row): string
+    {
+        $path = $row->template_path !== null && trim((string) $row->template_path) !== ''
+            ? trim((string) $row->template_path)
+            : '';
+        return $path !== '' ? $row->type . '-' . $path : $row->type;
+    }
+
     public function saved(WpHeadlessTemplate $template): void
     {
         $site = $template->wpHeadlessSite;
@@ -34,13 +42,18 @@ class WpHeadlessTemplateObserver
 
         $rows = WpHeadlessTemplate::on($conn)->where('site_id', $siteId)->get();
         $templates = [];
+        $templateRelations = [];
+        $idToFileKey = [];
         foreach ($rows as $row) {
+            $fileKey = self::fileKeyForRow($row);
+            $idToFileKey[$row->id] = $fileKey;
             $html = $row->template ?? '';
-            $fileKey = ($row->template_path !== null && trim((string) $row->template_path) !== '')
-                ? $row->type . '-' . trim((string) $row->template_path)
-                : $row->type;
-            // Giữ nguyên HTML (kể cả thuộc tính style inline) khi đẩy sang Next.js.
             $templates[$fileKey] = is_string($html) ? $html : '';
+        }
+        foreach ($rows as $row) {
+            if ($row->parent_id !== null && isset($idToFileKey[$row->parent_id])) {
+                $templateRelations[$idToFileKey[$row->id]] = $idToFileKey[$row->parent_id];
+            }
         }
 
         $types = array_keys($templates);
@@ -73,8 +86,9 @@ class WpHeadlessTemplateObserver
             try {
                 $receiveResponse = Http::timeout(10)
                     ->post($baseUrl . '/api/wp-templates/receive', [
-                        'site_id'   => $siteId,
-                        'templates' => $templates,
+                        'site_id'           => $siteId,
+                        'templates'         => $templates,
+                        'template_relations' => $templateRelations,
                     ]);
                 if (!$receiveResponse->successful()) {
                     Log::warning('WpHeadlessTemplateObserver: receive failed', [

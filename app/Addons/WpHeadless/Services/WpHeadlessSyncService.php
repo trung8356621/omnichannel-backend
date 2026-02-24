@@ -51,9 +51,11 @@ final class WpHeadlessSyncService
         }
 
         $templates = $this->queryTemplates($graphqlUrl, $headers);
+        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
         if ($templates !== null) {
             $this->upsertWpHeadlessSite($site, $templates);
-            $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
+            $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
+            $this->syncSidebarWidgets($site, $headers);
             $result['synced'][] = 'templates';
         } else {
             Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
@@ -106,9 +108,11 @@ final class WpHeadlessSyncService
             }
         } elseif ($step === 2) {
             $templates = $this->queryTemplates($graphqlUrl, $headers);
+            $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
             if ($templates !== null) {
                 $this->upsertWpHeadlessSite($site, $templates);
-                $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
+                $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems ?? []);
+                $this->syncSidebarWidgets($site, $headers);
                 $result['synced'][] = 'templates';
             } else {
                 Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
@@ -146,6 +150,13 @@ final class WpHeadlessSyncService
     {
         $scheme = ($site->ssl ?? true) ? 'https' : 'http';
         return $scheme . '://' . $site->domain . '/graphql';
+    }
+
+    /** Base URL WordPress (không có path /graphql) dùng cho REST wp-json. */
+    private function wpBaseUrl(Site $site): string
+    {
+        $scheme = ($site->ssl ?? true) ? 'https' : 'http';
+        return rtrim($scheme . '://' . $site->domain, '/');
     }
 
     private function queryPluginsAndThemes(string $url, array $headers): ?array
@@ -201,14 +212,48 @@ GQL;
             return null;
         }
         return [
-            'theme'      => $decoded['theme'] ?? [],
-            'header'     => $decoded['header'] ?? '',
-            'footer'     => $decoded['footer'] ?? '',
-            'sidebars'   => $decoded['sidebars'] ?? [],
-            'settings'   => $decoded['settings'] ?? null,
-            'postTypes'  => $decoded['postTypes'] ?? [],
-            'taxonomies' => $decoded['taxonomies'] ?? [],
+            'theme'               => $decoded['theme'] ?? [],
+            'header'              => $decoded['header'] ?? '',
+            'footer'              => $decoded['footer'] ?? '',
+            'headerTemplateJson'  => $decoded['headerTemplateJson'] ?? '',
+            'footerTemplateJson'   => $decoded['footerTemplateJson'] ?? '',
+            'sidebars'            => $decoded['sidebars'] ?? [],
+            'settings'            => $decoded['settings'] ?? null,
+            'postTypes'           => $decoded['postTypes'] ?? [],
+            'taxonomies'          => $decoded['taxonomies'] ?? [],
         ];
+    }
+
+    /**
+     * Lấy loop template items từ WordPress GraphQL headlessTemplateItems (product/post card, portfolio, content-none).
+     *
+     * @return array<int, array{slug: string, type: string, template: string, classes: array}>
+     */
+    private function queryTemplateItems(string $url, array $headers): array
+    {
+        $query = <<<'GQL'
+query {
+  headlessTemplateItems
+}
+GQL;
+
+        $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
+        if (! $response->successful()) {
+            Log::warning('WpHeadlessSync: headlessTemplateItems request failed', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
+            return [];
+        }
+        $raw = $response->json('data.headlessTemplateItems');
+        if ($raw === null) {
+            return [];
+        }
+        $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (! is_array($decoded)) {
+            return [];
+        }
+        return $decoded;
     }
 
     private function queryPostTypeStyles(string $url, array $headers): ?array
@@ -232,17 +277,14 @@ GQL;
     }
 
     /**
-     * Gọi GraphQL headlessHeaderFooter(header: Int, footer: Int) lấy HTML của header/footer block.
+     * Gọi GraphQL headlessHeaderFooter(header: Int, footer: Int) lấy HTML và template JSON của header/footer block.
      *
-     * @return array{headerHtml: string, footerHtml: string}
+     * @return array{headerHtml: string, footerHtml: string, headerTemplateJson: string, footerTemplateJson: string}
      */
     private function queryHeaderFooterHtml(string $url, array $headers, ?int $headerId, ?int $footerId): array
     {
         $headerId = $headerId > 0 ? $headerId : null;
         $footerId = $footerId > 0 ? $footerId : null;
-        if ($headerId === null && $footerId === null) {
-            return ['headerHtml' => '', 'footerHtml' => ''];
-        }
         $vars = [];
         if ($headerId !== null) {
             $vars['header'] = $headerId;
@@ -253,8 +295,8 @@ GQL;
         $query = <<<'GQL'
 query HeadlessHeaderFooter($header: Int, $footer: Int) {
   headlessHeaderFooter(header: $header, footer: $footer) {
-    headerHtml
-    footerHtml
+    headerTemplateJson
+    footerTemplateJson
   }
 }
 GQL;
@@ -268,107 +310,197 @@ GQL;
                 'header' => $headerId,
                 'footer' => $footerId,
             ]);
-            return ['headerHtml' => '', 'footerHtml' => ''];
+            return ['headerHtml' => '', 'footerHtml' => '', 'headerTemplateJson' => '', 'footerTemplateJson' => ''];
         }
         $node = $response->json('data.headlessHeaderFooter');
         if (!is_array($node)) {
-            return ['headerHtml' => '', 'footerHtml' => ''];
+            return ['headerHtml' => '', 'footerHtml' => '', 'headerTemplateJson' => '', 'footerTemplateJson' => ''];
         }
         return [
-            'headerHtml' => (string) ($node['headerHtml'] ?? ''),
-            'footerHtml' => (string) ($node['footerHtml'] ?? ''),
+            'headerTemplateJson' => (string) ($node['headerTemplateJson'] ?? ''),
+            'footerTemplateJson' => (string) ($node['footerTemplateJson'] ?? ''),
         ];
     }
 
     /**
-     * Thu thập mọi header_id / footer_id từ postTypes và taxonomies, gọi HeadlessHeaderFooter cho từng ID rồi lưu wp_headless_templates (type header_{id} / footer_{id}).
+     * Thu thập mọi header_id / footer_id từ postTypes và taxonomies; dùng headerTemplateJson/footerTemplateJson từ response nếu có, không thì gọi HeadlessHeaderFooter.
      */
     private function ensureHeaderFooterBlocksSaved(int $siteId, array $templates, string $graphqlUrl, array $headers): void
     {
         $headerIds = [];
         $footerIds = [];
+        $headerJsonById = [];
+        $footerJsonById = [];
+
+        $collect = static function (array $part) use (&$headerIds, &$footerIds, &$headerJsonById, &$footerJsonById): void {
+            $h = $part['header'] ?? null;
+            $f = $part['footer'] ?? null;
+            if (is_numeric($h) && (int) $h > 0) {
+                $headerIds[(int) $h] = true;
+                $json = trim((string) ($part['headerTemplateJson'] ?? ''));
+                if ($json !== '' && ! isset($headerJsonById[(int) $h])) {
+                    $headerJsonById[(int) $h] = $json;
+                }
+            }
+            if (is_numeric($f) && (int) $f > 0) {
+                $footerIds[(int) $f] = true;
+                $json = trim((string) ($part['footerTemplateJson'] ?? ''));
+                if ($json !== '' && ! isset($footerJsonById[(int) $f])) {
+                    $footerJsonById[(int) $f] = $json;
+                }
+            }
+        };
+
         if (is_numeric($templates['header'] ?? null) && (int) $templates['header'] > 0) {
-            $headerIds[(int) $templates['header']] = true;
+            $hid = (int) $templates['header'];
+            $headerIds[$hid] = true;
+            $rootHeaderJson = trim((string) ($templates['headerTemplateJson'] ?? ''));
+            if ($rootHeaderJson !== '') {
+                $headerJsonById[$hid] = $rootHeaderJson;
+            }
         }
         if (is_numeric($templates['footer'] ?? null) && (int) $templates['footer'] > 0) {
-            $footerIds[(int) $templates['footer']] = true;
+            $fid = (int) $templates['footer'];
+            $footerIds[$fid] = true;
+            $rootFooterJson = trim((string) ($templates['footerTemplateJson'] ?? ''));
+            if ($rootFooterJson !== '') {
+                $footerJsonById[$fid] = $rootFooterJson;
+            }
         }
         foreach ($templates['postTypes'] ?? [] as $part) {
             if (is_array($part)) {
-                $h = $part['header'] ?? null;
-                $f = $part['footer'] ?? null;
-                if (is_numeric($h) && (int) $h > 0) {
-                    $headerIds[(int) $h] = true;
-                }
-                if (is_numeric($f) && (int) $f > 0) {
-                    $footerIds[(int) $f] = true;
-                }
+                $collect($part);
             }
         }
         foreach ($templates['taxonomies'] ?? [] as $part) {
             if (is_array($part)) {
-                $h = $part['header'] ?? null;
-                $f = $part['footer'] ?? null;
-                if (is_numeric($h) && (int) $h > 0) {
-                    $headerIds[(int) $h] = true;
-                }
-                if (is_numeric($f) && (int) $f > 0) {
-                    $footerIds[(int) $f] = true;
-                }
+                $collect($part);
             }
         }
         $headerIds = array_keys($headerIds);
         $footerIds = array_keys($footerIds);
 
-        foreach ($headerIds as $id) {
-            $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, $id, null);
-            $html = trim($out['headerHtml']);
-            $html = $this->stripHtmlComments($html);
-            if ($html === '') {
-                continue;
+        // Luôn đảm bảo có header/footer mặc định (type 'header', 'footer') khi root không có ID dạng số > 0.
+        $rootHeader = $templates['header'] ?? null;
+        $rootFooter = $templates['footer'] ?? null;
+        $needDefaultHeader = ! (is_numeric($rootHeader) && (int) $rootHeader > 0);
+        $needDefaultFooter = ! (is_numeric($rootFooter) && (int) $rootFooter > 0);
+        if ($needDefaultHeader || $needDefaultFooter) {
+            $defaultHeaderJson = $templates['headerTemplateJson'] ?? '';
+            $defaultFooterJson = $templates['footerTemplateJson'] ?? '';
+            $defaultHeaderJson = is_array($defaultHeaderJson)
+                ? json_encode($defaultHeaderJson, \JSON_UNESCAPED_UNICODE)
+                : trim((string) $defaultHeaderJson);
+            $defaultFooterJson = is_array($defaultFooterJson)
+                ? json_encode($defaultFooterJson, \JSON_UNESCAPED_UNICODE)
+                : trim((string) $defaultFooterJson);
+            if (($needDefaultHeader && $defaultHeaderJson === '') || ($needDefaultFooter && $defaultFooterJson === '')) {
+                $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, null, null);
+                if ($needDefaultHeader && $defaultHeaderJson === '') {
+                    $defaultHeaderJson = trim((string) ($out['headerTemplateJson'] ?? ''));
+                }
+                if ($needDefaultFooter && $defaultFooterJson === '') {
+                    $defaultFooterJson = trim((string) ($out['footerTemplateJson'] ?? ''));
+                }
             }
-            $type = 'header_' . $id;
-            $parsed = $this->parseTemplateHtml($html, true);
-            WpHeadlessTemplate::updateOrCreate(
-                ['site_id' => $siteId, 'type' => $type],
-                [
-                    'parent_id'     => null,
-                    'template_path' => null,
-                    'global'        => true,
-                    'template'      => $html,
-                    'classes'       => $parsed['classes'],
-                    'body_class'    => [],
-                ]
-            );
+            if ($needDefaultHeader && $defaultHeaderJson !== '') {
+                $decoded = json_decode($defaultHeaderJson, true);
+                $classes = is_array($decoded) && isset($decoded['classes']) && is_array($decoded['classes'])
+                    ? $decoded['classes']
+                    : [];
+                sort($classes);
+                WpHeadlessTemplate::updateOrCreate(
+                    ['site_id' => $siteId, 'type' => 'header'],
+                    [
+                        'parent_id'     => null,
+                        'template_path' => null,
+                        'global'        => true,
+                        'template'      => WpHeadlessTemplate::normalizeTemplateValue($defaultHeaderJson),
+                        'classes'       => $classes,
+                        'body_class'    => [],
+                    ]
+                );
+            }
+            if ($needDefaultFooter && $defaultFooterJson !== '') {
+                $decoded = json_decode($defaultFooterJson, true);
+                $classes = is_array($decoded) && isset($decoded['classes']) && is_array($decoded['classes'])
+                    ? $decoded['classes']
+                    : [];
+                sort($classes);
+                WpHeadlessTemplate::updateOrCreate(
+                    ['site_id' => $siteId, 'type' => 'footer'],
+                    [
+                        'parent_id'     => null,
+                        'template_path' => null,
+                        'global'        => true,
+                        'template'      => WpHeadlessTemplate::normalizeTemplateValue($defaultFooterJson),
+                        'classes'       => $classes,
+                        'body_class'    => [],
+                    ]
+                );
+            }
+        }
+
+        foreach ($headerIds as $id) {
+            $headerJson = $headerJsonById[$id] ?? null;
+            if ($headerJson === null || $headerJson === '') {
+                $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, $id, null);
+                $headerJson = trim((string) ($out['headerTemplateJson'] ?? ''));
+            }
+            if ($headerJson !== '') {
+                $decoded = json_decode($headerJson, true);
+                $classes = is_array($decoded) && isset($decoded['classes']) && is_array($decoded['classes'])
+                    ? $decoded['classes']
+                    : [];
+                sort($classes);
+                WpHeadlessTemplate::updateOrCreate(
+                    ['site_id' => $siteId, 'type' => 'header_' . $id],
+                    [
+                        'parent_id'     => null,
+                        'template_path' => null,
+                        'global'        => true,
+                        'template'      => WpHeadlessTemplate::normalizeTemplateValue($headerJson),
+                        'classes'       => $classes,
+                        'body_class'    => [],
+                    ]
+                );
+            }
         }
         foreach ($footerIds as $id) {
-            $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, null, $id);
-            $html = trim($out['footerHtml']);
-            $html = $this->stripHtmlComments($html);
-            if ($html === '') {
-                continue;
+            $footerJson = $footerJsonById[$id] ?? null;
+            if ($footerJson === null || $footerJson === '') {
+                $out = $this->queryHeaderFooterHtml($graphqlUrl, $headers, null, $id);
+                $footerJson = trim((string) ($out['footerTemplateJson'] ?? ''));
             }
-            $type = 'footer_' . $id;
-            $parsed = $this->parseTemplateHtml($html, true);
-            WpHeadlessTemplate::updateOrCreate(
-                ['site_id' => $siteId, 'type' => $type],
-                [
-                    'parent_id'     => null,
-                    'template_path' => null,
-                    'global'        => true,
-                    'template'      => $html,
-                    'classes'       => $parsed['classes'],
-                    'body_class'    => [],
-                ]
-            );
+            if ($footerJson !== '') {
+                $decoded = json_decode($footerJson, true);
+                $classes = is_array($decoded) && isset($decoded['classes']) && is_array($decoded['classes'])
+                    ? $decoded['classes']
+                    : [];
+                sort($classes);
+                WpHeadlessTemplate::updateOrCreate(
+                    ['site_id' => $siteId, 'type' => 'footer_' . $id],
+                    [
+                        'parent_id'     => null,
+                        'template_path' => null,
+                        'global'        => true,
+                        'template'      => WpHeadlessTemplate::normalizeTemplateValue($footerJson),
+                        'classes'       => $classes,
+                        'body_class'    => [],
+                    ]
+                );
+            }
         }
     }
 
     /**
-     * Lưu header / footer / sidebar vào bảng wp_headless_templates (bóc tách classes + styles từ HTML).
-     * Header/footer block (theo ID từ postTypes/taxonomies): nếu chưa có thì gọi HeadlessHeaderFooter để lấy HTML rồi lưu.
+     * Lưu header / footer / sidebar / postTypes / taxonomies + loop template items vào bảng wp_headless_templates.
+     * Payload từ WordPress (headlessTemplates): toàn bộ là JSON. headlessTemplateItems: loop card (product/post) với placeholder, JSON.
+     * Header/footer block: lấy từ root headerTemplateJson/footerTemplateJson hoặc gọi HeadlessHeaderFooter.
+     *
+     * @param array<int, array{slug: string, type: string, template: string, classes: array}> $templateItems từ headlessTemplateItems
      */
-    private function saveTemplateFiles(Site $site, array $templates, string $graphqlUrl, array $headers): void
+    private function saveTemplateFiles(Site $site, array $templates, string $graphqlUrl, array $headers, array $templateItems = []): void
     {
         $siteId = $site->id;
 
@@ -387,6 +519,18 @@ GQL;
             ...($templates['taxonomies'] ?? [])
         ];
 
+        foreach ($templateItems as $item) {
+            $type = $item['type'] ?? '';
+            if ($type !== '' && isset($item['template'])) {
+                $parts[$type] = [
+                    'template'      => $item['template'],
+                    'classes'       => $item['classes'] ?? [],
+                    'bodyClass'     => [],
+                    'template_path' => null,
+                ];
+            }
+        }
+
         /** Các type là global (không phải post_type / taxonomy): header, footer, sidebars */
         $globalTypes = array_merge(['header', 'footer'], array_keys($sidebars));
 
@@ -394,37 +538,56 @@ GQL;
         $canonicalIdByClassesKey = [];
 
         foreach ($parts as $type => $part) {
-            // Home: lưu full_html. Còn lại: lưu template; nếu template rỗng thì fallback full_html.
+            // Header/footer: khi giá trị chỉ là ID (số) thì không lưu row type=header/footer — nội dung thật nằm ở header_{id}, footer_{id} (đã lưu JSON trong ensureHeaderFooterBlocksSaved).
+            if (($type === 'header' || $type === 'footer') && (is_numeric($part) || (is_string($part) && trim($part) !== '' && preg_match('/^\d+$/', trim($part))))) {
+                continue;
+            }
+            // Toàn bộ từ WordPress là JSON: mỗi item chỉ có trường template (chuỗi JSON), không còn full_html.
             if (is_array($part)) {
-                $fullHtml = trim((string) ($part['full_html'] ?? ''));
-                $template = trim((string) ($part['template'] ?? ''));
-                if ($type === 'home') {
-                    $html = $fullHtml !== '' ? $fullHtml : $template;
-                } else {
-                    $html = $template !== '' ? $template : $fullHtml;
-                }
+                $rawTemplate = $part['template'] ?? '';
+                $html = is_array($rawTemplate) ? json_encode($rawTemplate) : $this->ensureJsonOrError(trim((string) $rawTemplate));
             } else {
-                $html = $part;
+                $html = is_array($part) ? json_encode($part) : $this->ensureJsonOrError(trim((string) $part));
             }
             $html = is_string($html) ? trim($html) : '';
-            $html = $this->stripHtmlComments($html);
+            // Chỉ strip comment khi là HTML; nếu đã là JSON thì giữ nguyên.
+            if ($html !== '' && ! str_starts_with($html, '{') && ! str_starts_with($html, '[')) {
+                $html = $this->stripHtmlComments($html);
+            }
             $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
             $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
             $templatePath = is_array($part) ? (trim((string) ($part['template_path'] ?? ''))) : '';
             $templatePath = $templatePath !== '' ? $templatePath : null;
 
-            if ($html === '') {
+            $isSidebarType = str_starts_with((string) $type, 'sidebar_') && isset($sidebars[$type]);
+            if ($html === '' && ! $isSidebarType) {
                 continue;
             }
-            // Không lưu nếu giống post_content (chỉ nội dung bài) — tránh ghi đè template đúng.
+            // Sidebar: WordPress chỉ gửi list ID (template rỗng); nội dung widget lấy qua API tvh/v1/sidebar-widgets?sidebar_id=...
+            // Không lưu nếu giống post_content (chỉ nội dung bài) — tránh ghi đè template đúng. Bỏ qua nếu là template JSON (mọi data từ WP giờ là JSON).
             $isPostTypeOrTaxonomy = ! \in_array($type, $globalTypes, true);
-            if ($isPostTypeOrTaxonomy && ! $this->looksLikeFullTemplate($html)) {
+            if ($isPostTypeOrTaxonomy && ! $this->looksLikeFullTemplate($html) && ! $this->isTemplateJsonString($html)) {
                 continue;
             }
-            $forStaticWithScript = in_array($type, ['header', 'footer'], true)
-                || (isset($sidebars[$type]) && $type !== '');
-            $parsed = $this->parseTemplateHtml($html, $forStaticWithScript);
-            $classes = $parsed['classes'];
+            // WordPress đã gửi classes (từ parse_full_html_to_template_json) → dùng luôn, bỏ tách ở Laravel.
+            $classes = null;
+            if (is_array($part) && isset($part['classes']) && is_array($part['classes'])) {
+                $classes = array_values($part['classes']);
+                sort($classes);
+            }
+            if ($classes === null && $this->isTemplateJsonString($html)) {
+                $decoded = json_decode($html, true);
+                if (is_array($decoded) && isset($decoded['classes']) && is_array($decoded['classes'])) {
+                    $classes = array_values($decoded['classes']);
+                    sort($classes);
+                }
+            }
+            if ($classes === null) {
+                $forStaticWithScript = in_array($type, ['header', 'footer'], true)
+                    || (isset($sidebars[$type]) && $type !== '');
+                $parsed = $this->parseTemplateHtml($html, $forStaticWithScript);
+                $classes = $parsed['classes'];
+            }
 
             $classesKey = json_encode($classes);
             $parentId = $canonicalIdByClassesKey[$classesKey] ?? null;
@@ -437,7 +600,7 @@ GQL;
                     'parent_id'     => $parentId,
                     'template_path' => $templatePath,
                     'global'        => $isGlobal,
-                    'template'      => $html,
+                    'template'      => WpHeadlessTemplate::normalizeTemplateValue($html),
                     'classes'       => $classes,
                     'body_class'    => $bodyClass,
                 ]
@@ -447,6 +610,137 @@ GQL;
                 $canonicalIdByClassesKey[$classesKey] = $row->id;
             }
         }
+
+        // Merge toàn bộ class trong site → 1 file để fetchNodeByUri so sánh và xóa class dư thừa trong post_content JSON.
+        $this->saveMergedClassesForSite($siteId);
+    }
+
+    /**
+     * Sau khi sync template xong: merge toàn bộ class từ wp_headless_templates của site vào 1 file JSON.
+     * File dùng để so sánh với post_content JSON và xóa class không tồn tại trong template.
+     */
+    public function saveMergedClassesForSite(int $siteId): void
+    {
+        $rows = WpHeadlessTemplate::where('site_id', $siteId)->get();
+        $merged = [];
+        foreach ($rows as $row) {
+            $classes = $row->classes;
+            if (is_array($classes)) {
+                foreach ($classes as $c) {
+                    $c = trim((string) $c);
+                    if ($c !== '') {
+                        $merged[$c] = true;
+                    }
+                }
+            }
+        }
+        $classes = array_keys($merged);
+        sort($classes);
+
+        $dir = storage_path('app/wp_headless/sites/' . $siteId);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        $path = $dir . '/merged_classes.json';
+        file_put_contents($path, json_encode($classes, JSON_UNESCAPED_UNICODE));
+    }
+
+    /**
+     * Kéo toàn bộ template dạng sidebar_ từ WordPress REST:
+     * GET {wp_url}/wp-json/tvh/v1/sidebar-widgets?sidebar_id=sidebar-main
+     * Lưu JSON trả về vào cột template của từng bản ghi sidebar.
+     */
+    private function syncSidebarWidgets(Site $site, array $headers): void
+    {
+        $siteId = $site->id;
+        $rows   = WpHeadlessTemplate::where('site_id', $siteId)
+            ->where('type', 'like', 'sidebar_%')
+            ->get();
+
+        if ($rows->isEmpty()) {
+            return;
+        }
+
+        $baseUrl = $this->wpBaseUrl($site);
+        $endpoint = $baseUrl . '/wp-json/tvh/v1/sidebar-widgets';
+
+        foreach ($rows as $row) {
+            $sidebarId = Str::startsWith($row->type, 'sidebar_')
+                ? substr($row->type, 8)
+                : $row->type;
+            if ($sidebarId === '') {
+                continue;
+            }
+
+            $url = $endpoint . '?sidebar_id=' . rawurlencode($sidebarId);
+
+            try {
+                $response = Http::timeout(15)
+                    ->withHeaders($headers)
+                    ->acceptJson()
+                    ->get($url);
+            } catch (\Throwable $e) {
+                Log::warning('WpHeadlessSync: sidebar-widgets request failed', [
+                    'site_id'    => $siteId,
+                    'sidebar_id' => $sidebarId,
+                    'error'      => $e->getMessage(),
+                ]);
+                continue;
+            }
+
+            if (! $response->successful()) {
+                Log::debug('WpHeadlessSync: sidebar-widgets non-2xx', [
+                    'site_id'    => $siteId,
+                    'sidebar_id' => $sidebarId,
+                    'status'     => $response->status(),
+                ]);
+                continue;
+            }
+
+            $body = $response->body();
+            $json = $response->json();
+            if (is_array($json) && ($json['success'] ?? false) === true) {
+                $row->template = WpHeadlessTemplate::normalizeTemplateValue($body);
+                // Đồng bộ classes từ class_bao_ngoai và html_class tách từ custom_html (để CSS optimize dùng).
+                $mergedClasses = $this->mergeSidebarClassesFromPayload($json);
+                if ($mergedClasses !== []) {
+                    $row->classes = $mergedClasses;
+                }
+                $row->save();
+            }
+        }
+    }
+
+    /**
+     * Gom class_bao_ngoai và html_class từ từng widget (custom_html) trong payload sidebar API.
+     *
+     * @param array<string, mixed> $payload Decoded response từ tvh/v1/sidebar-widgets
+     * @return list<string>
+     */
+    private function mergeSidebarClassesFromPayload(array $payload): array
+    {
+        $classes = [];
+        foreach ((array) ($payload['class_bao_ngoai'] ?? []) as $c) {
+            $c = trim((string) $c);
+            if ($c !== '') {
+                $classes[$c] = true;
+            }
+        }
+        foreach ((array) ($payload['danh_sach_widget'] ?? []) as $widget) {
+            if (! is_array($widget)) {
+                continue;
+            }
+            foreach ((array) ($widget['html_class'] ?? []) as $c) {
+                $c = trim((string) $c);
+                if ($c !== '') {
+                    $classes[$c] = true;
+                }
+            }
+        }
+        $list = array_keys($classes);
+        sort($list);
+
+        return array_values($list);
     }
 
     /** Xóa mọi HTML comment <!-- ... --> trước khi lưu template. */
@@ -488,6 +782,27 @@ GQL;
             }
         }
         return false;
+    }
+
+    /** Nếu chuỗi là JSON hợp lệ thì trả về nguyên; nếu không (vd. HTML) thì trả về chuỗi JSON lỗi để lưu DB. */
+    private function ensureJsonOrError(string $s): string
+    {
+        if ($s === '') {
+            return '';
+        }
+        $s = preg_replace('/^\xEF\xBB\xBF/', '', $s);
+        json_decode($s);
+        if (json_last_error() === \JSON_ERROR_NONE) {
+            return $s;
+        }
+        return '{"error":"not JSON"}';
+    }
+
+    /** Chuỗi có phải template JSON (children array) từ WordPress — vẫn lưu vào wp_headless_templates. */
+    private function isTemplateJsonString(string $value): bool
+    {
+        $v = trim($value);
+        return $v !== '' && str_contains($v, '"children"') && str_contains($v, '[');
     }
 
     /**
