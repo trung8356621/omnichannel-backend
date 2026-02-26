@@ -188,18 +188,19 @@ GQL;
     }
 
     /**
-     * Lấy templates từ WordPress qua GraphQL headlessTemplates (plugin WP hiện chỉ expose field này).
-     * Trả về: theme, header, footer, sidebars, postTypes, taxonomies.
+     * Lấy templates từ WordPress qua GraphQL.
+     * Ưu tiên headlessTemplates (JSON đầy đủ); nếu lỗi/rỗng thì fallback query các field nhỏ (headlessTemplatesTheme, ...) và ghép.
+     * Trả về: theme, header, footer, headerTemplateJson, footerTemplateJson, sidebars, postTypes, taxonomies (đồng bộ với WP).
      */
     private function queryTemplates(string $url, array $headers): ?array
     {
-        $query = <<<'GQL'
+        $response = Http::timeout(60)->withHeaders($headers)->post($url, [
+            'query' => <<<'GQL'
 query {
   headlessTemplates
 }
-GQL;
-
-        $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
+GQL,
+        ]);
         if (!$response->successful()) {
             Log::warning('WpHeadlessSync: headlessTemplates request failed', [
                 'status' => $response->status(),
@@ -208,24 +209,82 @@ GQL;
             return null;
         }
         $raw = $response->json('data.headlessTemplates');
-        if ($raw === null) {
+        $decoded = null;
+        if ($raw !== null) {
+            $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
+        }
+        if (is_array($decoded) && isset($decoded['postTypes'])) {
+            return $this->normalizeTemplatesResponse($decoded);
+        }
+        return $this->queryTemplatesFromSmallFields($url, $headers);
+    }
+
+    /**
+     * Fallback: lấy templates từ các field GraphQL nhỏ và ghép.
+     * Đồng bộ với WordPress: mỗi field tương ứng TVH_Headless_Templates::get_headless_templates_*() (register-templates.php).
+     */
+    private function queryTemplatesFromSmallFields(string $url, array $headers): ?array
+    {
+        $query = <<<'GQL'
+query {
+  headlessTemplatesTheme
+  headlessTemplatesHeaderId
+  headlessTemplatesFooterId
+  headlessTemplatesHeaderJson
+  headlessTemplatesFooterJson
+  headlessTemplatesSidebars
+  headlessTemplatesPostTypes
+  headlessTemplatesTaxonomies
+}
+GQL;
+
+        $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
+        if (!$response->successful()) {
             return null;
         }
-        $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
-        if (!is_array($decoded)) {
+        $data = $response->json('data');
+        if (!is_array($data)) {
             return null;
         }
+        $themeRaw = $data['headlessTemplatesTheme'] ?? '';
+        $theme = is_string($themeRaw) && $themeRaw !== '' ? json_decode($themeRaw, true) : [];
+        $decoded = [
+            'theme'              => is_array($theme) ? $theme : [],
+            'header'             => $data['headlessTemplatesHeaderId'] ?? '',
+            'footer'             => $data['headlessTemplatesFooterId'] ?? '',
+            'headerTemplateJson' => (string) ($data['headlessTemplatesHeaderJson'] ?? ''),
+            'footerTemplateJson' => (string) ($data['headlessTemplatesFooterJson'] ?? ''),
+            'sidebars'           => $this->decodeJsonField($data['headlessTemplatesSidebars'] ?? '{}'),
+            'postTypes'          => $this->decodeJsonField($data['headlessTemplatesPostTypes'] ?? '{}'),
+            'taxonomies'         => $this->decodeJsonField($data['headlessTemplatesTaxonomies'] ?? '{}'),
+        ];
+        return $this->normalizeTemplatesResponse($decoded);
+    }
+
+    /** @param array<string, mixed> $decoded */
+    private function normalizeTemplatesResponse(array $decoded): array
+    {
         return [
-            'theme'               => $decoded['theme'] ?? [],
+            'theme'              => $decoded['theme'] ?? [],
             'header'              => $decoded['header'] ?? '',
             'footer'              => $decoded['footer'] ?? '',
             'headerTemplateJson'  => $decoded['headerTemplateJson'] ?? '',
-            'footerTemplateJson'   => $decoded['footerTemplateJson'] ?? '',
+            'footerTemplateJson'  => $decoded['footerTemplateJson'] ?? '',
             'sidebars'            => $decoded['sidebars'] ?? [],
             'settings'            => $decoded['settings'] ?? null,
             'postTypes'           => $decoded['postTypes'] ?? [],
             'taxonomies'          => $decoded['taxonomies'] ?? [],
         ];
+    }
+
+    /** @return array<string, mixed> */
+    private function decodeJsonField(string $raw): array
+    {
+        if ($raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
     }
 
     /**
