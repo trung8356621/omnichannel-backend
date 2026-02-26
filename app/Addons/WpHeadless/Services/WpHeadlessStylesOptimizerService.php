@@ -8,6 +8,7 @@ use App\Addons\WpHeadless\Models\WpHeadlessStyle;
 use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Models\Site;
+use App\Models\SiteMeta;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
@@ -15,6 +16,22 @@ use Illuminate\Support\Facades\Log;
 
 final class WpHeadlessStylesOptimizerService
 {
+    /*
+     * ─── TÓM TẮT QUY TRÌNH ─────────────────────────────────────────────────────
+     *
+     * 1. global-*.css
+     *    - Chứa CSS đặc biệt: HTML_TAGS (html, body, div...), @font-face, @keyframes,
+     *      @layer, @charset, @import, :root, *, và (nếu có class) rule theo class template global=1.
+     *    - Có thể chạy khi không có class → chỉ xuất special blocks.
+     *    - Toàn bộ CSS lưu vào file (path); GET /templates trả về globalCssChunks = URL file global.
+     *
+     * 2. post_type (post, page, category...) chạy manual hoặc từ WordPress "Làm mới CSS tối ưu".
+     *    - Header/footer không lưu file riêng: class header/footer gộp vào mỗi post_type (page, post, ...).
+     *
+     * 3. post_type khác global
+     *    - Lấy classes từ template + class header/footer (gộp chung); lọc raw CSS (post_type + global);
+     *    - Output = specialBlocks + reset + classBlocks; ghi file post_type-0.css, ...
+     */
     private const MAX_CHUNK_BYTES = 100 * 1024; // 100 KB
 
     /** CSS reset mặc định: luôn đặt đầu output (*, ::before, ::after, html). */
@@ -22,6 +39,9 @@ final class WpHeadlessStylesOptimizerService
 
     /** Thư mục public chứa file CSS tối ưu (relative từ public_path). */
     public const PUBLIC_CSS_DIR = 'wp-headless';
+
+    /** site_meta key: JSON { global: timestamp, ... } — dùng cho ensureGlobalOptimized (throttle). */
+    private const META_KEY_STYLES_OPTIMIZED_AT = 'wp_headless_styles_optimized_at';
 
     /**
      * Tạo CSS đã tối ưu cho post_type: lấy classes từ templates, lọc rules trong CSS (post_type + global),
@@ -33,21 +53,28 @@ final class WpHeadlessStylesOptimizerService
     {
         $siteId = $site->id;
 
-        // global = 1 không optimize trực tiếp (không tạo chunk/row cho post_type='global')
-        if ($postType === 'global') {
-            return [
-                'success'   => true,
-                'post_type' => $postType,
-                'size'      => 0,
-                'chunks'    => 0,
-                'urls'      => [],
-            ];
+        $isGlobal = $postType === 'global';
+        if (!$isGlobal) {
+            $this->ensureGlobalOptimized($site);
+        }
+
+        if ($isGlobal) {
+            return $this->optimizeGlobal($site, $siteId);
+        }
+
+        // Không lưu file riêng cho header/footer — CSS header/footer gộp vào từng post_type.
+        if (in_array($postType, ['header', 'footer'], true)) {
+            return ['success' => true, 'post_type' => $postType, 'size' => 0, 'chunks' => 0, 'urls' => []];
         }
 
         $classes = $this->collectTemplateClasses($siteId, $postType);
         if (empty($classes)) {
             return ['success' => false, 'message' => 'No template classes found for post_type.', 'chunks' => 0, 'urls' => []];
         }
+
+        // Gộp class header/footer vào post_type để CSS header/footer nằm trong file post_type (không lưu file riêng).
+        $headerFooterClasses = $this->getHeaderFooterClassNames($siteId);
+        $classes = array_values(array_unique(array_merge($classes, $headerFooterClasses)));
 
         $rawCss = $this->fetchStylesCss($siteId, $postType);
         if ($rawCss === '') {
@@ -57,10 +84,18 @@ final class WpHeadlessStylesOptimizerService
         $filtered = $this->filterCssByClasses($rawCss, $classes);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $classBlocks = $filtered['blocks'];
-        $allBlocks = array_merge($specialBlocks, [self::DEFAULT_CSS_RESET], $classBlocks);
+        // Lấy specialBlocks nhưng loại trừ block đã có trong global.css (tránh trùng).
+        $specialBlocksNotInGlobal = $this->excludeGlobalSpecialBlocks($siteId, $specialBlocks);
+        $allBlocks = array_merge(
+            $specialBlocksNotInGlobal,
+            [self::DEFAULT_CSS_RESET],
+            $classBlocks
+        );
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $allBlocks);
+        $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
         $optimizedCss = implode("\n", $allBlocks);
         $size = strlen($optimizedCss);
+
         $chunks = $this->chunkBlocksBySize($allBlocks, self::MAX_CHUNK_BYTES);
 
         try {
@@ -85,7 +120,6 @@ final class WpHeadlessStylesOptimizerService
                         'post_type'   => $postType,
                         'chunk_index' => $index,
                         'path'        => $relativePath,
-                        'content'     => null,
                         'size'        => strlen($cssContent),
                     ]);
                 }
@@ -127,15 +161,195 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
-     * Gom classes: global = 0 (post_type) merge với toàn bộ classes/bodyClass của global = 1.
-     * Lấy tất cả template global=1 (header, footer, sidebars) + template type = postType (global=0).
+     * Đảm bảo đã tạo file global-*.css (chạy 1 lần khi bất kỳ postType nào được optimize).
+     * Dùng site_meta thời gian lưu cuối, không so sánh file (file có thể cũ).
+     */
+    public function ensureGlobalOptimized(Site $site): void
+    {
+        $at = $this->getStylesOptimizedAt($site);
+        if (($at['global'] ?? 0) > 0) {
+            return;
+        }
+        $this->optimize($site, 'global');
+    }
+
+    /**
+     * Global CSS: chỉ lấy specialBlocks (HTML_TAGS, :root, *, @font-face, @keyframes, @layer, @charset, @import) từ toàn bộ global style.
+     * Không lọc theo class; toàn bộ lưu vào file.
+     */
+    private function optimizeGlobal(Site $site, int $siteId): array
+    {
+        $postType = 'global';
+        $rawCss = $this->fetchStylesCss($siteId, $postType);
+        if ($rawCss === '') {
+            return ['success' => false, 'message' => 'No CSS content for global.', 'chunks' => 0, 'urls' => []];
+        }
+        $filtered = $this->filterCssByClasses($rawCss, []);
+        $specialBlocks = $filtered['specialBlocks'] ?? [];
+        $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $specialBlocks);
+        $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
+        $optimizedCss = implode("\n", $allBlocks);
+        $size = strlen($optimizedCss);
+        if ($size === 0 && trim($rawCss) !== '') {
+            $optimizedCss = $rawCss;
+            $size = strlen($optimizedCss);
+            $allBlocks = [$rawCss];
+        }
+        $chunks = $this->chunkBlocksBySize($allBlocks, self::MAX_CHUNK_BYTES);
+
+        try {
+            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks) {
+                WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->delete();
+                $dir = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, public_path(self::PUBLIC_CSS_DIR . '/' . $siteId)), DIRECTORY_SEPARATOR);
+                if (!File::isDirectory($dir)) {
+                    File::makeDirectory($dir, 0755, true);
+                }
+                $this->ensureDirectoryWritable($dir);
+                $ds = DIRECTORY_SEPARATOR;
+                foreach ($chunks as $index => $cssContent) {
+                    $filename = $postType . '-' . $index . '.css';
+                    $fullPath = $dir . $ds . $filename;
+                    $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
+                    WpHeadlessStyleOptimized::create([
+                        'site_id'     => $siteId,
+                        'post_type'   => $postType,
+                        'chunk_index' => $index,
+                        'path'        => $relativePath,
+                        'size'        => strlen($cssContent),
+                    ]);
+                }
+            });
+            $normalizePath = static fn(string $path) => rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
+            $currentPaths = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)
+                ->get()->pluck('path')->filter()->map(fn($p) => $normalizePath(public_path($p)))->values()->all();
+            $dir = $normalizePath(public_path(self::PUBLIC_CSS_DIR . '/' . $siteId));
+            $existingFiles = glob($dir . DIRECTORY_SEPARATOR . $postType . '-*.css') ?: [];
+            foreach ($existingFiles as $f) {
+                $fNorm = $normalizePath($f);
+                if (!in_array($fNorm, $currentPaths, true)) {
+                    @File::delete($f);
+                }
+            }
+            $urls = WpHeadlessStyleOptimized::where('site_id', $siteId)
+                ->where('post_type', $postType)
+                ->orderBy('chunk_index')
+                ->get()
+                ->pluck('public_url')
+                ->filter()
+                ->values()
+                ->all();
+        } catch (\Throwable $e) {
+            Log::warning('WpHeadlessStylesOptimizer: global save failed', ['site_id' => $siteId, 'error' => $e->getMessage()]);
+            return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => []];
+        }
+        $this->setStylesOptimizedAt($site, 'global');
+        return [
+            'success'   => true,
+            'post_type' => 'global',
+            'size'      => $size,
+            'chunks'    => count($chunks),
+            'urls'      => $urls ?? [],
+        ];
+    }
+
+    /** Lấy thời gian lưu cuối từ site_meta (global, ...). */
+    private function getStylesOptimizedAt(Site $site): array
+    {
+        $row = SiteMeta::where('site_id', $site->id)->where('meta_key', self::META_KEY_STYLES_OPTIMIZED_AT)->first();
+        $value = $row->meta_value ?? null;
+        if ($value === null || $value === '') {
+            return [];
+        }
+        $decoded = json_decode($value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /** Ghi thời gian lưu cuối cho 1 loại (global hoặc post_type) vào site_meta. */
+    private function setStylesOptimizedAt(Site $site, string $type): void
+    {
+        $at = $this->getStylesOptimizedAt($site);
+        $at[$type] = time();
+        SiteMeta::updateOrCreate(
+            ['site_id' => $site->id, 'meta_key' => self::META_KEY_STYLES_OPTIMIZED_AT],
+            ['meta_value' => json_encode($at, JSON_UNESCAPED_UNICODE)]
+        );
+    }
+
+    /**
+     * Trả về danh sách class có trong template header và footer (để loại khỏi CSS của post/page/home/product).
+     */
+    private function getHeaderFooterClassNames(int $siteId): array
+    {
+        $rows = WpHeadlessTemplate::where('site_id', $siteId)
+            ->where(function ($q) {
+                $q->where('type', 'header')
+                    ->orWhere('type', 'like', 'header_%')
+                    ->orWhere('type', 'footer')
+                    ->orWhere('type', 'like', 'footer_%');
+            })
+            ->get();
+        $allClasses = [];
+        foreach ($rows as $t) {
+            if (!empty($t->classes) && is_array($t->classes)) {
+                foreach ($t->classes as $c) {
+                    $c = trim((string) $c);
+                    if ($c !== '') {
+                        $allClasses[$c] = true;
+                    }
+                }
+            }
+            if (!empty($t->body_class) && is_array($t->body_class)) {
+                foreach ($t->body_class as $c) {
+                    $c = trim((string) $c);
+                    if ($c !== '') {
+                        $allClasses[$c] = true;
+                    }
+                }
+            }
+        }
+        $list = array_keys($allClasses);
+        $list = array_filter($list, static function ($c) {
+            return strpos($c, 'icon-') !== 0;
+        });
+        return array_values($list);
+    }
+
+    /**
+     * Gom classes từ wp_headless_templates (fields classes, body_class).
+     * Default header/footer: lấy class từ mọi template header/footer trong bảng (type='header' OR type LIKE 'header_%', tương tự footer)
+     * để so sánh với CSS — cùng nguồn với getHeaderFooterClassNames, tránh file header-0.css / footer-0.css trống.
+     * header_$id / footer_$id (manual): chỉ template type = postType (ví dụ header_123).
      */
     private function collectTemplateClasses(int $siteId, string $postType): array
     {
-        $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('global', true)->get();
-        $postTypeTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->first();
-        if ($postTypeTemplate !== null && !$rows->contains('id', $postTypeTemplate->id)) {
-            $rows->push($postTypeTemplate);
+        if ($postType === 'header') {
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)
+                ->where(function ($q) {
+                    $q->where('type', 'header')->orWhere('type', 'like', 'header_%');
+                })
+                ->get();
+        } elseif ($postType === 'footer') {
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)
+                ->where(function ($q) {
+                    $q->where('type', 'footer')->orWhere('type', 'like', 'footer_%');
+                })
+                ->get();
+        } elseif (str_starts_with($postType, 'header_') || str_starts_with($postType, 'footer_')) {
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->get();
+        } else {
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('global', true)->get();
+
+            $postTypeTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->first();
+            if ($postTypeTemplate !== null && !$rows->contains('id', $postTypeTemplate->id)) {
+                $rows->push($postTypeTemplate);
+            }
+            if ($postType === 'home') {
+                $pageTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', 'page')->first();
+                if ($pageTemplate !== null && !$rows->contains('id', $pageTemplate->id)) {
+                    $rows->push($pageTemplate);
+                }
+            }
         }
 
         $allClasses = [];
@@ -165,22 +379,92 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
+     * Loại trừ khỏi $specialBlocks những block đã có trong global.css (so sánh theo signature minified).
+     * Trả về mảng block không trùng global để gộp vào CSS post_type.
+     */
+    private function excludeGlobalSpecialBlocks(int $siteId, array $specialBlocks): array
+    {
+        if ($specialBlocks === []) {
+            return [];
+        }
+        $globalRawCss = $this->fetchStylesCss($siteId, 'global');
+        if ($globalRawCss === '') {
+            return $specialBlocks;
+        }
+        $globalFiltered = $this->filterCssByClasses($globalRawCss, []);
+        $globalSpecials = $globalFiltered['specialBlocks'] ?? [];
+        $globalSignatures = [];
+        foreach ($globalSpecials as $b) {
+            $sig = md5($this->minifyCss($b));
+            $globalSignatures[$sig] = true;
+        }
+        $out = [];
+        foreach ($specialBlocks as $block) {
+            $sig = md5($this->minifyCss($block));
+            if (!isset($globalSignatures[$sig])) {
+                $out[] = $block;
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Lấy toàn bộ nội dung CSS từ wp_headless_styles (post_type + global), đã dedupe theo url/content.
-     * Luôn sắp xếp global trước để CSS global nằm trước CSS post_type trong output.
+     * (1) Bỏ qua style_type = inline mà content = null.
+     * (2) Đã vào global thì không thêm lại ở post_type/taxonomy (xóa trùng).
+     * Với postType = global: chỉ lấy row post_type = global (không gộp header/footer), thứ tự theo sort_order.
      */
     private function fetchStylesCss(int $siteId, string $postType): string
     {
+        $postTypes = [$postType, 'global'];
+        if ($postType === 'home') {
+            $postTypes[] = 'page';
+        }
+        if (in_array($postType, ['page', 'product'], true)) {
+            $postTypes[] = 'post';
+        }
+        $postTypes = array_values(array_unique($postTypes));
+        $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
         $rows = WpHeadlessStyle::where('site_id', $siteId)
-            ->whereIn('post_type', [$postType, 'global'])
-            ->orderByRaw("CASE WHEN post_type = 'global' THEN 0 ELSE 1 END")
+            ->whereIn('post_type', $postTypes)
+            ->orderByRaw($orderCase)
             ->orderBy('sort_order')
             ->get();
 
+        // Với post_type khác global: build globalKeys từ toàn bộ row global (cả file và inline có content) để tránh style trùng.
+        $globalKeys = [];
+        if ($postType !== 'global') {
+            $globalRows = WpHeadlessStyle::where('site_id', $siteId)->where('post_type', 'global')->get();
+            foreach ($globalRows as $row) {
+                if (($row->style_type ?? '') === 'inline' && ($row->content === null || $row->content === '')) {
+                    continue;
+                }
+                $k = $this->rowStyleKey($row);
+                if ($k !== '') {
+                    $globalKeys[$k] = true;
+                }
+            }
+        }
+
         $seen = [];
         $parts = [];
+
         foreach ($rows as $row) {
+            if (($row->style_type ?? '') === 'inline' && ($row->content === null || $row->content === '')) {
+                continue;
+            }
+            $key = $this->rowStyleKey($row);
+            if ($key === '') {
+                continue;
+            }
+            if (($row->post_type ?? '') === 'global') {
+                // đã có trong globalKeys từ query riêng
+            } else {
+                if (isset($globalKeys[$key])) {
+                    continue;
+                }
+            }
             if ($row->content !== null && $row->content !== '') {
-                $key = 'inline:' . md5($row->content);
                 if (!isset($seen[$key])) {
                     $seen[$key] = true;
                     $parts[] = $row->content;
@@ -191,16 +475,34 @@ final class WpHeadlessStylesOptimizerService
             if ($url === '') {
                 continue;
             }
-            if (isset($seen[$url])) {
+            if (isset($seen[$key])) {
                 continue;
             }
-            $seen[$url] = true;
+            $seen[$key] = true;
             $content = $this->fetchUrl($url);
             if ($content !== '') {
                 $parts[] = $content;
             }
         }
         return implode("\n", $parts);
+    }
+
+    /** Key cho dedup: url chuẩn hóa (scheme+host+path, host/scheme lowercase) hoặc inline:md5(content). Trả về '' nếu không có. Cùng format với WpHeadlessSyncService::styleKeyForDedup. */
+    private function rowStyleKey($row): string
+    {
+        $content = $row->content ?? null;
+        if ($content !== null && $content !== '') {
+            return 'inline:' . md5($content);
+        }
+        $url = $row->url ?? '';
+        if ($url !== '') {
+            $parsed = parse_url($url);
+            $path = $parsed['path'] ?? '';
+            $host = isset($parsed['host']) ? strtolower($parsed['host']) : '';
+            $scheme = isset($parsed['scheme']) ? strtolower($parsed['scheme']) . '://' : '//';
+            return $scheme . $host . $path;
+        }
+        return '';
     }
 
     private function fetchUrl(string $url): string
@@ -328,7 +630,8 @@ final class WpHeadlessStylesOptimizerService
     ];
 
     /**
-     * Giữ lại: (1) rule có selector chứa class → blocks; (2) CSS đặc biệt (thẻ HTML, :root, *, @font-face, @keyframes) → specialBlocks.
+     * Giữ lại: (1) rule có selector chứa class → blocks; (2) CSS đặc biệt (thẻ HTML, :root, *, @font-face, @keyframes, @layer, @charset, @import) → specialBlocks.
+     * Với global/header/footer khi không có class: chỉ xuất specialBlocks (HTML_TAGS, @font-face, @keyframes, ...).
      * @return array{blocks: list<string>, specialBlocks: list<string>}
      */
     private function filterCssByClasses(string $css, array $classes): array
@@ -353,7 +656,7 @@ final class WpHeadlessStylesOptimizerService
             $selTrim = trim($selector);
 
             if (str_starts_with($selTrim, '@')) {
-                if (preg_match('/^@(?:font-face|(?:-\w+-)?keyframes|charset|import)\b/i', $selTrim)) {
+                if (preg_match('/^@(?:font-face|(?:-\w+-)?keyframes|charset|import|layer)\b/i', $selTrim)) {
                     if (preg_match('/^@font-face\b/i', $selTrim) && preg_match('/fl-icons/i', $full)) {
                         continue;
                     }
@@ -411,7 +714,7 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
-     * Tách CSS thành các block: selector { body } hoặc @rule { ... } (brace-matching).
+     * Tách CSS thành các block: selector { body }, @rule { ... }, hoặc @import/@charset ...; (không có {}).
      */
     private function extractCssBlocks(string $css): array
     {
@@ -422,6 +725,18 @@ final class WpHeadlessStylesOptimizerService
             $i = $this->skipWhitespaceAndComments($css, $i);
             if ($i >= $len) {
                 break;
+            }
+            // @import và @charset không có {} — đọc đến ; (bỏ qua ; trong chuỗi).
+            if (preg_match('/^@(?:charset|import)\s/i', substr($css, $i))) {
+                $end = $this->findSemicolonOutsideString($css, $i);
+                if ($end !== null) {
+                    $full = trim(substr($css, $i, $end - $i + 1));
+                    if ($full !== '') {
+                        $blocks[] = ['selector' => $full, 'body' => '', 'full' => $full];
+                    }
+                    $i = $end + 1;
+                    continue;
+                }
             }
             if ($css[$i] === '}') {
                 $i++;
@@ -501,6 +816,41 @@ final class WpHeadlessStylesOptimizerService
             break;
         }
         return $i;
+    }
+
+    /** Tìm vị trí dấu ; tiếp theo không nằm trong chuỗi " hoặc '. Trả về null nếu không thấy. */
+    private function findSemicolonOutsideString(string $css, int $start): ?int
+    {
+        $len = strlen($css);
+        $inDouble = false;
+        $inSingle = false;
+        for ($i = $start; $i < $len; $i++) {
+            $ch = $css[$i];
+            if ($inDouble) {
+                if ($ch === '"' && ($i === 0 || $css[$i - 1] !== '\\')) {
+                    $inDouble = false;
+                }
+                continue;
+            }
+            if ($inSingle) {
+                if ($ch === "'" && ($i === 0 || $css[$i - 1] !== '\\')) {
+                    $inSingle = false;
+                }
+                continue;
+            }
+            if ($ch === '"') {
+                $inDouble = true;
+                continue;
+            }
+            if ($ch === "'") {
+                $inSingle = true;
+                continue;
+            }
+            if ($ch === ';') {
+                return $i;
+            }
+        }
+        return null;
     }
 
     /**

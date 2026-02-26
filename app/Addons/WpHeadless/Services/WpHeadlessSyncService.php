@@ -62,9 +62,11 @@ final class WpHeadlessSyncService
         }
 
         $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
-        if ($postTypeStyles !== null) {
-            $this->setMeta($site, self::META_POST_TYPE_STYLES, $postTypeStyles);
-            $this->syncStylesToAddonDb($site, $postTypeStyles);
+        $taxonomyStyles = $this->queryTaxonomyStyles($graphqlUrl, $headers);
+        $mergedStyles = $this->mergePostTypeAndTaxonomyStyles($postTypeStyles, $taxonomyStyles);
+        if ($mergedStyles !== null) {
+            $this->setMeta($site, self::META_POST_TYPE_STYLES, $mergedStyles);
+            $this->syncStylesToAddonDb($site, $mergedStyles);
             $result['synced'][] = self::META_POST_TYPE_STYLES;
         } else {
             Log::warning('WpHeadlessSync: headlessPostTypeStyles failed', ['site_id' => $site->id]);
@@ -119,12 +121,14 @@ final class WpHeadlessSyncService
             }
         } elseif ($step === 3) {
             $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
-            if ($postTypeStyles !== null) {
-                $this->setMeta($site, self::META_POST_TYPE_STYLES, $postTypeStyles);
-                $this->syncStylesToAddonDb($site, $postTypeStyles);
+            $taxonomyStyles = $this->queryTaxonomyStyles($graphqlUrl, $headers);
+            $mergedStyles = $this->mergePostTypeAndTaxonomyStyles($postTypeStyles, $taxonomyStyles);
+            if ($mergedStyles !== null) {
+                $this->setMeta($site, self::META_POST_TYPE_STYLES, $mergedStyles);
+                $this->syncStylesToAddonDb($site, $mergedStyles);
                 $result['synced'][] = self::META_POST_TYPE_STYLES;
             } else {
-                Log::warning('WpHeadlessSync: headlessPostTypeStyles failed', ['site_id' => $site->id]);
+                Log::warning('WpHeadlessSync: headlessPostTypeStyles/headlessTaxonomyStyles failed', ['site_id' => $site->id]);
             }
         } else {
             return ['success' => false, 'message' => 'Invalid step.', 'step' => $step];
@@ -274,6 +278,175 @@ GQL;
         }
         $decoded = json_decode($data, true);
         return is_array($decoded) ? $decoded : null;
+    }
+
+    private function queryTaxonomyStyles(string $url, array $headers): ?array
+    {
+        $query = <<<'GQL'
+query {
+  headlessTaxonomyStyles
+}
+GQL;
+
+        $response = Http::timeout(120)->withHeaders($headers)->post($url, ['query' => $query]);
+        if (!$response->successful()) {
+            return null;
+        }
+        $data = $response->json('data.headlessTaxonomyStyles');
+        if ($data === null) {
+            return null;
+        }
+        $decoded = json_decode($data, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /** Gộp [post, page, ...] + [category, ...] và tính global từ post types, đưa global lên đầu. */
+    private function mergePostTypeAndTaxonomyStyles(?array $postTypeStyles, ?array $taxonomyStyles): ?array
+    {
+        if ($postTypeStyles === null) {
+            return null;
+        }
+        $merged = $postTypeStyles;
+        if ($taxonomyStyles !== null && $taxonomyStyles !== []) {
+            $merged = array_merge($postTypeStyles, $taxonomyStyles);
+        }
+        return $this->ensureGlobalStylesComputed($merged);
+    }
+
+    /**
+     * Toàn bộ phần global style: tính từ post types (styles xuất hiện ở mọi post type), loại khỏi từng post type, thêm entry global lên đầu.
+     * Nếu đã có entry postType=global (WP cũ) thì giữ nguyên.
+     */
+    private function ensureGlobalStylesComputed(array $items): array
+    {
+        if (isset($items[0]) && ($items[0]['postType'] ?? '') === 'global') {
+            return $items;
+        }
+        $postTypeItems = array_values(array_filter($items, fn($i) => ($i['kind'] ?? '') === 'post_type'));
+        $taxonomyItems = array_values(array_filter($items, fn($i) => ($i['kind'] ?? '') === 'taxonomy'));
+        if ($postTypeItems === []) {
+            return $items;
+        }
+        $allSets = [];
+        foreach ($postTypeItems as $item) {
+            $pt = $item['postType'] ?? '';
+            $styles = $item['styles'] ?? [];
+            if ($pt !== '') {
+                $allSets[$pt] = $styles;
+            }
+        }
+        $globalStyles = $this->computeGlobalStyles($allSets);
+        if ($globalStyles === [] && $allSets !== []) {
+            $maxPt = null;
+            $maxCount = 0;
+            foreach ($allSets as $pt => $styles) {
+                $c = count($styles);
+                if ($c > $maxCount) {
+                    $maxCount = $c;
+                    $maxPt = $pt;
+                }
+            }
+            if ($maxPt !== null) {
+                $globalStyles = $allSets[$maxPt];
+            }
+        }
+        $globalKeys = [];
+        $globalNames = [];
+        foreach ($globalStyles as $s) {
+            $k = $this->styleKeyForDedup($s);
+            if ($k !== '') {
+                $globalKeys[$k] = true;
+            }
+            $name = trim((string) ($s['name'] ?? ''));
+            if ($name !== '') {
+                $globalNames[$name] = true;
+            }
+        }
+        $filteredPostTypeItems = [];
+        foreach ($postTypeItems as $item) {
+            $item['styles'] = array_values(array_filter($item['styles'] ?? [], function ($s) use ($globalKeys, $globalNames) {
+                $k = $this->styleKeyForDedup($s);
+                if ($k !== '' && isset($globalKeys[$k])) {
+                    return false;
+                }
+                $name = trim((string) ($s['name'] ?? ''));
+                if ($name !== '' && isset($globalNames[$name])) {
+                    return false;
+                }
+                return true;
+            }));
+            $filteredPostTypeItems[] = $item;
+        }
+        // Lọc bỏ style đã nằm trong global khỏi từng taxonomy → tránh trùng khi build CSS taxonomy.
+        $filteredTaxonomyItems = [];
+        foreach ($taxonomyItems as $item) {
+            $item['styles'] = array_values(array_filter($item['styles'] ?? [], function ($s) use ($globalKeys, $globalNames) {
+                $k = $this->styleKeyForDedup($s);
+                if ($k !== '' && isset($globalKeys[$k])) {
+                    return false;
+                }
+                $name = trim((string) ($s['name'] ?? ''));
+                if ($name !== '' && isset($globalNames[$name])) {
+                    return false;
+                }
+                return true;
+            }));
+            $filteredTaxonomyItems[] = $item;
+        }
+        $globalEntry = [
+            'postType' => 'global',
+            'kind'     => 'global',
+            'styles'   => $globalStyles,
+        ];
+        return array_merge([$globalEntry], $filteredPostTypeItems, $filteredTaxonomyItems);
+    }
+
+    private function computeGlobalStyles(array $allSets): array
+    {
+        if ($allSets === []) {
+            return [];
+        }
+        $num = count($allSets);
+        $keyInfo = [];
+        foreach ($allSets as $postType => $styles) {
+            foreach ($styles as $s) {
+                $key = $this->styleKeyForDedup($s);
+                if ($key === '') {
+                    continue;
+                }
+                if (!isset($keyInfo[$key])) {
+                    $keyInfo[$key] = ['style' => $s, 'post_types' => []];
+                }
+                if (!in_array($postType, $keyInfo[$key]['post_types'], true)) {
+                    $keyInfo[$key]['post_types'][] = $postType;
+                }
+            }
+        }
+        $global = [];
+        foreach ($keyInfo as $info) {
+            if (count($info['post_types']) >= $num) {
+                $global[] = $info['style'];
+            }
+        }
+        return $global;
+    }
+
+    /** Key dedup: URL chuẩn hóa (bỏ query, fragment) hoặc inline:md5. Cùng format với WpHeadlessStylesOptimizerService::rowStyleKey. */
+    private function styleKeyForDedup(array $s): string
+    {
+        $url = $s['url'] ?? '';
+        $content = $s['content'] ?? '';
+        if ($url !== '') {
+            $parsed = parse_url($url);
+            $path = $parsed['path'] ?? '';
+            $host = isset($parsed['host']) ? strtolower($parsed['host']) : '';
+            $scheme = isset($parsed['scheme']) ? strtolower($parsed['scheme']) . '://' : '//';
+            return $scheme . $host . $path;
+        }
+        if ($content !== '') {
+            return 'inline:' . md5($content);
+        }
+        return '';
     }
 
     /**
@@ -590,7 +763,8 @@ GQL;
             }
 
             $classesKey = json_encode($classes);
-            $parentId = $canonicalIdByClassesKey[$classesKey] ?? null;
+            // type = sidebar_* không tính parent_id (mỗi sidebar độc lập, không dedupe theo classes).
+            $parentId = $isSidebarType ? null : ($canonicalIdByClassesKey[$classesKey] ?? null);
 
             $isGlobal = in_array($type, $globalTypes, true);
 
@@ -606,7 +780,7 @@ GQL;
                 ]
             );
 
-            if ($parentId === null) {
+            if ($parentId === null && ! $isSidebarType) {
                 $canonicalIdByClassesKey[$classesKey] = $row->id;
             }
         }
@@ -938,6 +1112,7 @@ GQL;
     /**
      * Đồng bộ styles từ headlessPostTypeStyles vào bảng wp_headless_styles (addon DB).
      * Lọc trùng: cùng url (file) hoặc cùng content (inline) → gán parent_id trỏ tới bản ghi gốc đầu tiên.
+     * Style đã có bản gốc global thì không lưu bản con (parent_id != null) vì global đã kiểm tra toàn trang.
      */
     private function syncStylesToAddonDb(Site $site, array $postTypeStyles): void
     {
@@ -947,8 +1122,8 @@ GQL;
             DB::connection('wp_headless')->transaction(function () use ($siteId, $siteHost, $postTypeStyles) {
                 WpHeadlessStyle::where('site_id', $siteId)->delete();
 
-                /** key (url hoặc inline:md5) => id bản ghi gốc (parent_id = null) */
-                $canonicalIdByKey = [];
+                /** key => ['id' => id bản gốc, 'post_type' => post_type bản gốc] */
+                $canonicalByKey = [];
 
                 foreach ($postTypeStyles as $item) {
                     $postType = $item['postType'] ?? 'global';
@@ -986,12 +1161,15 @@ GQL;
                                 }
                                 $styleUrl = $url;
                                 $styleContent = null;
-                                $styleKey = 'url:' . $url;
+                                $styleKey = $this->styleKeyForDedup($s);
+                                if ($styleKey === '') {
+                                    $styleKey = 'url:' . $url;
+                                }
                             }
                         }
 
-                        $parentId = $canonicalIdByKey[$styleKey] ?? null;
-                        if ($parentId === null) {
+                        $canonical = $canonicalByKey[$styleKey] ?? null;
+                        if ($canonical === null) {
                             // Bản ghi gốc (lần đầu gặp CSS này)
                             $row = WpHeadlessStyle::create([
                                 'site_id'    => $siteId,
@@ -1004,9 +1182,14 @@ GQL;
                                 'sort_order' => $sortOrder++,
                                 'external'   => $external,
                             ]);
-                            $canonicalIdByKey[$styleKey] = $row->id;
+                            $canonicalByKey[$styleKey] = ['id' => $row->id, 'post_type' => $postType];
                         } else {
-                            // Trùng CSS → trỏ về bản gốc
+                            $parentPostType = $canonical['post_type'] ?? '';
+                            if ($parentPostType === 'global') {
+                                // Style global đã kiểm tra toàn trang, không lưu bản con (post_tag, taxonomy, ...).
+                                continue;
+                            }
+                            $parentId = $canonical['id'];
                             WpHeadlessStyle::create([
                                 'site_id'    => $siteId,
                                 'parent_id'  => $parentId,

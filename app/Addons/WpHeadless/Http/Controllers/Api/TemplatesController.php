@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
+use App\Addons\WpHeadless\Models\WpHeadlessStyle;
 use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
@@ -14,8 +15,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Trả về toàn bộ template HTML từ wp_headless_templates + CSS inline global (optimize 1 lần cho template global).
- * Next.js lưu template + CSS thành file, gộp CSS thành inline embed.
+ * Trả về toàn bộ template HTML từ wp_headless_templates + URL CSS global (optimize 1 lần cho template global).
+ * Next.js load global CSS qua URL (path), không còn inline từ content.
  */
 class TemplatesController extends Controller
 {
@@ -25,7 +26,7 @@ class TemplatesController extends Controller
 
     /**
      * GET /api/wp-headless/templates?site_id=1
-     * Response: { success, templates: {...}, globalCssChunks: string[] }
+     * Response: { success, templates, template_relations, globalCssChunks: string[], fontUrls: string[] }
      * Laravel tự chạy optimize CSS cho template global (global=1) nếu chưa có; gửi inline CSS kèm request.
      */
     public function __invoke(Request $request): JsonResponse
@@ -56,6 +57,10 @@ class TemplatesController extends Controller
         }
         $templateRelations = [];
         foreach ($rows as $row) {
+            // type = sidebar_* không tính parent_id (mỗi sidebar độc lập).
+            if (str_starts_with((string) $row->type, 'sidebar_')) {
+                continue;
+            }
             if ($row->parent_id !== null && isset($idToFileKey[$row->parent_id])) {
                 $templateRelations[$idToFileKey[$row->id]] = $idToFileKey[$row->parent_id];
             }
@@ -69,8 +74,7 @@ class TemplatesController extends Controller
         $hasGlobalTemplates = WpHeadlessTemplate::where('site_id', $siteId)
             ->where('global', true)
             ->exists();
-        $hasNoOptimizedContent = $globalChunks->isEmpty()
-            || $globalChunks->every(fn ($r) => $r->content === null || $r->content === '');
+        $hasNoOptimizedContent = $globalChunks->isEmpty();
 
         if ($hasGlobalTemplates && $hasNoOptimizedContent) {
             $result = $this->optimizer->optimize($site, 'global');
@@ -87,13 +91,25 @@ class TemplatesController extends Controller
             }
         }
 
-        $globalCssChunks = $globalChunks->map(fn ($r) => (string) ($r->content ?? ''))->filter()->values()->all();
+        $globalCssChunks = $globalChunks->map(fn ($r) => $r->public_url)->filter()->values()->all();
+
+        $fontUrls = WpHeadlessStyle::where('site_id', $siteId)
+            ->where('style_type', 'font')
+            ->whereNotNull('url')
+            ->where('url', '!=', '')
+            ->orderBy('sort_order')
+            ->get()
+            ->pluck('url')
+            ->unique()
+            ->values()
+            ->all();
 
         return response()->json([
-            'success'            => true,
-            'templates'          => $templates,
-            'template_relations' => $templateRelations,
-            'globalCssChunks'    => $globalCssChunks,
+            'success'             => true,
+            'templates'           => $templates,
+            'template_relations'  => $templateRelations,
+            'globalCssChunks'     => $globalCssChunks,
+            'fontUrls'            => $fontUrls,
         ]);
     }
 }

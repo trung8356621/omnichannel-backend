@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
+use App\Addons\WpHeadless\Models\WpHeadlessStyle;
 use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Services\WpGraphQLResolverService;
@@ -27,7 +28,7 @@ class OptimizedCssForUrlController extends Controller
      * POST /api/wp-headless/page-by-url
      * Body (từ Next.js): { "site_id": 2, "url": "/blog/my-post" }
      * Laravel: nodeByUri(uri) lấy full data WordPress, resolve post_type, lấy/generate optimized CSS.
-     * Response: { success, data: <node WP>, post_type, optimizedCssUrls: [...] }
+     * Response: { success, data, post_type, optimizedCssUrls: [global, post_type], fontUrls: [...] }
      */
     public function __invoke(Request $request): JsonResponse
     {
@@ -55,11 +56,23 @@ class OptimizedCssForUrlController extends Controller
             $postType = 'global';
         }
 
+        // URI "/" (trang chủ): nếu WordPress trả về Page (trang tĩnh làm front page) → trả post_type = home để Next.js dùng template "home".
+        $pathForHome = parse_url($urlOrPath, PHP_URL_PATH);
+        $pathForHome = ($pathForHome === null || $pathForHome === false) ? '' : trim($pathForHome, '/');
+        if ($pathForHome === '' && $postType === 'page') {
+            $postType = 'home';
+        }
+
         $templatePath = $data !== null ? ($data['templatePath'] ?? null) : null;
         $templatePath = $templatePath !== null && $templatePath !== '' ? (string) $templatePath : null;
 
         $templateRow = WpHeadlessTemplate::where('site_id', $site->id)->where('type', $postType)->first();
         $storedTemplatePath = $templateRow?->template_path;
+
+        // Đảm bảo global đã có file CSS trước khi lấy URLs (header/footer gộp trong post_type).
+        if (!in_array($postType, ['global'], true)) {
+            $this->optimizer->ensureGlobalOptimized($site);
+        }
 
         $existing = WpHeadlessStyleOptimized::where('site_id', $site->id)
             ->where('post_type', $postType)
@@ -73,6 +86,29 @@ class OptimizedCssForUrlController extends Controller
             $urls = $existing->map(fn($row) => $row->public_url)->filter()->values()->all();
         }
 
+        // Global CSS: luôn gửi kèm để Next.js load base (special blocks).
+        $globalUrls = WpHeadlessStyleOptimized::where('site_id', $site->id)
+            ->where('post_type', 'global')
+            ->orderBy('chunk_index')
+            ->get()
+            ->pluck('public_url')
+            ->filter()
+            ->values()
+            ->all();
+        $optimizedCssUrls = array_values(array_filter(array_merge($globalUrls, $urls)));
+
+        // Font URLs (Google Fonts, etc.) từ wp_headless_styles style_type = font — Next.js dùng <link> preload/stylesheet.
+        $fontUrls = WpHeadlessStyle::where('site_id', $site->id)
+            ->where('style_type', 'font')
+            ->whereNotNull('url')
+            ->where('url', '!=', '')
+            ->orderBy('sort_order')
+            ->get()
+            ->pluck('url')
+            ->unique()
+            ->values()
+            ->all();
+
         $bodyClass = $this->resolver->getBodyClassForPostType($site, $postType);
 
         return response()->json([
@@ -82,7 +118,8 @@ class OptimizedCssForUrlController extends Controller
             'templatePath'      => $templatePath,
             'template_path'     => $storedTemplatePath,
             'bodyClass'         => $bodyClass,
-            'optimizedCssUrls'  => $urls,
+            'optimizedCssUrls'  => $optimizedCssUrls,
+            'fontUrls'          => $fontUrls,
         ]);
     }
 

@@ -17,7 +17,6 @@ class WpHeadlessStyleOptimized extends Model
         'post_type',
         'chunk_index',
         'path',
-        'content',
         'size',
     ];
 
