@@ -96,54 +96,56 @@ GQL;
             return $cached;
         }
 
-        $query = <<<'GQL'
+        $postFields = [
+            'databaseId',
+            'uri',
+            'title',
+            'contentTemplateJson',
+            'excerpt',
+            'date',
+            'templatePath',
+            'featuredImage { node { sourceUrl altText } }',
+        ];
+
+        $taxonomyFields = [
+            'databaseId',
+            'uri',
+            'name',
+            'description',
+            'templatePath',
+        ];
+
+    $extendedFields = [
+        'tmHeader',
+        'tmFooter',
+    ];
+
+    $postFields = array_merge($postFields, $extendedFields);
+    $taxonomyFields = array_merge($taxonomyFields, $extendedFields);
+        // 2. Dùng Nowdoc làm template với các điểm giữ chỗ (%1$s, %2$s)
+$queryTemplate = <<<'GQL'
 query GetNodeByUri($uri: String!) {
   nodeByUri(uri: $uri) {
     __typename
     ... on Post {
-      databaseId
-      uri
-      title
-      contentTemplateJson
-      excerpt
-      date
-      templatePath
-      featuredImage { node { sourceUrl altText } }
-      tmHeader
-      tmFooter
+      %1$s
     }
     ... on Page {
-      databaseId
-      uri
-      title
-      contentTemplateJson
-      excerpt
-      templatePath
-      featuredImage { node { sourceUrl altText } }
-      tmHeader
-      tmFooter
+      %1$s
     }
     ... on Category {
-      databaseId
-      uri
-      name
-      description
-      templatePath
-      tmHeader
-      tmFooter
+      %2$s
     }
     ... on Tag {
-      databaseId
-      uri
-      name
-      description
-      templatePath
-      tmHeader
-      tmFooter
+      %2$s
     }
   }
 }
 GQL;
+
+// 3. Nối chuỗi bằng hàm sprintf
+$query = sprintf($queryTemplate, implode("\n", $postFields), implode("\n", $taxonomyFields));
+
 
         $response = Http::timeout(15)
             ->withHeaders($headers)
