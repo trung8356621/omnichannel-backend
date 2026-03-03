@@ -125,7 +125,7 @@ class WpBridgeController extends Controller
         $step = $request->input('step');
         if ($step !== null && $step !== '') {
             $step = (int) $step;
-            if ($step >= 1 && $step <= 3) {
+            if ($step >= 1 && $step <= 4) {
                 $result = app(WpHeadlessSyncService::class)->syncStep($site, $step);
                 if (!$result['success']) {
                     return response()->json($result, 422);

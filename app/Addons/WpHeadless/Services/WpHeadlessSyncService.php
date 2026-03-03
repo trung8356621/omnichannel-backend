@@ -20,6 +20,7 @@ final class WpHeadlessSyncService
 {
     private const META_PLUGINS_THEMES = 'wp_plugins_themes';
     private const META_POST_TYPE_STYLES = 'wp_post_type_styles';
+    private const META_SITE_SETTINGS = 'wp_site_settings';
 
     public function sync(Site $site): array
     {
@@ -72,12 +73,20 @@ final class WpHeadlessSyncService
             Log::warning('WpHeadlessSync: headlessPostTypeStyles failed', ['site_id' => $site->id]);
         }
 
+        $siteSettings = $this->querySiteSettings($graphqlUrl, $headers);
+        if ($siteSettings !== null) {
+            $this->setMeta($site, self::META_SITE_SETTINGS, $siteSettings);
+            $result['synced'][] = self::META_SITE_SETTINGS;
+        } else {
+            Log::warning('WpHeadlessSync: headlessSiteSettings failed', ['site_id' => $site->id]);
+        }
+
         return $result;
     }
 
     /**
      * Chạy một bước đồng bộ (dùng khi WordPress gọi sync-site-data theo từng bước).
-     * step 1 = plugin & theme, 2 = templates, 3 = post type styles.
+     * step 1 = plugin & theme, 2 = templates, 3 = post type styles, 4 = site settings (SEO + locale).
      */
     public function syncStep(Site $site, int $step): array
     {
@@ -129,6 +138,14 @@ final class WpHeadlessSyncService
                 $result['synced'][] = self::META_POST_TYPE_STYLES;
             } else {
                 Log::warning('WpHeadlessSync: headlessPostTypeStyles/headlessTaxonomyStyles failed', ['site_id' => $site->id]);
+            }
+        } elseif ($step === 4) {
+            $siteSettings = $this->querySiteSettings($graphqlUrl, $headers);
+            if ($siteSettings !== null) {
+                $this->setMeta($site, self::META_SITE_SETTINGS, $siteSettings);
+                $result['synced'][] = self::META_SITE_SETTINGS;
+            } else {
+                Log::warning('WpHeadlessSync: headlessSiteSettings failed', ['site_id' => $site->id]);
             }
         } else {
             return ['success' => false, 'message' => 'Invalid step.', 'step' => $step];
@@ -356,6 +373,30 @@ GQL;
             return null;
         }
         $decoded = json_decode($data, true);
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    private function querySiteSettings(string $url, array $headers): ?array
+    {
+        $query = <<<'GQL'
+query {
+  headlessSiteSettings
+}
+GQL;
+
+        $response = Http::timeout(30)->withHeaders($headers)->post($url, ['query' => $query]);
+        if (!$response->successful()) {
+            Log::warning('WpHeadlessSync: headlessSiteSettings request failed', [
+                'status' => $response->status(),
+                'body'   => $response->body(),
+            ]);
+            return null;
+        }
+        $data = $response->json('data.headlessSiteSettings');
+        if ($data === null) {
+            return null;
+        }
+        $decoded = is_string($data) ? json_decode($data, true) : $data;
         return is_array($decoded) ? $decoded : null;
     }
 
