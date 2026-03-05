@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Observers;
 
+use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -85,7 +86,18 @@ class WpHeadlessTemplateObserver
         $settings = $site->settings ?? [];
         $settings = is_array($settings) ? $settings : [];
 
-        if ($templates !== [] || $settings !== []) {
+        // URL các file CSS đã optimize (Laravel đã lưu) → Next.js đồng bộ về public/wp-headless/{siteId}/ để load trực tiếp.
+        $cssUrls = WpHeadlessStyleOptimized::on($template->getConnectionName())
+            ->where('site_id', $siteId)
+            ->orderBy('post_type')
+            ->orderBy('chunk_index')
+            ->get()
+            ->map(fn ($r) => $r->public_url)
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($templates !== [] || $settings !== [] || $cssUrls !== []) {
             try {
                 $receivePayload = [
                     'site_id'            => $siteId,
@@ -94,6 +106,9 @@ class WpHeadlessTemplateObserver
                 ];
                 if ($settings !== []) {
                     $receivePayload['settings'] = $settings;
+                }
+                if ($cssUrls !== []) {
+                    $receivePayload['cssUrls'] = $cssUrls;
                 }
                 $receiveResponse = Http::timeout(10)
                     ->post($baseUrl . '/api/wp-templates/receive', $receivePayload);

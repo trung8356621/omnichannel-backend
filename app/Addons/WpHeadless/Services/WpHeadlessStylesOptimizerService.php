@@ -117,6 +117,7 @@ final class WpHeadlessStylesOptimizerService
                     $filename = $postType . '-' . $index . '.css';
                     $fullPath = $dir . $ds . $filename;
                     $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $this->copyToNextjsPublic($writtenFullPath, $siteId, $filename);
                     $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
 
                     WpHeadlessStyleOptimized::create([
@@ -129,7 +130,7 @@ final class WpHeadlessStylesOptimizerService
                 }
             });
 
-            // Xóa file CSS cũ không còn trong DB (số chunk giảm)
+            // Xóa file CSS cũ không còn trong DB (số chunk giảm) — Laravel + Next.js public
             $normalizePath = static fn(string $path) => rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
             $currentPaths = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)
                 ->get()->pluck('path')->filter()->map(fn($p) => $normalizePath(public_path($p)))->values()->all();
@@ -139,6 +140,7 @@ final class WpHeadlessStylesOptimizerService
                 $fNorm = $normalizePath($f);
                 if (!in_array($fNorm, $currentPaths, true)) {
                     @File::delete($f);
+                    $this->deleteFromNextjsPublic($siteId, basename($f));
                 }
             }
 
@@ -215,6 +217,7 @@ final class WpHeadlessStylesOptimizerService
                     $filename = $postType . '-' . $index . '.css';
                     $fullPath = $dir . $ds . $filename;
                     $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $this->copyToNextjsPublic($writtenFullPath, $siteId, $filename);
                     $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
                     WpHeadlessStyleOptimized::create([
                         'site_id'     => $siteId,
@@ -234,6 +237,7 @@ final class WpHeadlessStylesOptimizerService
                 $fNorm = $normalizePath($f);
                 if (!in_array($fNorm, $currentPaths, true)) {
                     @File::delete($f);
+                    $this->deleteFromNextjsPublic($siteId, basename($f));
                 }
             }
             $urls = WpHeadlessStyleOptimized::where('site_id', $siteId)
@@ -297,6 +301,42 @@ final class WpHeadlessStylesOptimizerService
             ['site_id' => $site->id, 'meta_key' => self::META_KEY_STYLES_OPTIMIZED_AT],
             ['meta_value' => json_encode($at, JSON_UNESCAPED_UNICODE)]
         );
+    }
+
+    /**
+     * Copy file CSS đã ghi (Laravel public) sang thư mục public của Next.js để Next.js phục vụ local, không proxy.
+     */
+    private function copyToNextjsPublic(string $sourceFullPath, int $siteId, string $filename): void
+    {
+        $nextPath = config('wp-headless.nextjs_public_path');
+        if ($nextPath === null || $nextPath === '') {
+            return;
+        }
+        $nextPath = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $nextPath), DIRECTORY_SEPARATOR);
+        $destDir = $nextPath . DIRECTORY_SEPARATOR . self::PUBLIC_CSS_DIR . DIRECTORY_SEPARATOR . $siteId;
+        if (!File::isDirectory($destDir)) {
+            @File::makeDirectory($destDir, 0755, true);
+        }
+        $destPath = $destDir . DIRECTORY_SEPARATOR . $filename;
+        if (file_exists($sourceFullPath)) {
+            @copy($sourceFullPath, $destPath);
+        }
+    }
+
+    /**
+     * Xóa file CSS khỏi thư mục public Next.js (khi Laravel xóa chunk cũ).
+     */
+    private function deleteFromNextjsPublic(int $siteId, string $filename): void
+    {
+        $nextPath = config('wp-headless.nextjs_public_path');
+        if ($nextPath === null || $nextPath === '') {
+            return;
+        }
+        $nextPath = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $nextPath), DIRECTORY_SEPARATOR);
+        $filePath = $nextPath . DIRECTORY_SEPARATOR . self::PUBLIC_CSS_DIR . DIRECTORY_SEPARATOR . $siteId . DIRECTORY_SEPARATOR . $filename;
+        if (File::exists($filePath)) {
+            @File::delete($filePath);
+        }
     }
 
     /**

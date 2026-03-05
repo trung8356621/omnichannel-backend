@@ -79,22 +79,35 @@ class OptimizedCssForUrlController extends Controller
             ->orderBy('chunk_index')
             ->get();
 
+        // Next.js dùng file CSS local (Laravel đẩy file qua Next.js public): trả path thay vì full URL.
+        // Mặc định trả path; gửi css_origin=laravel nếu cần full URL.
+        $cssOrigin = strtolower((string) ($request->input('css_origin') ?? 'next'));
+        $cssOriginNext = $cssOrigin !== 'laravel';
+
         if ($existing->isEmpty()) {
             $result = $this->optimizer->optimize($site, $postType);
             $urls = ($result['success'] ?? false) ? ($result['urls'] ?? []) : [];
+            if ($cssOriginNext && !empty($urls)) {
+                $postTypeRows = WpHeadlessStyleOptimized::where('site_id', $site->id)
+                    ->where('post_type', $postType)
+                    ->orderBy('chunk_index')
+                    ->get();
+                $urls = $postTypeRows->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all();
+            }
         } else {
-            $urls = $existing->map(fn($row) => $row->public_url)->filter()->values()->all();
+            $urls = $cssOriginNext
+                ? $existing->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all()
+                : $existing->map(fn($row) => $row->public_url)->filter()->values()->all();
         }
 
         // Global CSS: luôn gửi kèm để Next.js load base (special blocks).
-        $globalUrls = WpHeadlessStyleOptimized::where('site_id', $site->id)
+        $globalRows = WpHeadlessStyleOptimized::where('site_id', $site->id)
             ->where('post_type', 'global')
             ->orderBy('chunk_index')
-            ->get()
-            ->pluck('public_url')
-            ->filter()
-            ->values()
-            ->all();
+            ->get();
+        $globalUrls = $cssOriginNext
+            ? $globalRows->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all()
+            : $globalRows->pluck('public_url')->filter()->values()->all();
         $optimizedCssUrls = array_values(array_filter(array_merge($globalUrls, $urls)));
 
         // Font URLs (Google Fonts, etc.) từ wp_headless_styles style_type = font — Next.js dùng <link> preload/stylesheet.
