@@ -76,6 +76,8 @@ final class WpHeadlessSyncService
         $siteSettings = $this->querySiteSettings($graphqlUrl, $headers);
         if ($siteSettings !== null) {
             $this->setMeta($site, self::META_SITE_SETTINGS, $siteSettings);
+            $this->saveSiteSettingsToWpHeadlessSite($site, $siteSettings);
+            $this->pushSeoSettingsToNextjs($site);
             $result['synced'][] = self::META_SITE_SETTINGS;
         } else {
             Log::warning('WpHeadlessSync: headlessSiteSettings failed', ['site_id' => $site->id]);
@@ -143,6 +145,8 @@ final class WpHeadlessSyncService
             $siteSettings = $this->querySiteSettings($graphqlUrl, $headers);
             if ($siteSettings !== null) {
                 $this->setMeta($site, self::META_SITE_SETTINGS, $siteSettings);
+                $this->saveSiteSettingsToWpHeadlessSite($site, $siteSettings);
+                $this->pushSeoSettingsToNextjs($site);
                 $result['synced'][] = self::META_SITE_SETTINGS;
             } else {
                 Log::warning('WpHeadlessSync: headlessSiteSettings failed', ['site_id' => $site->id]);
@@ -1213,6 +1217,8 @@ GQL;
      * Đồng bộ styles từ headlessPostTypeStyles vào bảng wp_headless_styles (addon DB).
      * Lọc trùng: cùng url (file) hoặc cùng content (inline) → gán parent_id trỏ tới bản ghi gốc đầu tiên.
      * Style đã có bản gốc global thì không lưu bản con (parent_id != null) vì global đã kiểm tra toàn trang.
+     * Nếu cùng một style (cùng styleKey) xuất hiện ở nhiều post_type (post + page, category, ...) thì đưa bản gốc
+     * vào global để tối ưu CSS một lần thay vì tạo nhiều bản con.
      */
     private function syncStylesToAddonDb(Site $site, array $postTypeStyles): void
     {
@@ -1289,18 +1295,10 @@ GQL;
                                 // Style global đã kiểm tra toàn trang, không lưu bản con (post_tag, taxonomy, ...).
                                 continue;
                             }
-                            $parentId = $canonical['id'];
-                            WpHeadlessStyle::create([
-                                'site_id'    => $siteId,
-                                'parent_id'  => $parentId,
-                                'post_type'  => $postType,
-                                'style_type' => $styleType,
-                                'name'       => $name,
-                                'url'        => $styleUrl,
-                                'content'    => '', //Empty content
-                                'sort_order' => $sortOrder++,
-                                'external'   => $external,
-                            ]);
+                            // Cùng style xuất hiện ở post_type khác (post + page, category, ...) → đưa bản gốc vào global
+                            // để tối ưu CSS một lần, không tạo bản con.
+                            WpHeadlessStyle::where('id', $canonical['id'])->update(['post_type' => 'global']);
+                            $canonicalByKey[$styleKey]['post_type'] = 'global';
                         }
                     }
                 }
@@ -1335,5 +1333,51 @@ GQL;
             ['site_id' => $site->id, 'meta_key' => $metaKey],
             ['meta_value' => json_encode($value, JSON_UNESCAPED_UNICODE)]
         );
+    }
+
+    /** Ghi $siteSettings vào wp_headless_sites.settings (merge với settings hiện có). */
+    private function saveSiteSettingsToWpHeadlessSite(Site $site, array $siteSettings): void
+    {
+        $wpSite = WpHeadlessSite::find($site->id);
+        if ($wpSite === null) {
+            return;
+        }
+        $current = is_array($wpSite->settings) ? $wpSite->settings : [];
+        $wpSite->settings = array_merge($current, $siteSettings);
+        $wpSite->save();
+    }
+
+    /** Đẩy wp_headless_sites.settings sang Next.js /api/wp-templates/receive để ghi seo.json. */
+    private function pushSeoSettingsToNextjs(Site $site): void
+    {
+        $wpSite = WpHeadlessSite::find($site->id);
+        if ($wpSite === null) {
+            return;
+        }
+        $settings = $wpSite->settings;
+        if (! is_array($settings) || $settings === []) {
+            return;
+        }
+        $baseUrl = $wpSite->getNextjsBaseUrl();
+        if ($baseUrl === '') {
+            return;
+        }
+        try {
+            $response = Http::timeout(10)->post(rtrim($baseUrl, '/') . '/api/wp-templates/receive', [
+                'site_id'  => $site->id,
+                'settings' => $settings,
+            ]);
+            if (! $response->successful()) {
+                Log::warning('WpHeadlessSync: pushSeoSettingsToNextjs failed', [
+                    'site_id' => $site->id,
+                    'status'  => $response->status(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('WpHeadlessSync: pushSeoSettingsToNextjs error', [
+                'site_id' => $site->id,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 }

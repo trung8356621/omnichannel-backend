@@ -105,6 +105,7 @@ GQL;
             'date',
             'templatePath',
             'featuredImage { node { sourceUrl altText } }',
+            'headlessSeo',
         ];
 
         $taxonomyFields = [

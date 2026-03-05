@@ -82,14 +82,21 @@ class WpHeadlessTemplateObserver
             ]);
         }
 
-        if ($templates !== []) {
+        $settings = $site->settings ?? [];
+        $settings = is_array($settings) ? $settings : [];
+
+        if ($templates !== [] || $settings !== []) {
             try {
+                $receivePayload = [
+                    'site_id'            => $siteId,
+                    'templates'          => $templates,
+                    'template_relations' => $templateRelations,
+                ];
+                if ($settings !== []) {
+                    $receivePayload['settings'] = $settings;
+                }
                 $receiveResponse = Http::timeout(10)
-                    ->post($baseUrl . '/api/wp-templates/receive', [
-                        'site_id'           => $siteId,
-                        'templates'         => $templates,
-                        'template_relations' => $templateRelations,
-                    ]);
+                    ->post($baseUrl . '/api/wp-templates/receive', $receivePayload);
                 if (!$receiveResponse->successful()) {
                     Log::warning('WpHeadlessTemplateObserver: receive failed', [
                         'site_id' => $siteId,

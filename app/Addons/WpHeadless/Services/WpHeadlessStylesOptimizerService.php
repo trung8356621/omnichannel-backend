@@ -43,6 +43,9 @@ final class WpHeadlessStylesOptimizerService
     /** site_meta key: JSON { global: timestamp, ... } — dùng cho ensureGlobalOptimized (throttle). */
     private const META_KEY_STYLES_OPTIMIZED_AT = 'wp_headless_styles_optimized_at';
 
+    /** site_meta key: site settings từ WP (headlessSiteSettings), có has_darkmode. */
+    private const META_KEY_SITE_SETTINGS = 'wp_site_settings';
+
     /**
      * Tạo CSS đã tối ưu cho post_type: lấy classes từ templates, lọc rules trong CSS (post_type + global),
      * ghi ra file public (WordPress lấy trực tiếp qua URL), lưu path vào wp_headless_styles_optimized.
@@ -81,11 +84,12 @@ final class WpHeadlessStylesOptimizerService
             return ['success' => false, 'message' => 'No CSS content for post_type + global.', 'chunks' => 0, 'urls' => []];
         }
 
-        $filtered = $this->filterCssByClasses($rawCss, $classes);
+        $stripDarkMode = !$this->getHasDarkmode($site);
+        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $classBlocks = $filtered['blocks'];
         // Lấy specialBlocks nhưng loại trừ block đã có trong global.css (tránh trùng).
-        $specialBlocksNotInGlobal = $this->excludeGlobalSpecialBlocks($siteId, $specialBlocks);
+        $specialBlocksNotInGlobal = $this->excludeGlobalSpecialBlocks($siteId, $specialBlocks, $stripDarkMode);
         $allBlocks = array_merge(
             $specialBlocksNotInGlobal,
             [self::DEFAULT_CSS_RESET],
@@ -184,7 +188,8 @@ final class WpHeadlessStylesOptimizerService
         if ($rawCss === '') {
             return ['success' => false, 'message' => 'No CSS content for global.', 'chunks' => 0, 'urls' => []];
         }
-        $filtered = $this->filterCssByClasses($rawCss, []);
+        $stripDarkMode = !$this->getHasDarkmode($site);
+        $filtered = $this->filterCssByClasses($rawCss, [], $stripDarkMode);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $specialBlocks);
         $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
@@ -263,6 +268,24 @@ final class WpHeadlessStylesOptimizerService
         }
         $decoded = json_decode($value, true);
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * Lấy cấu hình has_darkmode từ site settings (WP headlessSiteSettings). Mặc định false.
+     * Khi false, tối ưu CSS sẽ loại bỏ toàn bộ rule .dark * .
+     */
+    private function getHasDarkmode(Site $site): bool
+    {
+        $row = SiteMeta::where('site_id', $site->id)->where('meta_key', self::META_KEY_SITE_SETTINGS)->first();
+        $value = $row->meta_value ?? null;
+        if ($value === null || $value === '') {
+            return false;
+        }
+        $decoded = json_decode($value, true);
+        if (!is_array($decoded)) {
+            return false;
+        }
+        return (bool) ($decoded['has_darkmode'] ?? false);
     }
 
     /** Ghi thời gian lưu cuối cho 1 loại (global hoặc post_type) vào site_meta. */
@@ -382,7 +405,7 @@ final class WpHeadlessStylesOptimizerService
      * Loại trừ khỏi $specialBlocks những block đã có trong global.css (so sánh theo signature minified).
      * Trả về mảng block không trùng global để gộp vào CSS post_type.
      */
-    private function excludeGlobalSpecialBlocks(int $siteId, array $specialBlocks): array
+    private function excludeGlobalSpecialBlocks(int $siteId, array $specialBlocks, bool $stripDarkMode = false): array
     {
         if ($specialBlocks === []) {
             return [];
@@ -391,7 +414,7 @@ final class WpHeadlessStylesOptimizerService
         if ($globalRawCss === '') {
             return $specialBlocks;
         }
-        $globalFiltered = $this->filterCssByClasses($globalRawCss, []);
+        $globalFiltered = $this->filterCssByClasses($globalRawCss, [], $stripDarkMode);
         $globalSpecials = $globalFiltered['specialBlocks'] ?? [];
         $globalSignatures = [];
         foreach ($globalSpecials as $b) {
@@ -412,6 +435,7 @@ final class WpHeadlessStylesOptimizerService
      * Lấy toàn bộ nội dung CSS từ wp_headless_styles (post_type + global), đã dedupe theo url/content.
      * (1) Bỏ qua style_type = inline mà content = null.
      * (2) Đã vào global thì không thêm lại ở post_type/taxonomy (xóa trùng).
+     * (3) Row có parent_id (bản con trùng CSS): nếu không có content/url thì lấy CSS từ row cha để tối ưu đủ.
      * Với postType = global: chỉ lấy row post_type = global (không gộp header/footer), thứ tự theo sort_order.
      */
     private function fetchStylesCss(int $siteId, string $postType): string
@@ -430,6 +454,13 @@ final class WpHeadlessStylesOptimizerService
             ->orderByRaw($orderCase)
             ->orderBy('sort_order')
             ->get();
+
+        // Row có parent_id nhưng không có content/url (bản con trùng) → cần lấy CSS từ cha. Load sẵn các parent.
+        $parentIds = $rows->pluck('parent_id')->filter()->unique()->values()->all();
+        $parentRows = [];
+        if ($parentIds !== []) {
+            $parentRows = WpHeadlessStyle::where('site_id', $siteId)->whereIn('id', $parentIds)->get()->keyBy('id');
+        }
 
         // Với post_type khác global: build globalKeys từ toàn bộ row global (cả file và inline có content) để tránh style trùng.
         $globalKeys = [];
@@ -450,7 +481,37 @@ final class WpHeadlessStylesOptimizerService
         $parts = [];
 
         foreach ($rows as $row) {
-            if (($row->style_type ?? '') === 'inline' && ($row->content === null || $row->content === '')) {
+            $content = $row->content ?? null;
+            $url = $row->url ?? '';
+            $hasContent = $content !== null && $content !== '';
+            $hasUrl = $url !== '';
+
+            // Bản con (parent_id): không có content/url thì dùng CSS của row cha
+            if (($row->parent_id ?? null) !== null && !$hasContent && !$hasUrl) {
+                $parent = $parentRows[$row->parent_id] ?? null;
+                if ($parent !== null) {
+                    $parentKey = $this->rowStyleKey($parent);
+                    if ($parentKey !== '' && !isset($seen[$parentKey])) {
+                        $seen[$parentKey] = true;
+                        if (($parent->post_type ?? '') !== 'global' && isset($globalKeys[$parentKey])) {
+                            continue;
+                        }
+                        $parentContent = $parent->content ?? null;
+                        $parentUrl = $parent->url ?? '';
+                        if ($parentContent !== null && $parentContent !== '') {
+                            $parts[] = $parentContent;
+                        } elseif ($parentUrl !== '') {
+                            $fetched = $this->fetchUrl($parentUrl);
+                            if ($fetched !== '') {
+                                $parts[] = $fetched;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (($row->style_type ?? '') === 'inline' && !$hasContent) {
                 continue;
             }
             $key = $this->rowStyleKey($row);
@@ -464,14 +525,13 @@ final class WpHeadlessStylesOptimizerService
                     continue;
                 }
             }
-            if ($row->content !== null && $row->content !== '') {
+            if ($hasContent) {
                 if (!isset($seen[$key])) {
                     $seen[$key] = true;
-                    $parts[] = $row->content;
+                    $parts[] = $content;
                 }
                 continue;
             }
-            $url = $row->url ?? '';
             if ($url === '') {
                 continue;
             }
@@ -479,9 +539,9 @@ final class WpHeadlessStylesOptimizerService
                 continue;
             }
             $seen[$key] = true;
-            $content = $this->fetchUrl($url);
-            if ($content !== '') {
-                $parts[] = $content;
+            $fetched = $this->fetchUrl($url);
+            if ($fetched !== '') {
+                $parts[] = $fetched;
             }
         }
         return implode("\n", $parts);
@@ -630,11 +690,270 @@ final class WpHeadlessStylesOptimizerService
     ];
 
     /**
+     * Kiểm tra selector (một selector đơn) có class .dark hoặc .*-dark (ví dụ .bg-dark, .text-dark).
+     * Dùng khi stripDarkMode để loại bỏ rule dark mode.
+     */
+    private function selectorContainsDarkMode(string $selector): bool
+    {
+        return (bool) preg_match('/(\.dark\b|\.\w+-dark\b)/', $selector);
+    }
+
+    /**
+     * Loại nội dung trong :not(), :is(), :has(), :where() khỏi selector trước khi trích class.
+     * Chỉ cần kiểm tra class "dương" (phần áp style), không bắt buộc class trong :not(.transparent) v.v.
+     */
+    private function stripPseudoClassArgsFromSelector(string $singleSelector): string
+    {
+        $len = strlen($singleSelector);
+        $out = '';
+        $i = 0;
+        $pseudoNames = ['not', 'is', 'has', 'where'];
+        while ($i < $len) {
+            if ($singleSelector[$i] === ':' && $i + 1 < $len) {
+                $matched = false;
+                foreach ($pseudoNames as $name) {
+                    $nlen = strlen($name);
+                    if ($i + 1 + $nlen < $len
+                        && strcasecmp(substr($singleSelector, $i + 1, $nlen), $name) === 0
+                        && preg_match('/^\s*\(/', substr($singleSelector, $i + 1 + $nlen))) {
+                        $start = $i;
+                        $i += 1 + $nlen;
+                        while ($i < $len && preg_match('/\s/', $singleSelector[$i])) {
+                            $i++;
+                        }
+                        if ($i < $len && $singleSelector[$i] === '(') {
+                            $depth = 1;
+                            $i++;
+                            while ($i < $len && $depth > 0) {
+                                $ch = $singleSelector[$i];
+                                if ($ch === '(') {
+                                    $depth++;
+                                } elseif ($ch === ')') {
+                                    $depth--;
+                                } elseif (($ch === '"' || $ch === "'") && ($i === 0 || $singleSelector[$i - 1] !== '\\')) {
+                                    $quote = $ch;
+                                    $i++;
+                                    while ($i < $len) {
+                                        if ($singleSelector[$i] === $quote && $singleSelector[$i - 1] !== '\\') {
+                                            $i++;
+                                            break;
+                                        }
+                                        $i++;
+                                    }
+                                    continue;
+                                }
+                                $i++;
+                            }
+                            $out .= ' '; // giữ độ dài tương đối
+                            $matched = true;
+                            break;
+                        }
+                    }
+                }
+                if ($matched) {
+                    continue;
+                }
+            }
+            $out .= $singleSelector[$i];
+            $i++;
+        }
+        return $out;
+    }
+
+    /**
+     * Trích danh sách tên class (không có dấu chấm) từ một selector đơn.
+     * Bỏ qua class nằm trong :not(), :is(), :has(), :where() — chỉ lấy class "dương".
+     * Ví dụ ".header:not(.transparent) .nav" → ['header', 'nav'].
+     */
+    private function extractClassesFromSelector(string $singleSelector): array
+    {
+        $singleSelector = $this->stripPseudoClassArgsFromSelector($singleSelector);
+        if (preg_match_all('/\.([a-zA-Z_][a-zA-Z0-9_-]*)/', $singleSelector, $m)) {
+            return array_values(array_unique($m[1]));
+        }
+        return [];
+    }
+
+    /**
+     * Kiểm tra mọi class "dương" trong selector đều có trong danh sách allowed (cha con đều phải có trong classes).
+     * Class trong :not(), :is(), :has(), :where() không tính. Selector chỉ có tag HTML (không có class) trả về false.
+     */
+    private function selectorAllClassesInList(string $singleSelector, array $allowedClasses): bool
+    {
+        $classesInSelector = $this->extractClassesFromSelector($singleSelector);
+        if ($classesInSelector === []) {
+            return false;
+        }
+        $allowedSet = array_flip(array_map('strtolower', $allowedClasses));
+        foreach ($classesInSelector as $cls) {
+            if (!isset($allowedSet[strtolower($cls)])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Chỉ giữ lại những selector có toàn bộ class "dương" (cha + con) nằm trong $allowedClasses; loại bỏ selector thừa.
+     * Selector chỉ có tag HTML + class như .nav > li > a được giữ khi .nav có trong list.
+     * Trả về chuỗi selector đã gộp lại hoặc '' nếu không còn selector nào.
+     */
+    private function filterSelectorsToAllowedClassesOnly(string $selectorList, array $allowedClasses): string
+    {
+        if ($allowedClasses === []) {
+            return '';
+        }
+        $selectors = $this->splitSelectorList($selectorList);
+        $kept = [];
+        foreach ($selectors as $sel) {
+            if ($this->selectorAllClassesInList($sel, $allowedClasses)) {
+                $kept[] = $sel;
+            }
+        }
+        return $kept === [] ? '' : implode(',', $kept);
+    }
+
+    /**
+     * Kiểm tra selector có ít nhất một class nằm trong $allowedClasses (dùng cho trường hợp có #, bỏ qua kiểm tra cha con).
+     */
+    private function selectorHasAtLeastOneClassInList(string $selectorList, array $allowedClasses): bool
+    {
+        if ($allowedClasses === []) {
+            return false;
+        }
+        foreach ($allowedClasses as $c) {
+            $esc = preg_quote($c, '/');
+            if (preg_match('/\.' . $esc . '(?:\s|[,>+~\[:"\']|$)/', $selectorList)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Lọc nội dung CSS (body): rule có # thì giữ nguyên; không có # thì chỉ giữ selector có toàn bộ class trong $allowedClasses (bỏ dư thừa).
+     * Dùng cho body bên trong @media / @supports.
+     */
+    private function filterCssBodyToAllowedClassesOnly(string $cssBody, array $allowedClasses): string
+    {
+        if ($allowedClasses === []) {
+            return '';
+        }
+        $blocks = $this->extractCssBlocks($cssBody);
+        $kept = [];
+        foreach ($blocks as $block) {
+            if (str_contains($block['selector'], '#')) {
+                $kept[] = $block['full'];
+            } else {
+                $filteredSelector = $this->filterSelectorsToAllowedClassesOnly($block['selector'], $allowedClasses);
+                if ($filteredSelector !== '') {
+                    $kept[] = $filteredSelector . '{' . $block['body'] . '}';
+                }
+            }
+        }
+        return implode("\n", $kept);
+    }
+
+    /**
+     * Tách chuỗi selector list (nhiều selector cách nhau bởi dấu phẩy) thành từng selector đơn.
+     * Không tách dấu phẩy nằm trong [], () hoặc chuỗi " '.
+     */
+    private function splitSelectorList(string $selectorList): array
+    {
+        $len = strlen($selectorList);
+        $current = '';
+        $result = [];
+        $inDouble = false;
+        $inSingle = false;
+        $depthBracket = 0;
+        $depthParen = 0;
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $selectorList[$i];
+            if ($inDouble) {
+                $current .= $ch;
+                if ($ch === '"' && ($i === 0 || $selectorList[$i - 1] !== '\\')) {
+                    $inDouble = false;
+                }
+                continue;
+            }
+            if ($inSingle) {
+                $current .= $ch;
+                if ($ch === "'" && ($i === 0 || $selectorList[$i - 1] !== '\\')) {
+                    $inSingle = false;
+                }
+                continue;
+            }
+            if ($ch === '"') {
+                $inDouble = true;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === "'") {
+                $inSingle = true;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === '[') {
+                $depthBracket++;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === ']') {
+                $depthBracket--;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === '(') {
+                $depthParen++;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === ')') {
+                $depthParen--;
+                $current .= $ch;
+                continue;
+            }
+            if ($ch === ',' && $depthBracket === 0 && $depthParen === 0) {
+                $trimmed = trim($current);
+                if ($trimmed !== '') {
+                    $result[] = $trimmed;
+                }
+                $current = '';
+                continue;
+            }
+            $current .= $ch;
+        }
+        $trimmed = trim($current);
+        if ($trimmed !== '') {
+            $result[] = $trimmed;
+        }
+        return $result;
+    }
+
+    /**
+     * Loại bỏ chỉ những selector có .dark hoặc .*-dark khỏi danh sách selector, giữ lại rule với phần còn lại.
+     * Trả về chuỗi selector đã gộp lại, hoặc '' nếu toàn bộ đều bị loại.
+     */
+    private function filterSelectorsRemoveDark(string $selectorList): string
+    {
+        $selectors = $this->splitSelectorList($selectorList);
+        $kept = [];
+        foreach ($selectors as $sel) {
+            if ($this->selectorContainsDarkMode($sel)) {
+                continue;
+            }
+            $kept[] = $sel;
+        }
+        return $kept === [] ? '' : implode(',', $kept);
+    }
+
+    /**
      * Giữ lại: (1) rule có selector chứa class → blocks; (2) CSS đặc biệt (thẻ HTML, :root, *, @font-face, @keyframes, @layer, @charset, @import) → specialBlocks.
      * Với global/header/footer khi không có class: chỉ xuất specialBlocks (HTML_TAGS, @font-face, @keyframes, ...).
+     * Khi $stripDarkMode = true: chỉ loại bỏ từng selector có .dark hoặc .*-dark trong danh sách selector, giữ lại rule với các selector còn lại (ví dụ .a,.b-dark,.c → .a,.c).
      * @return array{blocks: list<string>, specialBlocks: list<string>}
      */
-    private function filterCssByClasses(string $css, array $classes): array
+    private function filterCssByClasses(string $css, array $classes, bool $stripDarkMode = false): array
     {
         $selectorClassRegex = null;
         if (!empty($classes)) {
@@ -655,32 +974,66 @@ final class WpHeadlessStylesOptimizerService
             $full = $block['full'];
             $selTrim = trim($selector);
 
+            if ($stripDarkMode && $this->selectorContainsDarkMode($selector)) {
+                $filteredSelector = $this->filterSelectorsRemoveDark($selector);
+                if ($filteredSelector === '') {
+                    continue;
+                }
+                $selector = $filteredSelector;
+                $full = $filteredSelector . '{' . $body . '}';
+                $selTrim = trim($selector);
+            }
+
             if (str_starts_with($selTrim, '@')) {
                 if (preg_match('/^@(?:font-face|(?:-\w+-)?keyframes|charset|import|layer)\b/i', $selTrim)) {
                     if (preg_match('/^@font-face\b/i', $selTrim) && preg_match('/fl-icons/i', $full)) {
                         continue;
                     }
                     $specialBlocks[] = $full;
-                } elseif (preg_match('/^@(?:media|supports)\b/i', $selTrim) && preg_match('/@(?:-\w+-)?keyframes\b/i', $body)) {
-                    $specialBlocks[] = $full;
+                } elseif (preg_match('/^@(?:media|supports)\b/i', $selTrim)) {
+                    if ($stripDarkMode && $this->selectorContainsDarkMode($body)) {
+                        $filteredBody = $this->stripDarkModeFromCss($body);
+                        if ($filteredBody !== '') {
+                            $full = $selector . '{' . $filteredBody . '}';
+                            $body = $filteredBody;
+                        } else {
+                            continue;
+                        }
+                    }
+                    if (preg_match('/@(?:-\w+-)?keyframes\b/i', $body)) {
+                        $specialBlocks[] = $full;
+                    } elseif ($selectorClassRegex !== null && preg_match($selectorClassRegex, $body)) {
+                        $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes);
+                        if ($filteredBody !== '') {
+                            $classBlocks[] = $selector . '{' . $filteredBody . '}';
+                        }
+                    }
                 } elseif ($selectorClassRegex !== null && preg_match($selectorClassRegex, $body)) {
-                    $classBlocks[] = $full;
+                    $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes);
+                    if ($filteredBody !== '') {
+                        $classBlocks[] = $selector . '{' . $filteredBody . '}';
+                    }
                 }
                 continue;
             }
 
-            if ($selectorClassRegex !== null && preg_match($selectorClassRegex, $selector)) {
+            // Có id (#) thì không kiểm tra class, giữ nguyên rule.
+            if (str_contains($selector, '#')) {
                 $classBlocks[] = $full;
+                continue;
+            }
+
+            // Không có #: chỉ giữ selector có toàn bộ class (cha + con) trong list, bỏ dư thừa như .col-hover-blur .col-inner khi col-hover-blur không có trong list.
+            if ($selectorClassRegex !== null && preg_match($selectorClassRegex, $selector)) {
+                $filteredSelector = $this->filterSelectorsToAllowedClassesOnly($selector, $classes);
+                if ($filteredSelector !== '') {
+                    $classBlocks[] = $filteredSelector . '{' . $body . '}';
+                }
                 continue;
             }
 
             if (preg_match('/^\*(\s|[,>+~\[:"\']|$)/', $selTrim) || preg_match('/^:root\b/i', $selTrim)) {
                 $specialBlocks[] = $full;
-                continue;
-            }
-
-            if (str_contains($selector, '#')) {
-                $classBlocks[] = $full;
                 continue;
             }
 
@@ -711,6 +1064,28 @@ final class WpHeadlessStylesOptimizerService
             }
         }
         return ['blocks' => $classBlocks, 'specialBlocks' => $specialBlocks];
+    }
+
+    /**
+     * Loại bỏ chỉ những selector có .dark hoặc .*-dark trong mỗi rule; giữ lại rule với phần selector còn lại.
+     * Dùng cho nội dung trong @media khi stripDarkMode.
+     */
+    private function stripDarkModeFromCss(string $css): string
+    {
+        $blocks = $this->extractCssBlocks($css);
+        $kept = [];
+        foreach ($blocks as $block) {
+            if ($this->selectorContainsDarkMode($block['selector'])) {
+                $filteredSelector = $this->filterSelectorsRemoveDark($block['selector']);
+                if ($filteredSelector === '') {
+                    continue;
+                }
+                $kept[] = $filteredSelector . '{' . $block['body'] . '}';
+            } else {
+                $kept[] = $block['full'];
+            }
+        }
+        return implode("\n", $kept);
     }
 
     /**
