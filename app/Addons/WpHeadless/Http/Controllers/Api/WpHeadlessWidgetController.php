@@ -93,7 +93,9 @@ class WpHeadlessWidgetController extends Controller
     }
 
     /**
-     * GET /api/wp-headless/widget/posts?site_id=&per_page=5&ids=
+     * POST /api/wp-headless/widget/posts
+     * Body or query: site_id (required), per_page=5, ids=
+     * Header: Authorization: Bearer <read_token>
      */
     public function posts(Request $request): JsonResponse
     {

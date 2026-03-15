@@ -5,6 +5,7 @@ use App\Models\Service;
 use App\Services\AddonManager;
 use Filament\Pages\Page;
 use Filament\Notifications\Notification;
+use Illuminate\Support\Facades\DB;
 use Redirect;
 
 class ManageServices extends Page
@@ -27,6 +28,30 @@ class ManageServices extends Page
     public function toggleService($id)
     {
         $service = Service::find($id);
+        if (!$service) {
+            Notification::make()->title('Không tìm thấy service')->danger()->send();
+            return;
+        }
+
+        $willActivate = !$service->is_active;
+        if ($willActivate) {
+            $dbName = $service->config['database'] ?? null;
+            if (!empty($dbName)) {
+                $exists = DB::selectOne(
+                    'SELECT 1 FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = ?',
+                    [$dbName]
+                );
+                if (!$exists) {
+                    Notification::make()
+                        ->title('Không thể kích hoạt addon')
+                        ->body("Database chưa được tạo. Vui lòng tạo database \"{$dbName}\" (và chạy migration cho addon) trước khi kích hoạt.")
+                        ->danger()
+                        ->send();
+                    return;
+                }
+            }
+        }
+
         $service->update(['is_active' => !$service->is_active]);
         $this->services = Service::all()->toArray();
         Notification::make()->title('Cập nhật trạng thái thành công')->success()->send();

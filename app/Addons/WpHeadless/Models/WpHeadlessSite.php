@@ -35,27 +35,64 @@ class WpHeadlessSite extends Model
 
     /**
      * URL gốc Next.js để proxy / gửi webhook.
-     * is_dev = true → domain chính từ bảng sites (url).
-     * is_dev = false → headless_next_dev.
+     * is_dev = true → headless_next_dev.
+     * is_dev = false → headless_next_dev hoặc build từ site domain (https nếu ssl).
      */
     public function getNextjsBaseUrl(): string
     {
-        if (!$this->is_dev) {
-            $site = $this->getMainSite();
-            if ($site && !empty($site->url)) {
-                return rtrim(trim((string) $site->url), '/');
-            }
-            if ($site && !empty($site->domain)) {
-                $d = trim((string) $site->domain);
-                return preg_match('#^https?://#i', $d) ? $d : 'https://' . $d;
-            }
-        }
-        $url = $this->headless_next_dev ?? '';
+        $url = $this->resolveNextjsBaseUrlFromSite();
         $url = rtrim(trim($url), '/');
         if ($url !== '' && !preg_match('#^https?://#i', $url)) {
-            $url = 'http://' . $url;
+            $url = ($this->is_dev ? 'http' : 'https') . '://' . $url;
         }
         return $url;
+    }
+
+    /**
+     * URL dùng cho webhook (receive, updated). Ưu tiên config nextjs_webhook_url (tránh lỗi kết nối localhost).
+     */
+    public function getNextjsWebhookUrl(): string
+    {
+        $override = config('wp-headless.nextjs_webhook_url');
+        if ($override !== null && trim((string) $override) !== '') {
+            return rtrim(trim((string) $override), '/');
+        }
+        return $this->getNextjsBaseUrl();
+    }
+
+    private function resolveNextjsBaseUrlFromSite(): string
+    {
+        if (!$this->is_dev) {
+            $site = $this->getMainSite();
+            if ($site && !empty($site->domain)) {
+                $d = trim((string) $site->domain);
+                $scheme = !empty($site->ssl) ? 'https' : 'http';
+                $base = preg_match('#^https?://#i', $d) ? $d : $scheme . '://' . $d;
+                return rtrim($base, '/');
+            }
+            $url = $this->headless_next_dev ?? '';
+            $url = rtrim(trim($url), '/');
+            if ($url !== '' && !preg_match('#^https?://#i', $url)) {
+                $url = 'https://' . $url;
+            }
+            return $url;
+        }
+        return (string) ($this->headless_next_dev ?? '');
+    }
+
+    /**
+     * URL gốc WordPress (uploads, assets). Dùng scheme + domain từ Site (http nếu !ssl, https nếu ssl).
+     */
+    public function getWpUploadsOrigin(): string
+    {
+        $site = $this->getMainSite();
+        if (!$site || empty($site->domain)) {
+            return '';
+        }
+        $d = trim((string) $site->domain);
+        $scheme = !empty($site->ssl) ? 'https' : 'http';
+        $base = preg_match('#^https?://#i', $d) ? $d : $scheme . '://' . $d;
+        return rtrim($base, '/');
     }
 
     /**

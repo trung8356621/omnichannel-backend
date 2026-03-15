@@ -37,9 +37,13 @@ class OptimizedCssForUrlController extends Controller
             'url'     => 'required|string|max:2048',
         ]);
 
-        $site = Site::find($request->input('site_id'));
+        $siteId = (int) $request->input('site_id');
+        $site = Site::find($siteId);
         if (!$site) {
-            return response()->json(['message' => 'Site not found'], 404);
+            return response()->json(['message' => 'Site not found'], 404,[
+                'Content-Type'  => 'application/json',
+                'Cache-Control' => 'public, max-age=60',
+            ], \JSON_UNESCAPED_UNICODE);
         }
 
         $urlOrPath = $request->input('url');
@@ -124,7 +128,7 @@ class OptimizedCssForUrlController extends Controller
 
         $bodyClass = $this->resolver->getBodyClassForPostType($site, $postType);
 
-        return response()->json([
+        $payload = [
             'success'           => true,
             'data'              => $data,
             'post_type'         => $postType,
@@ -133,7 +137,12 @@ class OptimizedCssForUrlController extends Controller
             'bodyClass'         => $bodyClass,
             'optimizedCssUrls'  => $optimizedCssUrls,
             'fontUrls'          => $fontUrls,
-        ]);
+        ];
+
+        return response()->json($payload, 200, [
+            'Content-Type'  => 'application/json',
+            'Cache-Control' => 'public, max-age=60',
+        ], \JSON_UNESCAPED_UNICODE);
     }
 
     private const TYPENAME_TO_POST_TYPE = [

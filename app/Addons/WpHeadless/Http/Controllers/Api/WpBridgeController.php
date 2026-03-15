@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
+use App\Addons\WpHeadless\Jobs\SyncSiteDataStepJob;
 use App\Addons\WpHeadless\Services\WpHeadlessSyncService;
 use App\Http\Controllers\Controller;
 use App\Models\Service;
@@ -11,6 +12,7 @@ use App\Models\Site;
 use App\Models\SiteService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -126,6 +128,19 @@ class WpBridgeController extends Controller
         if ($step !== null && $step !== '') {
             $step = (int) $step;
             if ($step >= 1 && $step <= 4) {
+                $useQueue = config('queue.default') !== 'sync';
+                if ($useQueue) {
+                    $cacheKey = SyncSiteDataStepJob::CACHE_PREFIX . $site->id . '_' . $step;
+                    Cache::put($cacheKey, ['status' => 'pending', 'result' => null], SyncSiteDataStepJob::CACHE_TTL_SECONDS);
+                    SyncSiteDataStepJob::dispatch($site->id, $step);
+                    return response()->json([
+                        'success' => true,
+                        'queued' => true,
+                        'site_id' => $site->id,
+                        'step' => $step,
+                        'message' => 'Đang đồng bộ ở nền. Vui lòng gọi GET /api/wp-bridge/sync-site-data/status để kiểm tra kết quả.',
+                    ]);
+                }
                 $result = app(WpHeadlessSyncService::class)->syncStep($site, $step);
                 if (!$result['success']) {
                     return response()->json($result, 422);
@@ -140,6 +155,58 @@ class WpBridgeController extends Controller
         }
         $result['site_id'] = $site->id;
         return response()->json($result);
+    }
+
+    /**
+     * Trạng thái bước đồng bộ đã đưa vào queue (WordPress poll khi nhận queued: true).
+     * GET /api/wp-bridge/sync-site-data/status?site_id=1&step=1
+     * Header: X-GraphQL-Secret = READ_TOKEN
+     */
+    public function syncSiteDataStatus(Request $request): JsonResponse
+    {
+        $siteId = $request->input('site_id');
+        $step = $request->input('step');
+        if ($siteId === null || $step === null) {
+            return response()->json(['success' => false, 'message' => 'Thiếu site_id hoặc step.'], 422);
+        }
+        $siteId = (int) $siteId;
+        $step = (int) $step;
+        if ($siteId <= 0 || $step < 1 || $step > 4) {
+            return response()->json(['success' => false, 'message' => 'site_id hoặc step không hợp lệ.'], 422);
+        }
+
+        $site = Site::find($siteId);
+        if (!$site) {
+            return response()->json(['success' => false, 'message' => 'Site not found.'], 404);
+        }
+
+        $token = $request->header('X-GraphQL-Secret') ?: $request->bearerToken();
+        $siteService = $this->getWpHeadlessSiteService($site);
+        if (!$siteService) {
+            return response()->json(['success' => false, 'message' => 'WP Headless not activated.'], 403);
+        }
+        $readToken = $siteService->settings['READ_TOKEN'] ?? '';
+        if ($token === '' || $token !== $readToken) {
+            return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
+        }
+
+        $cacheKey = SyncSiteDataStepJob::CACHE_PREFIX . $siteId . '_' . $step;
+        $data = Cache::get($cacheKey);
+        if ($data === null) {
+            return response()->json([
+                'success' => true,
+                'status' => 'pending',
+                'message' => 'Job đang chờ hoặc đang chạy. Đảm bảo php artisan queue:work đang chạy.',
+            ]);
+        }
+
+        $status = $data['status'] ?? 'pending';
+        $result = $data['result'] ?? null;
+        return response()->json([
+            'success' => true,
+            'status' => $status,
+            'result' => $result,
+        ]);
     }
 
     private function getWpHeadlessSiteService(Site $site): ?SiteService

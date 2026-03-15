@@ -1347,7 +1347,7 @@ GQL;
         $wpSite->save();
     }
 
-    /** Đẩy wp_headless_sites.settings sang Next.js /api/wp-templates/receive để ghi seo.json. */
+    /** Đẩy wp_headless_sites.settings sang Next.js /api/wp-templates/receive để ghi info.json (site_id, domain, wp_uploads_origin, read_token, seo, ...). */
     private function pushSeoSettingsToNextjs(Site $site): void
     {
         $wpSite = WpHeadlessSite::find($site->id);
@@ -1358,15 +1358,37 @@ GQL;
         if (! is_array($settings) || $settings === []) {
             return;
         }
-        $baseUrl = $wpSite->getNextjsBaseUrl();
+        $baseUrl = $wpSite->getNextjsWebhookUrl();
         if ($baseUrl === '') {
             return;
         }
+        // READ_TOKEN lấy từ site_services.settings (SiteService), không phải wp_headless_sites.settings.
+        $siteService = $this->getWpHeadlessSiteService($site);
+        $readToken = $siteService && is_array($siteService->settings)
+            ? trim((string) ($siteService->settings['READ_TOKEN'] ?? ''))
+            : '';
+        $domain = trim((string) ($site->domain ?? ''));
+        $info = [
+            'site_id'           => $site->id,
+            'domain'            => $domain,
+            'wp_uploads_origin' => $wpSite->getWpUploadsOrigin(),
+            'next_url'          => rtrim($wpSite->getNextjsBaseUrl(), '/'),
+            'laravel_api_url'   => rtrim(config('app.url', ''), '/'),
+            'read_token'        => $readToken,
+        ];
+        $info = array_merge($info, $settings);
+
         try {
-            $response = Http::timeout(10)->post(rtrim($baseUrl, '/') . '/api/wp-templates/receive', [
-                'site_id'  => $site->id,
-                'settings' => $settings,
-            ]);
+            $headers = ['Content-Type' => 'application/json'];
+            if ($readToken !== '') {
+                $headers['Authorization'] = 'Bearer ' . $readToken;
+            }
+            $response = Http::timeout(10)
+                ->withHeaders($headers)
+                ->post(rtrim($baseUrl, '/') . '/api/wp-templates/receive', [
+                    'site_id' => $site->id,
+                    'info'    => $info,
+                ]);
             if (! $response->successful()) {
                 Log::warning('WpHeadlessSync: pushSeoSettingsToNextjs failed', [
                     'site_id' => $site->id,

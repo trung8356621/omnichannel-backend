@@ -10,8 +10,10 @@ use App\Addons\WpHeadless\Filament\Pages\WpHeadlessSitePage;
 use App\Addons\WpHeadless\Http\Controllers\SiteProxyController;
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessCors;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
+use App\Addons\WpHeadless\Observers\SiteServiceObserver;
 use App\Addons\WpHeadless\Observers\WpHeadlessTemplateObserver;
 use App\Models\FrontendProject;
+use App\Models\SiteService;
 use Illuminate\Support\ServiceProvider;
 use Route;
 
@@ -35,6 +37,7 @@ class WpHeadlessServiceProvider extends ServiceProvider
         $this->registerAddonDatabase(__DIR__, self::DB_CONNECTION, __DIR__ . '/database/migrations');
         $this->registerFrontendProject();
         WpHeadlessTemplate::observe(WpHeadlessTemplateObserver::class);
+        SiteService::observe(SiteServiceObserver::class);
     }
 
     /**

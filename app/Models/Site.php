@@ -8,7 +8,23 @@ class Site extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['user_id', 'subscription_id', 'domain', 'url', 'status'];
+    protected $fillable = ['user_id', 'subscription_id', 'domain', 'status', 'ssl'];
+
+    protected $casts = ['ssl' => 'boolean'];
+
+    public function siteServices()
+    {
+        return $this->hasMany(SiteService::class);
+    }
+
+    /** Site có đang kích hoạt service wp-headless (status active) không. */
+    public function hasActiveWpHeadless(): bool
+    {
+        return $this->siteServices()
+            ->whereHas('service', fn ($q) => $q->where('slug', 'wp-headless'))
+            ->where('status', 'active')
+            ->exists();
+    }
 
     public function metas()
     {

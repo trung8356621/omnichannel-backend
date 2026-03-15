@@ -4,18 +4,25 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Observers;
 
-use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
+use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
+use App\Models\Service;
+use App\Models\Site;
+use App\Models\SiteService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 /**
  * Khi wp_headless_templates có bản ghi được create/update:
  * 1) Gửi toàn bộ HTML template của site tới Next.js /api/wp-templates/receive để lưu file.
- * 2) Gửi webhook /api/wp-templates/updated để Next xóa cache / revalidate.
+ * 2) CSS: Laravel tối ưu và đẩy thẳng nội dung file (cssFiles) cho Next lưu, không lưu file trên Laravel.
+ * 3) Gửi webhook /api/wp-templates/updated để Next xóa cache / revalidate.
  */
 class WpHeadlessTemplateObserver
 {
+    public function __construct(
+        private WpHeadlessStylesOptimizerService $optimizer
+    ) {}
     private static function fileKeyForRow(WpHeadlessTemplate $row): string
     {
         $path = $row->template_path !== null && trim((string) $row->template_path) !== ''
@@ -32,9 +39,9 @@ class WpHeadlessTemplateObserver
             return;
         }
 
-        $baseUrl = $site->getNextjsBaseUrl();
+        $baseUrl = $site->getNextjsWebhookUrl();
         if ($baseUrl === '') {
-            Log::debug('WpHeadlessTemplateObserver: skip (getNextjsBaseUrl empty for site_id ' . $template->site_id . ')');
+            Log::debug('WpHeadlessTemplateObserver: skip (getNextjsWebhookUrl empty for site_id ' . $template->site_id . ')');
             return;
         }
 
@@ -86,31 +93,60 @@ class WpHeadlessTemplateObserver
         $settings = $site->settings ?? [];
         $settings = is_array($settings) ? $settings : [];
 
-        // URL các file CSS đã optimize (Laravel đã lưu) → Next.js đồng bộ về public/wp-headless/{siteId}/ để load trực tiếp.
-        $cssUrls = WpHeadlessStyleOptimized::on($template->getConnectionName())
-            ->where('site_id', $siteId)
-            ->orderBy('post_type')
-            ->orderBy('chunk_index')
-            ->get()
-            ->map(fn ($r) => $r->public_url)
-            ->filter()
-            ->values()
-            ->all();
+        // READ_TOKEN lấy từ site_services.settings (bảng site_services), không phải wp_headless_sites.settings.
+        $readToken = '';
+        $wpHeadlessService = Service::where('slug', 'wp-headless')->first();
+        if ($wpHeadlessService) {
+            $siteService = SiteService::where('site_id', $siteId)->where('service_id', $wpHeadlessService->id)->first();
+            if ($siteService && is_array($siteService->settings)) {
+                $readToken = trim((string) ($siteService->settings['READ_TOKEN'] ?? ''));
+            }
+        }
 
-        if ($templates !== [] || $settings !== [] || $cssUrls !== []) {
+        // Payload info.json: site_id, domain, wp_uploads_origin, next_url, laravel_api_url, read_token, + settings (seo, locale, favicon...)
+        $mainSite = $site->getMainSite();
+        $domain = $mainSite ? trim((string) ($mainSite->domain ?? '')) : '';
+        $info = [
+            'site_id'            => $siteId,
+            'domain'             => $domain,
+            'wp_uploads_origin'  => $site->getWpUploadsOrigin(),
+            'next_url'           => rtrim($baseUrl, '/'),
+            'laravel_api_url'    => rtrim(config('app.url', ''), '/'),
+            'read_token'         => $readToken,
+        ];
+        $info = array_merge($info, $settings);
+
+        // Laravel tối ưu CSS và đẩy thẳng nội dung file cho Next lưu (không lưu file trên Laravel).
+        $cssFiles = [];
+        $mainSite = $site->getMainSite() ?? Site::find($siteId);
+        if ($mainSite instanceof Site) {
+            try {
+                $cssFiles = $this->optimizer->buildAllCssChunksForNext($mainSite);
+            } catch (\Throwable $e) {
+                Log::warning('WpHeadlessTemplateObserver: buildAllCssChunksForNext error', [
+                    'site_id' => $siteId,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        if ($templates !== [] || $info !== [] || $cssFiles !== []) {
             try {
                 $receivePayload = [
                     'site_id'            => $siteId,
                     'templates'          => $templates,
                     'template_relations' => $templateRelations,
+                    'info'               => $info,
                 ];
-                if ($settings !== []) {
-                    $receivePayload['settings'] = $settings;
+                if ($cssFiles !== []) {
+                    $receivePayload['cssFiles'] = $cssFiles;
                 }
-                if ($cssUrls !== []) {
-                    $receivePayload['cssUrls'] = $cssUrls;
+                $headers = ['Content-Type' => 'application/json'];
+                if ($readToken !== '') {
+                    $headers['Authorization'] = 'Bearer ' . $readToken;
                 }
-                $receiveResponse = Http::timeout(10)
+                $receiveResponse = Http::timeout(30)
+                    ->withHeaders($headers)
                     ->post($baseUrl . '/api/wp-templates/receive', $receivePayload);
                 if (!$receiveResponse->successful()) {
                     Log::warning('WpHeadlessTemplateObserver: receive failed', [

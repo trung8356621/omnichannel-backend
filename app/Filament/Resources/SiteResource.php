@@ -64,12 +64,6 @@ class SiteResource extends Resource
                     ->preload()
                     ->required(),
 
-                Forms\Components\TextInput::make('url')
-                    ->label(__('Admin url (use for headless)'))
-                    ->placeholder('https://example.com')
-                    ->url()
-                    ->maxLength(255),
-
                 // Bổ sung trường SSL
                 Forms\Components\Toggle::make('ssl')
                     ->label('SSL (HTTPS)')
@@ -92,6 +86,29 @@ class SiteResource extends Resource
                     ->required()
                     ->native(false),
 
+                Forms\Components\Section::make(__('WP Headless'))
+                    ->description(__('Cấu hình Headless cho site (chỉ hiện khi Site đã kích hoạt service WP Headless).'))
+                    ->schema([
+                        Forms\Components\TextInput::make('wp_headless.type')
+                            ->label(__('Type'))
+                            ->placeholder('wordpress, elementor_based, ...')
+                            ->maxLength(64),
+                        Forms\Components\TextInput::make('wp_headless.public_url')
+                            ->label(__('Public URL'))
+                            ->placeholder('https://example.com')
+                            ->url()
+                            ->maxLength(512),
+                        Forms\Components\TextInput::make('wp_headless.headless_next_dev')
+                            ->label(__('Headless Next.js (dev)'))
+                            ->placeholder('http://localhost:3000')
+                            ->maxLength(255)
+                            ->helperText(__('URL Next.js khi chạy dev.')),
+                        Forms\Components\Toggle::make('wp_headless.is_dev')
+                            ->label(__('Đang dùng môi trường dev'))
+                            ->default(false),
+                    ])
+                    ->columns(2)
+                    ->visible(fn ($livewire) => method_exists($livewire, 'getRecord') && $livewire->getRecord()?->hasActiveWpHeadless()),
 
             ]);
     }
@@ -112,11 +129,6 @@ class SiteResource extends Resource
                     ->label('SSL')
                     ->boolean()
                     ->sortable(),
-
-                Tables\Columns\TextColumn::make('url')
-                    ->label(__('URL'))
-                    ->copyable()
-                    ->limit(30),
 
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('Status'))

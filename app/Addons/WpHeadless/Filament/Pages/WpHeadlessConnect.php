@@ -77,10 +77,10 @@ class WpHeadlessConnect extends Page
                 [
                     'status' => 'inactive',
                     'settings' => [
+                        'site_type' => \App\Addons\WpHeadless\Observers\SiteServiceObserver::SITE_TYPE_WORDPRESS,
                         'MIGRATION_TOKEN' => $migration_token,
                         'READ_TOKEN' => $read_token,
                         'connected_at' => now()->toDateTimeString(),
-
                     ]
                 ]
             );

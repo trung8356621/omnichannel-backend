@@ -20,11 +20,11 @@ class WpHeadlessStyleOptimized extends Model
         'size',
     ];
 
-    /** URL public để WordPress enqueue trực tiếp. */
+    /** Path cho Next.js load từ public/wp-headless/{siteId}/ (Laravel không lưu file, đẩy nội dung thẳng cho Next). */
     public function getPublicUrlAttribute(): ?string
     {
         $path = $this->attributes['path'] ?? null;
-        return $path !== null && $path !== '' ? asset($path) : null;
+        return $path !== null && $path !== '' ? '/' . ltrim($path, '/') : null;
     }
 
     protected $casts = [

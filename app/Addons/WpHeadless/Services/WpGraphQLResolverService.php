@@ -387,15 +387,25 @@ $query = sprintf($queryTemplate, implode("\n", $postFields), implode("\n", $taxo
     public function pushTemplatesToNextjs(Site $site, array $payload): bool
     {
         $wpSite = WpHeadlessSite::find($site->id);
-        $nextjsUrl = $wpSite ? $wpSite->getNextjsBaseUrl() : '';
+        $nextjsUrl = $wpSite ? $wpSite->getNextjsWebhookUrl() : '';
         if ($nextjsUrl === '') {
             Log::debug('WpGraphQLResolver: pushTemplatesToNextjs skipped, no nextjs URL for site');
             return false;
         }
 
         $endpoint = rtrim($nextjsUrl, '/') . '/api/wp-templates/receive';
+        $payload['next_url'] = rtrim($nextjsUrl, '/');
+        $payload['laravel_api_url'] = rtrim(config('app.url', ''), '/');
+
+        $siteService = $this->getWpHeadlessSiteService($site);
+        $readToken = $siteService ? ($siteService->settings['READ_TOKEN'] ?? '') : '';
+        $headers = ['Content-Type' => 'application/json'];
+        if ($readToken !== '') {
+            $headers['Authorization'] = 'Bearer ' . $readToken;
+        }
+
         try {
-            $response = Http::timeout(10)->post($endpoint, $payload);
+            $response = Http::timeout(10)->withHeaders($headers)->post($endpoint, $payload);
             if (!$response->successful()) {
                 Log::warning('WpGraphQLResolver: pushTemplatesToNextjs failed', [
                     'status' => $response->status(),

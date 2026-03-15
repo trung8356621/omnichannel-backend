@@ -37,6 +37,17 @@ final class WpHeadlessStylesOptimizerService
     /** CSS reset mặc định: luôn đặt đầu output (*, ::before, ::after, html). */
     private const DEFAULT_CSS_RESET = '';
 
+    /**
+     * Danh sách ID selector loại bỏ khỏi CSS tối ưu vì đã xử lý bằng component Next.js.
+     * Ví dụ: #reviews, #commentform.
+     */
+    private const EXCLUDED_ID_SELECTORS = [
+        'reviews',
+        'commentform',
+        'review_form',
+        'ez-toc-container'
+    ];
+
     /** Thư mục public chứa file CSS tối ưu (relative từ public_path). */
     public const PUBLIC_CSS_DIR = 'wp-headless';
 
@@ -76,8 +87,11 @@ final class WpHeadlessStylesOptimizerService
         }
 
         // Gộp class header/footer vào post_type để CSS header/footer nằm trong file post_type (không lưu file riêng).
-        $headerFooterClasses = $this->getHeaderFooterClassNames($siteId);
-        $classes = array_values(array_unique(array_merge($classes, $headerFooterClasses)));
+        // loop_content-* tối ưu đặc biệt: chỉ dò class của chính template loop_content, không gộp class global/header/footer.
+        if (!str_starts_with($postType, 'loop_content-')) {
+            $headerFooterClasses = $this->getHeaderFooterClassNames($siteId);
+            $classes = array_values(array_unique(array_merge($classes, $headerFooterClasses)));
+        }
 
         $rawCss = $this->fetchStylesCss($siteId, $postType);
         if ($rawCss === '') {
@@ -85,7 +99,9 @@ final class WpHeadlessStylesOptimizerService
         }
 
         $stripDarkMode = !$this->getHasDarkmode($site);
-        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode);
+        // loop_content-* chỉ dò theo class selectors, không giữ rule theo id (#...).
+        $allowIdSelectors = !str_starts_with($postType, 'loop_content-');
+        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, $allowIdSelectors);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $classBlocks = $filtered['blocks'];
         // Lấy specialBlocks nhưng loại trừ block đã có trong global.css (tránh trùng).
@@ -95,6 +111,7 @@ final class WpHeadlessStylesOptimizerService
             [self::DEFAULT_CSS_RESET],
             $classBlocks
         );
+        $allBlocks = array_map(fn(string $b) => $this->removeExcludedIdRulesFromCss($b), $allBlocks);
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $allBlocks);
         $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
         $optimizedCss = implode("\n", $allBlocks);
@@ -103,22 +120,30 @@ final class WpHeadlessStylesOptimizerService
         $chunks = $this->chunkBlocksBySize($allBlocks, self::MAX_CHUNK_BYTES);
 
         try {
-            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks) {
+            $cssChunksForNext = [];
+            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks, &$cssChunksForNext) {
+                $oldRows = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->get();
+                foreach ($oldRows as $old) {
+                    $oldPath = trim((string) ($old->path ?? ''));
+                    if ($oldPath === '') {
+                        continue;
+                    }
+                    $oldFullPath = public_path($oldPath);
+                    if (File::exists($oldFullPath)) {
+                        @File::delete($oldFullPath);
+                    }
+                    $this->deleteFromNextjsPublic($siteId, basename($oldPath));
+                }
                 WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->delete();
 
-                $dir = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, public_path(self::PUBLIC_CSS_DIR . '/' . $siteId)), DIRECTORY_SEPARATOR);
-                if (!File::isDirectory($dir)) {
-                    File::makeDirectory($dir, 0755, true);
-                }
-                $this->ensureDirectoryWritable($dir);
-
-                $ds = DIRECTORY_SEPARATOR;
                 foreach ($chunks as $index => $cssContent) {
                     $filename = $postType . '-' . $index . '.css';
-                    $fullPath = $dir . $ds . $filename;
-                    $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
-                    $this->copyToNextjsPublic($writtenFullPath, $siteId, $filename);
-                    $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
+                    $relativeDir = self::PUBLIC_CSS_DIR . '/' . $siteId;
+                    $fullPath = public_path($relativeDir . '/' . $filename);
+                    $writtenPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $actualFilename = basename($writtenPath);
+                    $relativePath = $relativeDir . '/' . $actualFilename;
+                    $this->copyToNextjsPublic($writtenPath, $siteId, $actualFilename);
 
                     WpHeadlessStyleOptimized::create([
                         'site_id'     => $siteId,
@@ -127,22 +152,9 @@ final class WpHeadlessStylesOptimizerService
                         'path'        => $relativePath,
                         'size'        => strlen($cssContent),
                     ]);
+                    $cssChunksForNext[] = ['filename' => $actualFilename, 'content' => $cssContent];
                 }
             });
-
-            // Xóa file CSS cũ không còn trong DB (số chunk giảm) — Laravel + Next.js public
-            $normalizePath = static fn(string $path) => rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
-            $currentPaths = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)
-                ->get()->pluck('path')->filter()->map(fn($p) => $normalizePath(public_path($p)))->values()->all();
-            $dir = $normalizePath(public_path(self::PUBLIC_CSS_DIR . '/' . $siteId));
-            $existingFiles = glob($dir . DIRECTORY_SEPARATOR . $postType . '-*.css') ?: [];
-            foreach ($existingFiles as $f) {
-                $fNorm = $normalizePath($f);
-                if (!in_array($fNorm, $currentPaths, true)) {
-                    @File::delete($f);
-                    $this->deleteFromNextjsPublic($siteId, basename($f));
-                }
-            }
 
             $urls = WpHeadlessStyleOptimized::where('site_id', $siteId)
                 ->where('post_type', $postType)
@@ -154,15 +166,16 @@ final class WpHeadlessStylesOptimizerService
                 ->all();
         } catch (\Throwable $e) {
             Log::warning('WpHeadlessStylesOptimizer: save failed', ['site_id' => $siteId, 'post_type' => $postType, 'error' => $e->getMessage()]);
-            return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => []];
+            return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => [], 'css_chunks' => []];
         }
 
         return [
-            'success'   => true,
-            'post_type' => $postType,
-            'size'      => $size,
-            'chunks'    => count($chunks),
-            'urls'      => $urls ?? [],
+            'success'     => true,
+            'post_type'   => $postType,
+            'size'        => $size,
+            'chunks'      => count($chunks),
+            'urls'        => $urls ?? [],
+            'css_chunks'  => $cssChunksForNext ?? [],
         ];
     }
 
@@ -180,6 +193,63 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
+     * Thu thập toàn bộ CSS chunks (filename + content) để đẩy thẳng cho Next.js (không lưu file trên Laravel).
+     * Chạy optimize global rồi từng post_type có template, gộp css_chunks.
+     *
+     * @return array<int, array{filename: string, content: string}>
+     */
+    public function buildAllCssChunksForNext(Site $site): array
+    {
+        $siteId = $site->id;
+        $all = [];
+
+        $globalResult = $this->optimize($site, 'global');
+        if (isset($globalResult['css_chunks']) && is_array($globalResult['css_chunks'])) {
+            foreach ($globalResult['css_chunks'] as $c) {
+                if (isset($c['filename'], $c['content'])) {
+                    $all[] = ['filename' => $c['filename'], 'content' => $c['content']];
+                }
+            }
+        }
+
+        $postTypes = WpHeadlessTemplate::where('site_id', $siteId)
+            ->whereNotNull('type')
+            ->whereNotIn('type', ['header', 'footer'])
+            ->where('type', 'not like', 'sidebar_%')
+            ->distinct()
+            ->pluck('type')
+            ->values()
+            ->all();
+
+        // Đảm bảo luôn tối ưu thêm loop_content-* thành file (phục vụ Next.js embed inline CSS cho loop).
+        $loopContentTypes = WpHeadlessTemplate::where('site_id', $siteId)
+            ->whereNotNull('type')
+            ->where('type', 'like', 'loop_content-%')
+            ->distinct()
+            ->pluck('type')
+            ->values()
+            ->all();
+        $postTypes = array_values(array_unique(array_merge($postTypes, $loopContentTypes)));
+
+        $skip = ['global', 'header', 'footer'];
+        foreach ($postTypes as $postType) {
+            if (in_array($postType, $skip, true)) {
+                continue;
+            }
+            $result = $this->optimize($site, $postType);
+            if (isset($result['css_chunks']) && is_array($result['css_chunks'])) {
+                foreach ($result['css_chunks'] as $c) {
+                    if (isset($c['filename'], $c['content'])) {
+                        $all[] = ['filename' => $c['filename'], 'content' => $c['content']];
+                    }
+                }
+            }
+        }
+
+        return $all;
+    }
+
+    /**
      * Global CSS: chỉ lấy specialBlocks (HTML_TAGS, :root, *, @font-face, @keyframes, @layer, @charset, @import) từ toàn bộ global style.
      * Không lọc theo class; toàn bộ lưu vào file.
      */
@@ -193,6 +263,7 @@ final class WpHeadlessStylesOptimizerService
         $stripDarkMode = !$this->getHasDarkmode($site);
         $filtered = $this->filterCssByClasses($rawCss, [], $stripDarkMode);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
+        $specialBlocks = array_map(fn(string $b) => $this->removeExcludedIdRulesFromCss($b), $specialBlocks);
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $specialBlocks);
         $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
         $optimizedCss = implode("\n", $allBlocks);
@@ -205,20 +276,29 @@ final class WpHeadlessStylesOptimizerService
         $chunks = $this->chunkBlocksBySize($allBlocks, self::MAX_CHUNK_BYTES);
 
         try {
-            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks) {
-                WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->delete();
-                $dir = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, public_path(self::PUBLIC_CSS_DIR . '/' . $siteId)), DIRECTORY_SEPARATOR);
-                if (!File::isDirectory($dir)) {
-                    File::makeDirectory($dir, 0755, true);
+            $cssChunksForNext = [];
+            DB::connection('wp_headless')->transaction(function () use ($siteId, $postType, $chunks, &$cssChunksForNext) {
+                $oldRows = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->get();
+                foreach ($oldRows as $old) {
+                    $oldPath = trim((string) ($old->path ?? ''));
+                    if ($oldPath === '') {
+                        continue;
+                    }
+                    $oldFullPath = public_path($oldPath);
+                    if (File::exists($oldFullPath)) {
+                        @File::delete($oldFullPath);
+                    }
+                    $this->deleteFromNextjsPublic($siteId, basename($oldPath));
                 }
-                $this->ensureDirectoryWritable($dir);
-                $ds = DIRECTORY_SEPARATOR;
+                WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)->delete();
                 foreach ($chunks as $index => $cssContent) {
                     $filename = $postType . '-' . $index . '.css';
-                    $fullPath = $dir . $ds . $filename;
-                    $writtenFullPath = $this->writeCssFileSafe($fullPath, $cssContent);
-                    $this->copyToNextjsPublic($writtenFullPath, $siteId, $filename);
-                    $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/' . basename($writtenFullPath);
+                    $relativeDir = self::PUBLIC_CSS_DIR . '/' . $siteId;
+                    $fullPath = public_path($relativeDir . '/' . $filename);
+                    $writtenPath = $this->writeCssFileSafe($fullPath, $cssContent);
+                    $actualFilename = basename($writtenPath);
+                    $relativePath = $relativeDir . '/' . $actualFilename;
+                    $this->copyToNextjsPublic($writtenPath, $siteId, $actualFilename);
                     WpHeadlessStyleOptimized::create([
                         'site_id'     => $siteId,
                         'post_type'   => $postType,
@@ -226,20 +306,9 @@ final class WpHeadlessStylesOptimizerService
                         'path'        => $relativePath,
                         'size'        => strlen($cssContent),
                     ]);
+                    $cssChunksForNext[] = ['filename' => $actualFilename, 'content' => $cssContent];
                 }
             });
-            $normalizePath = static fn(string $path) => rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
-            $currentPaths = WpHeadlessStyleOptimized::where('site_id', $siteId)->where('post_type', $postType)
-                ->get()->pluck('path')->filter()->map(fn($p) => $normalizePath(public_path($p)))->values()->all();
-            $dir = $normalizePath(public_path(self::PUBLIC_CSS_DIR . '/' . $siteId));
-            $existingFiles = glob($dir . DIRECTORY_SEPARATOR . $postType . '-*.css') ?: [];
-            foreach ($existingFiles as $f) {
-                $fNorm = $normalizePath($f);
-                if (!in_array($fNorm, $currentPaths, true)) {
-                    @File::delete($f);
-                    $this->deleteFromNextjsPublic($siteId, basename($f));
-                }
-            }
             $urls = WpHeadlessStyleOptimized::where('site_id', $siteId)
                 ->where('post_type', $postType)
                 ->orderBy('chunk_index')
@@ -250,15 +319,16 @@ final class WpHeadlessStylesOptimizerService
                 ->all();
         } catch (\Throwable $e) {
             Log::warning('WpHeadlessStylesOptimizer: global save failed', ['site_id' => $siteId, 'error' => $e->getMessage()]);
-            return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => []];
+            return ['success' => false, 'message' => $e->getMessage(), 'chunks' => 0, 'urls' => [], 'css_chunks' => []];
         }
         $this->setStylesOptimizedAt($site, 'global');
         return [
-            'success'   => true,
-            'post_type' => 'global',
-            'size'      => $size,
-            'chunks'    => count($chunks),
-            'urls'      => $urls ?? [],
+            'success'    => true,
+            'post_type'  => 'global',
+            'size'       => $size,
+            'chunks'     => count($chunks),
+            'urls'       => $urls ?? [],
+            'css_chunks' => $cssChunksForNext ?? [],
         ];
     }
 
@@ -386,7 +456,10 @@ final class WpHeadlessStylesOptimizerService
      */
     private function collectTemplateClasses(int $siteId, string $postType): array
     {
-        if ($postType === 'header') {
+        if (str_starts_with($postType, 'loop_content-')) {
+            // loop_content-* chỉ lấy class của chính template type đó, không kèm global.
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->get();
+        } elseif ($postType === 'header') {
             $rows = WpHeadlessTemplate::where('site_id', $siteId)
                 ->where(function ($q) {
                     $q->where('type', 'header')->orWhere('type', 'like', 'header_%');
@@ -486,6 +559,11 @@ final class WpHeadlessStylesOptimizerService
         }
         if (in_array($postType, ['page', 'product'], true)) {
             $postTypes[] = 'post';
+        }
+        // loop_content-* vẫn cho đọc thêm nguồn global làm fallback dữ liệu CSS,
+        // nhưng lọc theo class loop_content riêng nên không kéo class global vào output.
+        if (str_starts_with($postType, 'loop_content-')) {
+            $postTypes = [$postType, 'global'];
         }
         $postTypes = array_values(array_unique($postTypes));
         $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
@@ -871,10 +949,24 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
+     * Kiểm tra selector có chứa id thuộc danh sách loại trừ hay không (vd: #reviews, #commentform).
+     */
+    private function selectorContainsExcludedId(string $selectorList): bool
+    {
+        foreach (self::EXCLUDED_ID_SELECTORS as $id) {
+            $esc = preg_quote((string) $id, '/');
+            if (preg_match('/#' . $esc . '(?:[^a-zA-Z0-9_-]|$)/i', $selectorList)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Lọc nội dung CSS (body): rule có # thì giữ nguyên; không có # thì chỉ giữ selector có toàn bộ class trong $allowedClasses (bỏ dư thừa).
      * Dùng cho body bên trong @media / @supports.
      */
-    private function filterCssBodyToAllowedClassesOnly(string $cssBody, array $allowedClasses): string
+    private function filterCssBodyToAllowedClassesOnly(string $cssBody, array $allowedClasses, bool $allowIdSelectors = true): string
     {
         if ($allowedClasses === []) {
             return '';
@@ -882,7 +974,10 @@ final class WpHeadlessStylesOptimizerService
         $blocks = $this->extractCssBlocks($cssBody);
         $kept = [];
         foreach ($blocks as $block) {
-            if (str_contains($block['selector'], '#')) {
+            if ($this->selectorContainsExcludedId($block['selector'])) {
+                continue;
+            }
+            if ($allowIdSelectors && str_contains($block['selector'], '#')) {
                 $kept[] = $block['full'];
             } else {
                 $filteredSelector = $this->filterSelectorsToAllowedClassesOnly($block['selector'], $allowedClasses);
@@ -993,7 +1088,7 @@ final class WpHeadlessStylesOptimizerService
      * Khi $stripDarkMode = true: chỉ loại bỏ từng selector có .dark hoặc .*-dark trong danh sách selector, giữ lại rule với các selector còn lại (ví dụ .a,.b-dark,.c → .a,.c).
      * @return array{blocks: list<string>, specialBlocks: list<string>}
      */
-    private function filterCssByClasses(string $css, array $classes, bool $stripDarkMode = false): array
+    private function filterCssByClasses(string $css, array $classes, bool $stripDarkMode = false, bool $allowIdSelectors = true): array
     {
         $selectorClassRegex = null;
         if (!empty($classes)) {
@@ -1043,13 +1138,13 @@ final class WpHeadlessStylesOptimizerService
                     if (preg_match('/@(?:-\w+-)?keyframes\b/i', $body)) {
                         $specialBlocks[] = $full;
                     } elseif ($selectorClassRegex !== null && preg_match($selectorClassRegex, $body)) {
-                        $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes);
+                        $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes, $allowIdSelectors);
                         if ($filteredBody !== '') {
                             $classBlocks[] = $selector . '{' . $filteredBody . '}';
                         }
                     }
                 } elseif ($selectorClassRegex !== null && preg_match($selectorClassRegex, $body)) {
-                    $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes);
+                    $filteredBody = $this->filterCssBodyToAllowedClassesOnly($body, $classes, $allowIdSelectors);
                     if ($filteredBody !== '') {
                         $classBlocks[] = $selector . '{' . $filteredBody . '}';
                     }
@@ -1057,8 +1152,12 @@ final class WpHeadlessStylesOptimizerService
                 continue;
             }
 
-            // Có id (#) thì không kiểm tra class, giữ nguyên rule.
-            if (str_contains($selector, '#')) {
+            if ($this->selectorContainsExcludedId($selector)) {
+                continue;
+            }
+
+            // Có id (#): chỉ giữ nguyên rule khi cho phép id selector.
+            if ($allowIdSelectors && str_contains($selector, '#')) {
                 $classBlocks[] = $full;
                 continue;
             }
@@ -1124,6 +1223,43 @@ final class WpHeadlessStylesOptimizerService
             } else {
                 $kept[] = $block['full'];
             }
+        }
+        return implode("\n", $kept);
+    }
+
+    /**
+     * Lọc hậu kỳ: loại mọi CSS rule có selector chứa id nằm trong EXCLUDED_ID_SELECTORS,
+     * kể cả khi rule nằm trong @media/@supports lồng nhau.
+     */
+    private function removeExcludedIdRulesFromCss(string $css): string
+    {
+        $blocks = $this->extractCssBlocks($css);
+        if ($blocks === []) {
+            return $css;
+        }
+        $kept = [];
+        foreach ($blocks as $block) {
+            $selector = trim((string) ($block['selector'] ?? ''));
+            $body = (string) ($block['body'] ?? '');
+            $full = (string) ($block['full'] ?? '');
+
+            if ($selector === '') {
+                continue;
+            }
+
+            if (preg_match('/^@(?:media|supports)\b/i', $selector)) {
+                $filteredBody = $this->removeExcludedIdRulesFromCss($body);
+                if (trim($filteredBody) !== '') {
+                    $kept[] = $selector . '{' . $filteredBody . '}';
+                }
+                continue;
+            }
+
+            if ($this->selectorContainsExcludedId($selector)) {
+                continue;
+            }
+
+            $kept[] = $full;
         }
         return implode("\n", $kept);
     }
