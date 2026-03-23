@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\WpHeadless\Observers;
 
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
-use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
 use App\Models\Service;
 use App\Models\Site;
 use App\Models\SiteService;
@@ -14,15 +13,12 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Khi wp_headless_templates có bản ghi được create/update:
- * 1) Gửi toàn bộ HTML template của site tới Next.js /api/wp-templates/receive để lưu file.
- * 2) CSS: Laravel tối ưu và đẩy thẳng nội dung file (cssFiles) cho Next lưu, không lưu file trên Laravel.
- * 3) Gửi webhook /api/wp-templates/updated để Next xóa cache / revalidate.
+ * - Chỉ gửi payload sang WordPress dispatcher.
+ * - WordPress tách thành các tiến trình con và gọi Next.js theo từng request riêng
+ *   (updated / receive / receive-css-chunks) để giảm nguy cơ timeout trong luồng save.
  */
 class WpHeadlessTemplateObserver
 {
-    public function __construct(
-        private WpHeadlessStylesOptimizerService $optimizer
-    ) {}
     private static function fileKeyForRow(WpHeadlessTemplate $row): string
     {
         $path = $row->template_path !== null && trim((string) $row->template_path) !== ''
@@ -66,30 +62,6 @@ class WpHeadlessTemplateObserver
 
         $types = array_keys($templates);
 
-        // 1) Gọi updated trước (xóa cache cũ) rồi mới gửi receive (lưu file mới).
-        // Nếu gọi receive trước rồi updated thì updated sẽ xóa luôn thư mục vừa lưu.
-        try {
-            $response = Http::timeout(5)
-                ->post($baseUrl . '/api/wp-templates/updated', [
-                    'site_id' => $siteId,
-                    'types'   => $types,
-                ]);
-            if (!$response->successful()) {
-                Log::warning('WpHeadlessTemplateObserver: templates-updated failed', [
-                    'site_id' => $siteId,
-                    'url'     => $baseUrl . '/api/wp-templates/updated',
-                    'status'  => $response->status(),
-                    'body'    => $response->body(),
-                ]);
-            }
-        } catch (\Throwable $e) {
-            Log::warning('WpHeadlessTemplateObserver: templates-updated error', [
-                'site_id' => $siteId,
-                'url'     => $baseUrl . '/api/wp-templates/updated',
-                'message' => $e->getMessage(),
-            ]);
-        }
-
         $settings = $site->settings ?? [];
         $settings = is_array($settings) ? $settings : [];
 
@@ -116,52 +88,57 @@ class WpHeadlessTemplateObserver
         ];
         $info = array_merge($info, $settings);
 
-        // Laravel tối ưu CSS và đẩy thẳng nội dung file cho Next lưu (không lưu file trên Laravel).
-        $cssFiles = [];
         $mainSite = $site->getMainSite() ?? Site::find($siteId);
-        if ($mainSite instanceof Site) {
-            try {
-                $cssFiles = $this->optimizer->buildAllCssChunksForNext($mainSite);
-            } catch (\Throwable $e) {
-                Log::warning('WpHeadlessTemplateObserver: buildAllCssChunksForNext error', [
-                    'site_id' => $siteId,
-                    'message' => $e->getMessage(),
-                ]);
-            }
+        if (!($mainSite instanceof Site)) {
+            Log::warning('WpHeadlessTemplateObserver: skip dispatch (main site not found)', [
+                'site_id' => $siteId,
+            ]);
+            return;
         }
 
-        if ($templates !== [] || $info !== [] || $cssFiles !== []) {
-            try {
-                $receivePayload = [
+        $scheme = !empty($mainSite->ssl) ? 'https' : 'http';
+        $host = trim((string) ($mainSite->domain ?? ''));
+        if ($host === '') {
+            Log::warning('WpHeadlessTemplateObserver: skip dispatch (empty wordpress domain)', [
+                'site_id' => $siteId,
+            ]);
+            return;
+        }
+        $wpBaseUrl = $scheme . '://' . preg_replace('#^https?://#i', '', $host);
+        $dispatchUrl = rtrim($wpBaseUrl, '/') . '/wp-json/tvh/v1/next-sync-dispatch';
+
+        try {
+            $headers = ['Content-Type' => 'application/json'];
+            if ($readToken !== '') {
+                $headers['Authorization'] = 'Bearer ' . $readToken;
+                $headers['X-GraphQL-Secret'] = $readToken;
+            }
+            $dispatchResponse = Http::timeout(8)
+                ->withHeaders($headers)
+                ->post($dispatchUrl, [
                     'site_id'            => $siteId,
+                    'types'              => $types,
+                    'next_url'           => rtrim($baseUrl, '/'),
+                    'read_token'         => $readToken,
                     'templates'          => $templates,
                     'template_relations' => $templateRelations,
                     'info'               => $info,
-                ];
-                if ($cssFiles !== []) {
-                    $receivePayload['cssFiles'] = $cssFiles;
-                }
-                $headers = ['Content-Type' => 'application/json'];
-                if ($readToken !== '') {
-                    $headers['Authorization'] = 'Bearer ' . $readToken;
-                }
-                $receiveResponse = Http::timeout(30)
-                    ->withHeaders($headers)
-                    ->post($baseUrl . '/api/wp-templates/receive', $receivePayload);
-                if (!$receiveResponse->successful()) {
-                    Log::warning('WpHeadlessTemplateObserver: receive failed', [
-                        'site_id' => $siteId,
-                        'url'     => $baseUrl . '/api/wp-templates/receive',
-                        'status'  => $receiveResponse->status(),
-                        'body'    => $receiveResponse->body(),
-                    ]);
-                }
-            } catch (\Throwable $e) {
-                Log::warning('WpHeadlessTemplateObserver: receive error', [
+                ]);
+
+            if (!$dispatchResponse->successful()) {
+                Log::warning('WpHeadlessTemplateObserver: wordpress dispatch failed', [
                     'site_id' => $siteId,
-                    'message' => $e->getMessage(),
+                    'url'     => $dispatchUrl,
+                    'status'  => $dispatchResponse->status(),
+                    'body'    => $dispatchResponse->body(),
                 ]);
             }
+        } catch (\Throwable $e) {
+            Log::warning('WpHeadlessTemplateObserver: wordpress dispatch error', [
+                'site_id' => $siteId,
+                'url'     => $dispatchUrl,
+                'message' => $e->getMessage(),
+            ]);
         }
     }
 }

@@ -35,10 +35,13 @@ final class WpHeadlessSyncService
             return ['success' => false, 'message' => 'Thiếu READ_TOKEN trong cấu hình site.'];
         }
 
-        $graphqlUrl = $this->graphqlUrl($site);
+        $graphqlUrl = $this->graphqlUrlNoCache($site);
         $headers = [
             'Content-Type'     => 'application/json',
             'X-GraphQL-Secret' => $readToken,
+            'Cache-Control'    => 'no-cache, no-store, must-revalidate',
+            'Pragma'           => 'no-cache',
+            'Expires'       => 0
         ];
 
         $result = ['success' => true, 'synced' => []];
@@ -51,15 +54,15 @@ final class WpHeadlessSyncService
             Log::warning('WpHeadlessSync: headlessPluginsAndThemes failed', ['site_id' => $site->id]);
         }
 
-        $templates = $this->queryTemplates($graphqlUrl, $headers);
-        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
-        if ($templates !== null) {
-            $this->upsertWpHeadlessSite($site, $templates);
-            $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
-            $this->syncSidebarWidgets($site, $headers);
+        // Step template được tách thành nhiều bước con để giảm tải bộ nhớ WordPress.
+        $templateSync = $this->syncTemplatesInSubSteps($site, $graphqlUrl, $headers);
+        if (!empty($templateSync['success'])) {
             $result['synced'][] = 'templates';
+            $result['template_substeps'] = $templateSync['substeps'] ?? [];
         } else {
             Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
+            $result['success'] = false;
+            $result['message'] = (string) ($templateSync['message'] ?? 'Sync templates thất bại: không lấy được dữ liệu template từ WordPress.');
         }
 
         $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
@@ -88,7 +91,12 @@ final class WpHeadlessSyncService
 
     /**
      * Chạy một bước đồng bộ (dùng khi WordPress gọi sync-site-data theo từng bước).
-     * step 1 = plugin & theme, 2 = templates, 3 = post type styles, 4 = site settings (SEO + locale).
+     * step 1 = plugin & theme
+     * step 2 = templates postTypes (+ loop items, luôn trước taxonomy)
+     * step 3 = templates taxonomies
+     * step 4 = finalize templates (sidebar widgets, merge classes)
+     * step 5 = post type styles
+     * step 6 = site settings (SEO + locale)
      */
     public function syncStep(Site $site, int $step): array
     {
@@ -103,10 +111,15 @@ final class WpHeadlessSyncService
             return ['success' => false, 'message' => 'Thiếu READ_TOKEN trong cấu hình site.'];
         }
 
-        $graphqlUrl = $this->graphqlUrl($site);
+        $graphqlUrl = $this->graphqlUrlNoCache($site);
+        // Thêm ?_t=123456789 vào cuối URL
+        $graphqlUrl = $graphqlUrl . (strpos($graphqlUrl, '?') !== false ? '&' : '?') . '_t=' . time();
         $headers = [
             'Content-Type'     => 'application/json',
             'X-GraphQL-Secret' => $readToken,
+            'Cache-Control'    => 'no-cache, no-store, must-revalidate',
+            'Pragma'           => 'no-cache',
+            'Expires'       => 0
         ];
 
         $result = ['success' => true, 'step' => $step, 'synced' => []];
@@ -120,17 +133,45 @@ final class WpHeadlessSyncService
                 Log::warning('WpHeadlessSync: headlessPluginsAndThemes failed', ['site_id' => $site->id]);
             }
         } elseif ($step === 2) {
-            $templates = $this->queryTemplates($graphqlUrl, $headers);
-            $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
-            if ($templates !== null) {
-                $this->upsertWpHeadlessSite($site, $templates);
-                $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems ?? []);
-                $this->syncSidebarWidgets($site, $headers);
-                $result['synced'][] = 'templates';
-            } else {
-                Log::warning('WpHeadlessSync: headlessTemplates failed', ['site_id' => $site->id]);
+            $templateSync = $this->syncTemplatesStepPostTypes($site, $graphqlUrl, $headers);
+            if (empty($templateSync['success'])) {
+                return [
+                    'success' => false,
+                    'step' => $step,
+                    'site_id' => $site->id,
+                    'message' => (string) ($templateSync['message'] ?? 'Step 2 thất bại: không lấy được templates postTypes từ WordPress.'),
+                    'substeps' => $templateSync['substeps'] ?? [],
+                ];
             }
+            $result['synced'][] = 'templates_post_types';
+            $result['substeps'] = $templateSync['substeps'] ?? [];
         } elseif ($step === 3) {
+            $templateSync = $this->syncTemplatesStepTaxonomies($site, $graphqlUrl, $headers);
+            if (empty($templateSync['success'])) {
+                return [
+                    'success' => false,
+                    'step' => $step,
+                    'site_id' => $site->id,
+                    'message' => (string) ($templateSync['message'] ?? 'Step 3 thất bại: không lấy được templates taxonomies từ WordPress.'),
+                    'substeps' => $templateSync['substeps'] ?? [],
+                ];
+            }
+            $result['synced'][] = 'templates_taxonomies';
+            $result['substeps'] = $templateSync['substeps'] ?? [];
+        } elseif ($step === 4) {
+            $templateSync = $this->syncTemplatesStepFinalize($site, $graphqlUrl, $headers);
+            if (empty($templateSync['success'])) {
+                return [
+                    'success' => false,
+                    'step' => $step,
+                    'site_id' => $site->id,
+                    'message' => (string) ($templateSync['message'] ?? 'Step 4 thất bại: finalize templates lỗi.'),
+                    'substeps' => $templateSync['substeps'] ?? [],
+                ];
+            }
+            $result['synced'][] = 'templates_finalize';
+            $result['substeps'] = $templateSync['substeps'] ?? [];
+        } elseif ($step === 5) {
             $postTypeStyles = $this->queryPostTypeStyles($graphqlUrl, $headers);
             $taxonomyStyles = $this->queryTaxonomyStyles($graphqlUrl, $headers);
             $mergedStyles = $this->mergePostTypeAndTaxonomyStyles($postTypeStyles, $taxonomyStyles);
@@ -141,7 +182,7 @@ final class WpHeadlessSyncService
             } else {
                 Log::warning('WpHeadlessSync: headlessPostTypeStyles/headlessTaxonomyStyles failed', ['site_id' => $site->id]);
             }
-        } elseif ($step === 4) {
+        } elseif ($step === 6) {
             $siteSettings = $this->querySiteSettings($graphqlUrl, $headers);
             if ($siteSettings !== null) {
                 $this->setMeta($site, self::META_SITE_SETTINGS, $siteSettings);
@@ -177,11 +218,158 @@ final class WpHeadlessSyncService
         return $scheme . '://' . $site->domain . '/graphql';
     }
 
+    /**
+     * URL GraphQL kèm cache-buster để tránh proxy/CDN/object cache giữ payload cũ
+     * trong quá trình sync cài đặt lại.
+     */
+    private function graphqlUrlNoCache(Site $site): string
+    {
+        $base = $this->graphqlUrl($site);
+        $sep = str_contains($base, '?') ? '&' : '?';
+        return $base . $sep . '_sync_ts=' . rawurlencode((string) microtime(true));
+    }
+
     /** Base URL WordPress (không có path /graphql) dùng cho REST wp-json. */
     private function wpBaseUrl(Site $site): string
     {
         $scheme = ($site->ssl ?? true) ? 'https' : 'http';
         return rtrim($scheme . '://' . $site->domain, '/');
+    }
+
+    /**
+     * Mỗi lần sync template: xóa toàn bộ template cũ + merged classes cũ của site.
+     * Điều này đảm bảo trạng thái "full replace" và tránh dính dữ liệu/cache vòng trước.
+     */
+    private function purgeSiteTemplates(int $siteId): void
+    {
+        WpHeadlessTemplate::where('site_id', $siteId)->delete();
+
+        $mergedClassesPath = storage_path('app/wp_headless/sites/' . $siteId . '/merged_classes.json');
+        if (is_file($mergedClassesPath)) {
+            @unlink($mergedClassesPath);
+        }
+    }
+
+    /**
+     * Step 2 được tách các bước con theo thứ tự:
+     * purge -> templateItems -> templates(base+postTypes+taxonomies) -> save -> sidebars.
+     * Luôn lấy templateItems trước taxonomies theo yêu cầu đồng bộ.
+     *
+     * @return array{success: bool, substeps: array<int, string>, message?: string}
+     */
+    private function syncTemplatesInSubSteps(Site $site, string $graphqlUrl, array $headers): array
+    {
+        $substeps = [];
+        $this->purgeSiteTemplates((int) $site->id);
+        $substeps[] = 'purged_old_templates';
+
+        // Luôn chạy trước taxonomy để match option tvh_headless_loop_wrappers.
+        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
+        $substeps[] = 'fetched_template_items';
+
+        $templates = $this->queryTemplates($graphqlUrl, $headers);
+        if ($templates === null) {
+            $substeps[] = 'failed_fetch_templates';
+            return [
+                'success' => false,
+                'substeps' => $substeps,
+                'message' => 'Step 2 thất bại: không lấy được templates từ WordPress.',
+            ];
+        }
+        $substeps[] = 'fetched_templates';
+
+        $this->upsertWpHeadlessSite($site, $templates);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
+        $substeps[] = 'saved_templates';
+
+        $this->syncSidebarWidgets($site, $headers);
+        $substeps[] = 'synced_sidebar_widgets';
+
+        return ['success' => true, 'substeps' => $substeps];
+    }
+
+    /**
+     * Step 2: purge + items + base + postTypes.
+     *
+     * @return array{success: bool, substeps: array<int, string>, message?: string}
+     */
+    private function syncTemplatesStepPostTypes(Site $site, string $graphqlUrl, array $headers): array
+    {
+        $substeps = [];
+        $this->purgeSiteTemplates((int) $site->id);
+        $substeps[] = 'purged_old_templates';
+
+        // Luôn chạy trước taxonomy.
+        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
+        $substeps[] = 'fetched_template_items';
+
+        $base = $this->queryTemplatesBaseOnly($graphqlUrl, $headers);
+        if ($base === null) {
+            return ['success' => false, 'substeps' => $substeps, 'message' => 'Không lấy được templates base.'];
+        }
+        $substeps[] = 'fetched_templates_base';
+
+        $postTypes = $this->queryTemplatesPostTypesOnly($graphqlUrl, $headers);
+        if ($postTypes === null) {
+            return ['success' => false, 'substeps' => $substeps, 'message' => 'Không lấy được templates postTypes.'];
+        }
+        $substeps[] = 'fetched_templates_post_types';
+
+        $templates = $base;
+        $templates['postTypes'] = $postTypes;
+        $templates['taxonomies'] = [];
+
+        $this->upsertWpHeadlessSite($site, $templates);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
+        $substeps[] = 'saved_post_type_templates';
+
+        return ['success' => true, 'substeps' => $substeps];
+    }
+
+    /**
+     * Step 3: chỉ thêm templates taxonomies.
+     *
+     * @return array{success: bool, substeps: array<int, string>, message?: string}
+     */
+    private function syncTemplatesStepTaxonomies(Site $site, string $graphqlUrl, array $headers): array
+    {
+        $substeps = [];
+        $base = $this->queryTemplatesBaseOnly($graphqlUrl, $headers);
+        if ($base === null) {
+            return ['success' => false, 'substeps' => $substeps, 'message' => 'Không lấy được templates base cho taxonomy step.'];
+        }
+        $substeps[] = 'fetched_templates_base';
+
+        $taxonomies = $this->queryTemplatesTaxonomiesOnly($graphqlUrl, $headers);
+        if ($taxonomies === null) {
+            return ['success' => false, 'substeps' => $substeps, 'message' => 'Không lấy được templates taxonomies.'];
+        }
+        $substeps[] = 'fetched_templates_taxonomies';
+
+        $templates = $base;
+        $templates['postTypes'] = [];
+        $templates['taxonomies'] = $taxonomies;
+
+        $this->upsertWpHeadlessSite($site, $templates);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, []);
+        $substeps[] = 'saved_taxonomy_templates';
+
+        return ['success' => true, 'substeps' => $substeps];
+    }
+
+    /**
+     * Step 4: finalize templates.
+     *
+     * @return array{success: bool, substeps: array<int, string>, message?: string}
+     */
+    private function syncTemplatesStepFinalize(Site $site, string $graphqlUrl, array $headers): array
+    {
+        $substeps = [];
+        $this->syncSidebarWidgets($site, $headers);
+        $substeps[] = 'synced_sidebar_widgets';
+        $this->saveMergedClassesForSite((int) $site->id);
+        $substeps[] = 'saved_merged_classes';
+        return ['success' => true, 'substeps' => $substeps];
     }
 
     private function queryPluginsAndThemes(string $url, array $headers): ?array
@@ -210,33 +398,12 @@ GQL;
 
     /**
      * Lấy templates từ WordPress qua GraphQL.
-     * Ưu tiên headlessTemplates (JSON đầy đủ); nếu lỗi/rỗng thì fallback query các field nhỏ (headlessTemplatesTheme, ...) và ghép.
+     * Luôn dùng query con (base + chunk postTypes + chunk taxonomies) để tránh OOM
+     * khi resolver headlessTemplates phải build payload quá lớn.
      * Trả về: theme, header, footer, headerTemplateJson, footerTemplateJson, sidebars, postTypes, taxonomies (đồng bộ với WP).
      */
     private function queryTemplates(string $url, array $headers): ?array
     {
-        $response = Http::timeout(60)->withHeaders($headers)->post($url, [
-            'query' => <<<'GQL'
-query {
-  headlessTemplates
-}
-GQL,
-        ]);
-        if (!$response->successful()) {
-            Log::warning('WpHeadlessSync: headlessTemplates request failed', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-            return null;
-        }
-        $raw = $response->json('data.headlessTemplates');
-        $decoded = null;
-        if ($raw !== null) {
-            $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
-        }
-        if (is_array($decoded) && isset($decoded['postTypes'])) {
-            return $this->normalizeTemplatesResponse($decoded);
-        }
         return $this->queryTemplatesFromSmallFields($url, $headers);
     }
 
@@ -246,7 +413,25 @@ GQL,
      */
     private function queryTemplatesFromSmallFields(string $url, array $headers): ?array
     {
-        $query = <<<'GQL'
+        $decoded = $this->queryTemplatesBaseOnly($url, $headers);
+        if ($decoded === null) {
+            return null;
+        }
+        $postTypes = $this->queryTemplatesPostTypesOnly($url, $headers);
+        if ($postTypes === null) return null;
+        $decoded['postTypes'] = $postTypes;
+
+        $taxonomies = $this->queryTemplatesTaxonomiesOnly($url, $headers);
+        if ($taxonomies === null) return null;
+        $decoded['taxonomies'] = $taxonomies;
+
+        return $this->normalizeTemplatesResponse($decoded);
+    }
+
+    /** @return array<string, mixed>|null */
+    private function queryTemplatesBaseOnly(string $url, array $headers): ?array
+    {
+        $baseQuery = <<<'GQL'
 query {
   headlessTemplatesTheme
   headlessTemplatesHeaderId
@@ -254,13 +439,14 @@ query {
   headlessTemplatesHeaderJson
   headlessTemplatesFooterJson
   headlessTemplatesSidebars
-  headlessTemplatesPostTypes
-  headlessTemplatesTaxonomies
 }
 GQL;
-
-        $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
-        if (!$response->successful()) {
+        $response = $this->postGraphql($url, $headers, $baseQuery, [], 120);
+        if ($response === null || ! $response->successful()) {
+            Log::warning('WpHeadlessSync: small templates base query failed', [
+                'status' => $response?->status(),
+                'body'   => $response?->body(),
+            ]);
             return null;
         }
         $data = $response->json('data');
@@ -269,17 +455,190 @@ GQL;
         }
         $themeRaw = $data['headlessTemplatesTheme'] ?? '';
         $theme = is_string($themeRaw) && $themeRaw !== '' ? json_decode($themeRaw, true) : [];
-        $decoded = [
+        return [
             'theme'              => is_array($theme) ? $theme : [],
             'header'             => $data['headlessTemplatesHeaderId'] ?? '',
             'footer'             => $data['headlessTemplatesFooterId'] ?? '',
             'headerTemplateJson' => (string) ($data['headlessTemplatesHeaderJson'] ?? ''),
             'footerTemplateJson' => (string) ($data['headlessTemplatesFooterJson'] ?? ''),
             'sidebars'           => $this->decodeJsonField($data['headlessTemplatesSidebars'] ?? '{}'),
-            'postTypes'          => $this->decodeJsonField($data['headlessTemplatesPostTypes'] ?? '{}'),
-            'taxonomies'         => $this->decodeJsonField($data['headlessTemplatesTaxonomies'] ?? '{}'),
+            'postTypes'          => [],
+            'taxonomies'         => [],
         ];
-        return $this->normalizeTemplatesResponse($decoded);
+    }
+
+    /** @return array<string, array<string, mixed>>|null */
+    private function queryTemplatesPostTypesOnly(string $url, array $headers): ?array
+    {
+        $chunkedPostTypes = $this->queryTemplateMapChunkedBySlug(
+            $url,
+            $headers,
+            'headlessTemplatePostTypeSlugs',
+            'headlessTemplatePostType'
+        );
+        if ($chunkedPostTypes !== null) {
+            return $chunkedPostTypes;
+        }
+        $postTypesQuery = <<<'GQL'
+query {
+  headlessTemplatesPostTypes
+}
+GQL;
+        $postTypesResponse = $this->postGraphql($url, $headers, $postTypesQuery, [], 180);
+        if ($postTypesResponse === null || ! $postTypesResponse->successful()) {
+            Log::warning('WpHeadlessSync: small templates postTypes query failed', [
+                'status' => $postTypesResponse?->status(),
+                'body'   => $postTypesResponse?->body(),
+            ]);
+            return null;
+        }
+        return $this->decodeJsonField((string) ($postTypesResponse->json('data.headlessTemplatesPostTypes') ?? '{}'));
+    }
+
+    /** @return array<string, array<string, mixed>>|null */
+    private function queryTemplatesTaxonomiesOnly(string $url, array $headers): ?array
+    {
+        // 1) Non-Woo taxonomies (query/process riêng).
+        $chunkedTaxonomies = $this->queryTemplateMapChunkedBySlug(
+            $url,
+            $headers,
+            'headlessTemplateTaxonomySlugs',
+            'headlessTemplateTaxonomy'
+        );
+        $normalTaxonomies = null;
+        if ($chunkedTaxonomies !== null) {
+            $normalTaxonomies = $chunkedTaxonomies;
+        } else {
+            $taxonomiesQuery = <<<'GQL'
+query {
+  headlessTemplatesTaxonomies
+}
+GQL;
+            $taxonomiesResponse = $this->postGraphql($url, $headers, $taxonomiesQuery, [], 180);
+            if ($taxonomiesResponse === null || ! $taxonomiesResponse->successful()) {
+                Log::warning('WpHeadlessSync: small templates taxonomies query failed', [
+                    'status' => $taxonomiesResponse?->status(),
+                    'body'   => $taxonomiesResponse?->body(),
+                ]);
+                return null;
+            }
+            $normalTaxonomies = $this->decodeJsonField((string) ($taxonomiesResponse->json('data.headlessTemplatesTaxonomies') ?? '{}'));
+        }
+
+        // 2) Woo taxonomies (query/process riêng).
+        $wooTaxonomiesQuery = <<<'GQL'
+query {
+  headlessTemplatesWOOTaxonomies
+}
+GQL;
+        $wooTaxonomiesResponse = $this->postGraphql($url, $headers, $wooTaxonomiesQuery, [], 180);
+        $wooTaxonomies = [];
+        if ($wooTaxonomiesResponse === null || ! $wooTaxonomiesResponse->successful()) {
+            Log::warning('WpHeadlessSync: Woo taxonomies query failed', [
+                'status' => $wooTaxonomiesResponse?->status(),
+                'body'   => $wooTaxonomiesResponse?->body(),
+            ]);
+        } else {
+            $wooTaxonomies = $this->decodeJsonField((string) ($wooTaxonomiesResponse->json('data.headlessTemplatesWOOTaxonomies') ?? '{}'));
+        }
+
+        return array_merge(
+            is_array($normalTaxonomies) ? $normalTaxonomies : [],
+            is_array($wooTaxonomies) ? $wooTaxonomies : []
+        );
+    }
+
+    /**
+     * Lấy map template dạng chunk theo slug (slug list + query từng slug).
+     * Trả null khi WP chưa hỗ trợ field chunked để caller fallback field cũ.
+     *
+     * @return array<string, array<string, mixed>>|null
+     */
+    private function queryTemplateMapChunkedBySlug(
+        string $url,
+        array $headers,
+        string $slugField,
+        string $itemField
+    ): ?array {
+        $slugsQuery = 'query { ' . $slugField . ' }';
+        $slugsResponse = $this->postGraphql($url, $headers, $slugsQuery, [], 120);
+        if ($slugsResponse === null || ! $slugsResponse->successful()) {
+            return null;
+        }
+        $errors = $slugsResponse->json('errors');
+        if (is_array($errors) && $errors !== []) {
+            return null;
+        }
+
+        $rawSlugs = $slugsResponse->json('data.' . $slugField);
+        if (! is_string($rawSlugs) || $rawSlugs === '') {
+            return null;
+        }
+        $decodedSlugs = json_decode($rawSlugs, true);
+        if (! is_array($decodedSlugs)) {
+            return null;
+        }
+
+        $out = [];
+        foreach ($decodedSlugs as $slugRaw) {
+            $slug = trim((string) $slugRaw);
+            if ($slug === '') {
+                continue;
+            }
+            $itemQuery = 'query($slug: String) { ' . $itemField . '(slug: $slug) }';
+            $itemResponse = $this->postGraphql($url, $headers, $itemQuery, ['slug' => $slug], 180);
+            if ($itemResponse === null || ! $itemResponse->successful()) {
+                Log::warning('WpHeadlessSync: chunked template item query failed', [
+                    'field' => $itemField,
+                    'slug'  => $slug,
+                    'status' => $itemResponse?->status(),
+                    'body'   => $itemResponse?->body(),
+                ]);
+                continue;
+            }
+            $itemErrors = $itemResponse->json('errors');
+            if (is_array($itemErrors) && $itemErrors !== []) {
+                Log::warning('WpHeadlessSync: chunked template item query has errors', [
+                    'field' => $itemField,
+                    'slug'  => $slug,
+                    'errors' => $itemErrors,
+                ]);
+                continue;
+            }
+            $rawItem = $itemResponse->json('data.' . $itemField);
+            $decodedItem = is_string($rawItem) ? json_decode($rawItem, true) : $rawItem;
+            if (is_array($decodedItem) && $decodedItem !== []) {
+                $out[$slug] = $decodedItem;
+            } else {
+                Log::warning('WpHeadlessSync: chunked template item empty', [
+                    'field' => $itemField,
+                    'slug'  => $slug,
+                ]);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Wrapper HTTP GraphQL có bắt exception để tránh văng cả tiến trình sync.
+     *
+     * @return \Illuminate\Http\Client\Response|null
+     */
+    private function postGraphql(string $url, array $headers, string $query, array $variables = [], int $timeout = 60)
+    {
+        try {
+            return Http::timeout($timeout)->withHeaders($headers)->post($url, [
+                'query'     => $query,
+                'variables' => $variables,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('WpHeadlessSync: GraphQL request exception', [
+                'url'     => $url,
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        }
     }
 
     /** @param array<string, mixed> $decoded */
@@ -781,9 +1140,6 @@ GQL;
     {
         $siteId = $site->id;
 
-        // Xóa hết bản ghi wp_headless_templates cũ cùng site_id trước khi đồng bộ.
-        WpHeadlessTemplate::where('site_id', $siteId)->delete();
-
         // Thu thập header_id, footer_id từ postTypes và taxonomies; gọi HeadlessHeaderFooter cho từng ID chưa có, lưu type header_{id} / footer_{id}.
         $this->ensureHeaderFooterBlocksSaved($siteId, $templates, $graphqlUrl, $headers);
 
@@ -866,9 +1222,13 @@ GQL;
                 $classes = $parsed['classes'];
             }
 
+            // Last-resort sanitize ở tầng lưu DB để tránh dính class taxonomy động hoặc href rỗng.
+            [$html, $classes] = $this->sanitizeTemplateBeforePersist((string) $type, (string) $html, is_array($classes) ? $classes : []);
+
             $classesKey = json_encode($classes);
-            // type = sidebar_* không tính parent_id (mỗi sidebar độc lập, không dedupe theo classes).
-            $parentId = $isSidebarType ? null : ($canonicalIdByClassesKey[$classesKey] ?? null);
+            // type = sidebar_* và loop_*: không dedupe theo parent_id để tránh mapping sai template item.
+            $isLoopType = str_starts_with((string) $type, 'loop_');
+            $parentId = ($isSidebarType || $isLoopType) ? null : ($canonicalIdByClassesKey[$classesKey] ?? null);
 
             $isGlobal = in_array($type, $globalTypes, true);
 
@@ -884,7 +1244,7 @@ GQL;
                 ]
             );
 
-            if ($parentId === null && ! $isSidebarType) {
+            if ($parentId === null && ! $isSidebarType && ! $isLoopType) {
                 $canonicalIdByClassesKey[$classesKey] = $row->id;
             }
         }
@@ -1074,6 +1434,133 @@ GQL;
             return $s;
         }
         return '{"error":"not JSON"}';
+    }
+
+    /**
+     * Chặn cuối trước khi ghi DB cho loop templates.
+     * - bỏ class taxonomy động (product_cat-*, product_tag-*, post_tag-*, has-post-thumbnail)
+     * - ép href rỗng của link sản phẩm -> {{product_permalink}}
+     * - ép img.back-image -> {{product_image_hover}}
+     *
+     * @param array<int, string> $classes
+     * @return array{0: string, 1: array<int, string>}
+     */
+    private function sanitizeTemplateBeforePersist(string $type, string $html, array $classes): array
+    {
+        if (!str_starts_with($type, 'loop_')) {
+            return [$html, $classes];
+        }
+
+        $classes = $this->filterUnstableLoopClasses($classes);
+        if (!$this->isTemplateJsonString($html)) {
+            return [$html, $classes];
+        }
+
+        $decoded = json_decode($html, true);
+        if (!is_array($decoded)) {
+            return [$html, $classes];
+        }
+
+        if (isset($decoded['classes']) && is_array($decoded['classes'])) {
+            $decoded['classes'] = $this->filterUnstableLoopClasses($decoded['classes']);
+            $classes = $decoded['classes'];
+        }
+        if (isset($decoded['children']) && is_array($decoded['children'])) {
+            $decoded['children'] = $this->sanitizeLoopTreeNodes($decoded['children'], false);
+        }
+
+        $encoded = json_encode($decoded, JSON_UNESCAPED_UNICODE);
+        if (is_string($encoded) && $encoded !== '') {
+            $html = $encoded;
+        }
+
+        return [$html, $classes];
+    }
+
+    /**
+     * @param array<int, mixed> $classes
+     * @return array<int, string>
+     */
+    private function filterUnstableLoopClasses(array $classes): array
+    {
+        $out = array_values(array_unique(array_filter(array_map(static fn($c) => trim((string) $c), $classes), static function (string $c): bool {
+            if ($c === '') return false;
+            if (preg_match('/^(?:product_cat|product_tag|post_tag)-/i', $c)) return false;
+            if (strtolower($c) === 'has-post-thumbnail') return false;
+            return true;
+        })));
+        sort($out);
+        return $out;
+    }
+
+    private function hasClassToken(array $attrs, string $token): bool
+    {
+        $classRaw = '';
+        if (isset($attrs['class']) && is_string($attrs['class'])) {
+            $classRaw = $attrs['class'];
+        } elseif (isset($attrs['className']) && is_string($attrs['className'])) {
+            $classRaw = $attrs['className'];
+        }
+        if ($classRaw === '') return false;
+        $tokens = preg_split('/\s+/', trim($classRaw), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        foreach ($tokens as $t) {
+            if (strtolower((string) $t) === strtolower($token)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @param array<int, mixed> $nodes
+     * @return array<int, mixed>
+     */
+    private function sanitizeLoopTreeNodes(array $nodes, bool $inBoxImage): array
+    {
+        $out = [];
+        foreach ($nodes as $node) {
+            if (!is_array($node)) {
+                $out[] = $node;
+                continue;
+            }
+
+            if (($node['type'] ?? '') === 'element') {
+                $tag = strtolower((string) ($node['tag'] ?? ''));
+                $attrs = isset($node['attrs']) && is_array($node['attrs']) ? $node['attrs'] : [];
+
+                foreach (['class', 'className'] as $k) {
+                    if (isset($attrs[$k]) && is_string($attrs[$k])) {
+                        $tokens = preg_split('/\s+/', trim($attrs[$k]), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+                        $attrs[$k] = implode(' ', $this->filterUnstableLoopClasses($tokens));
+                    }
+                }
+
+                $isBoxImage = $this->hasClassToken($attrs, 'box-image');
+                $isProductTitleLink = $this->hasClassToken($attrs, 'woocommerce-LoopProduct-link')
+                    || $this->hasClassToken($attrs, 'woocommerce-loop-product__link');
+
+                if ($tag === 'a' && $isProductTitleLink || ($tag === 'a' && ($inBoxImage || $isBoxImage))) {
+                    $href = isset($attrs['href']) ? trim((string) $attrs['href']) : '';
+                    if ($href === '') {
+                        $attrs['href'] = '{{product_permalink}}';
+                    }
+                }
+
+                if ($tag === 'img' && $this->hasClassToken($attrs, 'back-image')) {
+                    $attrs['src'] = '{{product_image_hover}}';
+                    foreach (['data-src', 'data-lazy-src', 'data-original'] as $k) {
+                        if (isset($attrs[$k])) {
+                            $attrs[$k] = '{{product_image_hover}}';
+                        }
+                    }
+                }
+
+                $node['attrs'] = $attrs;
+                if (isset($node['children']) && is_array($node['children'])) {
+                    $node['children'] = $this->sanitizeLoopTreeNodes($node['children'], $inBoxImage || $isBoxImage);
+                }
+            }
+            $out[] = $node;
+        }
+        return $out;
     }
 
     /** Chuỗi có phải template JSON (children array) từ WordPress — vẫn lưu vào wp_headless_templates. */

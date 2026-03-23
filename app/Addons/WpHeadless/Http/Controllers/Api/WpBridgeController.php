@@ -4,16 +4,18 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
-use App\Addons\WpHeadless\Jobs\SyncSiteDataStepJob;
 use App\Addons\WpHeadless\Services\WpHeadlessSyncService;
+use App\Addons\WpHeadless\Models\WpHeadlessSite;
+use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Http\Controllers\Controller;
 use App\Models\Service;
 use App\Models\Site;
 use App\Models\SiteService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class WpBridgeController extends Controller
@@ -127,21 +129,10 @@ class WpBridgeController extends Controller
         $step = $request->input('step');
         if ($step !== null && $step !== '') {
             $step = (int) $step;
-            if ($step >= 1 && $step <= 4) {
-                $useQueue = config('queue.default') !== 'sync';
-                if ($useQueue) {
-                    $cacheKey = SyncSiteDataStepJob::CACHE_PREFIX . $site->id . '_' . $step;
-                    Cache::put($cacheKey, ['status' => 'pending', 'result' => null], SyncSiteDataStepJob::CACHE_TTL_SECONDS);
-                    SyncSiteDataStepJob::dispatch($site->id, $step);
-                    return response()->json([
-                        'success' => true,
-                        'queued' => true,
-                        'site_id' => $site->id,
-                        'step' => $step,
-                        'message' => 'Đang đồng bộ ở nền. Vui lòng gọi GET /api/wp-bridge/sync-site-data/status để kiểm tra kết quả.',
-                    ]);
-                }
-                $result = app(WpHeadlessSyncService::class)->syncStep($site, $step);
+            if ($step >= 1 && $step <= 6) {
+                $result = in_array($step, [2, 3, 4], true)
+                    ? $this->syncTemplateStepWithoutObserverStorm($site, $step, $step === 4)
+                    : app(WpHeadlessSyncService::class)->syncStep($site, $step);
                 if (!$result['success']) {
                     return response()->json($result, 422);
                 }
@@ -158,7 +149,8 @@ class WpBridgeController extends Controller
     }
 
     /**
-     * Trạng thái bước đồng bộ đã đưa vào queue (WordPress poll khi nhận queued: true).
+     * Trạng thái đồng bộ (giữ endpoint để tương thích ngược với client cũ).
+     * Hiện tại sync-site-data chạy trực tiếp, không dùng queue cho các step install.
      * GET /api/wp-bridge/sync-site-data/status?site_id=1&step=1
      * Header: X-GraphQL-Secret = READ_TOKEN
      */
@@ -171,7 +163,7 @@ class WpBridgeController extends Controller
         }
         $siteId = (int) $siteId;
         $step = (int) $step;
-        if ($siteId <= 0 || $step < 1 || $step > 4) {
+        if ($siteId <= 0 || $step < 1 || $step > 6) {
             return response()->json(['success' => false, 'message' => 'site_id hoặc step không hợp lệ.'], 422);
         }
 
@@ -190,22 +182,15 @@ class WpBridgeController extends Controller
             return response()->json(['success' => false, 'message' => 'Unauthorized.'], 401);
         }
 
-        $cacheKey = SyncSiteDataStepJob::CACHE_PREFIX . $siteId . '_' . $step;
-        $data = Cache::get($cacheKey);
-        if ($data === null) {
-            return response()->json([
-                'success' => true,
-                'status' => 'pending',
-                'message' => 'Job đang chờ hoặc đang chạy. Đảm bảo php artisan queue:work đang chạy.',
-            ]);
-        }
-
-        $status = $data['status'] ?? 'pending';
-        $result = $data['result'] ?? null;
         return response()->json([
             'success' => true,
-            'status' => $status,
-            'result' => $result,
+            'status' => 'completed',
+            'result' => [
+                'success' => true,
+                'site_id' => $siteId,
+                'step' => $step,
+                'message' => 'Đồng bộ chạy trực tiếp, không dùng queue.',
+            ],
         ]);
     }
 
@@ -218,5 +203,104 @@ class WpBridgeController extends Controller
         return SiteService::where('site_id', $site->id)
             ->where('service_id', $service->id)
             ->first();
+    }
+
+    private static function fileKeyForTemplateRow(WpHeadlessTemplate $row): string
+    {
+        $path = $row->template_path !== null && trim((string) $row->template_path) !== ''
+            ? trim((string) $row->template_path)
+            : '';
+        return $path !== '' ? $row->type . '-' . $path : $row->type;
+    }
+
+    /**
+     * Step 2 (templates) có thể ghi rất nhiều row loop item.
+     * Tạm tắt model events để tránh observer bắn sync nhiều lần.
+     * Sau khi sync DB xong, đẩy thẳng templates sang Next.js (không callback ngược về WordPress)
+     * để tránh treo request admin-ajax khi WordPress chờ kết quả cài đặt.
+     */
+    private function syncTemplateStepWithoutObserverStorm(Site $site, int $step = 2, bool $pushToNextAfterSuccess = false): array
+    {
+        $dispatcher = WpHeadlessTemplate::getEventDispatcher();
+        WpHeadlessTemplate::unsetEventDispatcher();
+        try {
+            $result = app(WpHeadlessSyncService::class)->syncStep($site, $step);
+        } finally {
+            WpHeadlessTemplate::setEventDispatcher($dispatcher);
+        }
+
+        if ($pushToNextAfterSuccess && !empty($result['success'])) {
+            $this->pushTemplatesToNextDirect($site);
+        }
+
+        return $result;
+    }
+
+    private function pushTemplatesToNextDirect(Site $site): void
+    {
+        $wpSite = WpHeadlessSite::find($site->id);
+        if ($wpSite === null) {
+            return;
+        }
+        $nextBaseUrl = trim((string) $wpSite->getNextjsWebhookUrl());
+        if ($nextBaseUrl === '') {
+            return;
+        }
+
+        $rows = WpHeadlessTemplate::where('site_id', $site->id)->get();
+        $templates = [];
+        $templateRelations = [];
+        $idToFileKey = [];
+        foreach ($rows as $row) {
+            $fileKey = self::fileKeyForTemplateRow($row);
+            $idToFileKey[$row->id] = $fileKey;
+            $html = $row->template ?? '';
+            $templates[$fileKey] = is_string($html) ? $html : '';
+        }
+        foreach ($rows as $row) {
+            if ($row->parent_id !== null && isset($idToFileKey[$row->parent_id])) {
+                $templateRelations[$idToFileKey[$row->id]] = $idToFileKey[$row->parent_id];
+            }
+        }
+
+        $siteService = $this->getWpHeadlessSiteService($site);
+        $readToken = $siteService && is_array($siteService->settings)
+            ? trim((string) ($siteService->settings['READ_TOKEN'] ?? ''))
+            : '';
+
+        $settings = is_array($wpSite->settings) ? $wpSite->settings : [];
+        $info = array_merge([
+            'site_id'           => $site->id,
+            'domain'            => trim((string) ($site->domain ?? '')),
+            'wp_uploads_origin' => $wpSite->getWpUploadsOrigin(),
+            'next_url'          => rtrim($nextBaseUrl, '/'),
+            'laravel_api_url'   => rtrim(config('app.url', ''), '/'),
+            'read_token'        => $readToken,
+        ], $settings);
+
+        $headers = ['Content-Type' => 'application/json'];
+        if ($readToken !== '') {
+            $headers['Authorization'] = 'Bearer ' . $readToken;
+        }
+        $types = array_keys($templates);
+        try {
+            Http::timeout(8)->post(rtrim($nextBaseUrl, '/') . '/api/wp-templates/updated', [
+                'site_id' => $site->id,
+                'types'   => $types,
+            ]);
+            Http::timeout(60)
+                ->withHeaders($headers)
+                ->post(rtrim($nextBaseUrl, '/') . '/api/wp-templates/receive', [
+                    'site_id'            => $site->id,
+                    'templates'          => $templates,
+                    'template_relations' => $templateRelations,
+                    'info'               => $info,
+                ]);
+        } catch (\Throwable $e) {
+            Log::warning('WpBridgeController: pushTemplatesToNextDirect error', [
+                'site_id' => $site->id,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 }
