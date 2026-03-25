@@ -1,6 +1,7 @@
 <?php
 
 use App\Addons\WpHeadless\Http\Middleware\WpHeadlessReadTokenAuth;
+use App\Addons\WpHeadless\Http\Controllers\Api\OptimizedCssByClassesController;
 use App\Addons\WpHeadless\Http\Controllers\Api\OptimizedCssForUrlController;
 use App\Addons\WpHeadless\Http\Controllers\Api\StylesOptimizedController;
 use App\Addons\WpHeadless\Http\Controllers\Api\SubmitCommentController;
@@ -20,6 +21,7 @@ Route::post('/wp-headless/styles-optimized', [StylesOptimizedController::class, 
 Route::post('/wp-headless/templates', TemplatesController::class)->middleware(WpHeadlessReadTokenAuth::class);
 
 Route::post('/wp-headless/optimized-css-for-url', OptimizedCssForUrlController::class)->middleware(WpHeadlessReadTokenAuth::class);
+Route::post('/wp-headless/optimized-css-by-classes', OptimizedCssByClassesController::class)->middleware(WpHeadlessReadTokenAuth::class);
 
 /** Next.js: form đăng comment → Laravel forward tới WordPress REST API (wp/v2/comments). */
 Route::post('/wp-headless/submit-comment', SubmitCommentController::class);

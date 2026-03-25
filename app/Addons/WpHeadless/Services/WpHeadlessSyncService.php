@@ -1187,9 +1187,22 @@ GQL;
             if ($html !== '' && ! str_starts_with($html, '{') && ! str_starts_with($html, '[')) {
                 $html = $this->stripHtmlComments($html);
             }
-            $bodyClass = is_array($part) ? ($part['bodyClass'] ?? []) : [];
-            $bodyClass = is_array($bodyClass) ? array_values($bodyClass) : [];
-            $templatePath = is_array($part) ? (trim((string) ($part['template_path'] ?? ''))) : '';
+            $rawBodyClass = [];
+            if (is_array($part)) {
+                $rawBodyClass = $part['bodyClass'] ?? ($part['body_class'] ?? []);
+            }
+            if (is_string($rawBodyClass)) {
+                $rawBodyClass = preg_split('/\s+/', trim($rawBodyClass)) ?: [];
+            }
+            $bodyClass = is_array($rawBodyClass)
+                ? array_values(array_filter(array_map(
+                    static fn ($v) => trim((string) $v),
+                    $rawBodyClass
+                ), static fn ($v) => $v !== ''))
+                : [];
+            $templatePath = is_array($part)
+                ? trim((string) ($part['template_path'] ?? ($part['templatePath'] ?? '')))
+                : '';
             $templatePath = $templatePath !== '' ? $templatePath : null;
 
             $isSidebarType = str_starts_with((string) $type, 'sidebar_') && isset($sidebars[$type]);

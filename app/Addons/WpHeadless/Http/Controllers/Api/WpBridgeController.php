@@ -255,7 +255,16 @@ class WpBridgeController extends Controller
             $fileKey = self::fileKeyForTemplateRow($row);
             $idToFileKey[$row->id] = $fileKey;
             $html = $row->template ?? '';
-            $templates[$fileKey] = is_string($html) ? $html : '';
+            $templateStr = is_string($html)
+                ? $html
+                : (is_array($html) ? (json_encode($html, JSON_UNESCAPED_UNICODE) ?: '') : (string) $html);
+            $bodyClass = is_array($row->body_class) ? array_values($row->body_class) : [];
+            // Cùng shape với GET /api/wp-headless/templates để Next normalizeTemplatePayload gộp bodyClass → template-bodyclass.json.
+            $templates[$fileKey] = [
+                'template'      => $templateStr,
+                'bodyClass'     => $bodyClass,
+                'template_path' => $row->template_path !== null ? trim((string) $row->template_path) : '',
+            ];
         }
         foreach ($rows as $row) {
             if ($row->parent_id !== null && isset($idToFileKey[$row->parent_id])) {

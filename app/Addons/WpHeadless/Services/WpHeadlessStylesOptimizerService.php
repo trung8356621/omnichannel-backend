@@ -180,6 +180,110 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
+     * Tối ưu CSS trực tiếp theo danh sách class bóc từ HTML (không phụ thuộc template classes trong DB).
+     * Dùng cho ux_builder ở Next.js: tạo 1 file CSS cố định theo URI và trả về inline CSS.
+     *
+     * @param array<int, string> $classes
+     */
+    public function optimizeByClasses(Site $site, string $postType, array $classes, string $uri): array
+    {
+        $siteId = $site->id;
+        $postType = trim($postType) !== '' ? trim($postType) : 'page';
+        $allowedClasses = $this->normalizeClassList($classes);
+        if ($allowedClasses === []) {
+            return ['success' => false, 'message' => 'No classes provided.'];
+        }
+
+        $rawCss = $this->fetchStylesCss($siteId, $postType);
+        if ($rawCss === '') {
+            return ['success' => false, 'message' => 'No CSS content for post_type + global.'];
+        }
+
+        $stripDarkMode = !$this->getHasDarkmode($site);
+        $filtered = $this->filterCssByClasses($rawCss, $allowedClasses, $stripDarkMode, true);
+        $specialBlocks = is_array($filtered['specialBlocks'] ?? null) ? $filtered['specialBlocks'] : [];
+        $classBlocks = is_array($filtered['blocks'] ?? null) ? $filtered['blocks'] : [];
+        $specialBlocksNotInGlobal = $this->excludeGlobalSpecialBlocks($siteId, $specialBlocks, $stripDarkMode);
+        $allBlocks = array_merge(
+            $specialBlocksNotInGlobal,
+            [self::DEFAULT_CSS_RESET],
+            $classBlocks
+        );
+        $allBlocks = array_map(fn(string $b) => $this->removeExcludedIdRulesFromCss($b), $allBlocks);
+        $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $allBlocks);
+        $allBlocks = array_values(array_filter($allBlocks, static fn(string $b) => trim($b) !== ''));
+        $optimizedCss = implode("\n", $allBlocks);
+        if (trim($optimizedCss) === '') {
+            return ['success' => false, 'message' => 'Empty optimized CSS result.'];
+        }
+
+        $baseName = $this->sanitizeUriToCssBaseName($uri);
+        $filename = $baseName . '.css';
+        $relativeDir = self::PUBLIC_CSS_DIR . '/' . $siteId;
+        $fullPath = public_path($relativeDir . '/' . $filename);
+
+        try {
+            File::ensureDirectoryExists(dirname($fullPath));
+            File::put($fullPath, $optimizedCss);
+            $this->copyToNextjsPublic($fullPath, $siteId, $filename);
+        } catch (\Throwable $e) {
+            Log::warning('WpHeadlessStylesOptimizer: optimizeByClasses save failed', [
+                'site_id' => $siteId,
+                'post_type' => $postType,
+                'uri' => $uri,
+                'error' => $e->getMessage(),
+            ]);
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+
+        return [
+            'success' => true,
+            'post_type' => $postType,
+            'uri' => $uri,
+            'filename' => $filename,
+            'path' => '/' . ltrim($relativeDir . '/' . $filename, '/'),
+            'css' => $optimizedCss,
+            'size' => strlen($optimizedCss),
+        ];
+    }
+
+    /**
+     * @param array<int, string> $classes
+     * @return array<int, string>
+     */
+    private function normalizeClassList(array $classes): array
+    {
+        $out = [];
+        foreach ($classes as $item) {
+            foreach (preg_split('/\s+/', trim((string) $item), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $c) {
+                $c = trim((string) $c);
+                if ($c === '') {
+                    continue;
+                }
+                $out[$c] = true;
+            }
+        }
+        return array_values(array_keys($out));
+    }
+
+    private function sanitizeUriToCssBaseName(string $uri): string
+    {
+        $raw = trim($uri);
+        if ($raw === '' || $raw === '/') {
+            return 'home';
+        }
+        $path = parse_url($raw, PHP_URL_PATH);
+        $path = is_string($path) ? $path : $raw;
+        $path = trim($path, '/');
+        if ($path === '') {
+            return 'home';
+        }
+        $safe = preg_replace('/[^a-z0-9\-_]+/i', '-', $path) ?? 'home';
+        $safe = trim($safe, '-');
+        return $safe !== '' ? strtolower($safe) : 'home';
+    }
+
+    /**
      * Đảm bảo đã tạo file global-*.css (chạy 1 lần khi bất kỳ postType nào được optimize).
      * Dùng site_meta thời gian lưu cuối, không so sánh file (file có thể cũ).
      */
