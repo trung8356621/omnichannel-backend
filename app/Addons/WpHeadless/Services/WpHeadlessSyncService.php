@@ -252,8 +252,7 @@ final class WpHeadlessSyncService
 
     /**
      * Step 2 được tách các bước con theo thứ tự:
-     * purge -> templateItems -> templates(base+postTypes+taxonomies) -> save -> sidebars.
-     * Luôn lấy templateItems trước taxonomies theo yêu cầu đồng bộ.
+     * purge -> templates(base+postTypes+taxonomies) -> save -> sidebars.
      *
      * @return array{success: bool, substeps: array<int, string>, message?: string}
      */
@@ -262,10 +261,6 @@ final class WpHeadlessSyncService
         $substeps = [];
         $this->purgeSiteTemplates((int) $site->id);
         $substeps[] = 'purged_old_templates';
-
-        // Luôn chạy trước taxonomy để match option tvh_headless_loop_wrappers.
-        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
-        $substeps[] = 'fetched_template_items';
 
         $templates = $this->queryTemplates($graphqlUrl, $headers);
         if ($templates === null) {
@@ -279,7 +274,7 @@ final class WpHeadlessSyncService
         $substeps[] = 'fetched_templates';
 
         $this->upsertWpHeadlessSite($site, $templates);
-        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
         $substeps[] = 'saved_templates';
 
         $this->syncSidebarWidgets($site, $headers);
@@ -289,7 +284,7 @@ final class WpHeadlessSyncService
     }
 
     /**
-     * Step 2: purge + items + base + postTypes.
+     * Step 2: purge + base + postTypes.
      *
      * @return array{success: bool, substeps: array<int, string>, message?: string}
      */
@@ -298,10 +293,6 @@ final class WpHeadlessSyncService
         $substeps = [];
         $this->purgeSiteTemplates((int) $site->id);
         $substeps[] = 'purged_old_templates';
-
-        // Luôn chạy trước taxonomy.
-        $templateItems = $this->queryTemplateItems($graphqlUrl, $headers);
-        $substeps[] = 'fetched_template_items';
 
         $base = $this->queryTemplatesBaseOnly($graphqlUrl, $headers);
         if ($base === null) {
@@ -320,7 +311,7 @@ final class WpHeadlessSyncService
         $templates['taxonomies'] = [];
 
         $this->upsertWpHeadlessSite($site, $templates);
-        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, $templateItems);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
         $substeps[] = 'saved_post_type_templates';
 
         return ['success' => true, 'substeps' => $substeps];
@@ -351,7 +342,7 @@ final class WpHeadlessSyncService
         $templates['taxonomies'] = $taxonomies;
 
         $this->upsertWpHeadlessSite($site, $templates);
-        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers, []);
+        $this->saveTemplateFiles($site, $templates, $graphqlUrl, $headers);
         $substeps[] = 'saved_taxonomy_templates';
 
         return ['success' => true, 'substeps' => $substeps];
@@ -665,38 +656,6 @@ GQL;
         }
         $decoded = json_decode($raw, true);
         return is_array($decoded) ? $decoded : [];
-    }
-
-    /**
-     * Lấy loop template items từ WordPress GraphQL headlessTemplateItems (product/post card, portfolio, content-none).
-     *
-     * @return array<int, array{slug: string, type: string, template: string, classes: array}>
-     */
-    private function queryTemplateItems(string $url, array $headers): array
-    {
-        $query = <<<'GQL'
-query {
-  headlessTemplateItems
-}
-GQL;
-
-        $response = Http::timeout(60)->withHeaders($headers)->post($url, ['query' => $query]);
-        if (! $response->successful()) {
-            Log::warning('WpHeadlessSync: headlessTemplateItems request failed', [
-                'status' => $response->status(),
-                'body'   => $response->body(),
-            ]);
-            return [];
-        }
-        $raw = $response->json('data.headlessTemplateItems');
-        if ($raw === null) {
-            return [];
-        }
-        $decoded = is_string($raw) ? json_decode($raw, true) : $raw;
-        if (! is_array($decoded)) {
-            return [];
-        }
-        return $decoded;
     }
 
     private function queryPostTypeStyles(string $url, array $headers): ?array
@@ -1130,13 +1089,11 @@ GQL;
     }
 
     /**
-     * Lưu header / footer / sidebar / postTypes / taxonomies + loop template items vào bảng wp_headless_templates.
-     * Payload từ WordPress (headlessTemplates): toàn bộ là JSON. headlessTemplateItems: loop card (product/post) với placeholder, JSON.
+     * Lưu header / footer / sidebar / postTypes / taxonomies vào bảng wp_headless_templates.
+     * Payload từ WordPress (headlessTemplates): toàn bộ là JSON.
      * Header/footer block: lấy từ root headerTemplateJson/footerTemplateJson hoặc gọi HeadlessHeaderFooter.
-     *
-     * @param array<int, array{slug: string, type: string, template: string, classes: array}> $templateItems từ headlessTemplateItems
      */
-    private function saveTemplateFiles(Site $site, array $templates, string $graphqlUrl, array $headers, array $templateItems = []): void
+    private function saveTemplateFiles(Site $site, array $templates, string $graphqlUrl, array $headers): void
     {
         $siteId = $site->id;
 
@@ -1151,18 +1108,6 @@ GQL;
             ...($templates['postTypes'] ?? []),
             ...($templates['taxonomies'] ?? [])
         ];
-
-        foreach ($templateItems as $item) {
-            $type = $item['type'] ?? '';
-            if ($type !== '' && isset($item['template'])) {
-                $parts[$type] = [
-                    'template'      => $item['template'],
-                    'classes'       => $item['classes'] ?? [],
-                    'bodyClass'     => [],
-                    'template_path' => null,
-                ];
-            }
-        }
 
         /** Các type là global (không phải post_type / taxonomy): header, footer, sidebars */
         $globalTypes = array_merge(['header', 'footer'], array_keys($sidebars));

@@ -25,11 +25,11 @@ final class WpHeadlessStylesOptimizerService
      *    - Có thể chạy khi không có class → chỉ xuất special blocks.
      *    - Toàn bộ CSS lưu vào file (path); GET /templates trả về globalCssChunks = URL file global.
      *
-     * 2. post_type (post, page, category...) chạy manual hoặc từ WordPress "Làm mới CSS tối ưu".
-     *    - Header/footer không lưu file riêng: class header/footer gộp vào mỗi post_type (page, post, ...).
+     * 2. post_type (post, page, category, header, footer...) chạy manual hoặc từ WordPress "Làm mới CSS tối ưu".
+     *    - Header/footer: file riêng header-0.css, footer-0.css (không gộp class vào từng post_type).
      *
      * 3. post_type khác global
-     *    - Lấy classes từ template + class header/footer (gộp chung); lọc raw CSS (post_type + global);
+     *    - Lấy classes từ template; lọc raw CSS (post_type + global);
      *    - Output = specialBlocks + reset + classBlocks; ghi file post_type-0.css, ...
      */
     private const MAX_CHUNK_BYTES = 100 * 1024; // 100 KB
@@ -76,21 +76,9 @@ final class WpHeadlessStylesOptimizerService
             return $this->optimizeGlobal($site, $siteId);
         }
 
-        // Không lưu file riêng cho header/footer — CSS header/footer gộp vào từng post_type.
-        if (in_array($postType, ['header', 'footer'], true)) {
-            return ['success' => true, 'post_type' => $postType, 'size' => 0, 'chunks' => 0, 'urls' => []];
-        }
-
         $classes = $this->collectTemplateClasses($siteId, $postType);
         if (empty($classes)) {
             return ['success' => false, 'message' => 'No template classes found for post_type.', 'chunks' => 0, 'urls' => []];
-        }
-
-        // Gộp class header/footer vào post_type để CSS header/footer nằm trong file post_type (không lưu file riêng).
-        // loop_content-* tối ưu đặc biệt: chỉ dò class của chính template loop_content, không gộp class global/header/footer.
-        if (!str_starts_with($postType, 'loop_content-')) {
-            $headerFooterClasses = $this->getHeaderFooterClassNames($siteId);
-            $classes = array_values(array_unique(array_merge($classes, $headerFooterClasses)));
         }
 
         $rawCss = $this->fetchStylesCss($siteId, $postType);
@@ -99,9 +87,7 @@ final class WpHeadlessStylesOptimizerService
         }
 
         $stripDarkMode = !$this->getHasDarkmode($site);
-        // loop_content-* chỉ dò theo class selectors, không giữ rule theo id (#...).
-        $allowIdSelectors = !str_starts_with($postType, 'loop_content-');
-        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, $allowIdSelectors);
+        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, true);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $classBlocks = $filtered['blocks'];
         // Lấy specialBlocks nhưng loại trừ block đã có trong global.css (tránh trùng).
@@ -298,7 +284,7 @@ final class WpHeadlessStylesOptimizerService
 
     /**
      * Thu thập toàn bộ CSS chunks (filename + content) để đẩy thẳng cho Next.js (không lưu file trên Laravel).
-     * Chạy optimize global rồi từng post_type có template, gộp css_chunks.
+     * Đầu tiên: dọn thư mục CSS site + bản ghi wp_headless_styles_optimized, rồi optimize global và từng post_type (luôn gồm header, footer).
      *
      * @return array<int, array{filename: string, content: string}>
      */
@@ -306,6 +292,21 @@ final class WpHeadlessStylesOptimizerService
     {
         $siteId = $site->id;
         $all = [];
+
+        $relativeDir = self::PUBLIC_CSS_DIR . '/' . $siteId;
+        $laravelPath = public_path($relativeDir);
+        if (File::isDirectory($laravelPath)) {
+            File::cleanDirectory($laravelPath);
+        }
+        $nextPath = config('wp-headless.nextjs_public_path');
+        if (! empty($nextPath)) {
+            $nextPath = rtrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $nextPath), DIRECTORY_SEPARATOR);
+            $nextDest = $nextPath . DIRECTORY_SEPARATOR . self::PUBLIC_CSS_DIR . DIRECTORY_SEPARATOR . $siteId;
+            if (File::isDirectory($nextDest)) {
+                File::cleanDirectory($nextDest);
+            }
+        }
+        WpHeadlessStyleOptimized::where('site_id', $siteId)->delete();
 
         $globalResult = $this->optimize($site, 'global');
         if (isset($globalResult['css_chunks']) && is_array($globalResult['css_chunks'])) {
@@ -318,24 +319,15 @@ final class WpHeadlessStylesOptimizerService
 
         $postTypes = WpHeadlessTemplate::where('site_id', $siteId)
             ->whereNotNull('type')
-            ->whereNotIn('type', ['header', 'footer'])
             ->where('type', 'not like', 'sidebar_%')
             ->distinct()
             ->pluck('type')
             ->values()
             ->all();
 
-        // Đảm bảo luôn tối ưu thêm loop_content-* thành file (phục vụ Next.js embed inline CSS cho loop).
-        $loopContentTypes = WpHeadlessTemplate::where('site_id', $siteId)
-            ->whereNotNull('type')
-            ->where('type', 'like', 'loop_content-%')
-            ->distinct()
-            ->pluck('type')
-            ->values()
-            ->all();
-        $postTypes = array_values(array_unique(array_merge($postTypes, $loopContentTypes)));
+        $postTypes = array_values(array_unique(array_merge(['header', 'footer'], $postTypes)));
 
-        $skip = ['global', 'header', 'footer'];
+        $skip = ['global'];
         foreach ($postTypes as $postType) {
             if (in_array($postType, $skip, true)) {
                 continue;
@@ -514,56 +506,13 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
-     * Trả về danh sách class có trong template header và footer (để loại khỏi CSS của post/page/home/product).
-     */
-    private function getHeaderFooterClassNames(int $siteId): array
-    {
-        $rows = WpHeadlessTemplate::where('site_id', $siteId)
-            ->where(function ($q) {
-                $q->where('type', 'header')
-                    ->orWhere('type', 'like', 'header_%')
-                    ->orWhere('type', 'footer')
-                    ->orWhere('type', 'like', 'footer_%');
-            })
-            ->get();
-        $allClasses = [];
-        foreach ($rows as $t) {
-            if (!empty($t->classes) && is_array($t->classes)) {
-                foreach ($t->classes as $c) {
-                    $c = trim((string) $c);
-                    if ($c !== '') {
-                        $allClasses[$c] = true;
-                    }
-                }
-            }
-            if (!empty($t->body_class) && is_array($t->body_class)) {
-                foreach ($t->body_class as $c) {
-                    $c = trim((string) $c);
-                    if ($c !== '') {
-                        $allClasses[$c] = true;
-                    }
-                }
-            }
-        }
-        $list = array_keys($allClasses);
-        $list = array_filter($list, static function ($c) {
-            return strpos($c, 'icon-') !== 0;
-        });
-        return array_values($list);
-    }
-
-    /**
      * Gom classes từ wp_headless_templates (fields classes, body_class).
-     * Default header/footer: lấy class từ mọi template header/footer trong bảng (type='header' OR type LIKE 'header_%', tương tự footer)
-     * để so sánh với CSS — cùng nguồn với getHeaderFooterClassNames, tránh file header-0.css / footer-0.css trống.
+     * Header/footer: gom mọi bản ghi header / header_* hoặc footer / footer_* khi postType tương ứng.
      * header_$id / footer_$id (manual): chỉ template type = postType (ví dụ header_123).
      */
     private function collectTemplateClasses(int $siteId, string $postType): array
     {
-        if (str_starts_with($postType, 'loop_content-')) {
-            // loop_content-* chỉ lấy class của chính template type đó, không kèm global.
-            $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->get();
-        } elseif ($postType === 'header') {
+        if ($postType === 'header') {
             $rows = WpHeadlessTemplate::where('site_id', $siteId)
                 ->where(function ($q) {
                     $q->where('type', 'header')->orWhere('type', 'like', 'header_%');
@@ -578,7 +527,13 @@ final class WpHeadlessStylesOptimizerService
         } elseif (str_starts_with($postType, 'header_') || str_starts_with($postType, 'footer_')) {
             $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->get();
         } else {
-            $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('global', true)->get();
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)
+                ->where('global', true)
+                ->where('type', '!=', 'header')
+                ->where('type', '!=', 'footer')
+                ->where('type', 'not like', 'header_%')
+                ->where('type', 'not like', 'footer_%')
+                ->get();
 
             $postTypeTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->first();
             if ($postTypeTemplate !== null && !$rows->contains('id', $postTypeTemplate->id)) {
@@ -657,25 +612,27 @@ final class WpHeadlessStylesOptimizerService
      */
     private function fetchStylesCss(int $siteId, string $postType): string
     {
-        $postTypes = [$postType, 'global'];
-        if ($postType === 'home') {
-            $postTypes[] = 'page';
-        }
-        if (in_array($postType, ['page', 'product'], true)) {
-            $postTypes[] = 'post';
-        }
-        // loop_content-* vẫn cho đọc thêm nguồn global làm fallback dữ liệu CSS,
-        // nhưng lọc theo class loop_content riêng nên không kéo class global vào output.
-        if (str_starts_with($postType, 'loop_content-')) {
+        // Khi build cho header hoặc footer, ta lấy CSS từ toàn bộ các Row để vét hết các style rớt vãi
+        if (in_array($postType, ['header', 'footer'], true)) {
+            $rows = WpHeadlessStyle::where('site_id', $siteId)
+                ->orderBy('sort_order')
+                ->get();
+        } else {
             $postTypes = [$postType, 'global'];
+            if ($postType === 'home') {
+                $postTypes[] = 'page';
+            }
+            if (in_array($postType, ['page', 'product'], true)) {
+                $postTypes[] = 'post';
+            }
+            $postTypes = array_values(array_unique($postTypes));
+            $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
+            $rows = WpHeadlessStyle::where('site_id', $siteId)
+                ->whereIn('post_type', $postTypes)
+                ->orderByRaw($orderCase)
+                ->orderBy('sort_order')
+                ->get();
         }
-        $postTypes = array_values(array_unique($postTypes));
-        $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
-        $rows = WpHeadlessStyle::where('site_id', $siteId)
-            ->whereIn('post_type', $postTypes)
-            ->orderByRaw($orderCase)
-            ->orderBy('sort_order')
-            ->get();
 
         // Row có parent_id nhưng không có content/url (bản con trùng) → cần lấy CSS từ cha. Load sẵn các parent.
         $parentIds = $rows->pluck('parent_id')->filter()->unique()->values()->all();
