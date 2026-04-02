@@ -63,7 +63,7 @@ final class WpHeadlessStylesOptimizerService
      * Mặc định chạy global trước (nếu cần), lưu thời gian chạy cuối vào wp_options và throttle.
      * Nếu tổng size > 100 KB thì tách thành nhiều file (chunk_index 0, 1, ...).
      */
-    public function optimize(Site $site, string $postType): array
+    public function optimize(Site $site, string $postType, array &$existingSignatures = []): array
     {
         $siteId = $site->id;
 
@@ -73,7 +73,7 @@ final class WpHeadlessStylesOptimizerService
         }
 
         if ($isGlobal) {
-            return $this->optimizeGlobal($site, $siteId);
+            return $this->optimizeGlobal($site, $siteId, $existingSignatures);
         }
 
         $classes = $this->collectTemplateClasses($siteId, $postType);
@@ -87,15 +87,11 @@ final class WpHeadlessStylesOptimizerService
         }
 
         $stripDarkMode = !$this->getHasDarkmode($site);
-        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, true);
-        $specialBlocks = $filtered['specialBlocks'] ?? [];
-        $classBlocks = $filtered['blocks'];
-        // Lấy specialBlocks nhưng loại trừ block đã có trong global.css (tránh trùng).
-        $specialBlocksNotInGlobal = $this->excludeGlobalSpecialBlocks($siteId, $specialBlocks, $stripDarkMode);
+        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, true, $existingSignatures);
         $allBlocks = array_merge(
-            $specialBlocksNotInGlobal,
+            $filtered['specialBlocks'] ?? [],
             [self::DEFAULT_CSS_RESET],
-            $classBlocks
+            $filtered['blocks']
         );
         $allBlocks = array_map(fn(string $b) => $this->removeExcludedIdRulesFromCss($b), $allBlocks);
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $allBlocks);
@@ -307,8 +303,9 @@ final class WpHeadlessStylesOptimizerService
             }
         }
         WpHeadlessStyleOptimized::where('site_id', $siteId)->delete();
+        $allSignatures = [];
 
-        $globalResult = $this->optimize($site, 'global');
+        $globalResult = $this->optimize($site, 'global', $allSignatures);
         if (isset($globalResult['css_chunks']) && is_array($globalResult['css_chunks'])) {
             foreach ($globalResult['css_chunks'] as $c) {
                 if (isset($c['filename'], $c['content'])) {
@@ -332,7 +329,7 @@ final class WpHeadlessStylesOptimizerService
             if (in_array($postType, $skip, true)) {
                 continue;
             }
-            $result = $this->optimize($site, $postType);
+            $result = $this->optimize($site, $postType, $allSignatures);
             if (isset($result['css_chunks']) && is_array($result['css_chunks'])) {
                 foreach ($result['css_chunks'] as $c) {
                     if (isset($c['filename'], $c['content'])) {
@@ -349,7 +346,7 @@ final class WpHeadlessStylesOptimizerService
      * Global CSS: chỉ lấy specialBlocks (HTML_TAGS, :root, *, @font-face, @keyframes, @layer, @charset, @import) từ toàn bộ global style.
      * Không lọc theo class; toàn bộ lưu vào file.
      */
-    private function optimizeGlobal(Site $site, int $siteId): array
+    private function optimizeGlobal(Site $site, int $siteId, array &$existingSignatures = []): array
     {
         $postType = 'global';
         $rawCss = $this->fetchStylesCss($siteId, $postType);
@@ -357,7 +354,8 @@ final class WpHeadlessStylesOptimizerService
             return ['success' => false, 'message' => 'No CSS content for global.', 'chunks' => 0, 'urls' => []];
         }
         $stripDarkMode = !$this->getHasDarkmode($site);
-        $filtered = $this->filterCssByClasses($rawCss, [], $stripDarkMode);
+        $classes = $this->collectTemplateClasses($siteId, $postType);
+        $filtered = $this->filterCssByClasses($rawCss, $classes, $stripDarkMode, true, $existingSignatures);
         $specialBlocks = $filtered['specialBlocks'] ?? [];
         $specialBlocks = array_map(fn(string $b) => $this->removeExcludedIdRulesFromCss($b), $specialBlocks);
         $allBlocks = array_map(fn(string $b) => $this->minifyCss($b), $specialBlocks);
@@ -512,7 +510,15 @@ final class WpHeadlessStylesOptimizerService
      */
     private function collectTemplateClasses(int $siteId, string $postType): array
     {
-        if ($postType === 'header') {
+        if ($postType === 'global') {
+            $rows = WpHeadlessTemplate::where('site_id', $siteId)
+                ->where('global', true)
+                ->where('type', '!=', 'header')
+                ->where('type', '!=', 'footer')
+                ->where('type', 'not like', 'header_%')
+                ->where('type', 'not like', 'footer_%')
+                ->get();
+        } elseif ($postType === 'header') {
             $rows = WpHeadlessTemplate::where('site_id', $siteId)
                 ->where(function ($q) {
                     $q->where('type', 'header')->orWhere('type', 'like', 'header_%');
@@ -528,23 +534,8 @@ final class WpHeadlessStylesOptimizerService
             $rows = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->get();
         } else {
             $rows = WpHeadlessTemplate::where('site_id', $siteId)
-                ->where('global', true)
-                ->where('type', '!=', 'header')
-                ->where('type', '!=', 'footer')
-                ->where('type', 'not like', 'header_%')
-                ->where('type', 'not like', 'footer_%')
+                ->where('type', $postType)
                 ->get();
-
-            $postTypeTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', $postType)->first();
-            if ($postTypeTemplate !== null && !$rows->contains('id', $postTypeTemplate->id)) {
-                $rows->push($postTypeTemplate);
-            }
-            if ($postType === 'home') {
-                $pageTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', 'page')->first();
-                if ($pageTemplate !== null && !$rows->contains('id', $pageTemplate->id)) {
-                    $rows->push($pageTemplate);
-                }
-            }
         }
 
         $allClasses = [];
@@ -573,66 +564,23 @@ final class WpHeadlessStylesOptimizerService
         return array_values($allClasses);
     }
 
-    /**
-     * Loại trừ khỏi $specialBlocks những block đã có trong global.css (so sánh theo signature minified).
-     * Trả về mảng block không trùng global để gộp vào CSS post_type.
-     */
-    private function excludeGlobalSpecialBlocks(int $siteId, array $specialBlocks, bool $stripDarkMode = false): array
-    {
-        if ($specialBlocks === []) {
-            return [];
-        }
-        $globalRawCss = $this->fetchStylesCss($siteId, 'global');
-        if ($globalRawCss === '') {
-            return $specialBlocks;
-        }
-        $globalFiltered = $this->filterCssByClasses($globalRawCss, [], $stripDarkMode);
-        $globalSpecials = $globalFiltered['specialBlocks'] ?? [];
-        $globalSignatures = [];
-        foreach ($globalSpecials as $b) {
-            $sig = md5($this->minifyCss($b));
-            $globalSignatures[$sig] = true;
-        }
-        $out = [];
-        foreach ($specialBlocks as $block) {
-            $sig = md5($this->minifyCss($block));
-            if (!isset($globalSignatures[$sig])) {
-                $out[] = $block;
-            }
-        }
-        return $out;
-    }
 
-    /**
-     * Lấy toàn bộ nội dung CSS từ wp_headless_styles (post_type + global), đã dedupe theo url/content.
-     * (1) Bỏ qua style_type = inline mà content = null.
-     * (2) Đã vào global thì không thêm lại ở post_type/taxonomy (xóa trùng).
-     * (3) Row có parent_id (bản con trùng CSS): nếu không có content/url thì lấy CSS từ row cha để tối ưu đủ.
-     * Với postType = global: chỉ lấy row post_type = global (không gộp header/footer), thứ tự theo sort_order.
-     */
     private function fetchStylesCss(int $siteId, string $postType): string
     {
-        // Khi build cho header hoặc footer, ta lấy CSS từ toàn bộ các Row để vét hết các style rớt vãi
-        if (in_array($postType, ['header', 'footer'], true)) {
-            $rows = WpHeadlessStyle::where('site_id', $siteId)
-                ->orderBy('sort_order')
-                ->get();
-        } else {
-            $postTypes = [$postType, 'global'];
-            if ($postType === 'home') {
-                $postTypes[] = 'page';
-            }
-            if (in_array($postType, ['page', 'product'], true)) {
-                $postTypes[] = 'post';
-            }
-            $postTypes = array_values(array_unique($postTypes));
-            $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
-            $rows = WpHeadlessStyle::where('site_id', $siteId)
-                ->whereIn('post_type', $postTypes)
-                ->orderByRaw($orderCase)
-                ->orderBy('sort_order')
-                ->get();
+        $postTypes = [$postType, 'global'];
+        if ($postType === 'home') {
+            $postTypes[] = 'page';
         }
+        if (in_array($postType, ['page', 'product'], true)) {
+            $postTypes[] = 'post';
+        }
+        $postTypes = array_values(array_unique($postTypes));
+        $orderCase = "CASE WHEN post_type = 'global' THEN 0 WHEN post_type = 'page' THEN 1 WHEN post_type = 'post' THEN 2 ELSE 3 END";
+        $rows = WpHeadlessStyle::where('site_id', $siteId)
+            ->whereIn('post_type', $postTypes)
+            ->orderByRaw($orderCase)
+            ->orderBy('sort_order')
+            ->get();
 
         // Row có parent_id nhưng không có content/url (bản con trùng) → cần lấy CSS từ cha. Load sẵn các parent.
         $parentIds = $rows->pluck('parent_id')->filter()->unique()->values()->all();
@@ -1149,7 +1097,7 @@ final class WpHeadlessStylesOptimizerService
      * Khi $stripDarkMode = true: chỉ loại bỏ từng selector có .dark hoặc .*-dark trong danh sách selector, giữ lại rule với các selector còn lại (ví dụ .a,.b-dark,.c → .a,.c).
      * @return array{blocks: list<string>, specialBlocks: list<string>}
      */
-    private function filterCssByClasses(string $css, array $classes, bool $stripDarkMode = false, bool $allowIdSelectors = true): array
+    private function filterCssByClasses(string $css, array $classes, bool $stripDarkMode = false, bool $allowIdSelectors = true, array &$existingSignatures = []): array
     {
         $selectorClassRegex = null;
         if (!empty($classes)) {
@@ -1261,9 +1209,34 @@ final class WpHeadlessStylesOptimizerService
                 }
                 $specialBlocks[] = $full;
                 break;
+                $sig = md5($this->minifyCss($full));
+                if (!isset($existingSignatures[$sig])) {
+                    $specialBlocks[] = $full;
+                    $existingSignatures[$sig] = true;
+                }
+                break;
             }
         }
-        return ['blocks' => $classBlocks, 'specialBlocks' => $specialBlocks];
+
+        $finalClassBlocks = [];
+        foreach ($classBlocks as $cb) {
+            $sig = md5($this->minifyCss($cb));
+            if (!isset($existingSignatures[$sig])) {
+                $finalClassBlocks[] = $cb;
+                $existingSignatures[$sig] = true;
+            }
+        }
+
+        $finalSpecialBlocks = [];
+        foreach ($specialBlocks as $sb) {
+            $sig = md5($this->minifyCss($sb));
+            if (!isset($existingSignatures[$sig])) {
+                $finalSpecialBlocks[] = $sb;
+                $existingSignatures[$sig] = true;
+            }
+        }
+
+        return ['blocks' => $finalClassBlocks, 'specialBlocks' => $finalSpecialBlocks];
     }
 
     /**
