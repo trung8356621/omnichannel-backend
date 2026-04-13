@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\WpHeadless\Observers;
 
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
+use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
 use App\Models\Service;
 use App\Models\Site;
 use App\Models\SiteService;
@@ -96,6 +97,9 @@ class WpHeadlessTemplateObserver
             return;
         }
 
+        $cssFiles = app(WpHeadlessStylesOptimizerService::class)->buildCssFilesPayloadForNextReceive($mainSite);
+        $dispatchTimeout = count($cssFiles) > 0 ? 45 : 8;
+
         $scheme = !empty($mainSite->ssl) ? 'https' : 'http';
         $host = trim((string) ($mainSite->domain ?? ''));
         if ($host === '') {
@@ -113,7 +117,7 @@ class WpHeadlessTemplateObserver
                 $headers['Authorization'] = 'Bearer ' . $readToken;
                 $headers['X-GraphQL-Secret'] = $readToken;
             }
-            $dispatchResponse = Http::timeout(8)
+            $dispatchResponse = Http::timeout($dispatchTimeout)
                 ->withHeaders($headers)
                 ->post($dispatchUrl, [
                     'site_id'            => $siteId,
@@ -123,6 +127,7 @@ class WpHeadlessTemplateObserver
                     'templates'          => $templates,
                     'template_relations' => $templateRelations,
                     'info'               => $info,
+                    'cssFiles'           => $cssFiles,
                 ]);
 
             if (!$dispatchResponse->successful()) {

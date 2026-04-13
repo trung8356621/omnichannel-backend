@@ -20,6 +20,7 @@ class WpHeadlessTemplate extends Model
         'global',
         'template',
         'classes',
+        'ids',
         'body_class',
     ];
 
@@ -27,6 +28,7 @@ class WpHeadlessTemplate extends Model
         'parent_id'  => 'integer',
         'global'     => 'boolean',
         'classes'    => 'array',
+        'ids'        => 'array',
         'body_class' => 'array',
     ];
 
@@ -40,7 +42,7 @@ class WpHeadlessTemplate extends Model
     }
 
     /** Chuỗi JSON tối thiểu khi template rỗng/lỗi. */
-    private const EMPTY_JSON = '{"children":[],"classes":[]}';
+    private const EMPTY_JSON = '{"children":[],"classes":[],"ids":[]}';
 
     /**
      * Chuẩn hóa giá trị trước khi ghi vào cột template (JSON). Trả về chuỗi JSON hợp lệ (không trả null).

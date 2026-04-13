@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
 use App\Addons\WpHeadless\Models\WpHeadlessStyle;
-use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Services\WpGraphQLResolverService;
 use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
@@ -73,46 +72,26 @@ class OptimizedCssForUrlController extends Controller
         $templateRow = WpHeadlessTemplate::where('site_id', $site->id)->where('type', $postType)->first();
         $storedTemplatePath = $templateRow?->template_path;
 
-        // Đảm bảo global đã có file CSS trước khi lấy URLs (header/footer gộp trong post_type).
         if (!in_array($postType, ['global'], true)) {
             $this->optimizer->ensureGlobalOptimized($site);
         }
 
-        $existing = WpHeadlessStyleOptimized::where('site_id', $site->id)
-            ->where('post_type', $postType)
-            ->orderBy('chunk_index')
-            ->get();
-
-        // Next.js dùng file CSS local (Laravel đẩy file qua Next.js public): trả path thay vì full URL.
-        // Mặc định trả path; gửi css_origin=laravel nếu cần full URL.
+        // Next.js: path /wp-headless/... ; css_origin=laravel → URL đầy đủ tới Laravel public.
         $cssOrigin = strtolower((string) ($request->input('css_origin') ?? 'next'));
         $cssOriginNext = $cssOrigin !== 'laravel';
 
-        if ($existing->isEmpty()) {
-            $result = $this->optimizer->optimize($site, $postType);
-            $urls = ($result['success'] ?? false) ? ($result['urls'] ?? []) : [];
-            if ($cssOriginNext && !empty($urls)) {
-                $postTypeRows = WpHeadlessStyleOptimized::where('site_id', $site->id)
-                    ->where('post_type', $postType)
-                    ->orderBy('chunk_index')
-                    ->get();
-                $urls = $postTypeRows->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all();
-            }
-        } else {
-            $urls = $cssOriginNext
-                ? $existing->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all()
-                : $existing->map(fn($row) => $row->public_url)->filter()->values()->all();
+        if ($this->optimizer->siteNeedsCssOptimize($site, $postType)) {
+            $this->optimizer->optimize($site, $postType);
         }
 
-        // Global CSS: luôn gửi kèm để Next.js load base (special blocks).
-        $globalRows = WpHeadlessStyleOptimized::where('site_id', $site->id)
-            ->where('post_type', 'global')
-            ->orderBy('chunk_index')
-            ->get();
-        $globalUrls = $cssOriginNext
-            ? $globalRows->map(fn($row) => $row->path ? '/' . ltrim($row->path, '/') : null)->filter()->values()->all()
-            : $globalRows->pluck('public_url')->filter()->values()->all();
-        $optimizedCssUrls = array_values(array_filter(array_merge($globalUrls, $urls)));
+        $pathList = $this->optimizer->getOptimizedCssUrlPathsForPostType($site, $postType);
+        $optimizedCssUrls = $cssOriginNext
+            ? $pathList
+            : array_map(
+                static fn (string $path): string => rtrim((string) config('app.url', ''), '/') . $path,
+                $pathList
+            );
+        $optimizedCssUrls = array_values(array_filter($optimizedCssUrls));
 
         // Font URLs (Google Fonts, etc.) từ wp_headless_styles style_type = font — Next.js dùng <link> preload/stylesheet.
         $fontUrls = WpHeadlessStyle::where('site_id', $site->id)

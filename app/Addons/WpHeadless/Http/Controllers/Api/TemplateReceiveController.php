@@ -77,6 +77,7 @@ class TemplateReceiveController extends Controller
                         'global'     => $global,
                         'template'   => WpHeadlessTemplate::normalizeTemplateValue($html),
                         'classes'    => $parsed['classes'],
+                        'ids'        => $parsed['ids'] ?? [],
                         'body_class' => $bodyClass,
                     ]
                 );
@@ -138,6 +139,18 @@ class TemplateReceiveController extends Controller
         }
         $classes = array_keys($classes);
         sort($classes);
-        return ['classes' => $classes];
+        $ids = [];
+        if (preg_match_all('/\bid\s*=\s*["\']([^"\']+)["\']/i', $html, $im)) {
+            foreach ($im[1] as $idAttr) {
+                $i = trim((string) $idAttr);
+                if ($i !== '') {
+                    $ids[$i] = true;
+                }
+            }
+        }
+        $idList = array_keys($ids);
+        sort($idList);
+
+        return ['classes' => $classes, 'ids' => $idList];
     }
 }

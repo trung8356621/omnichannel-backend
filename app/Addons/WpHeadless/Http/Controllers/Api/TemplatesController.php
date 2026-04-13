@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
 use App\Addons\WpHeadless\Models\WpHeadlessStyle;
-use App\Addons\WpHeadless\Models\WpHeadlessStyleOptimized;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
 use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
 use App\Http\Controllers\Controller;
@@ -53,6 +52,7 @@ class TemplatesController extends Controller
                 'template_path' => $row->template_path ?? '',
                 'template'      => is_array($row->template) ? json_encode($row->template) : (string) ($row->template ?? ''),
                 'bodyClass'     => is_array($row->body_class) ? $row->body_class : [],
+                'ids'           => is_array($row->ids) ? $row->ids : [],
             ];
         }
         $templateRelations = [];
@@ -66,24 +66,13 @@ class TemplatesController extends Controller
             }
         }
 
-        $globalChunks = WpHeadlessStyleOptimized::where('site_id', $siteId)
-            ->where('post_type', 'global')
-            ->orderBy('chunk_index')
-            ->get();
-
         $hasGlobalTemplates = WpHeadlessTemplate::where('site_id', $siteId)
             ->where('global', true)
             ->exists();
-        $hasNoOptimizedContent = $globalChunks->isEmpty();
 
-        if ($hasGlobalTemplates && $hasNoOptimizedContent) {
+        if ($hasGlobalTemplates && $this->optimizer->siteNeedsCssOptimize($site, 'global')) {
             $result = $this->optimizer->optimize($site, 'global');
-            if (($result['success'] ?? false) === true) {
-                $globalChunks = WpHeadlessStyleOptimized::where('site_id', $siteId)
-                    ->where('post_type', 'global')
-                    ->orderBy('chunk_index')
-                    ->get();
-            } else {
+            if (($result['success'] ?? false) !== true) {
                 Log::warning('WpHeadless TemplatesController: global CSS optimize failed', [
                     'site_id' => $siteId,
                     'message' => $result['message'] ?? 'unknown',
@@ -91,7 +80,7 @@ class TemplatesController extends Controller
             }
         }
 
-        $globalCssChunks = $globalChunks->map(fn ($r) => $r->public_url)->filter()->values()->all();
+        $globalCssChunks = $this->optimizer->getOptimizedCssUrlPathsForPostType($site, 'global');
 
         $fontUrls = WpHeadlessStyle::where('site_id', $siteId)
             ->where('style_type', 'font')
@@ -109,6 +98,7 @@ class TemplatesController extends Controller
             'templates'           => $templates,
             'template_relations'  => $templateRelations,
             'globalCssChunks'     => $globalCssChunks,
+            'cssManifest'         => $this->optimizer->getCssManifest($site),
             'fontUrls'            => $fontUrls,
         ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
           ->header('Pragma', 'no-cache')

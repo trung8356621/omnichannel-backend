@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\WpHeadless\Http\Controllers\Api;
 
+use App\Addons\WpHeadless\Services\WpHeadlessStylesOptimizerService;
 use App\Addons\WpHeadless\Services\WpHeadlessSyncService;
 use App\Addons\WpHeadless\Models\WpHeadlessSite;
 use App\Addons\WpHeadless\Models\WpHeadlessTemplate;
@@ -130,8 +131,9 @@ class WpBridgeController extends Controller
         if ($step !== null && $step !== '') {
             $step = (int) $step;
             if ($step >= 1 && $step <= 6) {
+                // Bước 2–4: sau mỗi bước đẩy toàn bộ template trong DB sang Next.js (không chờ bước 4).
                 $result = in_array($step, [2, 3, 4], true)
-                    ? $this->syncTemplateStepWithoutObserverStorm($site, $step, $step === 4)
+                    ? $this->syncTemplateStepWithoutObserverStorm($site, $step, true)
                     : app(WpHeadlessSyncService::class)->syncStep($site, $step);
                 if (!$result['success']) {
                     return response()->json($result, 422);
@@ -216,8 +218,8 @@ class WpBridgeController extends Controller
     /**
      * Step 2 (templates) có thể ghi rất nhiều row loop item.
      * Tạm tắt model events để tránh observer bắn sync nhiều lần.
-     * Sau khi sync DB xong, đẩy thẳng templates sang Next.js (không callback ngược về WordPress)
-     * để tránh treo request admin-ajax khi WordPress chờ kết quả cài đặt.
+     * Sau khi sync DB xong, nếu $pushToNextAfterSuccess: đẩy toàn bộ templates sang Next.js (không callback WP).
+     * Dùng true cho bước 2, 3, 4 để mỗi tiến trình cài đặt lại trên WordPress đều cập nhật Next ngay.
      */
     private function syncTemplateStepWithoutObserverStorm(Site $site, int $step = 2, bool $pushToNextAfterSuccess = false): array
     {
@@ -305,6 +307,27 @@ class WpBridgeController extends Controller
                     'template_relations' => $templateRelations,
                     'info'               => $info,
                 ]);
+
+            $cssPayload = app(WpHeadlessStylesOptimizerService::class)->buildCssFilesPayloadForNextReceive($site);
+            foreach (array_chunk($cssPayload, 12) as $chunk) {
+                if ($chunk === []) {
+                    continue;
+                }
+                try {
+                    Http::timeout(120)
+                        ->withHeaders($headers)
+                        ->post(rtrim($nextBaseUrl, '/') . '/api/wp-templates/receive', [
+                            'site_id'  => $site->id,
+                            'cssFiles' => $chunk,
+                        ]);
+                } catch (\Throwable $e) {
+                    Log::warning('WpBridgeController: push CSS chunk to Next failed', [
+                        'site_id' => $site->id,
+                        'chunk'   => count($chunk),
+                        'message' => $e->getMessage(),
+                    ]);
+                }
+            }
         } catch (\Throwable $e) {
             Log::warning('WpBridgeController: pushTemplatesToNextDirect error', [
                 'site_id' => $site->id,

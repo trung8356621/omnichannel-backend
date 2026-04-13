@@ -1004,6 +1004,10 @@ GQL;
                     ? $decoded['classes']
                     : [];
                 sort($classes);
+                $ids = is_array($decoded) && isset($decoded['ids']) && is_array($decoded['ids'])
+                    ? array_values($decoded['ids'])
+                    : [];
+                sort($ids);
                 WpHeadlessTemplate::updateOrCreate(
                     ['site_id' => $siteId, 'type' => 'header'],
                     [
@@ -1012,6 +1016,7 @@ GQL;
                         'global'        => true,
                         'template'      => WpHeadlessTemplate::normalizeTemplateValue($defaultHeaderJson),
                         'classes'       => $classes,
+                        'ids'           => $ids,
                         'body_class'    => [],
                     ]
                 );
@@ -1022,6 +1027,10 @@ GQL;
                     ? $decoded['classes']
                     : [];
                 sort($classes);
+                $ids = is_array($decoded) && isset($decoded['ids']) && is_array($decoded['ids'])
+                    ? array_values($decoded['ids'])
+                    : [];
+                sort($ids);
                 WpHeadlessTemplate::updateOrCreate(
                     ['site_id' => $siteId, 'type' => 'footer'],
                     [
@@ -1030,6 +1039,7 @@ GQL;
                         'global'        => true,
                         'template'      => WpHeadlessTemplate::normalizeTemplateValue($defaultFooterJson),
                         'classes'       => $classes,
+                        'ids'           => $ids,
                         'body_class'    => [],
                     ]
                 );
@@ -1048,6 +1058,10 @@ GQL;
                     ? $decoded['classes']
                     : [];
                 sort($classes);
+                $ids = is_array($decoded) && isset($decoded['ids']) && is_array($decoded['ids'])
+                    ? array_values($decoded['ids'])
+                    : [];
+                sort($ids);
                 WpHeadlessTemplate::updateOrCreate(
                     ['site_id' => $siteId, 'type' => 'header_' . $id],
                     [
@@ -1056,6 +1070,7 @@ GQL;
                         'global'        => true,
                         'template'      => WpHeadlessTemplate::normalizeTemplateValue($headerJson),
                         'classes'       => $classes,
+                        'ids'           => $ids,
                         'body_class'    => [],
                     ]
                 );
@@ -1073,6 +1088,10 @@ GQL;
                     ? $decoded['classes']
                     : [];
                 sort($classes);
+                $ids = is_array($decoded) && isset($decoded['ids']) && is_array($decoded['ids'])
+                    ? array_values($decoded['ids'])
+                    : [];
+                sort($ids);
                 WpHeadlessTemplate::updateOrCreate(
                     ['site_id' => $siteId, 'type' => 'footer_' . $id],
                     [
@@ -1081,6 +1100,7 @@ GQL;
                         'global'        => true,
                         'template'      => WpHeadlessTemplate::normalizeTemplateValue($footerJson),
                         'classes'       => $classes,
+                        'ids'           => $ids,
                         'body_class'    => [],
                     ]
                 );
@@ -1173,15 +1193,38 @@ GQL;
                     sort($classes);
                 }
             }
-            if ($classes === null) {
-                $forStaticWithScript = in_array($type, ['header', 'footer'], true)
-                    || (isset($sidebars[$type]) && $type !== '');
+            $ids = null;
+            if (is_array($part) && isset($part['ids']) && is_array($part['ids'])) {
+                $ids = array_values($part['ids']);
+                sort($ids);
+            }
+            if ($ids === null && $this->isTemplateJsonString($html)) {
+                $decodedForIds = json_decode($html, true);
+                if (is_array($decodedForIds) && isset($decodedForIds['ids']) && is_array($decodedForIds['ids'])) {
+                    $ids = array_values($decodedForIds['ids']);
+                    sort($ids);
+                }
+            }
+
+            $forStaticWithScript = in_array($type, ['header', 'footer'], true)
+                || (isset($sidebars[$type]) && $type !== '');
+            if ($classes === null || $ids === null) {
                 $parsed = $this->parseTemplateHtml($html, $forStaticWithScript);
-                $classes = $parsed['classes'];
+                if ($classes === null) {
+                    $classes = $parsed['classes'];
+                }
+                if ($ids === null) {
+                    $ids = $parsed['ids'] ?? [];
+                }
             }
 
             // Last-resort sanitize ở tầng lưu DB để tránh dính class taxonomy động hoặc href rỗng.
-            [$html, $classes] = $this->sanitizeTemplateBeforePersist((string) $type, (string) $html, is_array($classes) ? $classes : []);
+            [$html, $classes, $ids] = $this->sanitizeTemplateBeforePersist(
+                (string) $type,
+                (string) $html,
+                is_array($classes) ? $classes : [],
+                is_array($ids) ? $ids : []
+            );
 
             $classesKey = json_encode($classes);
             // type = sidebar_* và loop_*: không dedupe theo parent_id để tránh mapping sai template item.
@@ -1198,6 +1241,7 @@ GQL;
                     'global'        => $isGlobal,
                     'template'      => WpHeadlessTemplate::normalizeTemplateValue($html),
                     'classes'       => $classes,
+                    'ids'           => $ids,
                     'body_class'    => $bodyClass,
                 ]
             );
@@ -1207,8 +1251,33 @@ GQL;
             }
         }
 
+        // Slider: chỉ dùng class để prune CSS Flickity (WP không gửi template JSON) — luôn tạo/cập nhật 1 dòng type=slider.
+        $this->ensureHeadlessSliderTemplateStub($siteId);
+
         // Merge toàn bộ class trong site → 1 file để fetchNodeByUri so sánh và xóa class dư thừa trong post_content JSON.
         $this->saveMergedClassesForSite($siteId);
+    }
+
+    /**
+     * Bản ghi synthetic: type=slider, template JSON rỗng, body_class rỗng, classes = token Flickity/Flatsome (đồng bộ với CSS optimizer).
+     */
+    private function ensureHeadlessSliderTemplateStub(int $siteId): void
+    {
+        $classes = WpHeadlessStylesOptimizerService::flickitySliderCssClassTokens();
+        sort($classes);
+
+        WpHeadlessTemplate::updateOrCreate(
+            ['site_id' => $siteId, 'type' => 'slider'],
+            [
+                'parent_id'     => null,
+                'template_path' => null,
+                'global'        => false,
+                'template'      => WpHeadlessTemplate::normalizeTemplateValue(null),
+                'classes'       => $classes,
+                'ids'           => [],
+                'body_class'    => [],
+            ]
+        );
     }
 
     /**
@@ -1401,27 +1470,33 @@ GQL;
      * - ép img.back-image -> {{product_image_hover}}
      *
      * @param array<int, string> $classes
-     * @return array{0: string, 1: array<int, string>}
+     * @param array<int, string> $ids
+     * @return array{0: string, 1: array<int, string>, 2: array<int, string>}
      */
-    private function sanitizeTemplateBeforePersist(string $type, string $html, array $classes): array
+    private function sanitizeTemplateBeforePersist(string $type, string $html, array $classes, array $ids): array
     {
         if (!str_starts_with($type, 'loop_')) {
-            return [$html, $classes];
+            return [$html, $classes, $ids];
         }
 
         $classes = $this->filterUnstableLoopClasses($classes);
+        $ids = $this->filterUnstableLoopIds($ids);
         if (!$this->isTemplateJsonString($html)) {
-            return [$html, $classes];
+            return [$html, $classes, $ids];
         }
 
         $decoded = json_decode($html, true);
         if (!is_array($decoded)) {
-            return [$html, $classes];
+            return [$html, $classes, $ids];
         }
 
         if (isset($decoded['classes']) && is_array($decoded['classes'])) {
             $decoded['classes'] = $this->filterUnstableLoopClasses($decoded['classes']);
             $classes = $decoded['classes'];
+        }
+        if (isset($decoded['ids']) && is_array($decoded['ids'])) {
+            $decoded['ids'] = $this->filterUnstableLoopIds($decoded['ids']);
+            $ids = $decoded['ids'];
         }
         if (isset($decoded['children']) && is_array($decoded['children'])) {
             $decoded['children'] = $this->sanitizeLoopTreeNodes($decoded['children'], false);
@@ -1432,7 +1507,7 @@ GQL;
             $html = $encoded;
         }
 
-        return [$html, $classes];
+        return [$html, $classes, $ids];
     }
 
     /**
@@ -1448,6 +1523,30 @@ GQL;
             return true;
         })));
         sort($out);
+        return $out;
+    }
+
+    /**
+     * @param array<int, mixed> $ids
+     * @return array<int, string>
+     */
+    private function filterUnstableLoopIds(array $ids): array
+    {
+        $out = array_values(array_unique(array_filter(array_map(static fn ($i) => trim((string) $i), $ids), static function (string $i): bool {
+            if ($i === '') {
+                return false;
+            }
+            if (preg_match('/^(?:post|page|product|attachment)-\d+$/i', $i)) {
+                return false;
+            }
+            if (preg_match('/^(?:product_cat|product_tag|post_tag)-/i', $i)) {
+                return false;
+            }
+
+            return true;
+        })));
+        sort($out);
+
         return $out;
     }
 
@@ -1536,6 +1635,7 @@ GQL;
     private function parseTemplateHtml(string $html, bool $includeDescendantClasses = false): array
     {
         $classes = [];
+        $ids = [];
 
         if (preg_match_all('/\bclass\s*=\s*["\']([^"\']+)["\']/i', $html, $classMatches)) {
             foreach ($classMatches[1] as $classAttr) {
@@ -1548,14 +1648,25 @@ GQL;
             }
         }
 
+        if (preg_match_all('/\bid\s*=\s*["\']([^"\']+)["\']/i', $html, $idMatches)) {
+            foreach ($idMatches[1] as $idAttr) {
+                $i = trim((string) $idAttr);
+                if ($i !== '') {
+                    $ids[$i] = true;
+                }
+            }
+        }
+
         if ($includeDescendantClasses) {
             $this->collectDescendantClasses($html, $classes);
         }
 
         $classes = array_keys($classes);
         sort($classes);
+        $idList = array_keys($ids);
+        sort($idList);
 
-        return ['classes' => $classes];
+        return ['classes' => $classes, 'ids' => $idList];
     }
 
     /**

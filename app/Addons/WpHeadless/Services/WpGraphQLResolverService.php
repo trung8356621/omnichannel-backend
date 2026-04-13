@@ -358,6 +358,7 @@ $query = sprintf($queryTemplate, implode("\n", $postFields), implode("\n", $taxo
                     'global'     => false,
                     'template'   => WpHeadlessTemplate::normalizeTemplateValue($headerHtml),
                     'classes'    => $parsed['classes'],
+                    'ids'        => $parsed['ids'] ?? [],
                     'body_class' => [],
                 ]
             );
@@ -372,6 +373,7 @@ $query = sprintf($queryTemplate, implode("\n", $postFields), implode("\n", $taxo
                     'global'     => false,
                     'template'   => WpHeadlessTemplate::normalizeTemplateValue($footerHtml),
                     'classes'    => $parsed['classes'],
+                    'ids'        => $parsed['ids'] ?? [],
                     'body_class' => [],
                 ]
             );
@@ -436,7 +438,19 @@ $query = sprintf($queryTemplate, implode("\n", $postFields), implode("\n", $taxo
         }
         $classes = array_keys($classes);
         sort($classes);
-        return ['classes' => $classes];
+        $ids = [];
+        if (preg_match_all('/\bid\s*=\s*["\']([^"\']+)["\']/i', $html, $im)) {
+            foreach ($im[1] as $idAttr) {
+                $i = trim((string) $idAttr);
+                if ($i !== '') {
+                    $ids[$i] = true;
+                }
+            }
+        }
+        $idList = array_keys($ids);
+        sort($idList);
+
+        return ['classes' => $classes, 'ids' => $idList];
     }
 
     /**
