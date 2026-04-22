@@ -436,7 +436,8 @@ final class WpHeadlessStylesOptimizerService
             return [];
         }
 
-        $stripDarkMode = !$this->getHasDarkmode($site);
+        // Giữ nguyên rule .dark trong mọi trường hợp (không strip ở bước optimize).
+        $stripDarkMode = false;
         $sigForFilter = $postType === 'slider' ? [] : $existingSignatures;
         $filtered = WpHeadlessStylesFilterHelper::filterCssByClassesAndIds(
             $rawCss,
@@ -774,7 +775,8 @@ final class WpHeadlessStylesOptimizerService
             return ['success' => false, 'message' => 'No CSS content for post_type.'];
         }
 
-        $stripDarkMode = !$this->getHasDarkmode($site);
+        // Giữ nguyên rule .dark trong mọi trường hợp (không strip ở bước optimize).
+        $stripDarkMode = false;
         $sigScratch = [];
         $filtered = WpHeadlessStylesFilterHelper::filterCssByClassesAndIds(
             $rawCss,
@@ -1355,7 +1357,8 @@ final class WpHeadlessStylesOptimizerService
         if ($rawCss === '') {
             return '';
         }
-        $stripDarkMode = !$this->getHasDarkmode($site);
+        // Giữ nguyên rule .dark trong mọi trường hợp (không strip ở bước optimize).
+        $stripDarkMode = false;
         $templatesData = $this->collectTemplateClassesAndIds($siteId, $postType);
         $classes = $templatesData['classes'] ?? [];
         $ids = $templatesData['ids'] ?? [];

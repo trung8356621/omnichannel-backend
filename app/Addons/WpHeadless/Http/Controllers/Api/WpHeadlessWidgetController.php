@@ -30,11 +30,12 @@ class WpHeadlessWidgetController extends Controller
             return response()->json(['success' => false, 'message' => 'Site not found'], 404);
         }
 
+        $normalizedCategory = $this->normalizeWidgetProductCategoryFilter($site, $request->input('category'));
         $params = [
             'limit'   => $request->input('limit', 4),
             'orderby' => $request->input('orderby'),
             'order'   => $request->input('order'),
-            'category'=> $request->input('category'),
+            'category'=> $normalizedCategory,
             'ids'     => $request->input('ids'),
         ];
         $params = array_filter($params, fn ($v) => $v !== null && $v !== '');
@@ -181,5 +182,72 @@ class WpHeadlessWidgetController extends Controller
             'Content-Type'     => 'application/json',
             'X-GraphQL-Secret' => $token,
         ];
+    }
+
+    /**
+     * Chuẩn hóa filter category cho widget-products:
+     * - Flatsome thường gửi cat là term_id (số)
+     * - wc_get_products(category=...) ưu tiên slug
+     * => map term_id -> slug để query đúng dữ liệu.
+     */
+    private function normalizeWidgetProductCategoryFilter(Site $site, mixed $rawCategory): ?string
+    {
+        if ($rawCategory === null) {
+            return null;
+        }
+
+        $raw = trim((string) $rawCategory);
+        if ($raw === '') {
+            return null;
+        }
+
+        $parts = array_values(array_filter(array_map(
+            static fn ($value) => trim((string) $value),
+            explode(',', $raw)
+        ), static fn (string $value): bool => $value !== ''));
+        if ($parts === []) {
+            return null;
+        }
+
+        $headers = $this->wpRestHeaders($site) ?? ['Content-Type' => 'application/json'];
+        $baseUrl = $this->wpBaseUrl($site);
+        $resolved = [];
+
+        foreach ($parts as $part) {
+            if (!ctype_digit($part)) {
+                $resolved[] = $part;
+                continue;
+            }
+
+            $termId = (int) $part;
+            if ($termId <= 0) {
+                continue;
+            }
+
+            try {
+                $termResponse = Http::timeout(8)
+                    ->withHeaders($headers)
+                    ->get($baseUrl . '/wp-json/wp/v2/product_cat/' . $termId);
+                if ($termResponse->successful()) {
+                    $slug = trim((string) ($termResponse->json('slug') ?? ''));
+                    if ($slug !== '') {
+                        $resolved[] = $slug;
+                        continue;
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('WpHeadlessWidget: resolve category slug failed', [
+                    'site_id' => $site->id,
+                    'term_id' => $termId,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
+
+            // Fallback giữ nguyên giá trị gốc nếu không resolve được slug.
+            $resolved[] = $part;
+        }
+
+        $resolved = array_values(array_unique(array_filter($resolved, static fn (string $value): bool => $value !== '')));
+        return $resolved === [] ? null : implode(',', $resolved);
     }
 }
