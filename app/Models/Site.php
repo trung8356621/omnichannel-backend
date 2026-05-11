@@ -17,6 +17,24 @@ class Site extends Model
         return $this->hasMany(SiteService::class);
     }
 
+    /**
+     * SiteService ưu tiên mở trang cấu hình dịch vụ (wp-headless trước, sau đó bản ghi đầu tiên).
+     */
+    public function primarySiteServiceForSettings(): ?SiteService
+    {
+        if (!$this->relationLoaded('siteServices')) {
+            $this->load(['siteServices.service']);
+        }
+
+        foreach ($this->siteServices as $siteService) {
+            if (($siteService->service?->slug ?? null) === 'wp-headless') {
+                return $siteService;
+            }
+        }
+
+        return $this->siteServices->first();
+    }
+
     /** Site có đang kích hoạt service wp-headless (status active) không. */
     public function hasActiveWpHeadless(): bool
     {

@@ -3,6 +3,7 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\SiteResource\Pages;
+use App\Filament\Resources\SiteServiceResource;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -18,11 +19,14 @@ class SiteResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
 
+    /** Menu cấp cao, không gom chung nhóm khác */
+    protected static ?string $navigationGroup = null;
+
     protected static ?int $navigationSort = 1;
 
     public static function getNavigationLabel(): string
     {
-        return __('Sites');
+        return __('Site Management');
     }
 
     public static function getModelLabel(): string
@@ -117,41 +121,16 @@ class SiteResource extends Resource
     {
         return $table
             ->columns([
-
-
-                Tables\Columns\TextColumn::make('domain')
-                    ->label(__('Domain'))
-                    ->searchable()
-                    ->sortable(),
-
-                // Hiển thị trạng thái SSL trên bảng
-                Tables\Columns\IconColumn::make('ssl')
-                    ->label('SSL')
-                    ->boolean()
-                    ->sortable(),
-
-                Tables\Columns\TextColumn::make('status')
-                    ->label(__('Status'))
-                    ->badge()
-                    ->color(fn(string $state): string => match ($state) {
-                        'active' => 'success',
-                        'inactive' => 'danger',
-                        'maintenance' => 'warning',
-                        default => 'gray',
-                    })
-                    ->formatStateUsing(fn(string $state): string => __($state)),
-
-                Tables\Columns\TextColumn::make('user.name')
-                    ->label(__('Owner'))
-                    ->sortable()
-                    ->searchable(),
-
-                Tables\Columns\TextColumn::make('created_at')
-                    ->label(__('Created At'))
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\ViewColumn::make('site_card')
+                    ->view('filament.tables.columns.site-card')
+                    ->searchable(['domain', 'user.name'])
+                    ->sortable(['domain', 'status']),
             ])
+            ->contentGrid([
+                'md' => 2,
+                'xl' => 3,
+            ])
+            ->defaultSort('domain')
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
                     ->label(__('Status'))
@@ -163,6 +142,14 @@ class SiteResource extends Resource
                 Tables\Filters\TrashedFilter::make(),
             ])
             ->actions([
+                Tables\Actions\Action::make('settings')
+                    ->label(__('Service settings'))
+                    ->icon('heroicon-o-cog-8-tooth')
+                    ->iconButton()
+                    ->url(fn (Site $record): ?string => ($ss = $record->primarySiteServiceForSettings())
+                        ? SiteServiceResource::getUrl('edit', ['record' => $ss])
+                        : null)
+                    ->visible(fn (Site $record): bool => (bool) $record->primarySiteServiceForSettings()),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])
@@ -178,7 +165,7 @@ class SiteResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         // Nếu không phải admin, chỉ xem được Site của chính mình
-        $query = parent::getEloquentQuery();
+        $query = parent::getEloquentQuery()->with(['user', 'siteServices.service']);
 
         if (auth()->user()->role !== 'admin') {
             return $query->where('user_id', auth()->id());

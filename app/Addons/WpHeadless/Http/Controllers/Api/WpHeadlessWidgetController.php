@@ -151,7 +151,6 @@ class WpHeadlessWidgetController extends Controller
                 'message' => 'WordPress returned ' . $response->status(),
             ], 502);
         }
-
         $body = $response->json();
         return response()->json(is_array($body) ? $body : ['success' => true, 'data' => $body]);
     }

@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 
 final class WpHeadlessStylesOptimizerService
 {
-    /* global.css: reset / :root / thẻ hệ thống. main.css: gộp post types + taxonomy (dedup block md5). home.css + layouts/header-*.css: bundle riêng. */
+    /* global.css: reset / :root / thẻ hệ thống. main.css: gộp post types + taxonomy (dedup), không gồm rule độc quyền template product. single_product.css: rule lọc từ template product không trùng main. home.css + layouts/header-*.css: bundle riêng. */
     private const MAX_CHUNK_BYTES = 100 * 1024; // 100 KB
 
     /** CSS reset mặc định: luôn đặt đầu output (*, ::before, ::after, html). */
@@ -31,7 +31,7 @@ final class WpHeadlessStylesOptimizerService
     /** site_meta key: site settings từ WP (headlessSiteSettings), có has_darkmode. */
     private const META_KEY_SITE_SETTINGS = 'wp_site_settings';
 
-    /** site_meta key: manifest JSON (global, main, home, layouts) cho Next.js. */
+    /** site_meta key: manifest JSON (global, main, single_product, home, layouts) cho Next.js. */
     private const META_KEY_CSS_MANIFEST = 'wp_headless_css_manifest';
 
     /** Thư mục con (trong public/wp-headless/{siteId}/) chứa CSS header/footer. */
@@ -42,6 +42,9 @@ final class WpHeadlessStylesOptimizerService
 
     /** post_type tổng hợp trong DB cho bundle home.css. */
     private const BUNDLE_POST_TYPE_HOME = 'home';
+
+    /** CSS chỉ dùng trên trang single product (Woo): rule từ template product không trùng main. */
+    private const BUNDLE_POST_TYPE_SINGLE_PRODUCT = 'single_product';
 
     public function optimize(Site $site, string $postType, array &$existingSignatures = []): array
     {
@@ -130,8 +133,16 @@ final class WpHeadlessStylesOptimizerService
             if ($main === []) {
                 $main = $this->publicUrlsFromOptimizedRows($site, self::BUNDLE_POST_TYPE_MAIN);
             }
+            $urls = array_merge($global, $main);
+            if ($postType === 'product') {
+                $sp = $this->normalizeManifestPathList($manifest['single_product'] ?? []);
+                if ($sp === []) {
+                    $sp = $this->publicUrlsFromOptimizedRows($site, self::BUNDLE_POST_TYPE_SINGLE_PRODUCT);
+                }
+                $urls = array_merge($urls, $sp);
+            }
 
-            return array_values(array_unique(array_merge($global, $main)));
+            return array_values(array_unique($urls));
         }
 
         return $global;
@@ -174,7 +185,13 @@ final class WpHeadlessStylesOptimizerService
             return !WpHeadlessStyleOptimized::where('site_id', $site->id)->where('post_type', $postType)->exists();
         }
         if ($this->belongsToMainCssBundle($postType, $site->id)) {
-            return !WpHeadlessStyleOptimized::where('site_id', $site->id)->where('post_type', self::BUNDLE_POST_TYPE_MAIN)->exists();
+            if (!WpHeadlessStyleOptimized::where('site_id', $site->id)->where('post_type', self::BUNDLE_POST_TYPE_MAIN)->exists()) {
+                return true;
+            }
+            $hasProductTemplate = WpHeadlessTemplate::where('site_id', $site->id)->where('type', 'product')->exists();
+
+            return $hasProductTemplate
+                && !WpHeadlessStyleOptimized::where('site_id', $site->id)->where('post_type', self::BUNDLE_POST_TYPE_SINGLE_PRODUCT)->exists();
         }
 
         return !WpHeadlessStyleOptimized::where('site_id', $site->id)->where('post_type', $postType)->exists();
@@ -248,11 +265,12 @@ final class WpHeadlessStylesOptimizerService
             ->get();
 
         $manifest = [
-            'version'   => 1,
-            'global'    => [],
-            'main'      => [],
-            'home'      => [],
-            'layouts'   => [],
+            'version'         => 1,
+            'global'          => [],
+            'main'            => [],
+            'single_product'  => [],
+            'home'            => [],
+            'layouts'         => [],
         ];
 
         foreach ($rows as $row) {
@@ -265,6 +283,8 @@ final class WpHeadlessStylesOptimizerService
                 $manifest['global'][] = $pub;
             } elseif ($pt === self::BUNDLE_POST_TYPE_MAIN) {
                 $manifest['main'][] = $pub;
+            } elseif ($pt === self::BUNDLE_POST_TYPE_SINGLE_PRODUCT) {
+                $manifest['single_product'][] = $pub;
             } elseif ($pt === self::BUNDLE_POST_TYPE_HOME) {
                 $manifest['home'][] = $pub;
             } elseif ($this->isLayoutPostType($pt)) {
@@ -524,7 +544,7 @@ final class WpHeadlessStylesOptimizerService
         $templateRowId = $row !== null ? (int) $row->id : null;
 
         $sig = [];
-        $this->seedSignaturesFromOptimizedBundles($site, ['global', self::BUNDLE_POST_TYPE_MAIN, self::BUNDLE_POST_TYPE_HOME], $sig);
+        $this->seedSignaturesFromOptimizedBundles($site, ['global', self::BUNDLE_POST_TYPE_MAIN, self::BUNDLE_POST_TYPE_SINGLE_PRODUCT, self::BUNDLE_POST_TYPE_HOME], $sig);
         $blocks = $this->computeOptimizedNonGlobalBlocks($site, $postType, $sig);
         $css = implode("\n", $blocks);
         $size = strlen($css);
@@ -697,6 +717,9 @@ final class WpHeadlessStylesOptimizerService
         $outBlocks = [];
 
         foreach ($mainTypes as $pt) {
+            if ($pt === 'product') {
+                continue;
+            }
             $blocks = $this->computeOptimizedNonGlobalBlocks($site, $pt, $filterSignatures);
             foreach ($blocks as $b) {
                 $h = md5($b);
@@ -707,6 +730,22 @@ final class WpHeadlessStylesOptimizerService
                 $outBlocks[] = $b;
             }
         }
+
+        $hasProductTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', 'product')->exists();
+        $singleOnlyBlocks = [];
+        if ($hasProductTemplate) {
+            /** Scratch chỉ trừ global: scratch chung với main khiến filter product bỏ hết block đã được product_cat… emit. */
+            $productFilterSig = [];
+            $this->seedSignaturesFromOptimizedGlobalCss($site, $productFilterSig);
+            foreach ($this->computeOptimizedNonGlobalBlocks($site, 'product', $productFilterSig) as $b) {
+                $h = md5($b);
+                if (isset($seenBlockMd5[$h])) {
+                    continue;
+                }
+                $singleOnlyBlocks[] = $b;
+            }
+        }
+        $singleProductCss = implode("\n", $singleOnlyBlocks);
 
         if ($outBlocks === []) {
             return [
@@ -723,13 +762,18 @@ final class WpHeadlessStylesOptimizerService
         $size = strlen($css);
 
         $relativePath = self::PUBLIC_CSS_DIR . '/' . $siteId . '/main.css';
+        $relativePathSingle = self::PUBLIC_CSS_DIR . '/' . $siteId . '/single_product.css';
 
         try {
             $cssChunksForNext = [];
-            DB::connection('wp_headless')->transaction(function () use ($site, $relativePath, $css, &$cssChunksForNext) {
-                $this->deleteOldOptimizedRowsAndFiles($site->id, [self::BUNDLE_POST_TYPE_MAIN, 'slider']);
+            DB::connection('wp_headless')->transaction(function () use ($site, $siteId, $relativePath, $relativePathSingle, $css, $singleProductCss, $hasProductTemplate, &$cssChunksForNext) {
+                $this->deleteOldOptimizedRowsAndFiles($site->id, [self::BUNDLE_POST_TYPE_MAIN, 'slider', self::BUNDLE_POST_TYPE_SINGLE_PRODUCT]);
                 $manifestSlice = [];
                 $this->persistBundleCssFile($site, self::BUNDLE_POST_TYPE_MAIN, $relativePath, $css, $manifestSlice, $cssChunksForNext);
+                if ($hasProductTemplate) {
+                    $manifestSlice = [];
+                    $this->persistBundleCssFile($site, self::BUNDLE_POST_TYPE_SINGLE_PRODUCT, $relativePathSingle, $singleProductCss, $manifestSlice, $cssChunksForNext);
+                }
             });
             $this->syncCssManifestFromOptimizedTable($site);
         } catch (\Throwable $e) {
@@ -932,6 +976,7 @@ final class WpHeadlessStylesOptimizerService
         }
         $set['global'] = true;
         $set[self::BUNDLE_POST_TYPE_MAIN] = true;
+        $set[self::BUNDLE_POST_TYPE_SINGLE_PRODUCT] = true;
         $set[self::BUNDLE_POST_TYPE_HOME] = true;
 
         return array_keys($set);
@@ -1002,13 +1047,14 @@ final class WpHeadlessStylesOptimizerService
     }
 
     /**
-     * Gom CSS theo nhóm (global, home, main, headers[], footers[]) rồi ghi file — luồng rebuild đầy đủ.
+     * Gom CSS theo nhóm (global, home, main, single_product, headers[], footers[]) rồi ghi file — luồng rebuild đầy đủ.
      * Dữ liệu nguồn: wp_headless_templates (type / template_path) + tính chuỗi tối ưu (tương đương cột css_optimized trong pseudocode).
      *
      * @return array{
      *   global: string,
      *   home: string,
      *   main: string,
+     *   single_product: string,
      *   headers: array<string, string>,
      *   footers: array<string, string>
      * }
@@ -1021,17 +1067,20 @@ final class WpHeadlessStylesOptimizerService
         $globalAtRules = [];
 
         $cssGroups = [
-            'global'  => '',
-            'home'    => '',
-            'main'    => '',
-            'headers' => [],
-            'footers' => [],
+            'global'         => '',
+            'home'           => '',
+            'main'           => '',
+            'single_product' => '',
+            'headers'        => [],
+            'footers'        => [],
         ];
 
         $gSig = [];
         $globalStr = $this->computeGlobalCssString($site, $gSig);
         $this->accumulateGlobalAtRulesFromCss($globalAtRules, $globalStr);
         $cssGroups['global'] = $globalStr;
+        /** Snapshot chữ ký sau computeGlobalCssString — pass product chỉ trừ global trong build này, không dùng mainMergeSig. */
+        $productIsolationSigSeed = array_merge($gSig);
 
         $orderedTypes = $this->collectOrderedTemplateTypesForFullCssRebuild($siteId);
         $mainMergeSig = $gSig;
@@ -1095,6 +1144,10 @@ final class WpHeadlessStylesOptimizerService
                 continue;
             }
 
+            if ($type === 'product') {
+                continue;
+            }
+
             $sigForFilter = $type === 'slider' ? [] : $mainMergeSig;
             $blocks = $type === 'slider'
                 ? $sliderBlocks
@@ -1113,6 +1166,22 @@ final class WpHeadlessStylesOptimizerService
                 $mainBlocks[] = $b;
             }
         }
+
+        $hasProductTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', 'product')->exists();
+        $singleProductOnlyBlocks = [];
+        if ($hasProductTemplate) {
+            $productFilterSig = array_merge($productIsolationSigSeed);
+            $productBlocks = $this->computeOptimizedNonGlobalBlocks($site, 'product', $productFilterSig);
+            foreach ($productBlocks as $b) {
+                $h = md5($b);
+                if (isset($mainSeenMd5[$h])) {
+                    continue;
+                }
+                $singleProductOnlyBlocks[] = $b;
+            }
+        }
+        $singleProductStr = implode("\n", $singleProductOnlyBlocks);
+        $this->accumulateGlobalAtRulesFromCss($globalAtRules, $singleProductStr);
 
         $mainStr = implode("\n", $mainBlocks);
         $this->accumulateGlobalAtRulesFromCss($globalAtRules, $mainStr);
@@ -1139,6 +1208,7 @@ final class WpHeadlessStylesOptimizerService
         $globalMap = $this->blockMapFromCssString((string) ($cssGroups['global'] ?? ''));
         $homeMap = $this->blockMapFromCssString((string) ($cssGroups['home'] ?? ''));
         $mainMap = $this->blockMapFromCssString((string) ($cssGroups['main'] ?? ''));
+        $singleProductMap = $this->blockMapFromCssString($singleProductStr);
         $headerMaps = [];
         foreach ($cssGroups['headers'] as $key => $content) {
             $headerMaps[(string) $key] = $this->blockMapFromCssString((string) $content);
@@ -1163,6 +1233,7 @@ final class WpHeadlessStylesOptimizerService
         $registerGroup('global', $globalMap, $frequency);
         $registerGroup('home', $homeMap, $frequency);
         $registerGroup('main', $mainMap, $frequency);
+        $registerGroup('single_product', $singleProductMap, $frequency);
         foreach ($headerMaps as $key => $map) {
             $registerGroup('header:' . $key, $map, $frequency);
         }
@@ -1181,7 +1252,7 @@ final class WpHeadlessStylesOptimizerService
         }
 
         foreach (array_keys($sharedHashes) as $hash) {
-            unset($homeMap[$hash], $mainMap[$hash]);
+            unset($homeMap[$hash], $mainMap[$hash], $singleProductMap[$hash]);
             foreach ($headerMaps as $k => $map) {
                 unset($headerMaps[$k][$hash]);
             }
@@ -1208,6 +1279,7 @@ final class WpHeadlessStylesOptimizerService
         $cssGroups['global'] = implode("\n", array_merge($globalAtTop, $globalShared, $globalOthers));
         $cssGroups['home'] = implode("\n", array_values($homeMap));
         $cssGroups['main'] = implode("\n", array_values($mainMap));
+        $cssGroups['single_product'] = implode("\n", array_values($singleProductMap));
         $cssGroups['headers'] = [];
         foreach ($headerMaps as $key => $map) {
             $joined = implode("\n", array_values($map));
@@ -1378,7 +1450,7 @@ final class WpHeadlessStylesOptimizerService
     /**
      * Ghi toàn bộ file từ $cssGroups, cập nhật wp_headless_styles_optimized + copy Next.
      *
-     * @param array{global: string, home: string, main: string, headers: array<string, string>, footers: array<string, string>} $cssGroups
+     * @param array{global: string, home: string, main: string, single_product?: string, headers: array<string, string>, footers: array<string, string>} $cssGroups
      * @return array{success: bool, css_chunks: list<array{filename: string, content: string}>}
      */
     private function generateOptimizedCssFilesFromCssGroups(Site $site, array $cssGroups): array
@@ -1411,6 +1483,20 @@ final class WpHeadlessStylesOptimizerService
                 if (trim($mainCss) !== '') {
                     $manifestSlice = [];
                     $this->persistBundleCssFile($site, self::BUNDLE_POST_TYPE_MAIN, $relativeDir . '/main.css', $mainCss, $manifestSlice, $cssChunksForNext);
+                }
+
+                $hasProductTemplate = WpHeadlessTemplate::where('site_id', $siteId)->where('type', 'product')->exists();
+                if ($hasProductTemplate) {
+                    $singleProductCss = (string) ($cssGroups['single_product'] ?? '');
+                    $manifestSlice = [];
+                    $this->persistBundleCssFile(
+                        $site,
+                        self::BUNDLE_POST_TYPE_SINGLE_PRODUCT,
+                        $relativeDir . '/single_product.css',
+                        $singleProductCss,
+                        $manifestSlice,
+                        $cssChunksForNext
+                    );
                 }
 
                 foreach ($cssGroups['headers'] ?? [] as $id => $content) {
@@ -1481,8 +1567,15 @@ final class WpHeadlessStylesOptimizerService
         };
 
         // 1. Quét block từ các source
-        if (isset($cssGroups['home'])) $processSource('home', $cssGroups['home']);
-        if (isset($cssGroups['main'])) $processSource('main', $cssGroups['main']);
+        if (isset($cssGroups['home'])) {
+            $processSource('home', $cssGroups['home']);
+        }
+        if (isset($cssGroups['main'])) {
+            $processSource('main', $cssGroups['main']);
+        }
+        if (isset($cssGroups['single_product'])) {
+            $processSource('single_product', $cssGroups['single_product']);
+        }
         foreach (['headers', 'footers'] as $groupKey) {
             if (!empty($cssGroups[$groupKey]) && is_array($cssGroups[$groupKey])) {
                 foreach ($cssGroups[$groupKey] as $id => $cssStr) {
@@ -1507,8 +1600,15 @@ final class WpHeadlessStylesOptimizerService
         };
 
         // 3. Cập nhật lại các source đã sạch bóng CSS trùng
-        if (isset($cssGroups['home'])) $cssGroups['home'] = $rebuildSource('home');
-        if (isset($cssGroups['main'])) $cssGroups['main'] = $rebuildSource('main');
+        if (isset($cssGroups['home'])) {
+            $cssGroups['home'] = $rebuildSource('home');
+        }
+        if (isset($cssGroups['main'])) {
+            $cssGroups['main'] = $rebuildSource('main');
+        }
+        if (isset($cssGroups['single_product'])) {
+            $cssGroups['single_product'] = $rebuildSource('single_product');
+        }
         foreach (['headers', 'footers'] as $groupKey) {
             if (!empty($cssGroups[$groupKey]) && is_array($cssGroups[$groupKey])) {
                 foreach ($cssGroups[$groupKey] as $id => $cssStr) {
@@ -1920,6 +2020,7 @@ final class WpHeadlessStylesOptimizerService
         $postTypes = array_values(array_unique($postTypes));
 
         $styleQuery = WpHeadlessStyle::where('site_id', $siteId)->whereIn('post_type', $postTypes);
+        $this->applyExcludeFontStyleType($styleQuery);
         $driver = DB::connection('wp_headless')->getDriverName();
         if ($postTypes !== [] && in_array($driver, ['mysql', 'mariadb'], true)) {
             $placeholders = implode(',', array_fill(0, count($postTypes), '?'));
@@ -1933,6 +2034,7 @@ final class WpHeadlessStylesOptimizerService
         $parentRows = [];
         if ($parentIds !== []) {
             $parentRowsQuery = WpHeadlessStyle::where('site_id', $siteId)->whereIn('id', $parentIds);
+            $this->applyExcludeFontStyleType($parentRowsQuery);
             $this->applyFileBeforeInlineOrder($parentRowsQuery);
             $parentRows = $parentRowsQuery->get()->keyBy('id');
         }
@@ -1940,9 +2042,13 @@ final class WpHeadlessStylesOptimizerService
         $globalKeys = [];
         if ($postType !== 'global') {
             $globalRowsQuery = WpHeadlessStyle::where('site_id', $siteId)->where('post_type', 'global');
+            $this->applyExcludeFontStyleType($globalRowsQuery);
             $this->applyFileBeforeInlineOrder($globalRowsQuery);
             $globalRows = $globalRowsQuery->get();
             foreach ($globalRows as $row) {
+                if (($row->style_type ?? '') === 'font') {
+                    continue;
+                }
                 if (($row->style_type ?? '') === 'inline' && ($row->content === null || $row->content === '')) {
                     continue;
                 }
@@ -1957,6 +2063,9 @@ final class WpHeadlessStylesOptimizerService
         $parts = [];
 
         foreach ($rows as $row) {
+            if (($row->style_type ?? '') === 'font') {
+                continue;
+            }
             $content = $row->content ?? null;
             $url = $row->url ?? '';
             $hasContent = $content !== null && $content !== '';
@@ -2032,6 +2141,14 @@ final class WpHeadlessStylesOptimizerService
         return $query
             ->orderByRaw("CASE WHEN style_type = 'inline' THEN 2 ELSE 1 END")
             ->orderBy('id', 'asc');
+    }
+
+    /** Font URL giữ nguyên để Next.js nhúng bằng <link>, không merge vào optimized css text. */
+    private function applyExcludeFontStyleType(\Illuminate\Database\Eloquent\Builder $query): \Illuminate\Database\Eloquent\Builder
+    {
+        return $query->where(static function ($q): void {
+            $q->whereNull('style_type')->orWhere('style_type', '!=', 'font');
+        });
     }
 
     /**
