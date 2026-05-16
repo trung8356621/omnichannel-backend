@@ -1,0 +1,607 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services;
+
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use DOMDocument;
+use DOMXPath;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+
+class SeoAnalyzerService
+{
+    /**
+     * Phân tích SEO tổng hợp theo rule-set nội bộ.
+     *
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    public function analyze(SeoArticle $article, ?string $domainOverride = null): array
+    {
+        $focusKeyword = $this->resolveFocusKeyword($article);
+
+        if ($focusKeyword === null) {
+            return $this->persistScoreResult(
+                $article,
+                $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], [])
+            );
+        }
+
+        return $this->runAnalysis(
+            $article,
+            $focusKeyword,
+            $this->resolveSeoTitle($article),
+            (string) ($article->body ?? ''),
+            trim((string) ($article->slug ?? '')),
+            $this->resolveMetaDescription($article),
+            $this->resolveArticleDomain($article, $domainOverride)
+        );
+    }
+
+    /**
+     * Chấm điểm khi đồng bộ từ WordPress: dùng dữ liệu scoring trong payload, không đọc body/slug từ bảng articles.
+     *
+     * @param  array<string, mixed>  $item
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    public function analyzeFromSyncItem(SeoArticle $article, array $item, ?string $domainOverride = null): array
+    {
+        $scoring = is_array($item['scoring'] ?? null) ? $item['scoring'] : [];
+        $seo = is_array($item['seo'] ?? null) ? $item['seo'] : [];
+
+        $focusKeyword = $this->normalizeFocusKeyword(
+            trim((string) ($scoring['focus_keyword'] ?? $seo['focus_keyword'] ?? ''))
+        );
+
+        if ($focusKeyword === '') {
+            $fromDb = $this->resolveFocusKeyword($article);
+            $focusKeyword = $fromDb !== null ? $this->normalizeFocusKeyword($fromDb) : '';
+        }
+
+        if ($focusKeyword === '') {
+            return $this->persistScoreResult(
+                $article,
+                $this->buildScoreResult(0, [], ['Không có Focus Keyword từ Rank Math / Yoast SEO.'], [])
+            );
+        }
+
+        return $this->runAnalysis(
+            $article,
+            $focusKeyword,
+            trim((string) ($scoring['seo_title'] ?? $seo['seo_title'] ?? $item['title'] ?? $article->title ?? '')),
+            (string) ($scoring['body'] ?? ''),
+            trim((string) ($scoring['slug'] ?? '')),
+            trim((string) ($scoring['meta_description'] ?? $seo['meta_description'] ?? '')),
+            $this->resolveArticleDomain($article, $domainOverride)
+        );
+    }
+
+    /**
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    private function runAnalysis(
+        SeoArticle $article,
+        string $focusKeyword,
+        string $seoTitle,
+        string $content,
+        string $slug,
+        string $metaDescription,
+        string $domain
+    ): array {
+        $good = [];
+        $errors = [];
+        $warnings = [];
+        $totalScore = 100;
+
+        $extractedLinks = $this->extractLinks($content, $domain);
+
+        // Rule 1: Focus keyword trong tiêu đề SEO
+        if ($this->containsKeyword($seoTitle, $focusKeyword)) {
+            $good[] = 'Từ khóa chính xuất hiện trong tiêu đề SEO.';
+        } else {
+            $errors[] = 'Tiêu đề SEO chưa chứa từ khóa chính.';
+            $totalScore -= 10;
+        }
+
+        // Rule 2: Focus keyword trong meta description
+        if ($this->containsKeyword($metaDescription, $focusKeyword)) {
+            $good[] = 'Từ khóa chính xuất hiện trong meta description.';
+        } else {
+            $errors[] = 'Meta description chưa chứa từ khóa chính.';
+            $totalScore -= 10;
+        }
+
+        // Rule 3: Focus keyword trong URL slug
+        if ($this->containsKeyword($slug, $focusKeyword)) {
+            $good[] = 'URL chứa từ khóa chính.';
+        } else {
+            $errors[] = 'URL chưa chứa từ khóa chính.';
+            $totalScore -= 5;
+        }
+
+        // Rule 4: Focus keyword trong 10% đầu nội dung
+        $firstTenPercent = $this->sliceFirstTenPercentText($content);
+        if ($this->containsKeyword($firstTenPercent, $focusKeyword)) {
+            $good[] = 'Từ khóa chính xuất hiện trong 10% đầu nội dung.';
+        } else {
+            $errors[] = 'Từ khóa chính chưa xuất hiện sớm trong nội dung.';
+            $totalScore -= 10;
+        }
+
+        // Rule 5: Focus keyword xuất hiện trong toàn nội dung
+        if ($this->containsKeyword($content, $focusKeyword)) {
+            $good[] = 'Từ khóa chính có xuất hiện trong nội dung.';
+        } else {
+            $errors[] = 'Nội dung chưa chứa từ khóa chính.';
+            $totalScore -= 10;
+        }
+
+        // Rule 6: Độ dài nội dung
+        $wordCount = $this->countWords($content);
+        $isEcommerceType = (string) $article->type === 'e-commerce';
+        if ($isEcommerceType) {
+            if ($wordCount > 500) {
+                $good[] = "Độ dài nội dung phù hợp cho e-commerce ({$wordCount} từ).";
+            } else {
+                $errors[] = "Nội dung e-commerce quá ngắn ({$wordCount} từ, cần > 500).";
+                $totalScore -= 10;
+            }
+        } else {
+            if ($wordCount < 600) {
+                $errors[] = "Nội dung quá ngắn ({$wordCount} từ, cần >= 600).";
+                $totalScore -= 10;
+            } elseif ($wordCount <= 1000) {
+                $warnings[] = "Nội dung trung bình ({$wordCount} từ). Nên > 1000 từ để tối ưu.";
+            } else {
+                $good[] = "Độ dài nội dung tốt ({$wordCount} từ).";
+            }
+        }
+
+        // Rule 7: Từ khóa trong H2/H3/H4
+        $headingText = $this->extractHeadingText($content);
+        if ($this->containsKeyword($headingText, $focusKeyword)) {
+            $good[] = 'Từ khóa chính xuất hiện trong heading phụ (H2/H3/H4).';
+        } else {
+            $errors[] = 'Heading phụ chưa chứa từ khóa chính.';
+            $totalScore -= 5;
+        }
+
+        // Rule 8: Alt ảnh chứa từ khóa
+        $imagesAltText = $this->extractImageAltText($content);
+        if ($this->containsKeyword($imagesAltText, $focusKeyword)) {
+            $good[] = 'Có ảnh chứa alt text gồm từ khóa chính.';
+        } else {
+            $errors[] = 'Chưa có alt text ảnh chứa từ khóa chính.';
+            $totalScore -= 5;
+        }
+
+        // Rule 9: Keyword density (1% - 2.5%)
+        $density = $this->calculateKeywordDensity($content, $focusKeyword);
+        if ($density >= 1.0 && $density <= 2.5) {
+            $good[] = 'Mật độ từ khóa nằm trong ngưỡng tối ưu (1% - 2.5%).';
+        } else {
+            $warnings[] = sprintf('Mật độ từ khóa hiện tại %.2f%% chưa tối ưu.', $density);
+            $totalScore -= 5;
+        }
+
+        // Rule 10: Slug ngắn gọn
+        if (mb_strlen($slug) < 75) {
+            $good[] = 'URL ngắn gọn (< 75 ký tự).';
+        } else {
+            $errors[] = 'URL quá dài (>= 75 ký tự).';
+            $totalScore -= 5;
+        }
+
+        // Rule 11: Có internal link
+        if (count($extractedLinks['internal']) > 0) {
+            $good[] = 'Có liên kết nội bộ trong nội dung.';
+        } else {
+            $errors[] = 'Chưa có liên kết nội bộ.';
+            $totalScore -= 5;
+        }
+
+        // Rule 12: Keyword ở 3 từ đầu tiêu đề SEO
+        if ($this->keywordInFirstThreeWords($seoTitle, $focusKeyword)) {
+            $good[] = 'Từ khóa chính nằm ở phần đầu tiêu đề.';
+        } else {
+            $warnings[] = 'Nên đặt từ khóa chính vào 3 từ đầu tiêu đề.';
+            $totalScore -= 5;
+        }
+
+        return $this->persistScoreResult(
+            $article,
+            $this->buildScoreResult(max(0, $totalScore), $good, $errors, $warnings),
+            $extractedLinks
+        );
+    }
+
+    /**
+     * @param  array<int, string>  $good
+     * @param  array<int, string>  $errors
+     * @param  array<int, string>  $warnings
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    private function buildScoreResult(int $score, array $good, array $errors, array $warnings): array
+    {
+        return [
+            'score' => $score,
+            'good' => $good,
+            'errors' => $errors,
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * @param  array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}  $scoreData
+     * @param  array{internal: array<int, mixed>, external: array<int, mixed>}|null  $extractedLinks
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    private function persistScoreResult(SeoArticle $article, array $scoreData, ?array $extractedLinks = null): array
+    {
+        $links = $extractedLinks ?? ['internal' => [], 'external' => []];
+
+        $this->storeMeta($article, 'seo_rank_math_score', $scoreData);
+        $this->storeMeta($article, 'seo_extracted_links', $links);
+
+        $updatePayload = [
+            'seo_score' => $scoreData['score'],
+        ];
+
+        if ($this->articleHasColumn('internal_link_count')) {
+            $updatePayload['internal_link_count'] = count($links['internal']);
+        }
+        if ($this->articleHasColumn('external_link_count')) {
+            $updatePayload['external_link_count'] = count($links['external']);
+        }
+
+        $article->update($updatePayload);
+
+        return $scoreData;
+    }
+
+    private function resolveArticleDomain(SeoArticle $article, ?string $domainOverride = null): string
+    {
+        if ($domainOverride !== null && trim($domainOverride) !== '') {
+            return $this->normalizeDomain($domainOverride);
+        }
+
+        if ($article->relationLoaded('site') && $article->site !== null) {
+            return $this->normalizeDomain((string) $article->site->domain);
+        }
+
+        $site = \App\Models\Site::query()->find($article->site_id);
+
+        return $this->normalizeDomain((string) ($site?->domain ?? ''));
+    }
+
+    private function normalizeFocusKeyword(string $raw): string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return '';
+        }
+
+        if (str_contains($raw, ',')) {
+            $parts = array_map(static fn (string $part): string => trim($part), explode(',', $raw));
+
+            return $parts[0] ?? '';
+        }
+
+        return $raw;
+    }
+
+    private function resolveSeoTitle(SeoArticle $article): string
+    {
+        $article->loadMissing('articleMetas');
+
+        $meta = $article->articleMetas->firstWhere('meta_key', 'seo_title');
+        if ($meta && is_string($meta->meta_value) && trim($meta->meta_value) !== '') {
+            return trim($meta->meta_value);
+        }
+
+        return trim((string) ($article->title ?? ''));
+    }
+
+    /**
+     * Helper gọi tĩnh tiện dùng ở bất cứ luồng nào.
+     *
+     * Ví dụ:
+     * SeoAnalyzerService::analyzeArticle($article);
+     */
+    public static function analyzeArticle(SeoArticle $article): array
+    {
+        return app(self::class)->analyze($article);
+    }
+
+    private function resolveFocusKeyword(SeoArticle $article): ?string
+    {
+        $article->loadMissing('keywords');
+
+        $main = $article->keywords->first(function ($keyword): bool {
+            return ((int) ($keyword->pivot->is_main ?? 0) === 1) || ((int) ($keyword->is_main ?? 0) === 1);
+        });
+
+        $keywordModel = $main ?? $article->keywords->first();
+
+        if (! $keywordModel) {
+            $article->loadMissing('articleMetas');
+            $metaKeyword = $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword');
+            if ($metaKeyword && is_string($metaKeyword->meta_value) && trim($metaKeyword->meta_value) !== '') {
+                return $this->normalizeFocusKeyword($metaKeyword->meta_value) ?: null;
+            }
+
+            return null;
+        }
+
+        $keyword = $this->normalizeFocusKeyword(
+            (string) ($keywordModel->phrase ?? $keywordModel->keyword ?? $keywordModel->name ?? '')
+        );
+
+        return $keyword !== '' ? $keyword : null;
+    }
+
+    private function resolveMetaDescription(SeoArticle $article): string
+    {
+        $article->loadMissing('articleMetas');
+
+        $meta = $article->articleMetas
+            ->first(function ($m): bool {
+                return in_array((string) $m->meta_key, [
+                    'meta_description',
+                    'seo_meta_description',
+                    '_yoast_wpseo_metadesc',
+                    'rank_math_description',
+                ], true);
+            });
+
+        if ($meta && is_string($meta->meta_value) && trim($meta->meta_value) !== '') {
+            return trim($meta->meta_value);
+        }
+
+        return trim((string) ($article->excerpt ?? ''));
+    }
+
+    /**
+     * @return array{
+     *   internal: array<int, array{href:string,text:string}>,
+     *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
+     * }
+     */
+    private function extractLinks(string $content, string $domain): array
+    {
+        $result = [
+            'internal' => [],
+            'external' => [],
+        ];
+
+        if (trim($content) === '') {
+            return $result;
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($dom);
+        $anchors = $xpath->query('//a[@href]');
+
+        if ($anchors === false) {
+            return $result;
+        }
+
+        foreach ($anchors as $anchor) {
+            $href = trim((string) $anchor->getAttribute('href'));
+            if ($href === '' || str_starts_with($href, '#') || str_starts_with($href, 'javascript:')) {
+                continue;
+            }
+
+            $text = trim((string) $anchor->textContent);
+
+            if ($this->isInternalLink($href, $domain)) {
+                $result['internal'][] = [
+                    'href' => $href,
+                    'text' => $text,
+                ];
+                continue;
+            }
+
+            $rel = strtolower((string) $anchor->getAttribute('rel'));
+            $isNoFollow = str_contains($rel, 'nofollow');
+
+            $result['external'][] = [
+                'href' => $href,
+                'text' => $text,
+                'is_nofollow' => $isNoFollow,
+            ];
+        }
+
+        return $result;
+    }
+
+    private function isInternalLink(string $href, string $domain): bool
+    {
+        if (str_starts_with($href, '/')) {
+            return true;
+        }
+
+        if (str_starts_with($href, '//')) {
+            $href = 'https:' . $href;
+        }
+
+        $host = parse_url($href, PHP_URL_HOST);
+        if (! is_string($host) || $host === '') {
+            return false;
+        }
+
+        $host = $this->normalizeDomain($host);
+
+        return $host !== '' && $domain !== '' && $host === $domain;
+    }
+
+    private function containsKeyword(string $text, string $keyword): bool
+    {
+        if (trim($keyword) === '' || trim($text) === '') {
+            return false;
+        }
+
+        return mb_stripos($text, $keyword) !== false;
+    }
+
+    private function keywordInFirstThreeWords(string $title, string $keyword): bool
+    {
+        if (trim($title) === '' || trim($keyword) === '') {
+            return false;
+        }
+
+        $words = preg_split('/\s+/u', trim($title), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $firstThree = implode(' ', array_slice($words, 0, 3));
+
+        return $this->containsKeyword($firstThree, $keyword);
+    }
+
+    private function sliceFirstTenPercentText(string $html): string
+    {
+        $text = trim(strip_tags($html));
+        if ($text === '') {
+            return '';
+        }
+
+        $length = mb_strlen($text);
+        $portion = max(1, (int) ceil($length * 0.1));
+
+        return mb_substr($text, 0, $portion);
+    }
+
+    private function countWords(string $html): int
+    {
+        $text = trim(strip_tags($html));
+        if ($text === '') {
+            return 0;
+        }
+
+        preg_match_all('/\pL[\pL\pN\-]*/u', $text, $matches);
+
+        return count($matches[0] ?? []);
+    }
+
+    private function calculateKeywordDensity(string $html, string $keyword): float
+    {
+        $text = mb_strtolower(trim(strip_tags($html)));
+        $keyword = mb_strtolower(trim($keyword));
+
+        if ($text === '' || $keyword === '') {
+            return 0.0;
+        }
+
+        $totalWords = $this->countWords($text);
+        if ($totalWords === 0) {
+            return 0.0;
+        }
+
+        preg_match_all('/\b' . preg_quote($keyword, '/') . '\b/u', $text, $hits);
+        $occurrence = count($hits[0] ?? []);
+        $keywordWordCount = max(1, $this->countWords($keyword));
+
+        return (($occurrence * $keywordWordCount) / $totalWords) * 100;
+    }
+
+    private function extractHeadingText(string $html): string
+    {
+        if (trim($html) === '') {
+            return '';
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($dom);
+        $nodes = $xpath->query('//h2|//h3|//h4');
+
+        if ($nodes === false) {
+            return '';
+        }
+
+        $chunks = [];
+        foreach ($nodes as $node) {
+            $chunks[] = trim((string) $node->textContent);
+        }
+
+        return trim(implode(' ', array_filter($chunks)));
+    }
+
+    private function extractImageAltText(string $html): string
+    {
+        if (trim($html) === '') {
+            return '';
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($dom);
+        $images = $xpath->query('//img[@alt]');
+
+        if ($images === false) {
+            return '';
+        }
+
+        $alts = [];
+        foreach ($images as $img) {
+            $alts[] = trim((string) $img->getAttribute('alt'));
+        }
+
+        return trim(implode(' ', array_filter($alts)));
+    }
+
+    private function normalizeDomain(string $domain): string
+    {
+        $domain = trim(Str::lower($domain));
+        $domain = preg_replace('#^https?://#', '', $domain) ?? $domain;
+        $domain = preg_replace('#^www\.#', '', $domain) ?? $domain;
+        $domain = trim($domain, '/');
+
+        return $domain;
+    }
+
+    /**
+     * Ghi meta an toàn cho relation name thực tế.
+     *
+     * @param array<string, mixed> $value
+     */
+    private function storeMeta(SeoArticle $article, string $key, array $value): void
+    {
+        $relation = $this->resolveMetaRelation($article);
+        $relation->updateOrCreate(
+            ['meta_key' => $key],
+            ['meta_value' => json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]
+        );
+    }
+
+    private function resolveMetaRelation(SeoArticle $article): HasMany
+    {
+        if (method_exists($article, 'meta')) {
+            /** @var HasMany $relation */
+            $relation = $article->meta();
+
+            return $relation;
+        }
+
+        /** @var HasMany $relation */
+        $relation = $article->articleMetas();
+
+        return $relation;
+    }
+
+    private function articleHasColumn(string $column): bool
+    {
+        return Schema::connection('omi_seo_ai')->hasColumn('articles', $column);
+    }
+}
+

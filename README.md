@@ -1,59 +1,130 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Omnichannel Backend (Laravel)
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Backend quản lý đa kênh: **site khách hàng**, **gói dịch vụ / subscription**, **ví & thanh toán**, và hệ thống **addon** mở rộng (WordPress Headless, SEO AI, …). Admin chạy trên **Filament v3** tại đường dẫn `/admin`.
 
-## About Laravel
+---
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+## Kiến trúc cốt lõi (core)
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+| Thành phần | Vai trò |
+|------------|--------|
+| **Models chính** | `Site`, `SiteService`, `SiteMeta`, `Service`, `ServicePlan`, `Subscription`, `User`, `Wallet`, `Transaction`, `Order`, `Invoice`, `UsageLog`, `TaskJob`, `FrontendProject`, `WpOption` — lưu trong **database mặc định** (`mysql`). |
+| **Site ↔ Service** | Một site có nhiều bản ghi `site_services` (dịch vụ đã kích hoạt trên site), mỗi bản ghi có `settings` (JSON) tùy addon. |
+| **Service (addon)** | Bảng `services` mô tả từng addon: `slug`, `addon_namespace` (class ServiceProvider), `is_active`, `config` (toàn bộ `addon.json`). |
+| **AddonManager** | Quét thư mục `app/Addons/*/addon.json`, đồng bộ/`updateOrCreate` vào bảng `services` theo `slug`. |
+| **AppServiceProvider** | Khi có bảng `services`, với mỗi service `is_active = true`, gọi `$this->app->register($service->addon_namespace)` để nạp route, migration connection, observer, … của addon. |
+| **AdminPanelProvider (Filament)** | Đăng ký panel `path('admin')`. Với mỗi service active, map `slug` → tên thư mục PascalCase (vd. `wp-headless` → `WpHeadless`), rồi tự **`discoverPages` / `discoverResources`** và **`loadViewsFrom`** (namespace view = `slug`). |
+| **Proxy frontend** | `FrontendProject` + route `/frontend/{router}/{path?}` proxy sang Next.js/React theo `router`, `port`, `proxy_auto`. Addon WP Headless có thể tự `updateOrCreate` bản ghi project khi boot. |
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+**Lưu ý:** Một số addon dùng **database riêng** (vd. WP Headless: `omi_wp_headless`). Connection runtime được đăng ký qua trait `RegistersAddonDatabase` trong ServiceProvider của addon (clone cấu hình từ `mysql`, đổi `database`).
 
-## Learning Laravel
+---
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+## Database schema
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### Database chính (Laravel default)
 
-## Laravel Sponsors
+Các bảng dưới đây lấy từ migrations trong `database/migrations/` (tóm tắt cột chính).
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+| Bảng | Mô tả ngắn |
+|------|------------|
+| **users** | `name`, `email`, `password`, `role` (`admin` \| `owner` \| `staff`), `status`, `parent_id` (staff thuộc owner), `google_id`, `avatar`, soft delete. |
+| **sites** | `user_id`, `subscription_id`, `domain` (unique), `ssl`, `status`, soft delete. (Cột `url` đã bỏ.) |
+| **site_meta** | Meta kỹ thuật theo site: `meta_key`, `meta_value`. |
+| **services** | Danh mục addon: `name`, `slug`, `addon_namespace`, `db_connection`, `is_active`, `config` (JSON). |
+| **site_services** | Gán dịch vụ cho site: `site_id`, `service_id`, `status`, `settings` (JSON). |
+| **service_plans** | Gói bán kèm service: `name`, `price`, `duration_days`, `limits` (JSON), … |
+| **subscriptions** | User đăng ký plan: `user_id`, `plan_id`, `starts_at`, `ends_at`, `status`, soft delete. |
+| **usage_logs** | Hạn mức theo subscription: `metric_key`, `current_usage`, `limit_value`. |
+| **wallets** | Một ví / user: `balance`, `currency`. |
+| **transactions** | Biến động ví: `type`, `amount`, balances, `status`, `reference_id`. |
+| **orders** | Đơn mua gói: `plan_id`, `amount`, `status`, `payment_method`, `metadata`. |
+| **invoices** | Hóa đơn gắn `order_id`, `invoice_number`, `total_amount`, `pdf_path`. |
+| **task_jobs** | Theo dõi job nặng theo site: `task_type`, `status`, `progress_percent`, `error_log`, … |
+| **frontend_projects** | Project Next/React: `name`, `type`, `package_json_path`, `router`, `proxy_auto`, `port`. |
+| **wp_options** | Key–value kiểu WordPress (`option_name`, `option_value`, `autoload`). |
+| **personal_access_tokens**, **cache**, **jobs**, **sessions**, … | Chuẩn Laravel / Sanctum. |
 
-### Premium Partners
+### Database addon WP Headless (connection `wp_headless`)
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+Migrations nằm trong `app/Addons/WpHeadless/database/migrations/`, chạy trên connection `wp_headless` (tên DB đọc từ `addon.json` → key `database`, vd. `omi_wp_headless`).
 
-## Contributing
+| Bảng | Mô tả ngắn |
+|------|------------|
+| **wp_headless_sites** | `id` = `sites.id` bên DB chính; `type` (theme/builder), … |
+| **wp_headless_styles** | CSS theo site / post type: `style_type` (file \| inline \| font), `url` / `content`, … |
+| **wp_headless_templates** | Template HTML theo `type` (header, footer, …), metadata `classes`, … (cột `template` đã qua nhiều migration — xem file migration cụ thể). |
+| **wp_headless_styles_optimized** | CSS đã tối ưu theo class thực dùng: `post_type`, `chunk_index`, `content`, `size`, … |
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+Chi tiết cột sau các migration alter: xem trực tiếp các file trong `database/migrations/` và `app/Addons/WpHeadless/database/migrations/`.
 
-## Code of Conduct
+---
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+## Cách kết nối / tạo addon mới
 
-## Security Vulnerabilities
+1. **Tạo thư mục** `app/Addons/{PascalCaseName}/`  
+   Tên thư mục phải khớp quy ước từ **slug** trong `addon.json`:  
+   `wp-headless` → `ucwords(str_replace(['-','_'], ' ', slug))` không khoảng → `WpHeadless`.
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+2. **Thêm `addon.json`** tại root thư mục addon, tối thiểu:
+   - `name`, `slug`, `provider` (class FQCN của `ServiceProvider`, vd. `App\Addons\MyAddon\MyAddonServiceProvider`)
+   - Tùy chọn: `database` — nếu có, khi boot provider cần gọi `RegistersAddonDatabase::registerAddonDatabase()` để đăng ký connection và (nếu muốn) `loadMigrationsFrom(...)`.
 
-## License
+3. **ServiceProvider**:
+   - Trong `register()` / `boot()`: route, config, observer, v.v.
+   - Nếu dùng DB riêng: `use RegistersAddonDatabase` và trong `boot()` gọi  
+     `$this->registerAddonDatabase(__DIR__, 'ten_connection', __DIR__.'/database/migrations');`  
+     Các model/migration addon nên set `$connection = 'ten_connection'` (thống nhất với WP Headless: `wp_headless`).
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+4. **Đồng bộ vào DB**  
+   Vào Filament **Hệ thống → Quản lý Service** (hoặc gọi `AddonManager::discover()`) để cập nhật bảng `services` từ `addon.json`.
+
+5. **Kích hoạt**  
+   Trên cùng trang quản lý, bật `is_active`.  
+   - Nếu `addon.json` có `database`: MySQL phải **đã tạo schema** đó trước; nếu chưa có, UI sẽ chặn bật addon.  
+   - Sau đó chạy migration (toàn app; migrations addon được load khi provider đã register — xem Laravel docs về `loadMigrationsFrom`).
+
+6. **Filament**  
+   Đặt page tại `Filament/Pages`, resource tại `Filament/Resources`, view tại `resources/views` — panel sẽ auto-discover khi service active.  
+   File **`Settings.php`** cùng namespace với provider (đổi tên class cuối thành `Settings`) với method `getDefaults()` để `SiteService` hydrate default `settings`.
+
+7. **Đăng ký provider trong `config/app.php`?**  
+   Không bắt buộc: provider được **đăng ký động** qua `addon_namespace` khi `is_active` (trong `AppServiceProvider`).
+
+---
+
+## Menu Filament (`/admin`)
+
+Đường dẫn panel: **`/admin`**. Nhóm và nhãn sidebar (theo code hiện tại):
+
+| Nhóm / vị trí | Mục menu | Ghi chú |
+|---------------|----------|---------|
+| *(mặc định / không nhóm)* | **Dashboard** | Trang chủ Filament. |
+| *(không nhóm)* | **Site Management** | Thực tế là resource **Site** (`SiteResource` — CRUD site; nhãn navigation custom). |
+| **Site Management** | **Activated Services** | `SiteServiceResource` — gán dịch vụ & settings cho từng site. |
+| **Site Management** | **WP Headless** | Chỉ khi addon `wp-headless` **active**; URL: `/admin/wp-headless/manage`. Chỉ role **`admin`**. |
+| **React/Next** | **Frontend (Next/React)** | `FrontendProjectResource` — chỉ **`admin`**. |
+| **React/Next** | **Lệnh NPM** | `FrontendNpmCommandsPage` — chỉ **`admin`**. |
+| **SEO Automation** | **SEO AI Generator** | Chỉ khi addon `seo-content-ai` **active** và user **`admin`**; URL: `/admin/seo/dashboard`. `canAccess` còn kiểm tra service đang bật trong DB. |
+| **Hệ thống** | **Quản lý Service** | `ManageServices` — bật/tắt addon, sync `addon.json`; chỉ **`admin`**. |
+| *(mặc định)* | **Users** | `UserResource` (hoặc nhãn plural của model) — query scoped theo role. |
+
+**Trang Filament không hiện trên menu** (vẫn truy cập được khi biết URL / redirect):
+
+- `/admin/wp-headless/connect` — flow kết nối WP (`WpHeadlessConnect`, CSRF có exception trong `bootstrap/app.php`).
+- `/admin/wp-headless/site` — chi tiết/sync site headless (`WpHeadlessSitePage`, cần đăng nhập).
+
+---
+
+## Tham chiếu nhanh file quan trọng
+
+- `app/Services/AddonManager.php` — quét và sync `services`
+- `app/Addons/RegistersAddonDatabase.php` — đăng ký DB addon
+- `app/Providers/AppServiceProvider.php` — `register()` provider theo `is_active`
+- `app/Providers/Filament/AdminPanelProvider.php` — discover Filament + views theo addon active
+- `app/Filament/Pages/ManageServices.php` — UI kích hoạt addon
+- `app/Addons/WpHeadless/WpHeadlessServiceProvider.php` — ví dụ đầy đủ: DB, routes web/API, commands, observers
+
+---
+
+*Framework: Laravel 12, PHP ^8.2, Filament ^3.2.*

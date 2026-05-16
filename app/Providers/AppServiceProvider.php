@@ -15,7 +15,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->registerActiveAddonProviders();
     }
 
     /**
@@ -45,22 +45,24 @@ class AppServiceProvider extends ServiceProvider
                 ]);
         });
 
-        //Cấu hình Addons
-        // Chỉ chạy nếu đang không trong môi trường Console (để tránh lỗi khi chạy migrate/seed)
-        // Hoặc kiểm tra bảng trực tiếp
-        try {
-            if (Schema::hasTable('services')) {
-                $activeServices = \App\Models\Service::where('is_active', true)->get();
+    }
 
-                foreach ($activeServices as $service) {
-                    if (class_exists($service->addon_namespace)) {
-                        $this->app->register($service->addon_namespace);
-                    }
+    private function registerActiveAddonProviders(): void
+    {
+        try {
+            if (!Schema::hasTable('services')) {
+                return;
+            }
+
+            $activeServices = \App\Models\Service::where('is_active', true)->get();
+
+            foreach ($activeServices as $service) {
+                if (class_exists($service->addon_namespace)) {
+                    $this->app->register($service->addon_namespace);
                 }
             }
-        } catch (\Exception $e) {
-            dd($e->getMessage());
-            // Bỏ qua lỗi nếu DB chưa sẵn sàng
+        } catch (\Throwable $e) {
+            report($e);
         }
     }
 }

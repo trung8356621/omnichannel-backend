@@ -92,6 +92,11 @@ class AdminPanelProvider extends PanelProvider
                             $this->loadViewsFrom($viewsPath, $service->slug);
                         }
 
+                        // SEO Content AI dùng Filament panel riêng (/seo); không đăng ký Pages/Resources vào /admin.
+                        if ($service->slug === 'seo-content-ai') {
+                            continue;
+                        }
+
                         // Tự động quét và nạp các Pages của Addon
                         $pagesPath = "{$addonPath}/Filament/Pages";
                         if (File::isDirectory($pagesPath)) {

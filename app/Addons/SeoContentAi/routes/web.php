@@ -1,6 +1,8 @@
 <?php
 
-use App\Addons\SeoContentAi\Filament\Pages\SeoDashboard;
-use Illuminate\Support\Facades\Route;
+declare(strict_types=1);
 
-Route::get('/seo/dashboard', SeoDashboard::class)->name('seo.dashboard');
+/**
+ * Routes are managed by Filament panel provider:
+ * App\Addons\SeoContentAi\Providers\SeoPanelProvider
+ */
