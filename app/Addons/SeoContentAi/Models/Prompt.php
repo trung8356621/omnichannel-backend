@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
-use App\Models\Site;
+use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Models\ApiConnection;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,24 +14,30 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Prompt extends Model
 {
+    use BelongsToOnDefaultConnection;
     use SoftDeletes;
 
     protected $connection = 'omi_seo_ai';
+
+    /** @var string Bảng vật lý là `prompts` (không phải `seo_prompts`). */
+    protected $table = 'prompts';
 
     protected $guarded = [];
 
     protected $casts = [
         'settings' => 'array',
+        'variables' => 'json',
+        'is_active' => 'boolean',
     ];
 
     public function user(): BelongsTo
     {
-        return $this->belongsTo(User::class);
+        return $this->belongsToOnDefaultConnection(User::class, 'user_id');
     }
 
-    public function site(): BelongsTo
+    public function aiConnection(): BelongsTo
     {
-        return $this->belongsTo(Site::class);
+        return $this->belongsToOnDefaultConnection(ApiConnection::class, 'ai_connection_id');
     }
 
     public function promptParts(): HasMany

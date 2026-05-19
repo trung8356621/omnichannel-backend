@@ -68,11 +68,11 @@ class DomainResource extends Resource
                             ->action(fn (Set $set) => $set('seo_read_token', Str::random(60)))
                     ),
                 Forms\Components\TextInput::make('seo_migration_token')
-                    ->label('Migration token')
+                    ->label('Migration / Write token')
                     ->key('seo_migration_token')
                     ->maxLength(255)
                     ->readOnly()
-                    ->helperText('Có thể sao chép bằng Ctrl+C.')
+                    ->helperText('Dùng làm API WRITE TOKEN trên plugin WordPress (đăng comment/review).')
                     ->visible(fn (Get $get): bool => $get('seo_platform') === 'wordpress')
                     ->suffixAction(
                         FormInputAction::make('generate_migration_token')

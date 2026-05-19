@@ -9,7 +9,6 @@ use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class PromptResult extends Model
 {
@@ -42,11 +41,6 @@ class PromptResult extends Model
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
-    }
-
-    public function article(): HasOne
-    {
-        return $this->hasOne(SeoArticle::class, 'prompt_result_id');
     }
 
     public function entityResults(): HasMany

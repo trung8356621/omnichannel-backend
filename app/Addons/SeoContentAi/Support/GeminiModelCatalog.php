@@ -1,0 +1,92 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Support;
+
+/**
+ * Model IDs khớp Google AI Studio (generateContent).
+ *
+ * @see https://ai.google.dev/gemini-api/docs/models
+ */
+final class GeminiModelCatalog
+{
+    /** @var array<string, string> */
+    private const ALIASES = [
+        'gemini-1.5-flash' => 'gemini-3-flash-preview',
+        'gemini-1.5-flash-latest' => 'gemini-3-flash-preview',
+        'gemini-1.5-flash-8b' => 'gemini-3.1-flash-lite',
+        'gemini-1.5-pro' => 'gemini-3.1-pro-preview',
+        'gemini-1.5-pro-latest' => 'gemini-3.1-pro-preview',
+        'gemini-pro' => 'gemini-3-flash-preview',
+        'gemini-2.0-flash' => 'gemini-3-flash-preview',
+        'gemini-2.0-flash-lite' => 'gemini-3.1-flash-lite',
+        'gemini-2.5-flash' => 'gemini-3-flash-preview',
+        'gemini-2.5-pro' => 'gemini-3.1-pro-preview',
+    ];
+
+    /**
+     * Thứ tự fallback khi model không tồn tại trên API key / region.
+     *
+     * @return list<string>
+     */
+    public static function fallbackModels(): array
+    {
+        return [
+            'gemini-3-flash-preview',
+            'gemini-3.1-flash-lite',
+            'gemini-3.1-flash-lite-preview',
+            'gemini-3.1-pro-preview',
+            'gemini-3-pro-preview',
+            'gemini-2.5-flash',
+            'gemini-2.5-pro',
+            'gemini-2.0-flash',
+            'gemini-2.0-flash-lite',
+        ];
+    }
+
+    public static function defaultModel(): string
+    {
+        return 'gemini-3-flash-preview';
+    }
+
+    /**
+     * @return array<string, string> value => label
+     */
+    public static function selectOptions(): array
+    {
+        return [
+            'gemini-3-flash-preview' => 'Gemini 3 Flash Preview (khuyên dùng — AI Studio)',
+            'gemini-3.1-flash-lite' => 'Gemini 3.1 Flash Lite',
+            'gemini-3.1-pro-preview' => 'Gemini 3.1 Pro Preview',
+            'gemini-2.5-flash' => 'Gemini 2.5 Flash',
+            'gemini-2.5-pro' => 'Gemini 2.5 Pro',
+            'gemini-2.0-flash' => 'Gemini 2.0 Flash',
+            'gemini-2.0-flash-lite' => 'Gemini 2.0 Flash Lite',
+        ];
+    }
+
+    public static function resolve(string $model): string
+    {
+        $model = trim($model);
+
+        if (str_starts_with($model, 'models/')) {
+            $model = substr($model, 7);
+        }
+
+        return self::ALIASES[$model] ?? $model;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function modelsToTry(string $requestedModel): array
+    {
+        $primary = self::resolve($requestedModel !== '' ? $requestedModel : self::defaultModel());
+
+        return array_values(array_unique(array_merge(
+            [$primary],
+            self::fallbackModels(),
+        )));
+    }
+}

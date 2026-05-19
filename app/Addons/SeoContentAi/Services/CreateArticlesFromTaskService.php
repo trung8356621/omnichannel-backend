@@ -1,0 +1,217 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services;
+
+use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Models\Site;
+use Illuminate\Database\Eloquent\Builder;
+
+final class CreateArticlesFromTaskService
+{
+    public function __construct(
+        private readonly SeoCreateArticleSettingsService $settings,
+        private readonly TaskTestInputResolver $inputResolver,
+        private readonly TaskWorkflowTestRunner $workflowRunner,
+        private readonly SeoMainDomainService $mainDomain,
+    ) {}
+
+    /**
+     * @return array{created: int, failed: int, messages: list<string>}
+     */
+    public function runFromKeywords(string $keywordsRaw): array
+    {
+        $siteId = $this->mainDomain->resolveMainSiteId();
+        if ($siteId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa có miền chính. Vào SEO → Danh sách tên miền → «Đặt làm chính» cho một domain.',
+            );
+        }
+
+        return $this->runFromKeywordsForSite($keywordsRaw, $siteId);
+    }
+
+    /**
+     * @return array{created: int, failed: int, messages: list<string>}
+     */
+    public function runFromKeywordsForSite(string $keywordsRaw, int $siteId): array
+    {
+        $taskId = $this->settings->getTaskId();
+        if ($taskId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa cấu hình quy trình tạo bài viết. Vào SEO → Tùy chỉnh để chọn task.',
+            );
+        }
+
+        $task = SeoTask::query()->find($taskId);
+        if ($task === null) {
+            throw new \InvalidArgumentException('Quy trình tạo bài viết (#' . $taskId . ') không tồn tại.');
+        }
+
+        if (! $task->is_active) {
+            throw new \InvalidArgumentException('Quy trình «' . $task->name . '» đang tắt. Hãy kích hoạt hoặc chọn task khác.');
+        }
+
+        $this->assertSiteAccessible($siteId);
+
+        $keywords = $this->parseKeywords($keywordsRaw);
+        if ($keywords === []) {
+            throw new \InvalidArgumentException('Nhập ít nhất một từ khóa.');
+        }
+
+        $scope = function (Builder $builder): void {
+            if (auth()->user()?->role === 'admin') {
+                return;
+            }
+
+            $builder->whereIn(
+                'site_id',
+                Site::query()->where('user_id', auth()->id())->select('id'),
+            );
+        };
+
+        $created = 0;
+        $failed = 0;
+        $messages = [];
+
+        foreach ($keywords as $keyword) {
+            try {
+                $context = $this->inputResolver->resolve(null, $keyword, $keyword, $scope);
+                $steps = $this->workflowRunner->run($task, $context);
+
+                $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
+                if ($stepFailed) {
+                    $failed++;
+                    $messages[] = '«' . $keyword . '»: quy trình có bước lỗi.';
+
+                    continue;
+                }
+
+                $this->createDraftArticle($siteId, $keyword, $context->variables, $steps);
+                $created++;
+                $messages[] = '«' . $keyword . '»: đã tạo bài nháp và chạy quy trình.';
+            } catch (\Throwable $exception) {
+                $failed++;
+                $messages[] = '«' . $keyword . '»: ' . $exception->getMessage();
+            }
+        }
+
+        return [
+            'created' => $created,
+            'failed' => $failed,
+            'messages' => $messages,
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @param  list<array<string, mixed>>  $steps
+     */
+    private function createDraftArticle(int $siteId, string $keyword, array $variables, array $steps): SeoArticle
+    {
+        $title = trim((string) ($variables['post_title'] ?? ''));
+        if ($title === '') {
+            $title = $keyword;
+        }
+
+        $article = SeoArticle::query()->create([
+            'site_id' => $siteId,
+            'user_id' => auth()->id(),
+            'type' => 'article',
+            'title' => $title,
+            'slug' => null,
+            'status' => 'draft',
+            'body' => '',
+            'language' => 'vi',
+        ]);
+
+        $this->attachKeyword($article, $keyword);
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'seo_focus_keyword'],
+            ['meta_value' => trim((string) ($variables['focus_keyword'] ?? $keyword))],
+        );
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'create_article_task_run'],
+            ['meta_value' => json_encode([
+                'keyword' => $keyword,
+                'steps_count' => count($steps),
+                'ran_at' => now()->toIso8601String(),
+            ], JSON_UNESCAPED_UNICODE)],
+        );
+
+        return $article;
+    }
+
+    private function attachKeyword(SeoArticle $article, string $phrase): void
+    {
+        $normalized = mb_strtolower(trim($phrase));
+        if ($normalized === '') {
+            return;
+        }
+
+        $keyword = Keyword::query()->firstOrCreate(
+            [
+                'site_id' => $article->site_id,
+                'phrase' => trim($phrase),
+            ],
+            [
+                'user_id' => (int) auth()->id(),
+            ],
+        );
+
+        $article->keywords()->syncWithoutDetaching([
+            $keyword->id => ['weight' => 1],
+        ]);
+    }
+
+    private function assertSiteAccessible(int $siteId): void
+    {
+        $query = Site::query()->whereKey($siteId);
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->where('user_id', auth()->id());
+        }
+
+        if (! $query->exists()) {
+            throw new \InvalidArgumentException('Website không hợp lệ hoặc bạn không có quyền.');
+        }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseKeywords(string $raw): array
+    {
+        $parts = preg_split('/[\r\n,;]+/u', $raw) ?: [];
+        $keywords = [];
+
+        foreach ($parts as $part) {
+            $phrase = trim($part);
+            if ($phrase === '') {
+                continue;
+            }
+            $keywords[] = $phrase;
+        }
+
+        return array_values(array_unique($keywords));
+    }
+
+    /**
+     * @return array<int|string, string>
+     */
+    public function taskOptionsForSettings(): array
+    {
+        $query = SeoTask::query()->where('is_active', true)->orderBy('name');
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->where('user_id', auth()->id());
+        }
+
+        return $query->pluck('name', 'id')->all();
+    }
+}

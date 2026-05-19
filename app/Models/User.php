@@ -2,10 +2,6 @@
 
 namespace App\Models;
 
-use Illuminate\Foundation\Auth\User as Authenticatable;
-
-namespace App\Models;
-
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 
@@ -23,19 +19,24 @@ class User extends Authenticatable
 
     protected $fillable = ['parent_id', 'role', 'status', 'name', 'email', 'password'];
 
-    // Kiểm tra nhân viên
+    /**
+     * Luôn dùng DB chính — tránh bị gán connection addon khi eager-load từ model `omi_seo_ai`.
+     */
+    public function getConnectionName(): ?string
+    {
+        return (string) config('database.default');
+    }
+
     public function isStaff()
     {
         return $this->role === self::ROLE_STAFF;
     }
 
-    // Lấy chủ sở hữu (nếu là nhân viên)
     public function owner()
     {
         return $this->belongsTo(User::class, 'parent_id');
     }
 
-    // Lấy danh sách nhân viên (nếu là chủ sở hữu)
     public function staffs()
     {
         return $this->hasMany(User::class, 'parent_id');

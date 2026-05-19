@@ -1,0 +1,49 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@source '../js/**/*.{js,jsx}';
+
+/* Filament theme.css is unlayered and overrides @layer utilities on <button>. */
+.seo-flow-builder .seo-flow-btn-primary {
+  background-color: #059669 !important;
+  border-color: #059669 !important;
+  color: #ffffff !important;
+}
+
+.seo-flow-builder .seo-flow-btn-primary:hover {
+  background-color: #10b981 !important;
+  border-color: #10b981 !important;
+}
+
+.seo-flow-builder .seo-flow-chip-active-emerald {
+  background-color: #059669 !important;
+  border-color: #059669 !important;
+  color: #ffffff !important;
+}
+
+.seo-flow-builder .seo-flow-chip-active-sky {
+  background-color: #0284c7 !important;
+  border-color: #0284c7 !important;
+  color: #ffffff !important;
+}
+
+.seo-flow-builder[data-theme='light'] .seo-flow-chip-off {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #1f2937 !important;
+}
+
+.seo-flow-builder[data-theme='light'] .seo-flow-chip-off:hover {
+  background-color: #f3f4f6 !important;
+}
+
+.seo-flow-builder[data-theme='dark'] .seo-flow-chip-off {
+  background-color: #1e293b !important;
+  border-color: #475569 !important;
+  color: #e2e8f0 !important;
+}
+
+.seo-flow-builder[data-theme='dark'] .seo-flow-chip-off:hover {
+  background-color: #334155 !important;
+}

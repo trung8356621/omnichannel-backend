@@ -22,6 +22,14 @@ class Keyword extends Model
         'difficulty' => 'decimal:2',
     ];
 
+    /**
+     * Alias cho Filament / API (cột DB là `phrase`).
+     */
+    public function getKeywordAttribute(): string
+    {
+        return (string) $this->phrase;
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
@@ -29,10 +37,7 @@ class Keyword extends Model
 
     public function site(): BelongsTo
     {
-        $relation = $this->belongsTo(Site::class);
-        $relation->getRelated()->setConnection((string) config('database.default'));
-
-        return $relation;
+        return $this->belongsTo(Site::class);
     }
 
     public function articles(): BelongsToMany

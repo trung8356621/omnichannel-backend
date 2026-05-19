@@ -12,6 +12,14 @@ class Site extends Model
 
     protected $casts = ['ssl' => 'boolean'];
 
+    /**
+     * Luôn dùng DB chính — tránh bị gán connection addon khi eager-load từ model `omi_seo_ai`.
+     */
+    public function getConnectionName(): ?string
+    {
+        return (string) config('database.default');
+    }
+
     public function siteServices()
     {
         return $this->hasMany(SiteService::class);

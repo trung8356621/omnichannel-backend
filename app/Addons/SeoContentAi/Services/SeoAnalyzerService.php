@@ -79,9 +79,55 @@ class SeoAnalyzerService
     }
 
     /**
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * Chấm điểm xem trước (editor realtime) — không ghi DB.
+     *
+     * @return array{
+     *   score:int,
+     *   good:array<int,string>,
+     *   errors:array<int,string>,
+     *   warnings:array<int,string>,
+     *   extracted_links:array{internal:array<int,array{href:string,text:string}>,external:array<int,array{href:string,text:string,is_nofollow:bool}>}
+     * }
      */
-    private function runAnalysis(
+    public function analyzePreview(
+        SeoArticle $article,
+        string $content,
+        ?string $seoTitle = null,
+        ?string $slug = null,
+        ?string $metaDescription = null,
+        ?string $domainOverride = null,
+    ): array {
+        $focusKeyword = $this->resolveFocusKeyword($article);
+
+        if ($focusKeyword === null) {
+            return array_merge(
+                $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], []),
+                ['extracted_links' => ['internal' => [], 'external' => []]],
+            );
+        }
+
+        $computed = $this->computeAnalysis(
+            $article,
+            $focusKeyword,
+            $seoTitle ?? $this->resolveSeoTitle($article),
+            $content,
+            $slug ?? trim((string) ($article->slug ?? '')),
+            $metaDescription ?? $this->resolveMetaDescription($article),
+            $this->resolveArticleDomain($article, $domainOverride),
+        );
+
+        return array_merge($computed['scoreData'], [
+            'extracted_links' => $computed['extractedLinks'],
+        ]);
+    }
+
+    /**
+     * @return array{
+     *   scoreData: array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>},
+     *   extractedLinks: array{internal: array<int, mixed>, external: array<int, mixed>}
+     * }
+     */
+    private function computeAnalysis(
         SeoArticle $article,
         string $focusKeyword,
         string $seoTitle,
@@ -113,8 +159,8 @@ class SeoAnalyzerService
             $totalScore -= 10;
         }
 
-        // Rule 3: Focus keyword trong URL slug
-        if ($this->containsKeyword($slug, $focusKeyword)) {
+        // Rule 3: Focus keyword trong URL slug (so sánh dạng slug / kebab-case)
+        if ($this->slugContainsFocusKeyword($slug, $focusKeyword)) {
             $good[] = 'URL chứa từ khóa chính.';
         } else {
             $errors[] = 'URL chưa chứa từ khóa chính.';
@@ -210,10 +256,38 @@ class SeoAnalyzerService
             $totalScore -= 5;
         }
 
+        return [
+            'scoreData' => $this->buildScoreResult(max(0, $totalScore), $good, $errors, $warnings),
+            'extractedLinks' => $extractedLinks,
+        ];
+    }
+
+    /**
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    private function runAnalysis(
+        SeoArticle $article,
+        string $focusKeyword,
+        string $seoTitle,
+        string $content,
+        string $slug,
+        string $metaDescription,
+        string $domain
+    ): array {
+        $computed = $this->computeAnalysis(
+            $article,
+            $focusKeyword,
+            $seoTitle,
+            $content,
+            $slug,
+            $metaDescription,
+            $domain,
+        );
+
         return $this->persistScoreResult(
             $article,
-            $this->buildScoreResult(max(0, $totalScore), $good, $errors, $warnings),
-            $extractedLinks
+            $computed['scoreData'],
+            $computed['extractedLinks'],
         );
     }
 
@@ -315,6 +389,11 @@ class SeoAnalyzerService
         return app(self::class)->analyze($article);
     }
 
+    public function resolveFocusKeywordForArticle(SeoArticle $article): ?string
+    {
+        return $this->resolveFocusKeyword($article);
+    }
+
     private function resolveFocusKeyword(SeoArticle $article): ?string
     {
         $article->loadMissing('keywords');
@@ -394,7 +473,7 @@ class SeoAnalyzerService
 
         foreach ($anchors as $anchor) {
             $href = trim((string) $anchor->getAttribute('href'));
-            if ($href === '' || str_starts_with($href, '#') || str_starts_with($href, 'javascript:')) {
+            if ($href === '' || str_starts_with($href, '#') || $this->isSpecialSchemeLink($href)) {
                 continue;
             }
 
@@ -418,7 +497,41 @@ class SeoAnalyzerService
             ];
         }
 
+        $result['internal'] = $this->deduplicateLinksByHrefAndText($result['internal']);
+        $result['external'] = $this->deduplicateLinksByHrefAndText($result['external']);
+
         return $result;
+    }
+
+    /**
+     * Link không phải HTTP(S) — bỏ qua khi đếm internal/external (tel:, mailto:, …).
+     */
+    private function isSpecialSchemeLink(string $href): bool
+    {
+        $lower = strtolower($href);
+
+        if (str_starts_with($lower, 'javascript:')) {
+            return true;
+        }
+
+        $scheme = parse_url($href, PHP_URL_SCHEME);
+        if (! is_string($scheme) || $scheme === '') {
+            return false;
+        }
+
+        return in_array(strtolower($scheme), [
+            'tel',
+            'mailto',
+            'sms',
+            'fax',
+            'callto',
+            'geo',
+            'skype',
+            'whatsapp',
+            'viber',
+            'data',
+            'cid',
+        ], true);
     }
 
     private function isInternalLink(string $href, string $domain): bool
@@ -448,6 +561,58 @@ class SeoAnalyzerService
         }
 
         return mb_stripos($text, $keyword) !== false;
+    }
+
+    /**
+     * So sánh slug bài viết với từ khóa chính đã chuyển sang kebab-case (Str::slug).
+     */
+    private function slugContainsFocusKeyword(string $slug, string $focusKeyword): bool
+    {
+        $keywordSlug = Str::slug($this->normalizeFocusKeyword($focusKeyword));
+        $articleSlug = Str::slug(trim($slug));
+
+        if ($keywordSlug === '' || $articleSlug === '') {
+            return false;
+        }
+
+        return str_contains($articleSlug, $keywordSlug);
+    }
+
+    /**
+     * Gộp link trùng: cùng URL và cùng anchor text chỉ tính một lần.
+     *
+     * @param  array<int, array<string, mixed>>  $links
+     * @return array<int, array<string, mixed>>
+     */
+    private function deduplicateLinksByHrefAndText(array $links): array
+    {
+        $seen = [];
+        $unique = [];
+
+        foreach ($links as $link) {
+            $href = $this->normalizeLinkHrefForDedup((string) ($link['href'] ?? ''));
+            $text = mb_strtolower(trim((string) ($link['text'] ?? '')));
+            $key = $href . "\0" . $text;
+
+            if ($href === '' || isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $unique[] = $link;
+        }
+
+        return $unique;
+    }
+
+    private function normalizeLinkHrefForDedup(string $href): string
+    {
+        $href = trim($href);
+        if ($href === '') {
+            return '';
+        }
+
+        return rtrim(mb_strtolower($href), '/');
     }
 
     private function keywordInFirstThreeWords(string $title, string $keyword): bool

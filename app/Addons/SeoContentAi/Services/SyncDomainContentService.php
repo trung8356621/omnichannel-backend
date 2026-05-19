@@ -143,7 +143,6 @@ class SyncDomainContentService
                     'type' => $type,
                 ],
                 [
-                    'user_id' => $userId,
                     'type' => $type,
                     'title' => (string) ($item['title'] ?? 'Untitled'),
                     'slug' => null,
@@ -163,6 +162,7 @@ class SyncDomainContentService
                 );
             }
 
+            $this->syncWordPressPostMeta($article, $item);
             $this->syncSeoMetaFromWordPress($article, $item);
             $this->syncFocusKeyword($site, $userId, $article, $item);
 
@@ -183,6 +183,37 @@ class SyncDomainContentService
         }
 
         return $synced;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function syncWordPressPostMeta(SeoArticle $article, array $item): void
+    {
+        $metaMap = [
+            'wp_post_content' => trim((string) ($item['post_content'] ?? '')),
+            'wp_slug' => trim((string) ($item['slug'] ?? '')),
+            'wp_featured_image_url' => trim((string) ($item['featured_image_url'] ?? '')),
+        ];
+
+        foreach ($metaMap as $metaKey => $metaValue) {
+            if ($metaValue === '') {
+                continue;
+            }
+
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $metaKey],
+                ['meta_value' => $metaValue],
+            );
+        }
+
+        $gallery = $item['product_gallery'] ?? null;
+        if (is_array($gallery) && $gallery !== []) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_product_gallery'],
+                ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+            );
+        }
     }
 
     /**

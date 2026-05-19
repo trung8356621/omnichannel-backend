@@ -14,6 +14,9 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\Support\Facades\FilamentView;
+use Filament\View\PanelsRenderHook;
+use Illuminate\Support\HtmlString;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -31,6 +34,13 @@ class SeoPanelProvider extends PanelProvider
 
         $this->loadViewsFrom($addonRoot . '/resources/views', 'seo-content-ai');
         $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot . '/database/migrations');
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::BODY_END,
+            fn (): HtmlString => new HtmlString(
+                view('seo-content-ai::filament.prompt-variable-insert')->render()
+            ),
+        );
     }
 
     public function panel(Panel $panel): Panel

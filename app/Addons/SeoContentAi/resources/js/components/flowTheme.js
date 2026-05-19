@@ -1,0 +1,144 @@
+/** Theme classes đồng bộ với isDark (Filament class "dark" trên html). */
+export function buildFlowTheme(isDark) {
+  if (isDark) {
+    return {
+      root: 'bg-slate-900 text-slate-100 border-slate-700',
+      header: 'bg-slate-950 border-slate-800',
+      title: 'text-white',
+      input:
+        'bg-slate-900 border-slate-600 text-slate-100 placeholder:text-slate-500 focus:border-emerald-500',
+      sidebar: 'bg-slate-950 border-slate-800',
+      sidebarTitle: 'text-slate-400',
+      widgetBtn:
+        'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-100 shadow-sm',
+      widgetIcon: {
+        article: 'text-sky-300 bg-sky-500/25',
+        prompt: 'text-violet-300 bg-violet-500/25',
+        filter: 'text-amber-300 bg-amber-500/25',
+        action: 'text-rose-300 bg-rose-500/25',
+        end: 'text-rose-300 bg-rose-500/25',
+      },
+      canvas: 'bg-slate-900',
+      panel: 'bg-slate-950 border-slate-800',
+      label: 'text-slate-400',
+      emptyHint: 'text-slate-500',
+      headingAccent: 'text-emerald-400 border-slate-800',
+      nodeBg: 'bg-slate-800',
+      nodeHeaderBorder: 'border-slate-700',
+      nodeTitle: 'text-slate-100',
+      nodeBody: 'text-slate-400',
+      chipOff: 'seo-flow-chip-off',
+      chipOnEmerald: 'seo-flow-chip-active-emerald',
+      chipOnSky: 'seo-flow-chip-active-sky',
+      btnPrimary: 'seo-flow-btn-primary',
+      field: 'bg-slate-900 border-slate-600 text-slate-100 focus:border-emerald-500',
+      portBorder: 'border-slate-900',
+      portInput: 'bg-slate-800 border-slate-500',
+      portDot: 'bg-slate-300',
+      portLabel: 'text-slate-300 bg-slate-800 border-slate-700',
+      trash: 'text-slate-500 hover:text-rose-400',
+      accentEmerald: 'text-emerald-400',
+      accentViolet: 'text-violet-300',
+      edgeColor: '#64748b',
+      gridImage: 'radial-gradient(#334155 1.5px, transparent 1.5px)',
+    };
+  }
+
+  return {
+    root: 'bg-gray-50 text-gray-900 border-gray-300',
+    header: 'bg-white border-gray-200',
+    title: 'text-gray-900',
+    input:
+      'bg-white border-gray-300 text-gray-900 placeholder:text-gray-500 focus:border-emerald-600 shadow-sm',
+    sidebar: 'bg-gray-100 border-gray-200',
+    sidebarTitle: 'text-gray-600',
+    widgetBtn:
+      'bg-white hover:bg-gray-50 border-gray-300 text-gray-800 shadow-sm',
+    widgetIcon: {
+      article: 'text-sky-700 bg-sky-100',
+      prompt: 'text-violet-700 bg-violet-100',
+      filter: 'text-amber-800 bg-amber-100',
+      action: 'text-rose-700 bg-rose-100',
+      end: 'text-rose-700 bg-rose-100',
+    },
+    canvas: 'bg-slate-100',
+    panel: 'bg-white border-gray-200',
+    label: 'text-gray-600',
+    emptyHint: 'text-gray-500',
+    headingAccent: 'text-emerald-700 border-gray-200',
+    nodeBg: 'bg-white',
+    nodeHeaderBorder: 'border-gray-200',
+    nodeTitle: 'text-gray-900',
+    nodeBody: 'text-gray-600',
+    chipOff: 'seo-flow-chip-off',
+    chipOnEmerald: 'seo-flow-chip-active-emerald',
+    chipOnSky: 'seo-flow-chip-active-sky',
+    btnPrimary: 'seo-flow-btn-primary',
+    field: 'bg-white border-gray-300 text-gray-900 focus:border-emerald-600 shadow-sm',
+    portBorder: 'border-white',
+    portInput: 'bg-white border-gray-400',
+    portDot: 'bg-gray-500',
+    portLabel: 'text-gray-700 bg-gray-100 border-gray-300',
+    trash: 'text-gray-500 hover:text-rose-600',
+    accentEmerald: 'text-emerald-700',
+    accentViolet: 'text-violet-700',
+    edgeColor: '#94a3b8',
+    gridImage: 'radial-gradient(#cbd5e1 1.5px, transparent 1.5px)',
+  };
+}
+
+export function nodeBorderClass(type, isSelected, isDark) {
+  if (isSelected) {
+    if (type === 'article') return 'border-sky-500';
+    if (type === 'prompt') return 'border-violet-500';
+    if (type === 'filter') return 'border-amber-500';
+    if (type === 'action' || type === 'end') return 'border-rose-500';
+  }
+  return isDark ? 'border-slate-600' : 'border-gray-300';
+}
+
+export function getPromptOutputPorts(promptId, prompts, isDark) {
+  const prompt = prompts.find((p) => p.id === promptId);
+  const violet = isDark ? 'bg-violet-500' : 'bg-violet-600';
+  const emerald = isDark ? 'bg-emerald-500' : 'bg-emerald-600';
+  if (!prompt) return [{ id: 'out_main', label: 'Toàn bộ', color: emerald }];
+  return [
+    ...prompt.tasks.map((task) => ({
+      id: `out_${task.id}`,
+      label: task.name,
+      color: violet,
+    })),
+    { id: 'out_main', label: 'Tổng (All)', color: emerald },
+  ];
+}
+
+/** Chiều cao header node (px) — cổng output căn theo vùng body bên dưới. */
+export const FLOW_NODE_HEADER_HEIGHT = 49;
+export const FLOW_PORT_ROW_HEIGHT = 36;
+export const FLOW_NODE_VERTICAL_PADDING = 12;
+
+export function getPromptNodeHeight(outputPortsCount) {
+  const bodyRows = Math.max(1, outputPortsCount);
+  return FLOW_NODE_HEADER_HEIGHT + bodyRows * FLOW_PORT_ROW_HEIGHT + FLOW_NODE_VERTICAL_PADDING;
+}
+
+export function getArticleNodeHeight() {
+  return 140;
+}
+
+export function getDefaultNodeHeight(nodeType, outputPortsCount = 1) {
+  if (nodeType === 'prompt') return getPromptNodeHeight(outputPortsCount);
+  if (nodeType === 'article') return getArticleNodeHeight();
+  return 100;
+}
+
+/** Vị trí `top` (px) cho cổng output — không dính header. */
+export function getOutputPortTop(nodeType, nodeHeight, outputPortsCount, portIndex) {
+  if (nodeType !== 'prompt') {
+    return nodeHeight / 2;
+  }
+
+  const bodyHeight = nodeHeight - FLOW_NODE_HEADER_HEIGHT;
+  const step = bodyHeight / (outputPortsCount + 1);
+  return FLOW_NODE_HEADER_HEIGHT + step * (portIndex + 1);
+}
