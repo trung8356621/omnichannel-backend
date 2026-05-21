@@ -20,11 +20,26 @@ class WordPressArticleContentService
         }
 
         $cached = trim((string) $this->getMeta($article, 'wp_post_content', ''));
+        $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
+
+        // Danh mục (product_cat / category): chỉ tin cache sau khi đồng bộ đúng entity=term.
+        // Tránh hiển thị nhầm nội dung post WP trùng term_id (vd. JSON font family).
+        if ($this->isTaxonomyRecord($article)) {
+            if ($entity === 'term' && $cached !== '') {
+                return $cached;
+            }
+
+            $remote = $this->fetchFromWordPress($article);
+            $fresh = trim((string) ($remote['post_content'] ?? ''));
+
+            return $fresh !== '' ? $fresh : $cached;
+        }
+
         if ($cached !== '') {
             return $cached;
         }
 
-        $remote = $this->fetchPostFromWordPress($article);
+        $remote = $this->fetchFromWordPress($article);
 
         return trim((string) ($remote['post_content'] ?? ''));
     }
@@ -40,19 +55,38 @@ class WordPressArticleContentService
             return $metaSlug;
         }
 
-        $remote = $this->fetchPostFromWordPress($article);
+        $remote = $this->fetchFromWordPress($article);
 
         return trim((string) ($remote['slug'] ?? ''));
     }
 
+    /**
+     * URL công khai theo cấu trúc permalink WordPress (không ghép domain + slug).
+     */
+    public function resolvePermalink(SeoArticle $article): string
+    {
+        $cached = trim((string) $this->getMeta($article, 'wp_permalink', ''));
+        if ($cached !== '') {
+            return $cached;
+        }
+
+        $remote = $this->fetchFromWordPress($article);
+
+        return trim((string) ($remote['permalink'] ?? ''));
+    }
+
     public function resolveFeaturedImageUrl(SeoArticle $article): ?string
     {
+        if ($this->isTaxonomyRecord($article)) {
+            return null;
+        }
+
         $cached = trim((string) $this->getMeta($article, 'wp_featured_image_url', ''));
         if ($cached !== '') {
             return $cached;
         }
 
-        $remote = $this->fetchPostFromWordPress($article);
+        $remote = $this->fetchFromWordPress($article);
 
         $url = trim((string) ($remote['featured_image_url'] ?? ''));
 
@@ -66,12 +100,16 @@ class WordPressArticleContentService
      */
     public function resolveProductGallery(SeoArticle $article): array
     {
+        if ($this->isTaxonomyRecord($article)) {
+            return [];
+        }
+
         $cached = $this->getMetaJson($article, 'wp_product_gallery');
         if ($cached !== []) {
             return $this->normalizeProductGallery($cached);
         }
 
-        $remote = $this->fetchPostFromWordPress($article);
+        $remote = $this->fetchFromWordPress($article);
         $gallery = $remote['product_gallery'] ?? null;
 
         return is_array($gallery) ? $this->normalizeProductGallery($gallery) : [];
@@ -96,10 +134,10 @@ class WordPressArticleContentService
     /**
      * @return array<string, mixed>
      */
-    public function fetchPostFromWordPress(SeoArticle $article): array
+    public function fetchFromWordPress(SeoArticle $article): array
     {
-        $wpPostId = (int) ($article->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
+        $wpId = (int) ($article->wp_post_id ?? 0);
+        if ($wpId <= 0) {
             return [];
         }
 
@@ -116,7 +154,11 @@ class WordPressArticleContentService
             return [];
         }
 
-        $url = $this->buildPostUrl($site, $wpPostId);
+        $taxonomy = $this->resolveWpTaxonomy($article);
+        $url = $taxonomy !== null
+            ? $this->buildTermUrl($site, $taxonomy, $wpId)
+            : $this->buildPostUrl($site, $wpId);
+
         if ($url === '') {
             return [];
         }
@@ -138,43 +180,117 @@ class WordPressArticleContentService
 
             $post = is_array($payload['post'] ?? null) ? $payload['post'] : [];
 
-            if (filled($post['post_content'] ?? null)) {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_post_content'],
-                    ['meta_value' => (string) $post['post_content']],
-                );
-            }
-
-            if (filled($post['slug'] ?? null)) {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_slug'],
-                    ['meta_value' => (string) $post['slug']],
-                );
-            }
-
-            if (filled($post['featured_image_url'] ?? null)) {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_featured_image_url'],
-                    ['meta_value' => (string) $post['featured_image_url']],
-                );
-            }
-
-            if (is_array($post['product_gallery'] ?? null) && $post['product_gallery'] !== []) {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_product_gallery'],
-                    ['meta_value' => json_encode($post['product_gallery'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
-                );
-            }
+            $this->persistFetchedMeta($article, $post, $taxonomy !== null);
 
             return $post;
         } catch (Throwable $e) {
-            Log::warning('WordPress post fetch failed', [
+            Log::warning('WordPress content fetch failed', [
                 'article_id' => $article->id,
-                'wp_post_id' => $wpPostId,
+                'wp_post_id' => $wpId,
+                'taxonomy' => $taxonomy,
                 'error' => $e->getMessage(),
             ]);
 
             return [];
+        }
+    }
+
+    /**
+     * @deprecated Use fetchFromWordPress()
+     *
+     * @return array<string, mixed>
+     */
+    public function fetchPostFromWordPress(SeoArticle $article): array
+    {
+        return $this->fetchFromWordPress($article);
+    }
+
+    public function isTaxonomyRecord(SeoArticle $article): bool
+    {
+        return $this->resolveWpTaxonomy($article) !== null;
+    }
+
+    private function resolveWpTaxonomy(SeoArticle $article): ?string
+    {
+        $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
+        if ($entity === 'term') {
+            $taxonomy = trim((string) $this->getMeta($article, 'wp_post_type', ''));
+
+            return $this->normalizeTaxonomySlug($taxonomy);
+        }
+
+        $type = strtolower(trim((string) ($article->type ?? '')));
+        if ($type === 'product_category') {
+            return 'product_cat';
+        }
+        if ($type === 'category') {
+            return 'category';
+        }
+
+        $wpPostType = trim((string) $this->getMeta($article, 'wp_post_type', ''));
+
+        return $this->normalizeTaxonomySlug($wpPostType);
+    }
+
+    private function normalizeTaxonomySlug(string $taxonomy): ?string
+    {
+        return match ($taxonomy) {
+            'product_cat', 'product_category' => 'product_cat',
+            'category' => 'category',
+            default => null,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy): void
+    {
+        if (array_key_exists('post_content', $post)) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_content'],
+                ['meta_value' => (string) $post['post_content']],
+            );
+        }
+
+        if (filled($post['slug'] ?? null)) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_slug'],
+                ['meta_value' => (string) $post['slug']],
+            );
+        }
+
+        if (filled($post['permalink'] ?? null)) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_permalink'],
+                ['meta_value' => (string) $post['permalink']],
+            );
+        }
+
+        if ($isTaxonomy) {
+            return;
+        }
+
+        if (filled($post['featured_image_url'] ?? null)) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_featured_image_url'],
+                ['meta_value' => (string) $post['featured_image_url']],
+            );
+        }
+
+        if (is_array($post['product_gallery'] ?? null) && $post['product_gallery'] !== []) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_product_gallery'],
+                ['meta_value' => json_encode($post['product_gallery'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+            );
+        }
+
+        if (is_array($post['post_images'] ?? null) && $post['post_images'] !== []) {
+            app(ArticlePostImagesService::class)->importFromSyncItem($article, $post);
+        }
+
+        if (is_array($post['faqs'] ?? null)) {
+            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
         }
     }
 
@@ -236,5 +352,15 @@ class WordPressArticleContentService
         }
 
         return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpPostId;
+    }
+
+    private function buildTermUrl(Site $site, string $taxonomy, int $termId): string
+    {
+        $base = $this->getPermalinkBase($site);
+        if ($base === '') {
+            return '';
+        }
+
+        return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $termId;
     }
 }

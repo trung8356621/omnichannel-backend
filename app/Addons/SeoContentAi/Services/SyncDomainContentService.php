@@ -79,16 +79,7 @@ class SyncDomainContentService
 
             $synced = $this->importItems($site, $items);
 
-            return [
-                'success' => true,
-                'message' => sprintf(
-                    'Đồng bộ thành công %d mục từ WordPress%s.',
-                    array_sum($synced),
-                    $isTest ? ' (chế độ test)' : ''
-                ),
-                'synced' => $synced,
-                'counts' => is_array($payload['counts'] ?? null) ? $payload['counts'] : [],
-            ];
+            return $this->buildImportSuccessResponse($synced, $isTest, is_array($payload['counts'] ?? null) ? $payload['counts'] : []);
         } catch (Throwable $e) {
             Log::error('SeoContentAi sync failed', [
                 'site_id' => $site->id,
@@ -104,10 +95,55 @@ class SyncDomainContentService
     }
 
     /**
+     * Nhận payload đẩy từ plugin WordPress (hook save_post / term).
+     *
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array{success:bool,message:string,synced?:array<string,int>}
+     */
+    public function importPushedItems(Site $site, array $items): array
+    {
+        $platform = (string) ($site->getMeta('seo_platform') ?? '');
+        if ($platform !== 'wordpress') {
+            return [
+                'success' => false,
+                'message' => 'Site chưa cấu hình nền tảng WordPress.',
+            ];
+        }
+
+        $synced = $this->importItems($site, $items);
+
+        return $this->buildImportSuccessResponse($synced, false, []);
+    }
+
+    /**
+     * @param  array<string, int>  $synced
+     * @param  array<string, int>  $counts
+     * @return array{success:bool,message:string,synced:array<string,int>,counts?:array<string,int>}
+     */
+    private function buildImportSuccessResponse(array $synced, bool $isTest, array $counts): array
+    {
+        $response = [
+            'success' => true,
+            'message' => sprintf(
+                'Đồng bộ thành công %d mục từ WordPress%s.',
+                array_sum($synced),
+                $isTest ? ' (chế độ test)' : ''
+            ),
+            'synced' => $synced,
+        ];
+
+        if ($counts !== []) {
+            $response['counts'] = $counts;
+        }
+
+        return $response;
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $items
      * @return array<string, int>
      */
-    private function importItems(Site $site, array $items): array
+    public function importItems(Site $site, array $items): array
     {
         $synced = [
             'article' => 0,
@@ -162,7 +198,17 @@ class SyncDomainContentService
                 );
             }
 
+            $wpEntity = trim((string) ($item['wp_entity'] ?? ''));
+            if ($wpEntity !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_entity'],
+                    ['meta_value' => $wpEntity],
+                );
+            }
+
             $this->syncWordPressPostMeta($article, $item);
+            app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
+            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
             $this->syncSeoMetaFromWordPress($article, $item);
             $this->syncFocusKeyword($site, $userId, $article, $item);
 
@@ -190,20 +236,47 @@ class SyncDomainContentService
      */
     private function syncWordPressPostMeta(SeoArticle $article, array $item): void
     {
-        $metaMap = [
-            'wp_post_content' => trim((string) ($item['post_content'] ?? '')),
-            'wp_slug' => trim((string) ($item['slug'] ?? '')),
-            'wp_featured_image_url' => trim((string) ($item['featured_image_url'] ?? '')),
-        ];
+        $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
+        $isTaxonomy = in_array($type, ['category', 'product_category'], true);
+        $content = $this->resolveSyncItemContent($item);
 
-        foreach ($metaMap as $metaKey => $metaValue) {
-            if ($metaValue === '') {
-                continue;
-            }
-
+        if ($isTaxonomy || $content !== '') {
             $article->articleMetas()->updateOrCreate(
-                ['meta_key' => $metaKey],
-                ['meta_value' => $metaValue],
+                ['meta_key' => 'wp_post_content'],
+                ['meta_value' => $content],
+            );
+        }
+
+        $slug = trim((string) ($item['slug'] ?? ''));
+        if ($slug !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_slug'],
+                ['meta_value' => $slug],
+            );
+        }
+
+        $permalink = trim((string) ($item['permalink'] ?? ''));
+        if ($permalink !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_permalink'],
+                ['meta_value' => $permalink],
+            );
+        }
+
+        if ($isTaxonomy) {
+            $article->articleMetas()->whereIn('meta_key', [
+                'wp_featured_image_url',
+                'wp_product_gallery',
+            ])->delete();
+
+            return;
+        }
+
+        $featuredImageUrl = trim((string) ($item['featured_image_url'] ?? ''));
+        if ($featuredImageUrl !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_featured_image_url'],
+                ['meta_value' => $featuredImageUrl],
             );
         }
 
@@ -214,6 +287,21 @@ class SyncDomainContentService
                 ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
             );
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveSyncItemContent(array $item): string
+    {
+        $content = trim((string) ($item['post_content'] ?? ''));
+        if ($content !== '') {
+            return $content;
+        }
+
+        $scoring = is_array($item['scoring'] ?? null) ? $item['scoring'] : [];
+
+        return trim((string) ($scoring['body'] ?? ''));
     }
 
     /**

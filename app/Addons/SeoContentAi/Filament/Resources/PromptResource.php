@@ -77,6 +77,7 @@ class PromptResource extends Resource
                                             ->default(true),
                                     ]),
                                 Forms\Components\Section::make('Khai báo Biến (Variables)')
+                                    ->description('Biến hệ thống {{input}} luôn có sẵn trong SEO Flow — nhận kết quả từ edge nối vào Khối Prompt. Model AI được chọn trên widget Khối Prompt trong Workflow Builder.')
                                     ->schema([
                                         Forms\Components\Repeater::make('variables')
                                             ->label('')
@@ -372,8 +373,8 @@ class PromptResource extends Resource
             ->values()
             ->all();
 
-        $names = $declared
-            ->pluck('name')
+        $names = collect(['input'])
+            ->merge($declared->pluck('name'))
             ->filter()
             ->merge(self::extractVariableNamesFromParts($parts))
             ->unique()
@@ -398,11 +399,15 @@ class PromptResource extends Resource
     public static function defaultVariableLabels(): array
     {
         return [
+            'input' => 'Kết quả edge nối vào (SEO Flow)',
             'post_title' => 'Tiêu đề bài viết',
             'post_content' => 'Nội dung bài viết',
             'focus_keyword' => 'Từ khóa chính',
             'post_excerpt' => 'Mô tả ngắn (Đoạn trích)',
             'site_domain' => 'Tên miền website',
+            'site_short_description' => 'Mô tả ngắn website (domain)',
+            'site_cta' => 'CTA / liên hệ website (domain)',
+            'site_links' => 'Danh sách link (từ khóa → URL, domain)',
         ];
     }
 

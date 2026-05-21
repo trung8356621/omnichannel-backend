@@ -23,6 +23,7 @@ import {
     Superscript,
     Table,
     Trash2,
+    ListTree,
 } from 'lucide-react';
 import ParagraphStyleDropdown from './ParagraphStyleDropdown';
 
@@ -258,6 +259,15 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                 </ToolbarGroup>
 
                 <span className="seo-toolbar-spacer" />
+
+                <ToolbarButton
+                    onClick={() => {
+                        window.dispatchEvent(new CustomEvent('extract-article-faqs-from-toolbar'));
+                    }}
+                    title="Tách FAQ từ đoạn đang bôi đen (hoặc cả block)"
+                >
+                    <ListTree size={ICON_SIZE} />
+                </ToolbarButton>
 
                 <button
                     type="button"

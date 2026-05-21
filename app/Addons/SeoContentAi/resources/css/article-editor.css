@@ -10,18 +10,6 @@
 }
 
 /* WordPress-style post editor chrome (Filament page) */
-.wp-article-edit .wp-postbox {
-    background: #fff;
-    border: 1px solid #c3c4c7;
-    border-radius: 4px;
-    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
-}
-
-.dark .wp-article-edit .wp-postbox {
-    background: rgb(17 24 39);
-    border-color: rgb(55 65 81);
-}
-
 .wp-article-edit .wp-postbox-header {
     display: flex;
     align-items: center;
@@ -53,7 +41,7 @@
     font-weight: 600;
     line-height: 1.3;
     padding: 0.25rem 0;
-    background: transparent;
+    background: #fff;
     color: inherit;
 }
 
@@ -70,6 +58,50 @@
 .wp-article-edit .seo-wp-btn-primary:hover {
     background: #135e96;
     border-color: #135e96;
+}
+
+.wp-article-edit .seo-wp-btn-secondary {
+    background: #f6f7f7;
+    color: #1d2327;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 0.35rem 0.75rem;
+    border-radius: 3px;
+    border: 1px solid #c3c4c7;
+}
+
+.wp-article-edit .seo-wp-btn-secondary:hover:not(:disabled) {
+    background: #fff;
+    border-color: #8c8f94;
+}
+
+.wp-article-edit .seo-wp-btn-secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.wp-article-edit .seo-wp-btn-outline {
+    display: inline-block;
+    background: transparent;
+    color: #2271b1;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    padding: 0.35rem 0.75rem;
+    border-radius: 3px;
+    border: 1px solid #2271b1;
+    text-decoration: none;
+}
+
+.wp-article-edit .seo-wp-btn-outline:hover {
+    background: #f0f6fc;
+    color: #135e96;
+    border-color: #135e96;
+}
+
+.wp-article-edit .seo-article-actions .seo-wp-btn-primary,
+.wp-article-edit .seo-article-actions .seo-wp-btn-secondary {
+    width: 100%;
+    text-align: center;
 }
 
 /* WooCommerce product gallery widget (sidebar) */
@@ -221,6 +253,28 @@
     border-radius: 4px;
     max-height: 200px;
     overflow: auto;
+}
+
+/* Placeholder shortcode FAQ trong editor */
+.omi-faq-placeholder,
+.tiptap-editor-content .omi-faq-placeholder,
+.seo-wp-content .omi-faq-placeholder {
+    margin: 0.75rem 0;
+    padding: 0.65rem 0.85rem;
+    text-align: center;
+    font-size: 0.8125rem;
+    font-style: italic;
+    color: #646970;
+    background: #f6f7f7;
+    border: 1px dashed #c3c4c7;
+    border-radius: 4px;
+}
+
+.dark .omi-faq-placeholder,
+.dark .tiptap-editor-content .omi-faq-placeholder {
+    color: #a7aaad;
+    background: rgb(30 41 59);
+    border-color: rgb(71 85 105);
 }
 
 /* Sidebar Chat AI */
@@ -521,7 +575,7 @@
 }
 
 .editor-container .max-w-none.space-y-3 {
-    overflow: hidden;
+    overflow: visible;
 }
 
 .seo-block-images-panel {
@@ -610,6 +664,42 @@
     border-radius: 4px;
 }
 
+.seo-ai-chat-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.seo-ai-chat-extract-faq {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.4rem 0.65rem;
+    font-size: 12px;
+    font-weight: 500;
+    color: #1d4ed8;
+    background: #eff6ff;
+    border: 1px solid #93c5fd;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.seo-ai-chat-extract-faq:hover:not(:disabled) {
+    background: #dbeafe;
+}
+
+.seo-ai-chat-extract-faq:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.dark .seo-ai-chat-extract-faq {
+    color: #93c5fd;
+    background: rgb(30 58 138 / 0.35);
+    border-color: rgb(59 130 246 / 0.5);
+}
+
 .seo-ai-chat-send {
     display: inline-flex;
     align-items: center;
@@ -633,7 +723,75 @@
 }
 
 /* Editor: không có toolbar full-width; chỉ bubble trên block đang active */
+.seo-editor-busy-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(2px);
+}
+
+.dark .seo-editor-busy-overlay {
+    background: rgba(15, 23, 42, 0.85);
+}
+
+.seo-editor-busy-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.65rem;
+    max-width: 320px;
+    padding: 1.25rem 1.5rem;
+    border-radius: 8px;
+    border: 1px solid #c3c4c7;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+    text-align: center;
+}
+
+.dark .seo-editor-busy-card {
+    background: rgb(17 24 39);
+    border-color: rgb(71 85 105);
+}
+
+.seo-editor-busy-spinner {
+    animation: seo-editor-spin 0.9s linear infinite;
+    color: #2271b1;
+}
+
+@keyframes seo-editor-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.seo-editor-busy-title {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: #1d2327;
+}
+
+.seo-editor-busy-message {
+    margin: 0;
+    font-size: 0.8125rem;
+    color: #646970;
+    line-height: 1.45;
+}
+
+.dark .seo-editor-busy-title {
+    color: #f1f5f9;
+}
+
+.dark .seo-editor-busy-message {
+    color: #94a3b8;
+}
+
 .seo-article-editor-root {
+    position: relative;
     border: 1px solid #c3c4c7;
     border-radius: 4px;
     background: #fff;
@@ -755,13 +913,18 @@
     border-bottom-color: #60a5fa;
 }
 
-.seo-editor-tab-score {
+.seo-editor-tab-score,
+.seo-editor-tab-badge {
     font-size: 0.65rem;
     font-weight: 700;
     padding: 0.1rem 0.35rem;
     border-radius: 9999px;
     background: #2271b1;
     color: #fff;
+}
+
+.seo-editor-tab-badge {
+    background: #646970;
 }
 
 .seo-editor-tab-actions {
@@ -1023,6 +1186,124 @@
     font-size: 0.8125rem;
     font-weight: 700;
     margin-bottom: 0.5rem;
+}
+
+.seo-content-bonus {
+    padding: 0.875rem 1rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #f9fafb;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.dark .seo-content-bonus {
+    border-color: rgb(55 65 81);
+    background: rgb(31 41 55);
+}
+
+.seo-content-bonus__title {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: #111827;
+}
+
+.dark .seo-content-bonus__title {
+    color: #f3f4f6;
+}
+
+.seo-content-bonus__subtitle {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.dark .seo-content-bonus__subtitle {
+    color: #9ca3af;
+}
+
+.seo-content-bonus-row {
+    padding: 0.625rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+}
+
+.dark .seo-content-bonus-row {
+    border-color: rgb(55 65 81);
+    background: rgb(17 24 39);
+}
+
+.seo-content-bonus-row--pass {
+    border-color: #86efac;
+    background: #f0fdf4;
+}
+
+.dark .seo-content-bonus-row--pass {
+    border-color: rgba(34, 197, 94, 0.45);
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.seo-content-bonus-row--fail {
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.dark .seo-content-bonus-row--fail {
+    border-color: rgba(244, 63, 94, 0.35);
+    background: rgba(190, 18, 60, 0.1);
+}
+
+.seo-content-bonus-row__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.25rem 0.5rem;
+}
+
+.seo-content-bonus-row__label {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #111827;
+}
+
+.dark .seo-content-bonus-row__label {
+    color: #f9fafb;
+}
+
+.seo-content-bonus-row__points {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    color: #047857;
+}
+
+.seo-content-bonus-row--fail .seo-content-bonus-row__points {
+    color: #b91c1c;
+}
+
+.dark .seo-content-bonus-row__points {
+    color: #6ee7b7;
+}
+
+.dark .seo-content-bonus-row--fail .seo-content-bonus-row__points {
+    color: #fca5a5;
+}
+
+.seo-content-bonus-row__meta,
+.seo-content-bonus-row__message {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: #4b5563;
+}
+
+.dark .seo-content-bonus-row__meta,
+.dark .seo-content-bonus-row__message {
+    color: #d1d5db;
 }
 
 .seo-link-list {
@@ -1324,15 +1605,30 @@
     cursor: pointer;
 }
 
+.dark .seo-image-toolbar-btn {
+    color: #e2e8f0;
+}
+
 .seo-image-toolbar-btn:hover {
     background: #f0f0f1;
     border-color: #dcdcde;
+}
+
+.dark .seo-image-toolbar-btn:hover {
+    background: rgb(51 65 85);
+    border-color: rgb(71 85 105);
 }
 
 .seo-image-toolbar-btn.is-active {
     border-color: #1d2327;
     background: #f0f0f1;
     color: #1d2327;
+}
+
+.dark .seo-image-toolbar-btn.is-active {
+    border-color: #93c5fd;
+    background: rgb(51 65 85);
+    color: #f8fafc;
 }
 
 .seo-image-toolbar-btn.is-danger:hover {
@@ -1483,4 +1779,418 @@
 .tiptap-editor-content figure.seo-article-figure.ProseMirror-selectednode {
     outline: 2px solid #2271b1;
     outline-offset: 2px;
+}
+
+/* Tab danh sách ảnh bài viết */
+.seo-images-tab {
+    max-height: min(70vh, 720px);
+    overflow-y: auto;
+    padding: 0.75rem 1rem 1.25rem;
+}
+
+.seo-images-tab-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.seo-images-tab-intro {
+    margin: 0;
+    flex: 1;
+    min-width: 200px;
+    font-size: 0.8125rem;
+    color: #646970;
+}
+
+.seo-images-quick-fix-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #2271b1;
+    background: #f0f6fc;
+    border: 1px solid #c3d9ed;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.seo-images-quick-fix-btn:hover:not(:disabled) {
+    background: #e5f0fa;
+    border-color: #2271b1;
+}
+
+.seo-images-quick-fix-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.dark .seo-images-quick-fix-btn {
+    color: #60a5fa;
+    background: rgb(30 41 59);
+    border-color: rgb(71 85 105);
+}
+
+.dark .seo-images-tab-intro {
+    color: #94a3b8;
+}
+
+.seo-images-tab-intro-wrap {
+    flex: 1;
+    min-width: 200px;
+}
+
+.seo-images-tab-warning {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: #b45309;
+    white-space: pre-line;
+}
+
+.dark .seo-images-tab-warning {
+    color: #fbbf24;
+}
+
+.seo-images-tab-empty {
+    margin: 2rem 0;
+    text-align: center;
+    color: #646970;
+    font-size: 0.875rem;
+}
+
+.seo-article-images-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.seo-article-images-row {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    background: #fff;
+}
+
+.dark .seo-article-images-row {
+    background: rgb(17 24 39);
+    border-color: rgb(71 85 105);
+}
+
+.seo-article-images-thumb-btn {
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.seo-article-images-thumb {
+    width: 88px;
+    height: 88px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid #dcdcde;
+}
+
+.seo-article-images-fields {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.seo-article-images-field-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.seo-article-images-wp-id {
+    font-size: 0.7rem;
+    color: #2271b1;
+    margin-top: 0.15rem;
+}
+
+.seo-article-images-hint {
+    font-weight: 400;
+    color: #646970;
+    font-size: 0.7rem;
+}
+
+.seo-article-images-src-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    color: #2271b1;
+    max-width: 100%;
+}
+
+.seo-article-images-src-link span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Compact main editor + FAQ panel (edit article) */
+.seo-article-editor-compact.seo-article-editor-root .editor-container,
+.seo-article-editor-compact .seo-article-editor-root .editor-container {
+    min-height: 200px;
+    max-height: min(42vh, 480px);
+    overflow-y: auto;
+}
+
+.seo-article-faq-panel {
+    margin-top: 0;
+}
+
+.seo-faq-extract-debug {
+    padding: 0.75rem 0.85rem;
+    border: 1px solid #f59e0b;
+    border-radius: 6px;
+    background: #fffbeb;
+    color: #78350f;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+}
+
+.dark .seo-faq-extract-debug {
+    border-color: #b45309;
+    background: rgb(69 26 3 / 0.45);
+    color: #fde68a;
+}
+
+.seo-faq-extract-debug__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.seo-faq-extract-debug__dismiss {
+    font-size: 0.75rem;
+    color: inherit;
+    opacity: 0.85;
+    text-decoration: underline;
+}
+
+.seo-faq-extract-debug__meta {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0;
+}
+
+.seo-faq-extract-debug__meta > div {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr;
+    gap: 0.35rem;
+}
+
+.seo-faq-extract-debug__meta dt {
+    font-weight: 600;
+    margin: 0;
+}
+
+.seo-faq-extract-debug__meta dd {
+    margin: 0;
+}
+
+.seo-faq-extract-debug__heading {
+    font-weight: 600;
+}
+
+.seo-faq-extract-debug__candidates ul {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+}
+
+.seo-faq-extract-debug__preview {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
+    opacity: 0.95;
+}
+
+.seo-faq-extract-debug__html {
+    margin-top: 0.5rem;
+}
+
+.seo-faq-extract-debug__html pre {
+    margin: 0.35rem 0 0;
+    padding: 0.5rem;
+    font-size: 0.7rem;
+    overflow-x: auto;
+    background: rgb(0 0 0 / 0.06);
+    border-radius: 4px;
+}
+
+.dark .seo-faq-extract-debug__html pre {
+    background: rgb(0 0 0 / 0.25);
+}
+
+.seo-article-faq-panel .wp-postbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.seo-faq-btn-add {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #2271b1;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    border: 1px solid #c3c4c7;
+    background: #f6f7f7;
+}
+
+.seo-faq-btn-add:hover {
+    background: #fff;
+    border-color: #2271b1;
+}
+
+.seo-faq-item {
+    padding: 0.85rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    background: #fafafa;
+}
+
+.dark .seo-faq-item {
+    border-color: rgb(55 65 81);
+    background: rgb(31 41 55);
+}
+
+.seo-faq-item.is-duplicate {
+    border-color: #fca5a5;
+    background: #fef2f2;
+}
+
+.dark .seo-faq-item.is-duplicate {
+    border-color: #b91c1c;
+    background: rgb(69 10 10 / 0.35);
+}
+
+.seo-faq-item__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.seo-faq-item__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.seo-faq-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #374151;
+}
+
+.dark .seo-faq-label {
+    color: #e5e7eb;
+}
+
+.seo-faq-question-input {
+    width: 100%;
+    margin-top: 0.35rem;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    background: #fff;
+    color: inherit;
+}
+
+.seo-faq-question-input.is-duplicate {
+    border-color: #ef4444;
+    background: #fff5f5;
+    color: #b91c1c;
+}
+
+.dark .seo-faq-question-input.is-duplicate {
+    background: rgb(69 10 10 / 0.5);
+    color: #fecaca;
+}
+
+.seo-faq-duplicate-msg {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+    color: #dc2626;
+    font-weight: 500;
+}
+
+.seo-faq-btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem;
+    border-radius: 4px;
+    color: #2271b1;
+    border: 1px solid transparent;
+}
+
+.seo-faq-btn-icon:hover {
+    background: #f0f6fc;
+    border-color: #c3c4c7;
+}
+
+.seo-faq-btn-icon:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.seo-faq-answer-wrap .seo-block-toolbar {
+    position: static;
+    margin: 0;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid #e5e7eb;
+    box-shadow: none;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.35rem 0.5rem;
+    background: #f6f7f7;
+}
+
+.dark .seo-faq-answer-wrap .seo-block-toolbar {
+    border-bottom-color: rgb(55 65 81);
+    background: rgb(31 41 55);
+}
+
+.seo-faq-answer-wrap .seo-block-toolbar-rich {
+    max-width: 100%;
+}
+
+.seo-faq-answer-wrap .ProseMirror {
+    min-height: 120px;
+    padding: 0.5rem 0.75rem;
+}
+
+.seo-faq-answer-wrap .ProseMirror:focus {
+    outline: none;
 }

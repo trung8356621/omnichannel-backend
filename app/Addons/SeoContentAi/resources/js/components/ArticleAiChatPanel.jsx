@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Send, Sparkles } from 'lucide-react';
+import { Send, Sparkles, ListTree } from 'lucide-react';
 import { loadChat, saveChat } from '../utils/articleEditorStorage';
 
 export default function ArticleAiChatPanel({ articleId }) {
     const [messages, setMessages] = useState([]);
     const [selectedText, setSelectedText] = useState('');
+    const [selectedHtml, setSelectedHtml] = useState('');
     const [input, setInput] = useState('');
     const [sending, setSending] = useState(false);
     const historyRef = useRef(null);
@@ -18,8 +19,10 @@ export default function ArticleAiChatPanel({ articleId }) {
             const detail = e.detail ?? {};
             if (detail.hasSelection && detail.text) {
                 setSelectedText(detail.text);
+                setSelectedHtml(detail.html ?? '');
             } else {
                 setSelectedText('');
+                setSelectedHtml('');
             }
         };
 
@@ -42,6 +45,35 @@ export default function ArticleAiChatPanel({ articleId }) {
         },
         [articleId],
     );
+
+    const handleExtractFaq = useCallback(() => {
+        const html = selectedHtml.trim();
+        const text = selectedText.trim();
+        if (!html && !text) {
+            return;
+        }
+
+        const payloadHtml =
+            html ||
+            text
+                .split(/\n{2,}/)
+                .map((p) => `<p>${p.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`)
+                .join('');
+
+        window.dispatchEvent(
+            new CustomEvent('extract-article-faqs', {
+                detail: { html: payloadHtml },
+            }),
+        );
+    }, [selectedHtml, selectedText]);
+
+    useEffect(() => {
+        const onToolbarExtract = () => handleExtractFaq();
+
+        window.addEventListener('extract-article-faqs-from-toolbar', onToolbarExtract);
+
+        return () => window.removeEventListener('extract-article-faqs-from-toolbar', onToolbarExtract);
+    }, [handleExtractFaq]);
 
     const handleSend = () => {
         const prompt = input.trim();
@@ -125,15 +157,27 @@ export default function ArticleAiChatPanel({ articleId }) {
                             }
                         }}
                     />
-                    <button
-                        type="button"
-                        className="seo-ai-chat-send"
-                        onClick={handleSend}
-                        disabled={!input.trim() || !selectedText.trim() || sending}
-                    >
-                        <Send size={15} />
-                        Chat AI
-                    </button>
+                    <div className="seo-ai-chat-actions">
+                        <button
+                            type="button"
+                            className="seo-ai-chat-extract-faq"
+                            onClick={handleExtractFaq}
+                            disabled={!selectedText.trim()}
+                            title="Bóc tách FAQ từ đoạn đang chọn (hoặc cả block đang sửa) và lưu xuống panel FAQ"
+                        >
+                            <ListTree size={15} />
+                            Tách FAQ
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-ai-chat-send"
+                            onClick={handleSend}
+                            disabled={!input.trim() || !selectedText.trim() || sending}
+                        >
+                            <Send size={15} />
+                            Chat AI
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

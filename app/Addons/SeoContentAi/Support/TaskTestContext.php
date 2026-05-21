@@ -32,4 +32,31 @@ final class TaskTestContext
             'variables' => $this->variables,
         ];
     }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function fromArray(array $data): self
+    {
+        $article = null;
+        $articleId = $data['article_id'] ?? null;
+
+        if (is_numeric($articleId) && (int) $articleId > 0) {
+            $article = SeoArticle::query()->find((int) $articleId);
+        }
+
+        $variables = is_array($data['variables'] ?? null) ? $data['variables'] : [];
+        $normalizedVariables = [];
+        foreach ($variables as $key => $value) {
+            $normalizedVariables[(string) $key] = is_string($value) ? $value : (string) $value;
+        }
+
+        return new self(
+            article: $article,
+            isNewArticle: (bool) ($data['is_new_article'] ?? false),
+            matchedBy: is_string($data['matched_by'] ?? null) ? $data['matched_by'] : null,
+            variables: $normalizedVariables,
+            summary: (string) ($data['summary'] ?? ''),
+        );
+    }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoArticleLink;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -116,8 +117,11 @@ class SeoAnalyzerService
             $this->resolveArticleDomain($article, $domainOverride),
         );
 
+        $contentBonus = app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content);
+
         return array_merge($computed['scoreData'], [
             'extracted_links' => $computed['extractedLinks'],
+            'content_bonus' => $contentBonus,
         ]);
     }
 
@@ -317,7 +321,7 @@ class SeoAnalyzerService
         $links = $extractedLinks ?? ['internal' => [], 'external' => []];
 
         $this->storeMeta($article, 'seo_rank_math_score', $scoreData);
-        $this->storeMeta($article, 'seo_extracted_links', $links);
+        $this->persistExtractedLinks($article, $links);
 
         $updatePayload = [
             'seo_score' => $scoreData['score'],
@@ -333,6 +337,49 @@ class SeoAnalyzerService
         $article->update($updatePayload);
 
         return $scoreData;
+    }
+
+    /**
+     * @param  array{internal: array<int, mixed>, external: array<int, mixed>}  $extractedLinks
+     */
+    private function persistExtractedLinks(SeoArticle $article, array $extractedLinks): void
+    {
+        $article->links()->delete();
+
+        $linksToInsert = [];
+        $now = now();
+
+        foreach ($extractedLinks['internal'] as $link) {
+            $linksToInsert[] = [
+                'article_id' => $article->id,
+                'type' => 'internal',
+                'url' => (string) ($link['href'] ?? ''),
+                'anchor_text' => Str::limit(strip_tags((string) ($link['text'] ?? '')), 500),
+                'is_nofollow' => (bool) ($link['is_nofollow'] ?? false),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        foreach ($extractedLinks['external'] as $link) {
+            $linksToInsert[] = [
+                'article_id' => $article->id,
+                'type' => 'external',
+                'url' => (string) ($link['href'] ?? ''),
+                'anchor_text' => Str::limit(strip_tags((string) ($link['text'] ?? '')), 500),
+                'is_nofollow' => (bool) ($link['is_nofollow'] ?? false),
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if ($linksToInsert === []) {
+            return;
+        }
+
+        foreach (array_chunk($linksToInsert, 500) as $chunk) {
+            SeoArticleLink::insert($chunk);
+        }
     }
 
     private function resolveArticleDomain(SeoArticle $article, ?string $domainOverride = null): string
@@ -444,7 +491,7 @@ class SeoAnalyzerService
 
     /**
      * @return array{
-     *   internal: array<int, array{href:string,text:string}>,
+     *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
      *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
      * }
      */
@@ -478,17 +525,17 @@ class SeoAnalyzerService
             }
 
             $text = trim((string) $anchor->textContent);
+            $rel = strtolower((string) $anchor->getAttribute('rel'));
+            $isNoFollow = str_contains($rel, 'nofollow');
 
             if ($this->isInternalLink($href, $domain)) {
                 $result['internal'][] = [
                     'href' => $href,
                     'text' => $text,
+                    'is_nofollow' => $isNoFollow,
                 ];
                 continue;
             }
-
-            $rel = strtolower((string) $anchor->getAttribute('rel'));
-            $isNoFollow = str_contains($rel, 'nofollow');
 
             $result['external'][] = [
                 'href' => $href,

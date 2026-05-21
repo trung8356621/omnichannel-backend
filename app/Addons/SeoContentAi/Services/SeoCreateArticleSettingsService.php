@@ -10,38 +10,145 @@ final class SeoCreateArticleSettingsService
 {
     public const OPTION_KEY = 'seo_create_article_task';
 
+    public const KEY_PUBLISH_ARTICLE = 'publish_article_task_id';
+
+    public const KEY_EDIT_ARTICLE = 'edit_article_task_id';
+
+    public const KEY_POST_REVIEW = 'post_review_task_id';
+
+    public const KEY_CREATE_IMAGE = 'create_image_task_id';
+
+    public const KEY_CREATE_VIDEO = 'create_video_task_id';
+
+    public const KEY_RENEW_FAQ_PROMPT_ID = 'renew_faq_prompt_id';
+
+    /** @deprecated Dùng publish_article_task_id; vẫn đọc/ghi để tương thích wp_options cũ */
+    public const KEY_LEGACY_TASK_ID = 'task_id';
+
     /**
-     * @return array{task_id: ?int}
+     * @return array{
+     *     publish_article_task_id: ?int,
+     *     edit_article_task_id: ?int,
+     *     post_review_task_id: ?int,
+     *     create_image_task_id: ?int,
+     *     create_video_task_id: ?int,
+     *     renew_faq_prompt_id: ?int,
+     * }
      */
     public function getSettings(): array
     {
         $data = WpOption::get(self::OPTION_KEY, []);
 
         if (! is_array($data)) {
-            return ['task_id' => null];
+            return $this->emptySettings();
         }
 
-        $taskId = isset($data['task_id']) ? (int) $data['task_id'] : null;
+        $publish = $this->positiveIntOrNull($data[self::KEY_PUBLISH_ARTICLE] ?? null)
+            ?? $this->positiveIntOrNull($data[self::KEY_LEGACY_TASK_ID] ?? null);
 
         return [
-            'task_id' => $taskId > 0 ? $taskId : null,
+            self::KEY_PUBLISH_ARTICLE => $publish,
+            self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($data[self::KEY_EDIT_ARTICLE] ?? null),
+            self::KEY_POST_REVIEW => $this->positiveIntOrNull($data[self::KEY_POST_REVIEW] ?? null),
+            self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($data[self::KEY_CREATE_VIDEO] ?? null),
+            self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
         ];
     }
 
-    public function getTaskId(): ?int
+    public function getRenewFaqPromptId(): ?int
     {
-        return $this->getSettings()['task_id'];
+        return $this->getSettings()[self::KEY_RENEW_FAQ_PROMPT_ID];
     }
 
     /**
-     * @param  array{task_id?: int|null}  $settings
+     * Quy trình «Đăng bài viết» (tạo bài từ khóa, v.v.).
+     */
+    public function getPublishArticleTaskId(): ?int
+    {
+        return $this->getSettings()[self::KEY_PUBLISH_ARTICLE];
+    }
+
+    /**
+     * Quy trình «Sửa bài viết» — fallback sang Đăng bài viết nếu chưa cấu hình.
+     */
+    public function getEditArticleTaskId(): ?int
+    {
+        $settings = $this->getSettings();
+
+        return $settings[self::KEY_EDIT_ARTICLE] ?? $settings[self::KEY_PUBLISH_ARTICLE];
+    }
+
+    public function getPostReviewTaskId(): ?int
+    {
+        return $this->getSettings()[self::KEY_POST_REVIEW];
+    }
+
+    public function getCreateImageTaskId(): ?int
+    {
+        return $this->getSettings()[self::KEY_CREATE_IMAGE];
+    }
+
+    public function getCreateVideoTaskId(): ?int
+    {
+        return $this->getSettings()[self::KEY_CREATE_VIDEO];
+    }
+
+    /**
+     * @deprecated Alias của getPublishArticleTaskId()
+     */
+    public function getTaskId(): ?int
+    {
+        return $this->getPublishArticleTaskId();
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
      */
     public function saveSettings(array $settings): void
     {
-        $taskId = isset($settings['task_id']) ? (int) $settings['task_id'] : null;
+        $publish = $this->positiveIntOrNull($settings[self::KEY_PUBLISH_ARTICLE] ?? $settings[self::KEY_LEGACY_TASK_ID] ?? null);
 
         WpOption::set(self::OPTION_KEY, [
-            'task_id' => $taskId > 0 ? $taskId : null,
+            self::KEY_PUBLISH_ARTICLE => $publish,
+            self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($settings[self::KEY_EDIT_ARTICLE] ?? null),
+            self::KEY_POST_REVIEW => $this->positiveIntOrNull($settings[self::KEY_POST_REVIEW] ?? null),
+            self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($settings[self::KEY_CREATE_VIDEO] ?? null),
+            self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
+            self::KEY_LEGACY_TASK_ID => $publish,
         ], 'no');
+    }
+
+    /**
+     * @return array{
+     *     publish_article_task_id: ?int,
+     *     edit_article_task_id: ?int,
+     *     post_review_task_id: ?int,
+     *     create_image_task_id: ?int,
+     *     create_video_task_id: ?int,
+     * }
+     */
+    private function emptySettings(): array
+    {
+        return [
+            self::KEY_PUBLISH_ARTICLE => null,
+            self::KEY_EDIT_ARTICLE => null,
+            self::KEY_POST_REVIEW => null,
+            self::KEY_CREATE_IMAGE => null,
+            self::KEY_CREATE_VIDEO => null,
+            self::KEY_RENEW_FAQ_PROMPT_ID => null,
+        ];
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $id = (int) $value;
+
+        return $id > 0 ? $id : null;
     }
 }

@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlignCenter, AlignLeft, AlignRight, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
 
@@ -9,30 +10,79 @@ const ALIGN_OPTIONS = [
     { id: 'full', icon: Maximize2, title: 'Rộng toàn khối' },
 ];
 
-function ImageMetaForm({ image, onSave, onCancel }) {
+function ImageMetaFormPortal({ anchorRef, image, onSave, onCancel }) {
+    const panelRef = useRef(null);
+    const [position, setPosition] = useState({ top: 0, left: 0 });
     const [alt, setAlt] = useState(image.alt ?? '');
     const [title, setTitle] = useState(image.title ?? '');
     const [caption, setCaption] = useState(image.caption ?? '');
 
-    return (
-        <div className="seo-image-meta-panel seo-image-meta-panel--anchored">
-            <p className="seo-image-meta-panel-title">Alt, title, caption</p>
-            <label className="seo-image-meta-label">Alt</label>
+    useLayoutEffect(() => {
+        if (!anchorRef.current || !panelRef.current) return;
+
+        const rect = anchorRef.current.getBoundingClientRect();
+        const width = panelRef.current.offsetWidth;
+        const left = rect.left + rect.width / 2 - width / 2;
+        const top = rect.bottom + 8;
+
+        setPosition({
+            top: Math.min(top, window.innerHeight - panelRef.current.offsetHeight - 8),
+            left: Math.max(8, Math.min(left, window.innerWidth - width - 8)),
+        });
+    }, [anchorRef]);
+
+    useEffect(() => {
+        const onKeyDown = (e) => {
+            if (e.key === 'Escape') onCancel();
+        };
+        document.addEventListener('keydown', onKeyDown);
+        return () => document.removeEventListener('keydown', onKeyDown);
+    }, [onCancel]);
+
+    useEffect(() => {
+        const onMouseDown = (e) => {
+            if (panelRef.current?.contains(e.target)) return;
+            if (anchorRef.current?.contains(e.target)) return;
+            onCancel();
+        };
+        document.addEventListener('mousedown', onMouseDown);
+        return () => document.removeEventListener('mousedown', onMouseDown);
+    }, [anchorRef, onCancel]);
+
+    const panel = (
+        <div
+            ref={panelRef}
+            className="seo-image-meta-panel"
+            style={{ top: `${position.top}px`, left: `${position.left}px` }}
+            onMouseDown={(e) => e.stopPropagation()}
+        >
+            <p className="seo-image-meta-panel-title">Chỉnh sửa ảnh</p>
+            <label className="seo-image-meta-label" htmlFor="seo-block-img-alt">
+                Văn bản thay thế (alt)
+            </label>
             <input
+                id="seo-block-img-alt"
                 type="text"
                 className="seo-image-meta-input"
                 value={alt}
                 onChange={(e) => setAlt(e.target.value)}
+                placeholder="Mô tả ảnh cho SEO và trợ năng"
             />
-            <label className="seo-image-meta-label">Title</label>
+            <label className="seo-image-meta-label" htmlFor="seo-block-img-title">
+                Title
+            </label>
             <input
+                id="seo-block-img-title"
                 type="text"
                 className="seo-image-meta-input"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
             />
-            <label className="seo-image-meta-label">Caption</label>
+            <label className="seo-image-meta-label" htmlFor="seo-block-img-caption">
+                Chú thích (caption)
+            </label>
             <textarea
+                id="seo-block-img-caption"
                 className="seo-image-meta-textarea"
                 rows={2}
                 value={caption}
@@ -59,6 +109,8 @@ function ImageMetaForm({ image, onSave, onCancel }) {
             </div>
         </div>
     );
+
+    return createPortal(panel, document.body);
 }
 
 export default function ImageBlockEditor({
@@ -73,6 +125,7 @@ export default function ImageBlockEditor({
     canDeleteBlock,
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
+    const toolbarRef = useRef(null);
 
     const image = useMemo(() => {
         if (block.image) return block.image;
@@ -84,6 +137,12 @@ export default function ImageBlockEditor({
     const commitImage = (nextImage) => {
         onUpdate(renderImageFigure(nextImage), nextImage);
     };
+
+    useEffect(() => {
+        if (!isActive) {
+            setEditingMeta(false);
+        }
+    }, [isActive]);
 
     const handlePreviewClick = (e) => {
         if (e.target.closest('a')) {
@@ -151,7 +210,7 @@ export default function ImageBlockEditor({
 
             <div className="seo-block-image-stage seo-wp-content">
                 <div className="seo-block-image-edit-wrap">
-                    <div className="seo-image-toolbar seo-image-toolbar--inline">
+                    <div ref={toolbarRef} className="seo-image-toolbar seo-image-toolbar--inline">
                         {ALIGN_OPTIONS.map(({ id, icon: Icon, title }) => (
                             <button
                                 key={id}
@@ -167,10 +226,14 @@ export default function ImageBlockEditor({
                         <span className="seo-image-toolbar-sep" />
                         <button
                             type="button"
-                            className="seo-image-toolbar-btn"
-                            title="Chỉnh alt, title, caption"
+                            className={`seo-image-toolbar-btn ${editingMeta ? 'is-active' : ''}`}
+                            title="Chỉnh sửa ảnh (alt, title, caption)"
+                            aria-pressed={editingMeta}
                             onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => setEditingMeta((v) => !v)}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingMeta((v) => !v);
+                            }}
                         >
                             <Pencil size={18} strokeWidth={1.75} />
                         </button>
@@ -190,7 +253,8 @@ export default function ImageBlockEditor({
             </div>
 
             {editingMeta ? (
-                <ImageMetaForm
+                <ImageMetaFormPortal
+                    anchorRef={toolbarRef}
                     image={image}
                     onSave={(next) => {
                         commitImage(next);

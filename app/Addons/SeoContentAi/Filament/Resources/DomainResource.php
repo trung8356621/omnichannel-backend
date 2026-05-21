@@ -16,7 +16,6 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class DomainResource extends Resource
@@ -110,30 +109,11 @@ class DomainResource extends Resource
             ])
             ->defaultSort('domain')
             ->actions([
-                Tables\Actions\Action::make('set_main_domain')
-                    ->label('Đặt làm chính')
-                    ->icon('heroicon-s-star')
-                    ->color('warning')
-                    ->requiresConfirmation()
-                    ->action(function (Site $record): void {
-                        DB::transaction(function () use ($record): void {
-                            $sites = Site::query()->where('user_id', $record->user_id)->get();
-
-                            foreach ($sites as $site) {
-                                $isMain = (int) $site->id === (int) $record->id ? '1' : '0';
-                                $site->metas()->updateOrCreate(
-                                    ['meta_key' => 'seo_is_main'],
-                                    ['meta_value' => $isMain]
-                                );
-                            }
-                        });
-                    }),
                 Tables\Actions\Action::make('overview')
                     ->label('Tổng quan')
                     ->icon('heroicon-o-chart-bar')
                     ->color('info')
                     ->url(fn (Site $record): string => DomainResource::getUrl('general', ['record' => $record])),
-                Tables\Actions\EditAction::make(),
             ])
             ->bulkActions([]);
     }
@@ -161,7 +141,9 @@ class DomainResource extends Resource
         return [
             'index' => Pages\ListDomains::route('/'),
             'edit' => Pages\EditDomain::route('/{record}/edit'),
+            'info' => Pages\EditDomainInfo::route('/{record}/info'),
             'general' => Pages\GeneralDomain::route('/{record}/general'),
+            'internal-links' => Pages\ListDomainInternalLinks::route('/{record}/internal-links'),
         ];
     }
 }

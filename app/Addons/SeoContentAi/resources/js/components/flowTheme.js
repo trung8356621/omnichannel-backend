@@ -97,18 +97,42 @@ export function nodeBorderClass(type, isSelected, isDark) {
   return isDark ? 'border-slate-600' : 'border-gray-300';
 }
 
+/**
+ * Nhãn cổng output: "Task 1: Tên nhiệm vụ" (tránh lặp "Task 1: Task 1").
+ */
+export function formatTaskPortLabel(task, index) {
+  const order = index + 1;
+  const prefix = `Task ${order}`;
+  const name = (task?.name ?? '').trim();
+  const generic = !name || name === 'Nhiệm vụ' || name === 'Nhiệm vụ chính';
+
+  if (generic) {
+    return prefix;
+  }
+
+  if (/^Task\s+\d+\s*:/i.test(name)) {
+    return name;
+  }
+
+  if (/^Task\s+\d+$/i.test(name)) {
+    return name;
+  }
+
+  return `${prefix}: ${name}`;
+}
+
 export function getPromptOutputPorts(promptId, prompts, isDark) {
   const prompt = prompts.find((p) => p.id === promptId);
   const violet = isDark ? 'bg-violet-500' : 'bg-violet-600';
   const emerald = isDark ? 'bg-emerald-500' : 'bg-emerald-600';
   if (!prompt) return [{ id: 'out_main', label: 'Toàn bộ', color: emerald }];
   return [
-    ...prompt.tasks.map((task) => ({
+    ...prompt.tasks.map((task, index) => ({
       id: `out_${task.id}`,
-      label: task.name,
+      label: formatTaskPortLabel(task, index),
       color: violet,
     })),
-    { id: 'out_main', label: 'Tổng (All)', color: emerald },
+    { id: 'out_main', label: 'Tổng (AI)', color: emerald },
   ];
 }
 
@@ -116,6 +140,29 @@ export function getPromptOutputPorts(promptId, prompts, isDark) {
 export const FLOW_NODE_HEADER_HEIGHT = 49;
 export const FLOW_PORT_ROW_HEIGHT = 36;
 export const FLOW_NODE_VERTICAL_PADDING = 12;
+
+/** Khớp với `w-[220px]` trong ArticleFlowBuilder. */
+export const FLOW_NODE_OUTER_WIDTH = 220;
+
+/** Cổng dùng `-right-3` / `-left-3` và `w-5 h-5` (20px). */
+export const FLOW_PORT_OFFSET_OUTER = 12;
+export const FLOW_PORT_SIZE = 20;
+
+/** Tọa độ X trung tâm cổng output (tính từ cạnh trái node). */
+export function getOutputPortCenterX(nodeX) {
+  return nodeX + FLOW_NODE_OUTER_WIDTH + FLOW_PORT_OFFSET_OUTER - FLOW_PORT_SIZE / 2;
+}
+
+/** Tọa độ X trung tâm cổng input (tính từ cạnh trái node). */
+export function getInputPortCenterX(nodeX) {
+  return nodeX - FLOW_PORT_OFFSET_OUTER + FLOW_PORT_SIZE / 2;
+}
+
+/** Cổng input luôn `top-1/2` → giữa theo chiều cao node đã lưu. */
+export function getInputPortCenterY(nodeY, nodeHeight) {
+  return nodeY + nodeHeight / 2;
+}
+
 
 export function getPromptNodeHeight(outputPortsCount) {
   const bodyRows = Math.max(1, outputPortsCount);

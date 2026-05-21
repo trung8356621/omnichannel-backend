@@ -40,6 +40,16 @@ class Keyword extends Model
         return $this->belongsTo(Site::class);
     }
 
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'parent_id');
+    }
+
+    public function children(): HasMany
+    {
+        return $this->hasMany(self::class, 'parent_id');
+    }
+
     public function articles(): BelongsToMany
     {
         return $this->belongsToMany(SeoArticle::class, 'article_keyword', 'keyword_id', 'article_id')

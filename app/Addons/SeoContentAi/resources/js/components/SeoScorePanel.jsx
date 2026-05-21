@@ -68,6 +68,61 @@ function CheckList({ title, icon: Icon, items, tone }) {
     );
 }
 
+function ContentBonusRow({ item, faqCount }) {
+    if (!item) {
+        return null;
+    }
+
+    const passed = Boolean(item.passed);
+    const points = typeof item.points === 'number' ? item.points : 0;
+    const maxPoints = typeof item.max_points === 'number' ? item.max_points : 10;
+    const toneClass = passed
+        ? 'seo-content-bonus-row--pass'
+        : 'seo-content-bonus-row--fail';
+
+    return (
+        <div className={`seo-content-bonus-row ${toneClass}`}>
+            <div className="seo-content-bonus-row__head">
+                <span className="seo-content-bonus-row__label">{item.label}:</span>
+                <span className="seo-content-bonus-row__points">
+                    {points} / {maxPoints} điểm
+                </span>
+            </div>
+            {item.key === 'faq' && typeof faqCount === 'number' ? (
+                <p className="seo-content-bonus-row__meta">
+                    Số câu hỏi: <strong>{faqCount}</strong>
+                </p>
+            ) : null}
+            {item.message ? (
+                <p className="seo-content-bonus-row__message">{item.message}</p>
+            ) : null}
+        </div>
+    );
+}
+
+function ContentBonusSection({ contentBonus }) {
+    const items = contentBonus?.items;
+    if (!items) {
+        return null;
+    }
+
+    const totalBonus =
+        typeof contentBonus.total_bonus === 'number'
+            ? contentBonus.total_bonus
+            : (items.featured_snippet?.points ?? 0) + (items.faq?.points ?? 0);
+
+    return (
+        <div className="seo-content-bonus">
+            <h3 className="seo-content-bonus__title">Nội dung bổ sung (workflow)</h3>
+            <p className="seo-content-bonus__subtitle">
+                Tổng cộng <strong>{totalBonus}</strong> / 20 điểm (cộng vào điểm bài khi chạy workflow)
+            </p>
+            <ContentBonusRow item={items.featured_snippet} />
+            <ContentBonusRow item={items.faq} faqCount={contentBonus.faq_count} />
+        </div>
+    );
+}
+
 function LinksSection({ extractedLinks }) {
     const internal = extractedLinks?.internal ?? [];
     const external = extractedLinks?.external ?? [];
@@ -121,11 +176,19 @@ function LinksSection({ extractedLinks }) {
     );
 }
 
-export default function SeoScorePanel({ focusKeyword, analysis, extractedLinks, loading, analyzing }) {
+export default function SeoScorePanel({
+    focusKeyword,
+    analysis,
+    contentBonus: contentBonusProp,
+    extractedLinks,
+    loading,
+    analyzing,
+}) {
     const score = analysis?.score ?? 0;
     const good = analysis?.good ?? [];
     const errors = analysis?.errors ?? [];
     const warnings = analysis?.warnings ?? [];
+    const contentBonus = contentBonusProp ?? analysis?.content_bonus ?? null;
 
     return (
         <div className="seo-score-panel">
@@ -150,6 +213,8 @@ export default function SeoScorePanel({ focusKeyword, analysis, extractedLinks, 
                     )}
                 </div>
             </div>
+
+            <ContentBonusSection contentBonus={contentBonus} />
 
             <div className="seo-score-checks space-y-4">
                 <CheckList title="Đạt" icon={CheckCircle2} items={good} tone="good" />

@@ -1,114 +1,349 @@
-<x-filament-panels::page>
-    @php
-        $synced = $this->isSiteSynced();
-    @endphp
+@php
+    use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 
-    @if(! $synced)
-        <div
-            class="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-1 dark:border-amber-500/40 dark:bg-amber-500/10"
-        >
-        <x-filament::section class="!shadow-none border-0 bg-transparent">
-            <x-slot name="heading">
-                {{ __('Website này chưa được đồng bộ dữ liệu') }}
-            </x-slot>
+    $site = $this->getSite();
+    $synced = $this->isSiteSynced();
+    $api = $this->getApiTokenSummary();
+    $plainTokens = $this->getPlainTokens();
+    $scoring = $this->getScoringStatistics();
+    $distribution = $this->getScoreDistribution();
+    $stats = $this->getSyncStatistics();
+    $technical = $this->getTechnicalSeoSummary();
+    $internalLinksUrl = DomainResource::getUrl('internal-links', ['record' => $site]);
+    $technicalUrl = DomainResource::getUrl('info', ['record' => $site]);
+    $keywordsTabUrl = $this->getInternalLinkTabUrl('keywords');
+    $linksTabUrl = $this->getInternalLinkTabUrl('links');
 
+    $chartSegments = array_values(array_filter(
+        $distribution['segments'],
+        static fn (array $s): bool => ($s['count'] ?? 0) > 0
+    ));
+    $donutGradient = '';
+    $donutTotal = array_sum(array_column($chartSegments, 'count'));
+    if ($donutTotal > 0) {
+        $cursor = 0;
+        $parts = [];
+        foreach ($chartSegments as $seg) {
+            $pct = ($seg['count'] / $donutTotal) * 100;
+            $start = $cursor;
+            $cursor += $pct;
+            $parts[] = $seg['color'] . ' ' . $start . '% ' . $cursor . '%';
+        }
+        $donutGradient = 'conic-gradient(' . implode(', ', $parts) . ')';
+    }
+@endphp
+
+@php
+    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
+@endphp
+
+{{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
+<div>
+    @if(is_readable($overviewCss))
+        <style>{!! file_get_contents($overviewCss) !!}</style>
+    @endif
+
+    <x-filament-panels::page>
+    <div class="seo-domain-overview">
+        {{-- API Key --}}
+        <x-filament::section>
+            <x-slot name="heading">{{ __('API Key') }}</x-slot>
             <x-slot name="description">
-                {{ __('Chưa có bản ghi nào trong kho nội dung SEO cho tên miền này. Hãy chạy đồng bộ từ WordPress.') }}
+                {{ __('Read token & Migration token. Bấm icon mắt để hiển thị; focus ô input để tự copy.') }}
             </x-slot>
 
-            <x-filament::button
-                type="button"
-                color="warning"
-                icon="heroicon-o-arrow-path"
-                wire:click="mountAction('sync_data')"
-            >
-                {{ __('Đồng bộ dữ liệu') }}
-            </x-filament::button>
-        </x-filament::section>
-        </div>
-    @else
-        @php
-            $stats = $this->getSyncStatistics();
-            $scoring = $this->getScoringStatistics();
-        @endphp
-
-        <x-filament::section class="mb-6">
-            <x-slot name="heading">
-                {{ __('Chấm điểm SEO') }}
-            </x-slot>
-
-            <x-slot name="description">
-                {{ __('Điểm tính sau mỗi lần đồng bộ (Rank Math / Yoast + rule nội bộ).') }}
-            </x-slot>
-
-            @if($scoring['scored'] === 0)
-                <p class="text-sm text-amber-700 dark:text-amber-300">
-                    {{ __('Chưa có bài được chấm điểm. Chạy lại đồng bộ; cần Focus Keyword trên WordPress (Rank Math hoặc Yoast).') }}
-                </p>
+            @if(($api['platform'] ?? '') !== 'wordpress')
+                <p class="text-sm text-gray-500">{{ __('Nền tảng không dùng token WordPress.') }}</p>
             @else
-                <div class="grid gap-3 text-sm sm:grid-cols-2">
-                    <p>
-                        <span class="font-semibold">{{ __('Đã chấm') }}:</span>
-                        {{ $scoring['scored'] }} {{ __('bài') }}
-                    </p>
-                    <p>
-                        <span class="font-semibold">{{ __('Điểm TB') }}:</span>
-                        {{ $scoring['avg_score'] }}/100
-                    </p>
-                    <p>
-                        <span class="font-semibold">{{ __('Thấp nhất') }}:</span>
-                        {{ $scoring['min_score'] }}
-                    </p>
-                    <p>
-                        <span class="font-semibold">{{ __('Cao nhất') }}:</span>
-                        {{ $scoring['max_score'] }}
-                    </p>
+                <div class="space-y-4">
+                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
+                        'label' => __('Read token'),
+                        'plain' => ($this->tokensUnlocked && $this->readTokenVisible) ? $plainTokens['read_token'] : '',
+                        'visible' => $this->readTokenVisible,
+                        'unlocked' => $this->tokensUnlocked,
+                        'field' => 'read',
+                    ])
+                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
+                        'label' => __('Migration token'),
+                        'plain' => ($this->tokensUnlocked && $this->migrationTokenVisible) ? $plainTokens['migration_token'] : '',
+                        'visible' => $this->migrationTokenVisible,
+                        'unlocked' => $this->tokensUnlocked,
+                        'field' => 'migration',
+                    ])
                 </div>
+
+                @if($this->showPasswordPrompt)
+                    <div class="mt-4 max-w-md rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-900">
+                        <p class="mb-3 text-sm text-gray-600 dark:text-gray-300">
+                            {{ __('Nhập mật khẩu tài khoản để hiển thị token.') }}
+                        </p>
+                        <div class="flex flex-wrap items-end gap-3">
+                            <div class="min-w-[12rem] flex-1">
+                                <label class="mb-1 block text-sm font-medium">{{ __('Mật khẩu') }}</label>
+                                <input
+                                    type="password"
+                                    wire:model="tokenPassword"
+                                    wire:keydown.enter="confirmRevealTokens"
+                                    class="fi-input block w-full rounded-lg border-gray-300 dark:border-gray-600 dark:bg-gray-800"
+                                    autocomplete="current-password"
+                                />
+                                @error('tokenPassword')
+                                    <p class="mt-1 text-sm text-danger-600">{{ $message }}</p>
+                                @enderror
+                            </div>
+                            <button
+                                type="button"
+                                wire:click="confirmRevealTokens"
+                                class="fi-btn fi-btn-size-sm inline-flex items-center justify-center gap-1 rounded-lg bg-primary-600 px-3 py-2 text-sm font-semibold text-white hover:bg-primary-500"
+                            >
+                                {{ __('Xác nhận') }}
+                            </button>
+                            <button
+                                type="button"
+                                wire:click="cancelPasswordPrompt"
+                                class="fi-btn fi-btn-size-sm inline-flex items-center justify-center gap-1 rounded-lg bg-gray-100 px-3 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200"
+                            >
+                                {{ __('Hủy') }}
+                            </button>
+                        </div>
+                    </div>
+                @endif
             @endif
         </x-filament::section>
 
-        <x-filament::section>
-            <x-slot name="heading">
-                {{ __('Thống kê đồng bộ') }}
-            </x-slot>
+        @if(! $synced)
+            <x-filament::section class="border-amber-200 dark:border-amber-500/40">
+                <x-slot name="heading">{{ __('Đồng bộ') }}</x-slot>
+                <x-slot name="description">
+                    {{ __('Website chưa có dữ liệu trong kho SEO. Chạy đồng bộ từ WordPress.') }}
+                </x-slot>
+                <div class="seo-sync-actions !border-0 !pt-0 !mt-0">
+                    <x-filament::button type="button" color="warning" icon="heroicon-o-arrow-path" wire:click="mountAction('sync_data')">
+                        {{ __('Đồng bộ dữ liệu') }}
+                    </x-filament::button>
+                    @if(auth()->user()?->role === 'admin')
+                        <x-filament::button type="button" color="danger" icon="heroicon-o-bug-ant" wire:click="mountAction('test_sync_data')">
+                            {{ __('Test đồng bộ (Debug)') }}
+                        </x-filament::button>
+                    @endif
+                </div>
+            </x-filament::section>
+        @else
+            <div class="seo-domain-overview__grid seo-domain-overview__grid--2">
+                {{-- Chấm điểm SEO --}}
+                <x-filament::section>
+                    <x-slot name="heading">{{ __('Chấm điểm SEO') }}</x-slot>
+                    <x-slot name="description">
+                        {{ __('Phân bố điểm sau đồng bộ (Rank Math / Yoast + rule nội bộ).') }}
+                    </x-slot>
 
-            <x-slot name="description">
-                {{ __('Dữ liệu theo trường type trên bảng nội dung SEO.') }}
-            </x-slot>
+                    @if($scoring['scored'] === 0)
+                        <p class="text-sm text-amber-700 dark:text-amber-300">
+                            {{ __('Chưa có bài được chấm. Cần Focus Keyword trên WordPress.') }}
+                        </p>
+                    @else
+                        <div class="seo-score-donut">
+                            <div
+                                class="seo-score-donut__chart"
+                                style="{{ $donutGradient !== '' ? 'background: ' . $donutGradient : 'background: rgb(var(--gray-200))' }}"
+                                role="img"
+                                aria-label="{{ __('Biểu đồ phân bố điểm SEO') }}"
+                            >
+                                <div class="seo-score-donut__hole">
+                                    <strong>{{ $scoring['avg_score'] }}</strong>
+                                    <span>{{ __('Điểm TB') }}</span>
+                                </div>
+                            </div>
+                            @if(count($distribution['segments']) > 0)
+                                <ul class="seo-score-legend">
+                                    @foreach($distribution['segments'] as $seg)
+                                        @if(($seg['count'] ?? 0) > 0)
+                                            <li>
+                                                <span class="seo-score-legend__dot" style="background: {{ $seg['color'] }}"></span>
+                                                <span class="seo-score-legend__label">{{ $seg['label'] }}:</span>
+                                                <a
+                                                    href="{{ $this->getArticlesFilterUrl($seg['key']) }}"
+                                                    class="seo-score-legend__link"
+                                                >
+                                                    {{ $seg['count'] }} {{ __('bài') }}
+                                                </a>
+                                            </li>
+                                        @endif
+                                    @endforeach
+                                </ul>
+                            @endif
+                        </div>
+                        <div class="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                            <p><span class="font-semibold">{{ __('Đã chấm') }}:</span> {{ $scoring['scored'] }}</p>
+                            <p><span class="font-semibold">{{ __('Thấp nhất') }}:</span> {{ $scoring['min_score'] }}</p>
+                            <p><span class="font-semibold">{{ __('Cao nhất') }}:</span> {{ $scoring['max_score'] }}</p>
+                        </div>
+                    @endif
+                </x-filament::section>
 
-            <div class="grid gap-3 text-sm text-gray-700 dark:text-gray-200 sm:grid-cols-2">
-                <p>
-                    <span class="font-semibold">{{ __('Bài viết') }}:</span>
-                    {{ $stats['articles'] }}
-                </p>
-                <p>
-                    <span class="font-semibold">{{ __('Sản phẩm') }}:</span>
-                    {{ $stats['products'] }}
-                </p>
-                <p>
-                    <span class="font-semibold">{{ __('Danh mục') }}:</span>
-                    {{ $stats['categories'] }}
-                </p>
-                <p>
-                    <span class="font-semibold">{{ __('Danh mục sản phẩm') }}:</span>
-                    {{ $stats['product_categories'] }}
-                </p>
-                @if($stats['other'] > 0)
-                    <p class="sm:col-span-2">
-                        <span class="font-semibold">{{ __('Khác') }}:</span>
-                        {{ $stats['other'] }}
-                    </p>
-                @endif
+                {{-- Thống kê đồng bộ + nút --}}
+                <x-filament::section>
+                    <x-slot name="heading">{{ __('Thống kê đồng bộ') }}</x-slot>
+                    <x-slot name="description">{{ __('Số lượng theo type trên kho nội dung SEO.') }}</x-slot>
+
+                    <div class="grid gap-2 text-sm sm:grid-cols-2">
+                        <p><span class="font-semibold">{{ __('Bài viết') }}:</span> {{ $stats['articles'] }}</p>
+                        <p><span class="font-semibold">{{ __('Sản phẩm') }}:</span> {{ $stats['products'] }}</p>
+                        <p><span class="font-semibold">{{ __('Danh mục') }}:</span> {{ $stats['categories'] }}</p>
+                        <p><span class="font-semibold">{{ __('Danh mục SP') }}:</span> {{ $stats['product_categories'] }}</p>
+                        @if($stats['other'] > 0)
+                            <p class="sm:col-span-2"><span class="font-semibold">{{ __('Khác') }}:</span> {{ $stats['other'] }}</p>
+                        @endif
+                        <p class="sm:col-span-2 text-gray-500">{{ __('Tổng') }}: {{ $stats['total'] }} {{ __('bản ghi') }}</p>
+                    </div>
+
+                    <div class="seo-sync-actions">
+                        <x-filament::button type="button" color="warning" icon="heroicon-o-arrow-path" wire:click="mountAction('sync_data')">
+                            {{ __('Đồng bộ dữ liệu') }}
+                        </x-filament::button>
+                        @if(auth()->user()?->role === 'admin')
+                            <x-filament::button type="button" color="danger" icon="heroicon-o-bug-ant" wire:click="mountAction('test_sync_data')">
+                                {{ __('Test đồng bộ (Debug)') }}
+                            </x-filament::button>
+                        @endif
+                        <x-filament::button type="button" color="danger" icon="heroicon-o-trash" wire:click="mountAction('clear_domain_content')">
+                            {{ __('Dọn dẹp') }}
+                        </x-filament::button>
+                    </div>
+                </x-filament::section>
             </div>
 
-            <p class="mt-4 text-sm text-gray-600 dark:text-gray-400">
-                {{ __('Đang có :a bài viết, :b sản phẩm (và :c danh mục, :d danh mục SP).', [
-                    'a' => $stats['articles'],
-                    'b' => $stats['products'],
-                    'c' => $stats['categories'],
-                    'd' => $stats['product_categories'],
-                ]) }}
-            </p>
-        </x-filament::section>
-    @endif
-</x-filament-panels::page>
+            {{-- Internal link --}}
+            <x-filament::section>
+                <x-slot name="heading">{{ __('Internal link') }}</x-slot>
+                <x-slot name="description">{{ __('Từ khóa và URL được trích xuất từ nội dung bài viết đã chấm SEO.') }}</x-slot>
+
+                <div class="seo-internal-tabs">
+                    <a href="{{ $keywordsTabUrl }}" class="{{ $this->internalLinkTab === 'keywords' ? 'is-active' : '' }}">
+                        {{ __('Từ khóa') }}
+                    </a>
+                    <a href="{{ $linksTabUrl }}" class="{{ $this->internalLinkTab === 'links' ? 'is-active' : '' }}">
+                        {{ __('Link') }}
+                    </a>
+                </div>
+
+                <div>
+                    @if($this->internalLinkTab === 'keywords')
+                        @php $topKeywords = $this->getTopKeywords(); @endphp
+                        @if($topKeywords->isEmpty())
+                            <p class="text-sm text-gray-500 italic">{{ __('Chưa có từ khóa gắn bài viết.') }}</p>
+                        @else
+                            <ul class="seo-rank-list">
+                                @foreach($topKeywords as $row)
+                                    <li>
+                                        <span class="seo-rank-list__label">{{ $row->phrase }}</span>
+                                        <a
+                                            href="{{ $this->getArticlesFilterUrlForKeyword((int) $row->id) }}"
+                                            class="seo-rank-list__count text-primary-600 hover:underline dark:text-primary-400"
+                                            title="{{ __('Xem danh sách bài viết') }}"
+                                        >
+                                            {{ $row->articles_count }} {{ __('bài') }}
+                                        </a>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @endif
+                    @else
+                        @php $topLinks = $this->getTopLinks(); @endphp
+                        @if($topLinks->isEmpty())
+                            <p class="text-sm text-gray-500 italic">{{ __('Chưa có link được trích xuất. Chạy chấm SEO sau đồng bộ.') }}</p>
+                        @else
+                            <ul class="seo-rank-list">
+                                @foreach($topLinks as $row)
+                                    <li>
+                                        <span class="seo-rank-list__label">
+                                            <span class="text-xs uppercase text-gray-400">{{ $row->type === 'internal' ? 'Nội bộ' : 'Ngoài' }}</span>
+                                            {{ $row->url }}
+                                        </span>
+                                        <a
+                                            href="{{ $this->getArticlesFilterUrlForLink($row->url, $row->type) }}"
+                                            class="seo-rank-list__count text-primary-600 hover:underline dark:text-primary-400"
+                                            title="{{ __('Xem danh sách bài viết') }}"
+                                        >
+                                            {{ $row->articles_count }} {{ __('bài') }}
+                                        </a>
+                                    </li>
+                                @endforeach
+                            </ul>
+                        @endif
+                    @endif
+                </div>
+
+                <div class="mt-4">
+                    <x-filament::button
+                        tag="a"
+                        :href="$internalLinksUrl . '?tab=' . $this->internalLinkTab"
+                        size="sm"
+                        color="gray"
+                        icon="heroicon-o-arrow-right"
+                    >
+                        {{ __('Xem thêm') }}
+                    </x-filament::button>
+                </div>
+            </x-filament::section>
+
+            {{-- Technical SEO --}}
+            <x-filament::section>
+                <x-slot name="heading">{{ __('Technical SEO') }}</x-slot>
+                <x-slot name="description">
+                    {{ __('Mô tả site, CTA và liên kết dùng trong prompt') }}
+                    (@{{site_short_description}}, @{{site_cta}}, @{{site_links}}).
+                </x-slot>
+
+                @if(! $technical['has_content'])
+                    <p class="text-sm text-gray-500">{{ __('Chưa cấu hình thông tin Technical SEO.') }}</p>
+                @else
+                    <div class="space-y-2 text-sm">
+                        @if($technical['short_description_preview'] !== '')
+                            <p><span class="font-semibold">{{ __('Mô tả') }}:</span> {{ $technical['short_description_preview'] }}</p>
+                        @endif
+                        <p>
+                            <span class="font-semibold">{{ __('CTA') }}:</span> {{ $technical['cta_count'] }} {{ __('mục') }}
+                            ·
+                            <span class="font-semibold">{{ __('Liên kết prompt') }}:</span> {{ $technical['links_count'] }} {{ __('mục') }}
+                        </p>
+                    </div>
+                @endif
+
+                <div class="mt-4">
+                    <x-filament::button tag="a" :href="$technicalUrl" size="sm" icon="heroicon-o-cog-6-tooth">
+                        {{ __('Chỉnh sửa Technical SEO') }}
+                    </x-filament::button>
+                </div>
+            </x-filament::section>
+        @endif
+    </div>
+    </x-filament-panels::page>
+
+    <script>
+        window.seoCopyTokenField = function (input) {
+            if (! input || ! input.classList.contains('seo-token-field__input--revealed')) {
+                return;
+            }
+            const value = input.value;
+            if (! value || value === '****************************************') {
+                return;
+            }
+            navigator.clipboard.writeText(value).then(function () {
+                let tip = document.getElementById('seo-token-copy-tip');
+                if (! tip) {
+                    tip = document.createElement('div');
+                    tip.id = 'seo-token-copy-tip';
+                    tip.className = 'seo-token-copy-tip';
+                    document.body.appendChild(tip);
+                }
+                tip.textContent = 'Đã copy token vào clipboard';
+                tip.style.display = 'block';
+                clearTimeout(window.seoTokenCopyTipTimer);
+                window.seoTokenCopyTipTimer = setTimeout(function () {
+                    tip.style.display = 'none';
+                }, 2200);
+            });
+        };
+    </script>
+</div>

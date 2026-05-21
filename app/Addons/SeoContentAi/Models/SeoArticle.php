@@ -95,10 +95,142 @@ class SeoArticle extends Model
         return $this->hasMany(ArticleKeyword::class, 'article_id');
     }
 
+    public function links(): HasMany
+    {
+        return $this->hasMany(SeoArticleLink::class, 'article_id');
+    }
+
+    public function faqs(): HasMany
+    {
+        return $this->hasMany(SeoFaq::class, 'article_id')->orderBy('sort_order');
+    }
+
+    /**
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    public function resolveFaqs(): array
+    {
+        if ($this->relationLoaded('faqs')) {
+            return $this->faqsToArray($this->faqs);
+        }
+
+        if (SeoFaq::query()->where('article_id', $this->id)->exists()) {
+            return $this->faqsToArray(
+                $this->faqs()->orderBy('sort_order')->get()
+            );
+        }
+
+        $legacy = $this->articleMetas()
+            ->where('meta_key', 'seo_article_faqs')
+            ->value('meta_value');
+
+        if (! is_string($legacy) || $legacy === '') {
+            return [];
+        }
+
+        $decoded = json_decode($legacy, true);
+
+        if (! is_array($decoded)) {
+            return [];
+        }
+
+        $faqs = [];
+        foreach ($decoded as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $question = trim((string) ($item['question'] ?? ''));
+            $answer = trim((string) ($item['answer'] ?? ''));
+            if ($question === '' || $answer === '') {
+                continue;
+            }
+            $more = trim((string) ($item['more'] ?? ''));
+            $row = ['question' => $question, 'answer' => $answer];
+            if ($more !== '') {
+                $row['more'] = $more;
+            }
+            $faqs[] = $row;
+        }
+
+        return $faqs;
+    }
+
+    /**
+     * @param  iterable<int, SeoFaq>  $faqs
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    private function faqsToArray(iterable $faqs): array
+    {
+        $result = [];
+        foreach ($faqs as $faq) {
+            $row = [
+                'question' => (string) $faq->question,
+                'answer' => (string) $faq->answer,
+            ];
+            $more = trim((string) ($faq->more ?? ''));
+            if ($more !== '') {
+                $row['more'] = $more;
+            }
+            $result[] = $row;
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array{
+     *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
+     *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
+     * }
+     */
+    public function resolveExtractedLinks(): array
+    {
+        if ($this->relationLoaded('links')) {
+            return $this->linksToExtractedArray($this->links);
+        }
+
+        if (SeoArticleLink::query()->where('article_id', $this->id)->exists()) {
+            return $this->linksToExtractedArray(
+                $this->links()->orderBy('id')->get()
+            );
+        }
+
+        return $this->resolveExtractedLinksFromLegacyMeta();
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Collection<int, SeoArticleLink>|\Illuminate\Support\Collection<int, SeoArticleLink>  $links
+     * @return array{
+     *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
+     *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
+     * }
+     */
+    private function linksToExtractedArray($links): array
+    {
+        $internal = [];
+        $external = [];
+
+        foreach ($links as $link) {
+            $row = [
+                'href' => (string) $link->url,
+                'text' => (string) ($link->anchor_text ?? ''),
+                'is_nofollow' => (bool) $link->is_nofollow,
+            ];
+
+            if ($link->type === 'external') {
+                $external[] = $row;
+            } else {
+                $internal[] = $row;
+            }
+        }
+
+        return ['internal' => $internal, 'external' => $external];
+    }
+
     /**
      * @return array{internal: array<int, mixed>, external: array<int, mixed>}
      */
-    public function resolveExtractedLinks(): array
+    private function resolveExtractedLinksFromLegacyMeta(): array
     {
         $raw = null;
 

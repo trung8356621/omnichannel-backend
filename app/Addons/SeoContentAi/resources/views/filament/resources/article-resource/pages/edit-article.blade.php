@@ -1,9 +1,31 @@
 <x-filament-panels::page>
     <div
         x-data
-        x-on:save-article-html.window="$wire.saveContent($event.detail.html, $event.detail.silent ?? false)"
+        x-on:editor-html-collected.window="
+            if ($event.detail.target === 'sync') {
+                $wire.syncArticleToWordPress($event.detail.html);
+            } else {
+                $wire.persistArticleLocal($event.detail.html);
+            }
+        "
+        x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
+        @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
         x-on:seo-analyze-draft.window="$wire.analyzeSeoDraft($event.detail.html)"
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
+        x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs)"
+        x-on:extract-article-faqs-with-context.window="$wire.extractFaqsFromSelection($event.detail.html ?? '', $event.detail.articleHtml ?? '')"
+        x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
+        x-on:check-faq-question.window="
+            $wire.checkFaqQuestionDuplicate($event.detail.question, $event.detail.faqId).then((result) => {
+                window.dispatchEvent(new CustomEvent('faq-duplicate-checked', {
+                    detail: {
+                        index: $event.detail.index,
+                        duplicate: result?.duplicate ?? false,
+                        duplicate_scope: result?.duplicate_scope ?? null,
+                    },
+                }));
+            });
+        "
         class="wp-article-edit -mx-4 max-w-none"
     >
         <div class="wp-article-edit-layout">
@@ -34,13 +56,14 @@
                                 OK
                             </button>
                         @else
+                            @php($articlePermalink = $this->getArticlePermalink())
                             <a
-                                href="{{ $this->getPermalinkBase() ? $this->getPermalinkBase() . '/' . $this->getDisplaySlug() : '#' }}"
+                                href="{{ $articlePermalink !== '' ? $articlePermalink : '#' }}"
                                 target="_blank"
                                 rel="noopener"
                                 class="text-sky-600 dark:text-sky-400 hover:underline break-all"
                             >
-                                {{ $this->getPermalinkBase() }}/{{ $this->getDisplaySlug() }}
+                                {{ $articlePermalink !== '' ? $articlePermalink : $this->getPermalinkBase() . '/' . $this->getDisplaySlug() }}
                             </a>
                             <button
                                 type="button"
@@ -56,10 +79,15 @@
                 <script type="application/json" id="seo-article-initial-html">@json($editorHtml)</script>
                 <script type="application/json" id="seo-article-initial-outline">@json($this->getEditorOutlineMarkdown())</script>
                 <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
+                <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
-                <script type="application/json" id="seo-article-meta">@json(['id' => $record->id])</script>
+                <script type="application/json" id="seo-article-meta">@json(['id' => $record->id, 'title' => $articleTitle])</script>
+                <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
+                <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
 
-                <div wire:ignore id="seo-article-editor-root" class="w-full min-h-[500px]"></div>
+                <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
+
+                <div wire:ignore id="seo-article-faq-root" class="w-full mt-4"></div>
             </div>
 
             {{-- Sidebar widgets (ẩn khi chọn text → hiện Chat AI) --}}
@@ -73,16 +101,14 @@
                 <div class="wp-postbox">
                     <div class="wp-postbox-header">
                         <h2>Xuất bản</h2>
-                        @if ($record->wp_post_id)
-                            <a
-                                href="{{ $this->getPermalinkBase() ? $this->getPermalinkBase() . '/' . $this->getDisplaySlug() : '#' }}"
-                                target="_blank"
-                                rel="noopener"
-                                class="text-xs text-sky-600 hover:underline"
-                            >
-                                Xem trước
-                            </a>
-                        @endif
+                        <a
+                            href="{{ $this->getArticlePreviewUrl() }}"
+                            target="_blank"
+                            rel="noopener"
+                            class="text-xs text-sky-600 hover:underline"
+                        >
+                            Xem trước (Laravel)
+                        </a>
                     </div>
                     <div class="wp-postbox-inside space-y-3 text-sm">
                         <div class="flex justify-between gap-2">
@@ -106,15 +132,44 @@
                         @if ($record->wp_post_id)
                             <div class="text-xs text-gray-500">WordPress ID: {{ $record->wp_post_id }}</div>
                         @endif
-                        <div class="flex items-center justify-between gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
-                            <span class="text-xs text-gray-400">Nháp editor lưu cục bộ (trình duyệt)</span>
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            Nháp editor lưu cục bộ trong trình duyệt. «Lưu» ghi vào hệ thống SEO; «Đồng bộ» đẩy lên WordPress.
+                        </p>
+                        <div class="seo-article-actions flex flex-col gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
                             <button
                                 type="button"
-                                wire:click="savePublish"
-                                class="seo-wp-btn-primary"
+                                wire:click="requestSaveArticle"
+                                wire:loading.attr="disabled"
+                                wire:target="requestSaveArticle,persistArticleLocal"
+                                class="seo-wp-btn-primary w-full"
                             >
-                                Cập nhật
+                                <span wire:loading.remove wire:target="requestSaveArticle,persistArticleLocal">Lưu</span>
+                                <span wire:loading wire:target="requestSaveArticle,persistArticleLocal">Đang lưu…</span>
                             </button>
+                            <button
+                                type="button"
+                                wire:click="requestSyncToWordPress"
+                                wire:loading.attr="disabled"
+                                wire:target="requestSyncToWordPress,syncArticleToWordPress"
+                                class="seo-wp-btn-secondary w-full"
+                                @if (! $record->wp_post_id) disabled title="Chưa liên kết WordPress" @endif
+                            >
+                                <span wire:loading.remove wire:target="requestSyncToWordPress,syncArticleToWordPress">Đồng bộ WordPress</span>
+                                <span wire:loading wire:target="requestSyncToWordPress,syncArticleToWordPress">Đang đồng bộ…</span>
+                            </button>
+                            @if ($record->wp_post_id)
+                                @php($wpPermalink = $this->getArticlePermalink())
+                                @if ($wpPermalink !== '')
+                                    <a
+                                        href="{{ $wpPermalink }}"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="seo-wp-btn-outline w-full text-center"
+                                    >
+                                        Xem trên WordPress
+                                    </a>
+                                @endif
+                            @endif
                         </div>
                     </div>
                 </div>

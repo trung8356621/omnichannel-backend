@@ -24,9 +24,10 @@ class AiConnectionResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-cpu-chip';
 
-    protected static ?string $navigationGroup = 'Tùy chỉnh';
-
-    protected static ?string $navigationLabel = 'Cấu hình AI';
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
 
     protected static ?string $modelLabel = 'Kết nối AI';
 

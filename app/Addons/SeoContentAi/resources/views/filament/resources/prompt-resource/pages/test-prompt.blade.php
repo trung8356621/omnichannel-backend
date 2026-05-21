@@ -2,6 +2,10 @@
     <div class="seo-prompt-test-layout">
         <div class="seo-prompt-test-main">
             <x-filament::section heading="Biến đầu vào">
+                <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    Model AI được chọn trên widget <strong>Khối Prompt</strong> trong Workflow Builder.
+                    Biến <code>{{input}}</code> nhận kết quả từ edge nối vào khi chạy quy trình.
+                </p>
                 <form wire:submit="runTest" class="space-y-4">
                     {{ $this->form }}
 
@@ -17,13 +21,20 @@
                 </form>
             </x-filament::section>
 
-            @if (filled($compiledPreview))
-                <x-filament::section heading="Prompt đã ghép (xem trước)">
+            <x-filament::section heading="Prompt đã ghép (xem trước)">
+                <x-slot name="description">
+                    Ghép từ cấu hình prompt hiện tại trên database (sau khi bạn lưu ở trang Sửa). Kết quả AI bên dưới có thể từ lần chạy cũ trong sidebar.
+                </x-slot>
+                @if (filled($compiledPreview))
                     <div class="seo-prompt-test-pre-wrap">
                         <pre class="seo-prompt-test-pre">{{ $compiledPreview }}</pre>
                     </div>
-                </x-filament::section>
-            @endif
+                @else
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                        Chưa có nội dung xem trước. Nhấn «Làm mới xem trước» hoặc «Chạy thử».
+                    </p>
+                @endif
+            </x-filament::section>
 
             @if (filled($errorMessage))
                 <x-filament::section heading="Lỗi">
@@ -32,17 +43,20 @@
             @endif
 
             @if (filled($outputText))
-                <x-filament::section heading="Kết quả AI">
+                <x-filament::section :heading="$this->aiResultSectionHeading()">
                     <div class="seo-prompt-test-pre-wrap">
                         <pre class="seo-prompt-test-pre">{{ $outputText }}</pre>
                     </div>
 
-                    <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
-                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                            Đăng JSON bình luận/review lên WordPress. Sản phẩm WooCommerce nhận sao tự động (2×5★, 1×4★) nếu prompt không có <code>star_ranking</code>.
-                        </p>
-                        <div class="flex flex-col sm:flex-row gap-3 sm:items-end">
-                            <div class="flex-1 min-w-0">
+                </x-filament::section>
+
+                <x-filament::section heading="Test">
+                    <x-slot name="description">
+                        Áp dụng kết quả AI lên bài đã đồng bộ WordPress. Chọn bài đích rồi chọn loại đăng.
+                    </x-slot>
+
+                    <div class="space-y-4">
+                        <div>
                                 <label class="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">Bài viết / sản phẩm đích</label>
                                 <select
                                     wire:model="publishArticleId"
@@ -57,17 +71,66 @@
                                     @endforeach
                                 </select>
                             </div>
-                            <x-filament::button
-                                type="button"
-                                icon="heroicon-o-chat-bubble-left-right"
-                                color="success"
-                                wire:click="publishCommentsToWordPress"
-                                wire:loading.attr="disabled"
-                                wire:target="publishCommentsToWordPress"
+                        <div
+                            class="seo-prompt-test-publish"
+                            x-data="{ open: false }"
+                            @keydown.escape.window="open = false"
+                        >
+                            <div class="flex flex-wrap items-center gap-2">
+                                <x-filament::button
+                                    type="button"
+                                    icon="heroicon-o-arrow-up-tray"
+                                    color="success"
+                                    wire:loading.attr="disabled"
+                                    wire:target="publishTest"
+                                    @click="open = !open"
+                                >
+                                    <span wire:loading.remove wire:target="publishTest">Đăng…</span>
+                                    <span wire:loading wire:target="publishTest">Đang xử lý…</span>
+                                </x-filament::button>
+                                <span class="text-xs text-gray-500 dark:text-gray-400">Chọn một trong ba tùy chọn</span>
+                            </div>
+
+                            <div
+                                x-show="open"
+                                x-cloak
+                                @click.outside="open = false"
+                                class="seo-prompt-test-publish-menu"
                             >
-                                <span wire:loading.remove wire:target="publishCommentsToWordPress">Đăng lên WordPress</span>
-                                <span wire:loading wire:target="publishCommentsToWordPress">Đang đăng…</span>
-                            </x-filament::button>
+                                <button
+                                    type="button"
+                                    class="seo-prompt-test-publish-menu__item"
+                                    wire:click="publishTest('skeleton')"
+                                    wire:loading.attr="disabled"
+                                    wire:target="publishTest"
+                                    @click="open = false"
+                                >
+                                    <span class="seo-prompt-test-publish-menu__title">1. Đăng sườn bài viết</span>
+                                    <span class="seo-prompt-test-publish-menu__desc">Dàn ý Markdown + từ khóa ngữ nghĩa → meta (outline, keywords).</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="seo-prompt-test-publish-menu__item"
+                                    wire:click="publishTest('article')"
+                                    wire:loading.attr="disabled"
+                                    wire:target="publishTest"
+                                    @click="open = false"
+                                >
+                                    <span class="seo-prompt-test-publish-menu__title">2. Đăng bài viết</span>
+                                    <span class="seo-prompt-test-publish-menu__desc">Từ dàn ý tạo HTML + tiêu đề (biến hoặc H1/H2 đầu).</span>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="seo-prompt-test-publish-menu__item"
+                                    wire:click="publishTest('reviews')"
+                                    wire:loading.attr="disabled"
+                                    wire:target="publishTest"
+                                    @click="open = false"
+                                >
+                                    <span class="seo-prompt-test-publish-menu__title">3. Đăng review / bình luận</span>
+                                    <span class="seo-prompt-test-publish-menu__desc">JSON kết quả AI → comment/review trên WordPress (sao WC nếu thiếu <code>star_ranking</code>).</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </x-filament::section>
@@ -99,15 +162,14 @@
                                 class="seo-history-card seo-history-card--{{ $statusClass }}{{ $isActive ? ' is-active' : '' }}"
                             >
                                 <span class="seo-history-card__grid">
-                                    <span class="seo-history-card__main">
+                                    <span class="seo-history-card__summary">
+                                        {{ $this->resultSummary($result) }}@if ($tokenLabel = $this->tokenUsageLabelFor($result)) <span class="seo-history-card__tokens">({{ $tokenLabel }})</span>@endif
+                                    </span>
+                                    <span class="seo-history-card__meta">
                                         <span class="seo-history-card__time">
                                             {{ ($result->finished_at ?? $result->created_at)?->timezone(config('app.timezone'))->format('d/m/Y H:i') }}
                                         </span>
-                                        <span class="seo-history-card__summary">
-                                            {{ $this->resultSummary($result) }}
-                                        </span>
-                                    </span>
-                                    <span class="seo-history-card__badge seo-history-card__badge--{{ $statusClass }}">
+                                        <span class="seo-history-card__badge seo-history-card__badge--{{ $statusClass }}">
                                         @if ($status === 'completed')
                                             <svg class="seo-history-card__icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/></svg>
                                             Thành công
@@ -117,6 +179,7 @@
                                         @else
                                             Đang chạy…
                                         @endif
+                                        </span>
                                     </span>
                                 </span>
                             </button>
@@ -343,43 +406,54 @@
         }
 
         .seo-history-card__grid {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            align-items: start;
-            gap: 0.5rem 0.75rem;
-            width: 100%;
-        }
-
-        .seo-history-card__main {
             display: flex;
             flex-direction: column;
-            gap: 0.25rem;
+            gap: 0.375rem;
+            width: 100%;
+            min-width: 0;
+        }
+
+        .seo-history-card__summary {
+            display: block;
+            width: 100%;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            line-height: 1.4;
+            color: #111827;
+            word-break: break-word;
+        }
+
+        .dark .seo-history-card__summary {
+            color: #f3f4f6;
+        }
+
+        .seo-history-card__meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
             min-width: 0;
         }
 
         .seo-history-card__time {
             font-size: 0.6875rem;
-            font-weight: 600;
-            color: #374151;
+            font-weight: 500;
+            color: #6b7280;
             white-space: nowrap;
+            flex-shrink: 0;
         }
 
         .dark .seo-history-card__time {
-            color: #d1d5db;
+            color: #9ca3af;
         }
 
-        .seo-history-card__summary {
-            font-size: 0.75rem;
-            line-height: 1.35;
-            color: #4b5563;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            word-break: break-word;
+        .seo-history-card__tokens {
+            font-weight: 500;
+            color: #6b7280;
+            white-space: nowrap;
         }
 
-        .dark .seo-history-card__summary {
+        .dark .seo-history-card__tokens {
             color: #9ca3af;
         }
 
@@ -388,7 +462,7 @@
             align-items: center;
             gap: 0.25rem;
             flex-shrink: 0;
-            align-self: start;
+            margin-left: auto;
             padding: 0.2rem 0.5rem;
             border-radius: 9999px;
             font-size: 0.625rem;
@@ -463,6 +537,71 @@
         .dark .seo-prompt-test-pre {
             background-color: #1f2937;
             color: #f3f4f6;
+        }
+
+        .seo-prompt-test-publish {
+            position: relative;
+        }
+
+        .seo-prompt-test-publish-menu {
+            margin-top: 0.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
+        }
+
+        .dark .seo-prompt-test-publish-menu {
+            border-color: #4b5563;
+            background: #111827;
+        }
+
+        .seo-prompt-test-publish-menu__item {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.125rem;
+            width: 100%;
+            text-align: left;
+            padding: 0.625rem 0.75rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            color: #111827;
+            transition: background-color 0.15s;
+        }
+
+        .seo-prompt-test-publish-menu__item:hover {
+            background-color: #f3f4f6;
+        }
+
+        .dark .seo-prompt-test-publish-menu__item {
+            color: #f3f4f6;
+        }
+
+        .dark .seo-prompt-test-publish-menu__item:hover {
+            background-color: #1f2937;
+        }
+
+        .seo-prompt-test-publish-menu__title {
+            font-weight: 600;
+        }
+
+        .seo-prompt-test-publish-menu__desc {
+            font-size: 0.75rem;
+            line-height: 1.35;
+            color: #6b7280;
+        }
+
+        .dark .seo-prompt-test-publish-menu__desc {
+            color: #9ca3af;
+        }
+
+        .seo-prompt-test-publish-menu__desc code {
+            font-size: 0.7em;
         }
     </style>
 </x-filament-panels::page>

@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoMainDomainService;
+use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -15,6 +18,8 @@ final class TaskTestInputResolver
 
     public function __construct(
         private readonly SeoAnalyzerService $seoAnalyzer,
+        private readonly SiteDomainPromptContextService $sitePromptContext,
+        private readonly SeoMainDomainService $mainDomain,
     ) {}
 
     /**
@@ -80,6 +85,8 @@ final class TaskTestInputResolver
         $postTitle = trim((string) ($article->title ?? ''));
 
         $variables = $this->baseVariables($postTitle, $focusKeyword, (int) $article->id);
+        $article->loadMissing('site');
+        $variables = array_merge($variables, $this->sitePromptContext->promptVariablesForSite($article->site));
 
         return new TaskTestContext(
             article: $article,
@@ -109,6 +116,7 @@ final class TaskTestInputResolver
         }
 
         $variables = $this->baseVariables($postTitle, $focusKeyword, null);
+        $variables = array_merge($variables, $this->sitePromptContext->promptVariablesForSite($this->mainDomain->resolveMainSite()));
 
         if ($title === '' && $keyword === '') {
             throw new \InvalidArgumentException('Chọn bài viết hoặc nhập tiêu đề / từ khóa để chạy thử.');

@@ -2,6 +2,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   buildFlowTheme,
   getDefaultNodeHeight,
+  getInputPortCenterX,
+  getInputPortCenterY,
+  getOutputPortCenterX,
   getOutputPortTop,
   getPromptOutputPorts,
   nodeBorderClass,
@@ -45,6 +48,23 @@ const commentReviewLabels = Object.fromEntries(commentReviewFilters.map((o) => [
 
 const actionLabels = Object.fromEntries(mockActions.map((a) => [a.id, a.label]));
 
+function getPromptConfig(promptId) {
+  if (promptId == null || promptId === '') {
+    return null;
+  }
+
+  return mockPrompts.find((p) => String(p.id) === String(promptId)) ?? null;
+}
+
+function defaultPromptNodeData(promptId) {
+  const config = getPromptConfig(promptId) ?? mockPrompts[0];
+
+  return {
+    promptId: config?.id ?? 'p1',
+    aiModel: config?.defaultModel ?? '',
+  };
+}
+
 function normalizeArticleNodeData(data = {}) {
   const next = { ...data };
   if (!Array.isArray(next.actions)) {
@@ -76,9 +96,22 @@ function migrateLegacyFlowNode(node) {
 function normalizeNodes(nodes) {
   return (nodes ?? []).map((node) => {
     const migrated = migrateLegacyFlowNode(node);
-    return migrated.type === 'article'
+    let next = migrated.type === 'article'
       ? { ...migrated, data: normalizeArticleNodeData(migrated.data) }
       : migrated;
+
+    if (next.type === 'prompt') {
+      const config = getPromptConfig(next.data?.promptId);
+      next = {
+        ...next,
+        data: {
+          ...next.data,
+          aiModel: next.data?.aiModel || config?.defaultModel || '',
+        },
+      };
+    }
+
+    return next;
   });
 }
 
@@ -138,8 +171,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
       title = 'Bài viết';
       data = { postTypes: [], taxonomies: [], actions: [], commentReview: [] };
     }
-    else if (type === 'prompt') { title = 'Khối Prompt'; data = { promptId: mockPrompts[0]?.id ?? 'p1' }; }
-    else if (type === 'filter') { title = 'Lọc (Filter)'; data = { rule: '' }; }
+    else if (type === 'prompt') {
+      title = 'Khối Prompt';
+      data = defaultPromptNodeData(mockPrompts[0]?.id ?? 'p1');
+    }
+    else if (type === 'filter') { title = 'Lọc / Xử lý'; data = { filterType: 'custom', rule: '' }; }
     else if (type === 'action') {
       title = 'Hành động';
       data = { actionType: 'create_article', isTrigger: false };
@@ -158,6 +194,10 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
     setNodes(nodes.map(node => node.id === nodeId ? { ...node, data: { ...node.data, [key]: value } } : node));
   };
 
+  const updateNodeDataFields = (nodeId, patch) => {
+    setNodes(nodes.map((node) => (node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node)));
+  };
+
   const handleMouseDown = (nodeId, e) => {
     e.stopPropagation(); setDraggedNodeId(nodeId); setIsDragging(true); setSelectedNodeId(nodeId);
     const rect = e.currentTarget.getBoundingClientRect();
@@ -167,7 +207,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
   const handleMouseMove = (e) => {
     if (!isDragging || !draggedNodeId || !canvasRef.current) return;
     const canvasRect = canvasRef.current.getBoundingClientRect();
-    setNodes(nodes.map(n => n.id === draggedNodeId ? { ...n, x: Math.max(10, e.clientX - canvasRect.left - dragOffset.x), y: Math.max(10, e.clientY - canvasRect.top - dragOffset.y) } : n));
+    const nx = Math.max(10, e.clientX - canvasRect.left - dragOffset.x);
+    const ny = Math.max(10, e.clientY - canvasRect.top - dragOffset.y);
+    setNodes((prev) =>
+      prev.map((n) => (n.id === draggedNodeId ? { ...n, x: nx, y: ny } : n)),
+    );
   };
 
   const handleMouseUp = () => { setIsDragging(false); setDraggedNodeId(null); };
@@ -256,11 +300,14 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
               const tgtNode = nodes.find(n => n.id === edge.targetNode);
               if (!srcNode || !tgtNode) return null;
               const srcPorts = srcNode.type === 'prompt' ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark) : [{id: 'out_main'}];
+              const tgtOutPorts = tgtNode.type === 'prompt' ? getPromptOutputPorts(tgtNode.data.promptId, mockPrompts, isDark) : [{ id: 'out_main' }];
               const srcPortIndex = srcPorts.findIndex(p => p.id === edge.sourcePort);
               const srcNodeHeight = getDefaultNodeHeight(srcNode.type, srcPorts.length);
-              const startX = srcNode.x + 220;
-              const startY = srcNode.y + getOutputPortTop(srcNode.type, srcNodeHeight, srcPorts.length, srcPortIndex);
-              const endX = tgtNode.x; const endY = tgtNode.y + 50;
+              const tgtNodeHeight = getDefaultNodeHeight(tgtNode.type, tgtOutPorts.length);
+              const startX = getOutputPortCenterX(srcNode.x);
+              const startY = srcNode.y + getOutputPortTop(srcNode.type, srcNodeHeight, srcPorts.length, Math.max(0, srcPortIndex));
+              const endX = getInputPortCenterX(tgtNode.x);
+              const endY = getInputPortCenterY(tgtNode.y, tgtNodeHeight);
               const cpOffset = Math.abs(endX - startX) * 0.5;
               const d = `M ${startX} ${startY} C ${startX + cpOffset} ${startY}, ${endX - cpOffset} ${endY}, ${endX} ${endY}`;
               
@@ -280,8 +327,10 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
               const connectPorts = srcNode.type === 'prompt' ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark) : [{ id: 'out_main' }];
               const connectHeight = getDefaultNodeHeight(srcNode.type, connectPorts.length);
               const connectIndex = connectPorts.findIndex((p) => p.id === connecting.portId);
-              const startY = srcNode.y + getOutputPortTop(srcNode.type, connectHeight, connectPorts.length, connectIndex);
-              return <line x1={srcNode.x + 220} y1={startY} x2={srcNode.x + 270} y2={startY} stroke="#f59e0b" strokeWidth="2" strokeDasharray="4" />;
+              const ix = Math.max(0, connectIndex);
+              const startY = srcNode.y + getOutputPortTop(srcNode.type, connectHeight, connectPorts.length, ix);
+              const startX = getOutputPortCenterX(srcNode.x);
+              return <line x1={startX} y1={startY} x2={startX + 48} y2={startY} stroke="#f59e0b" strokeWidth="2" strokeDasharray="4" />;
             })()}
           </svg>
 
@@ -329,8 +378,28 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                       <span>Tax: {formatSelection(node.data.taxonomies)}</span>
                     </div>
                   )}
-                  {node.type === 'prompt' && <div className={`font-medium truncate ${t.accentViolet}`}>{mockPrompts.find(p => p.id === node.data.promptId)?.name}</div>}
-                  {node.type === 'filter' && <div className="truncate">Logic: {node.data.rule || 'Chưa cấu hình'}</div>}
+                  {node.type === 'prompt' && (
+                    <>
+                      <div className={`font-medium truncate ${t.accentViolet}`}>{mockPrompts.find(p => p.id === node.data.promptId)?.name}</div>
+                      {node.data.aiModel ? (
+                        <div className={`text-[10px] truncate mt-0.5 ${t.emptyHint}`}>{node.data.aiModel}</div>
+                      ) : null}
+                    </>
+                  )}
+                  {node.type === 'filter' && (
+                    <div className="flex flex-col gap-1">
+                      <span className="font-semibold text-amber-600 dark:text-amber-400">
+                        {node.data.filterType === 'parse_outline' ? 'Bóc tách Dàn ý' :
+                         node.data.filterType === 'parse_keywords' ? 'Bóc tách Từ khóa' :
+                         node.data.filterType === 'parse_faq' ? 'Bóc tách FAQ' :
+                         node.data.filterType === 'score_seo' ? 'Chấm điểm SEO' :
+                         'Lọc tùy chỉnh'}
+                      </span>
+                      {(!node.data.filterType || node.data.filterType === 'custom') && (
+                        <span className="truncate text-[10px]">Logic: {node.data.rule || 'Chưa cấu hình'}</span>
+                      )}
+                    </div>
+                  )}
                   {node.type === 'action' && (
                     <div className="flex flex-col">
                       <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-gray-800'}`}>
@@ -338,7 +407,9 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                           ? 'Sửa bài viết'
                           : node.data.actionType === 'post_comment_review'
                             ? 'Đăng bình luận / review'
-                            : 'Tạo bài viết mới'}
+                            : node.data.actionType === 'save_vocabulary_research'
+                              ? 'Lưu nghiên cứu từ vựng'
+                              : 'Tạo bài viết mới'}
                       </span>
                       {node.data.isTrigger ? (
                         <span className="flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1.5 bg-amber-100 dark:bg-amber-500/10 px-2 py-0.5 rounded w-max border border-amber-200 dark:border-amber-500/20">
@@ -359,7 +430,14 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                     }}
                   >
                     <div onClick={(e) => handlePortClick(node.id, port.id, 'output', e)} className={`w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center z-20 ${t.portBorder} ${connecting?.nodeId === node.id && connecting?.portId === port.id ? 'bg-amber-500 animate-pulse' : port.color}`}><div className="w-1.5 h-1.5 bg-white rounded-full"></div></div>
-                    {node.type === 'prompt' && <div className={`mr-3 text-[10px] font-semibold px-1.5 py-0.5 rounded border ${t.portLabel}`}>{port.label}</div>}
+                    {node.type === 'prompt' && (
+                      <div
+                        className={`mr-3 max-w-[9.5rem] truncate text-[10px] font-semibold px-1.5 py-0.5 rounded border ${t.portLabel}`}
+                        title={port.label}
+                      >
+                        {port.label}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -458,17 +536,94 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
               
               {selectedNode.type === 'prompt' && (
                 <div className="space-y-4">
-                  <label className={`text-xs block mb-1 ${t.label}`}>Chọn Prompt thực thi</label>
-                  <select value={selectedNode.data.promptId} onChange={(e) => updateNodeData(selectedNode.id, 'promptId', e.target.value)} className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`}>
-                    {mockPrompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
+                  <div>
+                    <label className={`text-xs block mb-1 ${t.label}`}>Chọn Prompt thực thi</label>
+                    <select
+                      value={selectedNode.data.promptId}
+                      onChange={(e) => {
+                        const promptId = e.target.value;
+                        const config = getPromptConfig(promptId);
+                        updateNodeDataFields(selectedNode.id, {
+                          promptId,
+                          aiModel: config?.defaultModel ?? '',
+                        });
+                      }}
+                      className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`}
+                    >
+                      {mockPrompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={`text-xs block mb-1 ${t.label}`}>Model AI</label>
+                    <select
+                      value={selectedNode.data.aiModel || getPromptConfig(selectedNode.data.promptId)?.defaultModel || ''}
+                      onChange={(e) => updateNodeData(selectedNode.id, 'aiModel', e.target.value)}
+                      className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`}
+                    >
+                      {Object.entries(getPromptConfig(selectedNode.data.promptId)?.models || {}).map(([value, label]) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                    <p className={`text-[11px] mt-1.5 leading-relaxed ${t.emptyHint}`}>
+                      Kết nối AI lấy từ Prompt đã chọn. Dùng biến <code>{'{{input}}'}</code> trong prompt để nhận kết quả từ edge nối vào.
+                    </p>
+                  </div>
                 </div>
               )}
 
               {selectedNode.type === 'filter' && (
                 <div className="space-y-4">
-                  <label className={`text-xs block mb-1 ${t.label}`}>Điều kiện lọc</label>
-                  <input type="text" value={selectedNode.data.rule || ''} onChange={(e) => updateNodeData(selectedNode.id, 'rule', e.target.value)} placeholder="Nhập logic lọc..." className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`} />
+                  <div>
+                    <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1 font-semibold">Chức năng Xử lý / Lọc</label>
+                    <select
+                      value={selectedNode.data.filterType || 'custom'}
+                      onChange={(e) => updateNodeData(selectedNode.id, 'filterType', e.target.value)}
+                      className="w-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-700 rounded-md p-2 text-sm text-gray-800 dark:text-slate-200 focus:border-amber-500 outline-none shadow-sm transition-colors"
+                    >
+                      <option value="custom">Lọc điều kiện tùy chỉnh</option>
+                      <option value="parse_outline">1. Bóc tách Dàn ý (Markdown -&gt; JSON)</option>
+                      <option value="parse_keywords">2. Bóc tách Từ khóa (Markdown -&gt; JSON)</option>
+                      <option value="parse_faq">3. Bóc tách FAQ</option>
+                      <option value="score_seo">4. Chấm điểm SEO (FAQ + Bảng)</option>
+                    </select>
+                  </div>
+
+                  {(!selectedNode.data.filterType || selectedNode.data.filterType === 'custom') && (
+                    <div>
+                      <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1">Điều kiện lọc</label>
+                      <input
+                        type="text"
+                        value={selectedNode.data.rule || ''}
+                        onChange={(e) => updateNodeData(selectedNode.id, 'rule', e.target.value)}
+                        placeholder="Nhập logic lọc (VD: score > 80)..."
+                        className="w-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-700 rounded-md p-2 text-sm text-gray-800 dark:text-white focus:outline-none focus:border-amber-500 transition-colors shadow-sm"
+                      />
+                    </div>
+                  )}
+
+                  {selectedNode.data.filterType === 'parse_outline' && (
+                    <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-3 rounded-lg text-xs text-amber-700 dark:text-amber-400 leading-relaxed shadow-sm">
+                      💡 <b>Parse Dàn ý:</b> Hệ thống sẽ sử dụng Parser để bóc tách các thẻ Heading (H2, H3) từ kết quả Markdown của AI thành cấu trúc JSON Outline chuẩn và đưa vào Meta Data.
+                    </div>
+                  )}
+
+                  {selectedNode.data.filterType === 'parse_keywords' && (
+                    <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-3 rounded-lg text-xs text-amber-700 dark:text-amber-400 leading-relaxed shadow-sm">
+                      💡 <b>Parse Từ khóa:</b> Hệ thống sẽ đọc Markdown dạng list (### Category) và bóc tách thành các mảng từ khóa ngữ nghĩa (Synonyms, LSI...) lưu vào Meta Data.
+                    </div>
+                  )}
+
+                  {selectedNode.data.filterType === 'parse_faq' && (
+                    <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-3 rounded-lg text-xs text-amber-700 dark:text-amber-400 leading-relaxed shadow-sm">
+                      💡 <b>Parse FAQ:</b> Bóc tách câu hỏi/trả lời (H3) và tự chấm +10 điểm nếu có FAQ hợp lệ.
+                    </div>
+                  )}
+
+                  {selectedNode.data.filterType === 'score_seo' && (
+                    <div className="bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/20 p-3 rounded-lg text-xs text-violet-700 dark:text-violet-300 leading-relaxed shadow-sm">
+                      💡 <b>Chấm SEO:</b> FAQ (+10) và bảng Markdown Featured Snippet (&gt;=10 hàng, 2-5 cột, +10). Chạy sau khi AI sinh nội dung.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -502,6 +657,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                     >
                       <option value="create_article">Tạo bài viết mới</option>
                       <option value="edit_article">Cập nhật / Sửa bài viết</option>
+                      <option value="save_vocabulary_research">Lưu nghiên cứu từ vựng (Topic Cluster)</option>
                       <option value="post_comment_review">Đăng bình luận / review (WordPress)</option>
                     </select>
                   </div>
@@ -510,6 +666,13 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                     <div className="bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 p-3 rounded-lg">
                       <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
                         Đăng JSON comment/review lên WordPress qua plugin. Product: tự gán sao 5-5-4 nếu thiếu <code>star_ranking</code>.
+                      </p>
+                    </div>
+                  ) : selectedNode.data.actionType === 'save_vocabulary_research' ? (
+                    <div className="bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/20 p-3 rounded-lg">
+                      <p className="text-xs text-violet-800 dark:text-violet-300 leading-relaxed">
+                        Lưu từ khóa đã bóc tách (Khối Lọc → Bóc tách Từ khóa) vào bảng <code>keywords</code> theo cấu trúc Topic Cluster:
+                        từ khóa chính (parent) + từ khóa con theo nhóm ngữ nghĩa, đồng thời gắn pivot <code>article_keyword</code>.
                       </p>
                     </div>
                   ) : (

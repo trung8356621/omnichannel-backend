@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\PromptResult;
+use App\Addons\SeoContentAi\Support\AiModelCatalog;
 use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
@@ -25,7 +26,7 @@ final class PromptRunnerService
     /**
      * @param  array<string, string>  $variables
      */
-    public function run(SeoPrompt $prompt, array $variables): PromptResult
+    public function run(SeoPrompt $prompt, array $variables, ?string $modelOverride = null): PromptResult
     {
         $prompt->loadMissing(['parts', 'aiConnection']);
 
@@ -42,6 +43,11 @@ final class PromptRunnerService
             throw new PromptRunException('Kết nối AI chưa có API Key.');
         }
 
+        $model = trim((string) ($modelOverride ?? ''));
+        if ($model === '') {
+            $model = AiModelCatalog::defaultForConnection($connection);
+        }
+
         $compiled = $this->compilePrompt($prompt, $variables);
 
         $result = PromptResult::query()->create([
@@ -53,12 +59,13 @@ final class PromptRunnerService
             'input_snapshot' => [
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
+                'model' => $model,
             ],
             'started_at' => now(),
         ]);
 
         try {
-            [$output, $usage] = $this->callProvider($connection, $compiled);
+            [$output, $usage] = $this->callProvider($connection, $compiled, $model);
 
             $result->update([
                 'status' => 'completed',
@@ -152,11 +159,11 @@ final class PromptRunnerService
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callProvider(ApiConnection $connection, string $prompt): array
+    private function callProvider(ApiConnection $connection, string $prompt, string $model): array
     {
         return match ($connection->provider) {
-            'gemini' => $this->callGemini($connection, $prompt),
-            'claude' => $this->callClaude($connection, $prompt),
+            'gemini' => $this->callGemini($connection, $prompt, $model),
+            'claude' => $this->callClaude($connection, $prompt, $model),
             default => throw new PromptRunException('Nhà cung cấp AI không được hỗ trợ: ' . $connection->provider),
         };
     }
@@ -164,9 +171,9 @@ final class PromptRunnerService
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callGemini(ApiConnection $connection, string $prompt): array
+    private function callGemini(ApiConnection $connection, string $prompt, string $model): array
     {
-        $modelsToTry = GeminiModelCatalog::modelsToTry((string) ($connection->default_model ?? ''));
+        $modelsToTry = GeminiModelCatalog::modelsToTry($model);
 
         $lastError = null;
 
@@ -176,7 +183,8 @@ final class PromptRunnerService
                     return $this->requestGeminiGenerateContent($connection, $prompt, $model, $apiVersion);
                 } catch (PromptRunException $exception) {
                     $lastError = $exception;
-                    if (! $this->isGeminiModelNotFoundError($exception->getMessage())) {
+                    if (! $this->isGeminiModelNotFoundError($exception->getMessage())
+                        && ! $this->isGeminiRetryableError($exception->getMessage())) {
                         throw $exception;
                     }
                 }
@@ -193,6 +201,17 @@ final class PromptRunnerService
         return str_contains($lower, 'not found')
             || str_contains($lower, 'not supported for generatecontent')
             || str_contains($lower, '404');
+    }
+
+    private function isGeminiRetryableError(string $message): bool
+    {
+        $lower = strtolower($message);
+
+        return str_contains($lower, 'high demand')
+            || str_contains($lower, 'overloaded')
+            || str_contains($lower, 'resource exhausted')
+            || str_contains($lower, '429')
+            || str_contains($lower, '503');
     }
 
     /**
@@ -256,9 +275,9 @@ final class PromptRunnerService
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callClaude(ApiConnection $connection, string $prompt): array
+    private function callClaude(ApiConnection $connection, string $prompt, string $model): array
     {
-        $model = $connection->default_model ?: 'claude-3-5-sonnet-20240620';
+        $model = $model !== '' ? $model : ($connection->default_model ?: 'claude-3-5-sonnet-20240620');
 
         $response = Http::timeout(180)
             ->acceptJson()

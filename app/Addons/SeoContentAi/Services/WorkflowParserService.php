@@ -1,0 +1,1737 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services;
+
+use DOMDocument;
+use DOMElement;
+use DOMNode;
+use Illuminate\Support\Str;
+
+class WorkflowParserService
+{
+    public function __construct(
+        private readonly SeoPromptSettingsService $promptSettings,
+        private readonly SeoOverviewSettingsService $overviewSettings,
+    ) {
+    }
+    /**
+     * Parse Dàn ý: Chuyển đổi Markdown H2, H3 thành Cấu trúc cây JSON
+     * Lưu vào meta bài viết dưới dạng json (seo_article_outlines)
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function parseOutline(string $markdown): array
+    {
+        $lines = explode("\n", $markdown);
+        $outlines = [];
+        $currentH2Index = -1;
+        $sortOrder = 1;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (preg_match('/^##\s+(.*)/', $line, $matches)) {
+                $text = trim(str_replace('**', '', $matches[1]));
+                $outlines[] = [
+                    'level' => 2,
+                    'text' => $text,
+                    'children' => [],
+                    'sort_order' => $sortOrder++,
+                ];
+                $currentH2Index = count($outlines) - 1;
+            } elseif (preg_match('/^###\s+(.*)/', $line, $matches)) {
+                $text = trim(str_replace('**', '', $matches[1]));
+                $h3Node = [
+                    'level' => 3,
+                    'text' => $text,
+                    'sort_order' => $sortOrder++,
+                ];
+
+                if ($currentH2Index !== -1) {
+                    $outlines[$currentH2Index]['children'][] = $h3Node;
+                } else {
+                    $outlines[] = [
+                        'level' => 3,
+                        'text' => $text,
+                        'children' => [],
+                        'sort_order' => $sortOrder++,
+                    ];
+                }
+            }
+        }
+
+        return $outlines;
+    }
+
+    /**
+     * Parse Từ khóa: Chuyển đổi Markdown danh mục (### Category) và gạch đầu dòng (-) thành JSON Ngữ nghĩa
+     *
+     * @return array<string, list<string>>
+     */
+    public function parseKeywords(string $markdown): array
+    {
+        $lines = explode("\n", $markdown);
+        $result = [];
+        $currentCategory = null;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (preg_match('/^###\s+(.*)/', $line, $matches)) {
+                $categoryName = trim($matches[1]);
+                $categoryName = trim(str_replace(['**', '*'], '', $categoryName));
+                $currentCategory = $categoryName;
+                $result[$currentCategory] = [];
+            } elseif ($currentCategory !== null && preg_match('/^[-*]\s+(.*)/', $line, $matches)) {
+                $value = trim($matches[1]);
+                $value = trim(str_replace(['**', '*', '_'], '', $value));
+                $result[$currentCategory][] = $value;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Bóc tách FAQ chuẩn dựa trên Sequential DOM Traversal + State Machine.
+     *
+     * @return list<array{question: string, answer: string}>
+     */
+    public function parseFaqsFromHtml(string $html, bool $treatAllAsFaqSection = false): array
+    {
+        $html = $this->preprocessHtmlForFaqExtraction($html);
+        if ($html === '') {
+            return [];
+        }
+
+        $faqs = $this->parseFaqsFromStrongParagraphPairs($html, $treatAllAsFaqSection);
+        if ($faqs !== []) {
+            return $faqs;
+        }
+
+        return $this->parseFaqs($html, $treatAllAsFaqSection);
+    }
+
+    /**
+     * Loại bỏ khối FAQ đã render trên WP (omi-faq-container) trước khi quét / cắt nội dung.
+     */
+    public function preprocessHtmlForFaqExtraction(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $html = (string) preg_replace(
+            '/<div[^>]*\bomi-faq-container\b[^>]*>[\s\S]*?<\/div>\s*(?:<script[^>]*type=["\']application\/ld\+json["\'][^>]*>[\s\S]*?<\/script>)?/iu',
+            '',
+            $html,
+        );
+
+        return trim($html);
+    }
+
+    /**
+     * Markdown hoặc HTML (đồng bộ WordPress / workflow).
+     *
+     * @return list<array{question: string, answer: string}>
+     */
+    public function parseFaqsFromContent(string $content, bool $treatAllAsFaqSection = false): array
+    {
+        $content = $this->preprocessHtmlForFaqExtraction($content);
+        if ($content === '') {
+            return [];
+        }
+
+        if (preg_match('/<[a-z][\s\S]*>/i', $content) === 1) {
+            return $this->parseFaqsFromHtml($content, $treatAllAsFaqSection);
+        }
+
+        return $this->parseFaqs($content, $treatAllAsFaqSection);
+    }
+
+    /**
+     * Tiêu đề khối FAQ (H2/H3) — ưu tiên đoạn chọn, sau đó toàn bài.
+     *
+     * @return array{level: int, text: string, html: string, heading_line: string, source: string}|null
+     */
+    public function findFaqSectionHeadingInContent(string $content, string $contextContent = ''): ?array
+    {
+        $content = trim($content);
+        $contextContent = trim($contextContent);
+
+        foreach ([['html' => $content, 'source' => 'selection'], ['html' => $contextContent, 'source' => 'article']] as $bucket) {
+            if ($bucket['html'] === '') {
+                continue;
+            }
+
+            $found = $this->findFaqSectionHeadingInSingleContent($bucket['html']);
+            if ($found !== null) {
+                $found['source'] = $bucket['source'];
+
+                return $found;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Chẩn đoán tách FAQ thủ công (debug UI).
+     *
+     * @return array{
+     *     heading: array<string, mixed>|null,
+     *     parsed_total: int,
+     *     valid_pairs: int,
+     *     question_candidates: list<string>,
+     *     skipped: list<array{question: string, reason: string}>,
+     * }
+     */
+    public function diagnoseManualFaqExtract(string $fragment, string $articleHtml = ''): array
+    {
+        $fragment = trim($fragment);
+        $parsed = $fragment !== '' ? $this->parseFaqsFromHtml($fragment, true) : [];
+
+        $valid = 0;
+        $skipped = [];
+
+        foreach ($parsed as $row) {
+            $question = trim((string) ($row['question'] ?? ''));
+            $answer = trim((string) ($row['answer'] ?? ''));
+            if ($question === '') {
+                continue;
+            }
+
+            if ($answer !== '') {
+                $valid++;
+
+                continue;
+            }
+
+            $skipped[] = [
+                'question' => $question,
+                'reason' => 'empty_answer',
+            ];
+        }
+
+        return [
+            'heading' => $this->findFaqSectionHeadingInContent($fragment, $articleHtml),
+            'parsed_total' => count($parsed),
+            'valid_pairs' => $valid,
+            'question_candidates' => $this->scanFaqQuestionCandidatesInHtml($fragment),
+            'skipped' => $skipped,
+        ];
+    }
+
+    /**
+     * @return array{level: int, text: string, html: string, heading_line: string}|null
+     */
+    private function findFaqSectionHeadingInSingleContent(string $content): ?array
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return null;
+        }
+
+        if (preg_match('/<[a-z][\s\S]*>/i', $content) === 1) {
+            $root = $this->loadHtmlFaqRoot($content);
+            if ($root === null) {
+                return null;
+            }
+
+            foreach ($this->collectFaqBlockElements($root) as $block) {
+                $tag = strtolower($block->tagName);
+                $level = $this->htmlHeadingLevel($tag);
+                if ($level === null) {
+                    continue;
+                }
+
+                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+                if (! $this->isFaqSectionHeading($headingLine)) {
+                    continue;
+                }
+
+                $dom = $block->ownerDocument;
+                $html = $dom instanceof DOMDocument ? (string) $dom->saveHTML($block) : '';
+
+                return [
+                    'level' => $level,
+                    'text' => $this->headingText($headingLine),
+                    'html' => trim($html),
+                    'heading_line' => $headingLine,
+                ];
+            }
+
+            return null;
+        }
+
+        foreach (explode("\n", $content) as $line) {
+            $trimmed = trim($line);
+            $level = $this->lineHeadingLevel($trimmed);
+            if ($level === null || ! $this->isFaqSectionHeading($trimmed)) {
+                continue;
+            }
+
+            $text = $this->headingText($trimmed);
+
+            return [
+                'level' => $level,
+                'text' => $text,
+                'html' => '<h' . $level . '>' . htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h' . $level . '>',
+                'heading_line' => $trimmed,
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function scanFaqQuestionCandidatesInHtml(string $html): array
+    {
+        $html = trim($html);
+        if ($html === '' || preg_match('/<[a-z][\s\S]*>/i', $html) !== 1) {
+            return [];
+        }
+
+        $root = $this->loadHtmlFaqRoot($html);
+        if ($root === null) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($this->collectFaqBlockElements($root) as $block) {
+            $tag = strtolower($block->tagName);
+            $level = $this->htmlHeadingLevel($tag);
+
+            if ($level !== null) {
+                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+                if ($this->isFaqSectionHeading($headingLine)) {
+                    continue;
+                }
+
+                if (in_array($tag, ['h3', 'h4', 'h5', 'h6'], true) && ! $this->isFaqSectionHeading($headingLine)) {
+                    $question = $this->normalizeExtractedFaqQuestion($this->elementText($block));
+                    if ($question !== '') {
+                        $candidates[] = $question;
+                    }
+                }
+
+                continue;
+            }
+
+            if ($this->isStrongQuestionParagraph($block)) {
+                $question = $this->extractStrongQuestionText($block);
+                if ($question !== '') {
+                    $candidates[] = $question;
+                }
+            }
+        }
+
+        return $candidates;
+    }
+
+    /**
+     * Bóc FAQ từ HTML: cặp <p><strong>câu hỏi</strong></p> + (các) <p> trả lời liền kề.
+     *
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    public function parseFaqsFromStrongParagraphPairs(string $html, bool $treatAllAsFaqSection = false): array
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return [];
+        }
+
+        $root = $this->loadHtmlFaqRoot($html);
+        if ($root === null) {
+            return [];
+        }
+
+        $blocks = $this->collectFaqBlockElements($root);
+        $faqs = [];
+        $inFaqSection = $treatAllAsFaqSection;
+        $faqSectionLevel = null;
+        $count = count($blocks);
+
+        for ($index = 0; $index < $count; $index++) {
+            $block = $blocks[$index];
+            $tag = strtolower($block->tagName);
+            $level = $this->htmlHeadingLevel($tag);
+
+            if ($level !== null) {
+                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+
+                if ($this->isFaqSectionHeading($headingLine)) {
+                    $inFaqSection = true;
+                    $faqSectionLevel = $level;
+
+                    continue;
+                }
+
+                if ($inFaqSection && $faqSectionLevel !== null && $level <= $faqSectionLevel) {
+                    $inFaqSection = false;
+                    $faqSectionLevel = null;
+                }
+
+                $isFaqQuestionHeading = $inFaqSection
+                    && in_array($tag, ['h3', 'h4', 'h5', 'h6'], true)
+                    && ! $this->isFaqSectionHeading($headingLine);
+
+                if (! $isFaqQuestionHeading) {
+                    continue;
+                }
+            }
+
+            if (! $inFaqSection) {
+                continue;
+            }
+
+            if ($this->isStrongQuestionParagraph($block)) {
+                $question = $this->extractStrongQuestionText($block);
+                if ($question === '') {
+                    continue;
+                }
+
+                [$answerHtml, $moreHtml, $next] = $this->collectFaqAnswerHtml($blocks, $index + 1);
+
+                $answer = trim(implode("\n", array_filter($answerHtml, static fn (string $part): bool => trim($part) !== '')));
+                if ($answer !== '') {
+                    $more = trim(implode("\n", array_filter($moreHtml, static fn (string $part): bool => trim($part) !== '')));
+                    $faqs[] = [
+                        'question' => $question,
+                        'answer' => $answer,
+                        'more' => $more,
+                    ];
+                }
+
+                $index = $next - 1;
+
+                continue;
+            }
+
+            if (in_array($tag, ['h3', 'h4', 'h5', 'h6'], true)) {
+                $headingLine = str_repeat('#', $level ?? 3) . ' ' . $this->elementText($block);
+                if ($this->isFaqSectionHeading($headingLine)) {
+                    continue;
+                }
+
+                $question = $this->normalizeExtractedFaqQuestion($this->elementText($block));
+                if ($question === '') {
+                    continue;
+                }
+
+                [$answerHtml, $moreHtml, $next] = $this->collectFaqAnswerHtml($blocks, $index + 1);
+
+                $answer = trim(implode("\n", array_filter($answerHtml, static fn (string $part): bool => trim($part) !== '')));
+                if ($answer !== '') {
+                    $more = trim(implode("\n", array_filter($moreHtml, static fn (string $part): bool => trim($part) !== '')));
+                    $faqs[] = [
+                        'question' => $question,
+                        'answer' => $answer,
+                        'more' => $more,
+                    ];
+                }
+
+                $index = $next - 1;
+            }
+        }
+
+        return $faqs;
+    }
+
+    /**
+     * Bóc tách FAQ chuẩn chỉ dựa trên DOM Traversal và State Machine.
+     * Xử lý trực tiếp HTML thay vì Markdown.
+     *
+     * @return list<array{question: string, answer: string}>
+     */
+    public function parseFaqs(string $html, bool $treatAllAsFaqSection = false): array
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return [];
+        }
+
+        if (preg_match('/<[a-z][\s\S]*>/i', $html) !== 1) {
+            return $this->parseFaqsFromMarkdownLegacy($html, $treatAllAsFaqSection);
+        }
+
+        $dom = new \DOMDocument();
+        libxml_use_internal_errors(true);
+        @$dom->loadHTML('<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+
+        $xpath = new \DOMXPath($dom);
+        $rootNodes = $xpath->query('//div[@id="omi-faq-root"]');
+        if ($rootNodes === false || $rootNodes->length === 0) {
+            return [];
+        }
+        $root = $rootNodes->item(0);
+        if (! $root instanceof \DOMElement) {
+            return [];
+        }
+
+        $faqs = [];
+        $inFaqSection = $treatAllAsFaqSection;
+        $currentQuestion = null;
+        $currentAnswerHtml = [];
+
+        $sectionKeywords = ['faq', 'câu hỏi thường gặp', 'cau hoi thuong gap', 'hỏi đáp', 'hoi dap', 'giải đáp', 'giai dap'];
+
+        foreach ($root->childNodes as $node) {
+            if (! $node instanceof \DOMElement) {
+                continue;
+            }
+
+            $tag = strtolower($node->tagName);
+            $text = trim($node->textContent);
+            $lowerText = mb_strtolower($text);
+
+            if (in_array($tag, ['h2', 'h3'], true)) {
+                $isFaqHeading = false;
+                foreach ($sectionKeywords as $kw) {
+                    if (str_contains($lowerText, $kw)) {
+                        $isFaqHeading = true;
+                        break;
+                    }
+                }
+                $isQuestionHeading = preg_match('/^(❓\s*)?(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $text) === 1;
+
+                if ($isFaqHeading) {
+                    $inFaqSection = true;
+                    continue;
+                } elseif ($inFaqSection && ! $treatAllAsFaqSection && ! $isQuestionHeading) {
+                    $inFaqSection = false;
+
+                    if ($currentQuestion && $this->isValidAnswer($currentAnswerHtml)) {
+                        $faqs[] = [
+                            'question' => $currentQuestion,
+                            'answer' => trim(implode("\n", $currentAnswerHtml)),
+                        ];
+                    }
+                    $currentQuestion = null;
+                    $currentAnswerHtml = [];
+                    continue;
+                }
+            }
+
+            if (! $inFaqSection) {
+                continue;
+            }
+
+            $isQuestion = false;
+            $cleanTextStart = preg_replace('/^[^a-z0-9]+/iu', '', $text);
+            $cleanTextStart = is_string($cleanTextStart) ? $cleanTextStart : $text;
+
+            if (
+                preg_match('/^(q:|hỏi\s*:)/iu', $cleanTextStart)
+                || preg_match('/^(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $cleanTextStart)
+            ) {
+                $isQuestion = true;
+            } elseif (in_array($tag, ['p', 'div', 'li'], true)) {
+                $strongs = $node->getElementsByTagName('strong');
+                if ($strongs->length > 0) {
+                    $strongText = mb_strtolower(trim((string) $strongs->item(0)?->textContent));
+
+                    if (str_contains($strongText, 'câu hỏi') || str_contains($strongText, 'cau hoi')) {
+                        $isQuestion = true;
+                    } elseif (str_ends_with(trim($text), '?') || str_ends_with(trim($strongText), '?')) {
+                        $isQuestion = true;
+                    }
+                }
+            }
+
+            if ($isQuestion) {
+                if ($currentQuestion && $this->isValidAnswer($currentAnswerHtml)) {
+                    $faqs[] = [
+                        'question' => $currentQuestion,
+                        'answer' => trim(implode("\n", $currentAnswerHtml)),
+                    ];
+                }
+
+                $cleanQuestion = preg_replace(
+                    '/^(.*?)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*\d+|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q|Hỏi)\s*:\s*/iu',
+                    '',
+                    $text,
+                );
+                $finalQ = trim((string) $cleanQuestion) !== '' ? (string) $cleanQuestion : $text;
+                $finalQ = trim(str_replace(['**', '*'], '', $finalQ));
+
+                $currentQuestion = $finalQ;
+                $currentAnswerHtml = [];
+            } elseif ($currentQuestion !== null) {
+                if ($tag === 'hr' && $currentAnswerHtml === []) {
+                    continue;
+                }
+
+                $nodeHtml = (string) $dom->saveHTML($node);
+
+                if ($currentAnswerHtml === []) {
+                    $nodeHtml = $this->stripFaqAnswerLabelFromHtml($nodeHtml);
+                }
+
+                $currentAnswerHtml[] = $nodeHtml;
+            }
+        }
+
+        if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
+            $faqs[] = [
+                'question' => $currentQuestion,
+                'answer' => trim(implode("\n", $currentAnswerHtml)),
+            ];
+        }
+
+        return $faqs;
+    }
+
+    /**
+     * Fallback cho Markdown cũ (đảm bảo tương thích workflow hiện có).
+     *
+     * @return list<array{question: string, answer: string}>
+     */
+    private function parseFaqsFromMarkdownLegacy(string $markdown, bool $treatAllAsFaqSection = false): array
+    {
+        $lines = explode("\n", $markdown);
+        $faqs = [];
+        $currentQuestion = null;
+        $answerLines = [];
+        $inFaqSection = $treatAllAsFaqSection;
+        $faqSectionLevel = null;
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+            $headingLevel = $this->lineHeadingLevel($trimmed);
+
+            if ($headingLevel !== null) {
+                if ($this->isFaqSectionHeading($trimmed)) {
+                    if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                        $faqs[] = [
+                            'question' => $currentQuestion,
+                            'answer' => trim(implode("\n", $answerLines)),
+                        ];
+                    }
+
+                    $inFaqSection = true;
+                    $faqSectionLevel = $headingLevel;
+                    $currentQuestion = null;
+                    $answerLines = [];
+
+                    continue;
+                }
+
+                if ($inFaqSection && ! $treatAllAsFaqSection && $faqSectionLevel !== null && $headingLevel <= $faqSectionLevel) {
+                    if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                        $faqs[] = [
+                            'question' => $currentQuestion,
+                            'answer' => trim(implode("\n", $answerLines)),
+                        ];
+                    }
+
+                    $inFaqSection = false;
+                    $faqSectionLevel = null;
+                    $currentQuestion = null;
+                    $answerLines = [];
+                }
+            }
+
+            if (! $inFaqSection) {
+                continue;
+            }
+
+            if (preg_match('/^#{3,6}\s+(.*)/u', $trimmed, $matches) === 1 && ! $this->isFaqSectionHeading($trimmed)) {
+                if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                    $faqs[] = [
+                        'question' => $currentQuestion,
+                        'answer' => trim(implode("\n", $answerLines)),
+                    ];
+                }
+
+                $currentQuestion = trim(str_replace('**', '', $matches[1]));
+                $answerLines = [];
+
+                continue;
+            }
+
+            if ($this->isFaqQuestionLine($trimmed)) {
+                if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                    $faqs[] = [
+                        'question' => $currentQuestion,
+                        'answer' => trim(implode("\n", $answerLines)),
+                    ];
+                }
+
+                $currentQuestion = $this->normalizeFaqQuestionLine($trimmed);
+                $answerLines = [];
+
+                continue;
+            }
+
+            if ($currentQuestion !== null && $trimmed !== '' && ! preg_match('/^#{1,6}\s+/', $trimmed)) {
+                $answerLines[] = $trimmed;
+            }
+        }
+
+        if ($inFaqSection && $currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+            $faqs[] = [
+                'question' => $currentQuestion,
+                'answer' => trim(implode("\n", $answerLines)),
+            ];
+        }
+
+        return $faqs;
+    }
+
+    public const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
+
+    /**
+     * HTML hiển thị placeholder trong editor (khi lưu WordPress chuyển thành shortcode).
+     */
+    public function faqPlaceholderHtml(): string
+    {
+        return '<p class="omi-faq-placeholder" data-omi-faq="1">' . self::FAQ_SHORTCODE_PLACEHOLDER . '</p>';
+    }
+
+    /**
+     * Giữ tiêu đề khối FAQ, xóa câu hỏi/trả lời, chèn placeholder [omi_faq].
+     */
+    public function stripFaqContentKeepHeadingHtml(string $html, bool $treatAllAsFaqSection = false): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementById('omi-faq-root');
+        if (! $root instanceof DOMElement) {
+            return $html;
+        }
+
+        $outDom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $container = $outDom->createElement('div');
+        $outDom->appendChild($container);
+
+        $inFaqSection = $treatAllAsFaqSection;
+        $faqSectionLevel = null;
+        $placeholderAdded = false;
+        $sawFaqQuestionInSection = false;
+
+        foreach (iterator_to_array($root->childNodes) as $node) {
+            if ($node instanceof DOMElement) {
+                $tag = strtolower($node->tagName);
+                $level = $this->htmlHeadingLevel($tag);
+                $headingLine = $level !== null ? str_repeat('#', $level) . ' ' . $this->elementText($node) : '';
+
+                if ($level !== null) {
+                    if ($this->isFaqSectionHeading($headingLine)) {
+                        $container->appendChild($outDom->importNode($node, true));
+                        $inFaqSection = true;
+                        $faqSectionLevel = $level;
+                        $sawFaqQuestionInSection = false;
+
+                        continue;
+                    }
+
+                    if ($inFaqSection && $faqSectionLevel !== null && $level <= $faqSectionLevel && ! $this->isFaqSectionHeading($headingLine)) {
+                        $inFaqSection = false;
+                        $faqSectionLevel = null;
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    if ($inFaqSection) {
+                        $sawFaqQuestionInSection = true;
+                        if (! $placeholderAdded) {
+                            $this->appendPlaceholderToDom($outDom, $container);
+                            $placeholderAdded = true;
+                        }
+                        continue;
+                    }
+
+                    $container->appendChild($outDom->importNode($node, true));
+
+                    continue;
+                }
+
+                if ($inFaqSection) {
+                    if (! $sawFaqQuestionInSection && ! $this->isStrongQuestionParagraph($node)) {
+                        // Giữ nguyên phần giữa title FAQ và câu hỏi đầu tiên.
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    $sawFaqQuestionInSection = true;
+
+                    if (! $placeholderAdded) {
+                        $this->appendPlaceholderToDom($outDom, $container);
+                        $placeholderAdded = true;
+                    }
+
+                    continue;
+                }
+
+                $container->appendChild($outDom->importNode($node, true));
+
+                continue;
+            }
+
+            if ($node->nodeType === XML_TEXT_NODE) {
+                $text = trim((string) $node->textContent);
+                if ($text === '') {
+                    continue;
+                }
+
+                if ($inFaqSection) {
+                    if (! $sawFaqQuestionInSection) {
+                        // Text thô trước câu hỏi đầu tiên vẫn giữ lại.
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    if (! $placeholderAdded) {
+                        $this->appendPlaceholderToDom($outDom, $container);
+                        $placeholderAdded = true;
+                    }
+
+                    continue;
+                }
+
+                $container->appendChild($outDom->importNode($node, true));
+            }
+        }
+
+        if ($inFaqSection && ! $placeholderAdded) {
+            $this->appendPlaceholderToDom($outDom, $container);
+        }
+
+        return $this->innerHtmlOfElement($container);
+    }
+
+    /**
+     * Cắt bỏ phần FAQ ra khỏi nội dung HTML và chèn shortcode thay thế.
+     */
+    public function removeFaqAndAppendShortcode(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        if (preg_match('/<[a-z][\s\S]*>/i', $html) !== 1) {
+            return $this->removeFaqFromMarkdownAndAppendShortcode($html);
+        }
+
+        $pattern = '/<h[23][^>]*>.*?((faq|câu hỏi thường gặp|cau hoi thuong gap|hỏi đáp|giải đáp).*?)<\/h[23]>.*$/is';
+        $cleanedHtml = preg_replace($pattern, '', $html);
+        $cleanedHtml = trim((string) $cleanedHtml);
+
+        if (! str_contains($cleanedHtml, self::FAQ_SHORTCODE_PLACEHOLDER)) {
+            $cleanedHtml .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        return $cleanedHtml;
+    }
+
+    private function removeFaqFromMarkdownAndAppendShortcode(string $markdown): string
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
+        $result = [];
+        $inFaqSection = false;
+        $faqSectionLevel = null;
+        $placeholderAdded = false;
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+            $headingLevel = $this->lineHeadingLevel($trimmed);
+
+            if ($headingLevel !== null && $this->isFaqSectionHeading($trimmed)) {
+                $result[] = $line;
+                $inFaqSection = true;
+                $faqSectionLevel = $headingLevel;
+
+                if (! $placeholderAdded) {
+                    $result[] = '';
+                    $result[] = self::FAQ_SHORTCODE_PLACEHOLDER;
+                    $placeholderAdded = true;
+                }
+
+                continue;
+            }
+
+            if ($inFaqSection && $headingLevel !== null && $faqSectionLevel !== null && $headingLevel <= $faqSectionLevel) {
+                $inFaqSection = false;
+                $faqSectionLevel = null;
+                $result[] = $line;
+                continue;
+            }
+
+            if ($inFaqSection) {
+                continue;
+            }
+
+            $result[] = $line;
+        }
+
+        if ($inFaqSection && ! $placeholderAdded) {
+            $result[] = '';
+            $result[] = self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        $cleaned = trim(implode("\n", $result));
+        if ($cleaned !== '' && ! str_contains($cleaned, self::FAQ_SHORTCODE_PLACEHOLDER)) {
+            $cleaned .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        return $cleaned;
+    }
+
+    public function removeFaqAndAppendShortcodeFromContent(string $content): string
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return '';
+        }
+
+        if (str_contains($content, self::FAQ_SHORTCODE_PLACEHOLDER)) {
+            return $content;
+        }
+
+        if (preg_match('/<[a-z][\s\S]*>/i', $content) === 1) {
+            $content = $this->preprocessHtmlForFaqExtraction($content);
+            $stripped = $this->stripFaqContentKeepHeadingHtml($content, false);
+            if ($stripped !== '' && str_contains($stripped, self::FAQ_SHORTCODE_PLACEHOLDER)) {
+                return $stripped;
+            }
+
+            if ($this->parseFaqsFromStrongParagraphPairs($content) !== []
+                || $this->parseFaqs($content) !== []) {
+                return $this->stripFaqContentKeepHeadingHtml($content, false);
+            }
+
+            return $content;
+        }
+
+        return $this->removeFaqAndAppendShortcode($content);
+    }
+
+    /**
+     * Kiểm tra bài viết có chứa bảng Markdown đạt chuẩn Featured Snippet không.
+     * Ngưỡng đọc từ cài đặt prompt (số dòng dữ liệu, cột min/max).
+     */
+    public function hasFeaturedSnippetTable(string $markdown): bool
+    {
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+        $minRowCount = $this->promptSettings->featuredSnippetMinMarkdownRowCount();
+        $minCols = $thresholds['min_columns'];
+        $maxCols = $thresholds['max_columns'];
+
+        $lines = explode("\n", $markdown);
+        $inTable = false;
+        $rowCount = 0;
+        $colCount = 0;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+
+            if (preg_match('/\|.*\|/', $line)) {
+                if (! $inTable) {
+                    $inTable = true;
+                    $rowCount = 0;
+                    $cols = array_filter(explode('|', trim($line, '|')), static fn ($c): bool => trim((string) $c) !== '');
+                    $colCount = count($cols);
+                }
+
+                if (! preg_match('/^\|?[\s\-\:]+\|/', $line)) {
+                    $rowCount++;
+                }
+            } elseif ($inTable) {
+                if ($rowCount >= $minRowCount && $colCount >= $minCols && $colCount <= $maxCols) {
+                    return true;
+                }
+                $inTable = false;
+            }
+        }
+
+        if ($inTable && $rowCount >= $minRowCount && $colCount >= $minCols && $colCount <= $maxCols) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Bảng HTML trong editor (TipTap) — không qua Markdown pipe.
+     */
+    public function hasFeaturedSnippetTableFromHtml(string $html): bool
+    {
+        $html = trim($html);
+        if ($html === '' || preg_match('/<table\b/i', $html) !== 1) {
+            return false;
+        }
+
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+        $minDataRows = $thresholds['min_rows'];
+        $minCols = $thresholds['min_columns'];
+        $maxCols = $thresholds['max_columns'];
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="omi-snippet-root">' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementById('omi-snippet-root');
+        if (! $root instanceof DOMElement) {
+            return false;
+        }
+
+        foreach ($root->getElementsByTagName('table') as $table) {
+            if ($table instanceof DOMElement && $this->htmlTableMeetsFeaturedSnippetThresholds($table, $minDataRows, $minCols, $maxCols)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Markdown hoặc HTML editor.
+     */
+    public function contentHasFeaturedSnippetTable(string $content): bool
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return false;
+        }
+
+        if ($this->hasFeaturedSnippetTableFromHtml($content)) {
+            return true;
+        }
+
+        $markdown = preg_match('/<[a-z][\s\S]*>/i', $content) === 1
+            ? $this->htmlFragmentToMarkdown($content)
+            : $content;
+
+        return $this->hasFeaturedSnippetTable($markdown);
+    }
+
+    /**
+     * Tính điểm SEO bổ sung dựa trên nội dung và FAQ đã bóc tách.
+     *
+     * @param  list<array{question: string, answer: string}>  $parsedFaqs
+     * @return array{total_score: int, parsed_faq_count: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
+     */
+    public function calculateSeoScore(string $markdown, array $parsedFaqs = [], ?string $sourceContent = null): array
+    {
+        $score = 0;
+        $details = [];
+        $faqCount = count($parsedFaqs);
+
+        if ($faqCount > 0) {
+            $score += 10;
+            $details['faq'] = [
+                'passed' => true,
+                'points' => 10,
+                'message' => 'Có chứa cấu trúc FAQ chuẩn (' . $faqCount . ' câu hỏi)',
+            ];
+        } else {
+            $details['faq'] = [
+                'passed' => false,
+                'points' => 0,
+                'message' => 'Thiếu phần FAQ chuẩn',
+            ];
+        }
+
+        $snippet = $this->promptSettings->getFeaturedSnippetThresholds();
+        $snippetLabel = sprintf(
+            '>= %d dòng dữ liệu, %d–%d cột',
+            $snippet['min_rows'],
+            $snippet['min_columns'],
+            $snippet['max_columns'],
+        );
+
+        $hasTable = $this->hasFeaturedSnippetTable($markdown)
+            || ($sourceContent !== null && $this->hasFeaturedSnippetTableFromHtml($sourceContent));
+
+        if ($hasTable) {
+            $score += 10;
+            $details['table'] = [
+                'passed' => true,
+                'points' => 10,
+                'message' => 'Có bảng dữ liệu chuẩn Featured Snippet (' . $snippetLabel . ')',
+            ];
+        } else {
+            $details['table'] = [
+                'passed' => false,
+                'points' => 0,
+                'message' => 'Không tìm thấy bảng hoặc bảng chưa đạt (' . $snippetLabel . ')',
+            ];
+        }
+
+        return [
+            'total_score' => $score,
+            'parsed_faq_count' => $faqCount,
+            'checklist' => $details,
+        ];
+    }
+
+    /**
+     * Chấm FAQ + Featured Snippet từ Markdown hoặc HTML (editor / đồng bộ).
+     *
+     * @param  list<array{question: string, answer: string}>  $parsedFaqs
+     * @return array{total_score: int, parsed_faq_count: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
+     */
+    public function calculateSeoScoreFromContent(string $content, array $parsedFaqs = []): array
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return $this->calculateSeoScore('', $parsedFaqs);
+        }
+
+        if ($parsedFaqs === [] && preg_match('/<[a-z][\s\S]*>/i', $content) === 1) {
+            $parsedFaqs = $this->parseFaqsFromContent($content);
+        }
+
+        $markdown = preg_match('/<[a-z][\s\S]*>/i', $content) === 1
+            ? $this->htmlFragmentToMarkdown($content)
+            : $content;
+
+        return $this->calculateSeoScore($markdown, $parsedFaqs, $content);
+    }
+
+    /**
+     * Chuẩn hóa tiêu đề / từ khóa setting để so khớp FAQ (không phân biệt hoa thường).
+     */
+    public function normalizeForFaqMatch(string $text): string
+    {
+        $text = trim(str_replace(['**', '*'], '', $text));
+        if ($text === '') {
+            return '';
+        }
+
+        $lower = mb_strtolower($text);
+        $lower = (string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', $lower);
+
+        return trim((string) preg_replace('/\s+/u', ' ', $lower));
+    }
+
+    private function normalizeForFaqAsciiMatch(string $text): string
+    {
+        $ascii = Str::ascii($text, 'vi');
+        $ascii = mb_strtolower(trim($ascii));
+        $ascii = (string) preg_replace('/[^a-z0-9]+/u', ' ', $ascii);
+
+        return trim((string) preg_replace('/\s+/u', ' ', $ascii));
+    }
+
+    private function isFaqSectionHeading(string $headingLine): bool
+    {
+        $text = $this->headingText($headingLine);
+        if ($text === '' || $this->looksLikeFaqItemHeading($text)) {
+            return false;
+        }
+
+        $lower = $this->normalizeForFaqMatch($text);
+        if ($this->headingMatchesFaqCatchKeywords($lower)) {
+            return true;
+        }
+
+        return $this->headingLooksLikeFaqSection($lower);
+    }
+
+    private function headingMatchesFaqCatchKeywords(string $lowerHeading): bool
+    {
+        if ($lowerHeading === '') {
+            return false;
+        }
+
+        $asciiHeading = $this->normalizeForFaqAsciiMatch($lowerHeading);
+
+        foreach ($this->overviewSettings->getFaqCatchKeywords() as $keyword) {
+            $normalizedKeyword = $this->normalizeForFaqMatch($keyword);
+            if ($normalizedKeyword !== '' && str_contains($lowerHeading, $normalizedKeyword)) {
+                return true;
+            }
+
+            $asciiKeyword = $this->normalizeForFaqAsciiMatch($keyword);
+            if ($asciiKeyword !== '' && $asciiHeading !== '' && str_contains($asciiHeading, $asciiKeyword)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function headingLooksLikeFaqSection(string $lowerHeading): bool
+    {
+        if (preg_match('/\bfaq\b/u', $lowerHeading) === 1) {
+            return true;
+        }
+
+        if (preg_match('/câu\s*hỏi|cau\s*hoi/u', $lowerHeading) === 1) {
+            return true;
+        }
+
+        return preg_match('/hỏi\s*đáp|hoi\s*dap|giải\s*đáp|giai\s*dap/u', $lowerHeading) === 1;
+    }
+
+    /** Tiêu đề H3/H4 kiểu «Câu hỏi 1: …?» — không phải tiêu đề vùng FAQ. */
+    private function looksLikeFaqItemHeading(string $text): bool
+    {
+        $plain = trim(str_replace(['**', '*'], '', $text));
+        if ($plain === '') {
+            return false;
+        }
+
+        if ($this->isNumberedFaqQuestionText($plain)) {
+            return true;
+        }
+
+        return preg_match('/\?\s*$/u', $plain) === 1
+            && preg_match('/^(❓\s*)?(câu\s*hỏi|cau\s*hoi)\b/iu', $plain) === 1;
+    }
+
+    private function headingText(string $headingLine): string
+    {
+        if (preg_match('/^#{1,6}\s+(.*)$/u', trim($headingLine), $matches) !== 1) {
+            return '';
+        }
+
+        return trim(str_replace(['**', '*'], '', $matches[1]));
+    }
+
+    private function lineHeadingLevel(string $line): ?int
+    {
+        if (preg_match('/^(#{1,6})\s+/u', $line, $matches) !== 1) {
+            return null;
+        }
+
+        return strlen($matches[1]);
+    }
+
+    private function isFaqQuestionLine(string $line): bool
+    {
+        if ($line === '' || $this->isFaqSectionHeading($line)) {
+            return false;
+        }
+
+        $plain = trim(str_replace(['**', '*'], '', $line));
+
+        return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1;
+    }
+
+    private function normalizeFaqQuestionLine(string $line): string
+    {
+        return trim(str_replace(['**', '*'], '', $line));
+    }
+
+    private function loadHtmlFaqRoot(string $html): ?DOMElement
+    {
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementById('omi-faq-root');
+
+        return $root instanceof DOMElement ? $root : null;
+    }
+
+    /**
+     * @return list<DOMElement>
+     */
+    private function collectFaqBlockElements(DOMElement $root): array
+    {
+        $blocks = [];
+        $this->appendFaqBlockElements($root, $blocks);
+
+        return $blocks;
+    }
+
+    /**
+     * @param  list<DOMElement>  $blocks
+     */
+    private function appendFaqBlockElements(DOMElement $node, array &$blocks): void
+    {
+        foreach ($node->childNodes as $child) {
+            if (! $child instanceof DOMElement) {
+                continue;
+            }
+
+            $tag = strtolower($child->tagName);
+
+            if (in_array($tag, ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'], true)) {
+                $blocks[] = $child;
+
+                continue;
+            }
+
+            if (in_array($tag, ['div', 'section', 'article', 'blockquote', 'ul', 'ol', 'li', 'main'], true)) {
+                $this->appendFaqBlockElements($child, $blocks);
+            }
+        }
+    }
+
+    /**
+     * <p> mà nội dung chính nằm trong <strong> (câu hỏi), không cần chữ «câu hỏi» / «trả lời».
+     */
+    private function isStrongQuestionParagraph(DOMElement $element): bool
+    {
+        if (strtolower($element->tagName) !== 'p') {
+            return false;
+        }
+
+        if ($this->isFaqPromoParagraph($element)) {
+            return false;
+        }
+
+        $strongText = $this->concatStrongText($element);
+        if (mb_strlen($strongText) < 2) {
+            return false;
+        }
+
+        $fullText = $this->elementText($element);
+        if ($fullText === '') {
+            return false;
+        }
+
+        if ($this->looksLikeStandaloneFaqSectionTitle($fullText)) {
+            return false;
+        }
+
+        $normalizedFull = preg_replace('/\s+/u', '', $fullText) ?? '';
+        $normalizedStrong = preg_replace('/\s+/u', '', $strongText) ?? '';
+
+        if ($normalizedFull === $normalizedStrong) {
+            return true;
+        }
+
+        if ($this->isNumberedFaqQuestionText($fullText) || $this->isNumberedFaqQuestionText($strongText)) {
+            return true;
+        }
+
+        return $this->firstElementChildTag($element) === 'strong'
+            && mb_strlen($strongText) >= (int) (mb_strlen($fullText) * 0.45);
+    }
+
+    private function isFaqPromoParagraph(DOMElement $element): bool
+    {
+        $text = mb_strtolower($this->elementText($element));
+
+        if ($text === '') {
+            return false;
+        }
+
+        if (preg_match('/câu\s*hỏi\s+của\s+bạn|cau\s*hoi\s+cua\s+ban/u', $text) === 1) {
+            return true;
+        }
+
+        return str_contains($text, 'chưa có trong faq')
+            || (str_contains($text, 'gọi ngay') && str_contains($text, 'faq'));
+    }
+
+    private function isNumberedFaqQuestionText(string $text): bool
+    {
+        $plain = trim(str_replace(['**', '*'], '', $text));
+
+        return preg_match(
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi))\s*:/iu',
+            $plain,
+        ) === 1;
+    }
+
+    private function isFaqAnswerParagraph(DOMElement $element): bool
+    {
+        if (strtolower($element->tagName) !== 'p') {
+            return false;
+        }
+
+        if ($this->isStrongQuestionParagraph($element)) {
+            return false;
+        }
+
+        $text = $this->elementText($element);
+
+        return $text !== '' && ! $this->looksLikeStandaloneFaqSectionTitle($text);
+    }
+
+    /**
+     * @param  list<DOMElement>  $blocks
+     * @return array{0: list<string>, 1: list<string>, 2: int}
+     */
+    private function collectFaqAnswerHtml(array $blocks, int $startIndex): array
+    {
+        $count = count($blocks);
+        $answerHtml = [];
+        $candidateAnswerHtml = [];
+        $candidateInsideBlockquote = [];
+        $moreHtml = [];
+        $next = $startIndex;
+
+        while ($next < $count) {
+            $current = $blocks[$next];
+            $tag = strtolower($current->tagName);
+            $level = $this->htmlHeadingLevel($tag);
+
+            // Gặp heading mới => kết thúc câu trả lời hiện tại.
+            if ($level !== null) {
+                break;
+            }
+
+            // Gặp paragraph strong dạng câu hỏi kế tiếp => dừng.
+            if ($this->isStrongQuestionParagraph($current)) {
+                break;
+            }
+
+            $hasBlockquoteAhead = $this->hasFaqBlockquoteAhead($blocks, $next + 1);
+
+            if (
+                $tag === 'p'
+                && $hasBlockquoteAhead
+                && ! $this->isElementInsideTag($current, 'blockquote')
+            ) {
+                $moreHtml[] = $this->innerHtmlOfElement($current);
+            } elseif ($this->isFaqAnswerParagraph($current)) {
+                $answerPart = $this->innerHtmlOfElement($current);
+                if ($candidateAnswerHtml === []) {
+                    $answerPart = $this->stripFaqAnswerLabelFromHtml($answerPart);
+                }
+
+                $candidateAnswerHtml[] = $answerPart;
+                $candidateInsideBlockquote[] = $this->isElementInsideTag($current, 'blockquote');
+            } elseif ($tag === 'p') {
+                $moreHtml[] = $this->innerHtmlOfElement($current);
+            }
+
+            $next++;
+        }
+
+        // Trả lời trong <blockquote> (nhiều <p><em>…) — gộp toàn bộ, không tách rời vì blockquote.
+        if (in_array(true, $candidateInsideBlockquote, true)) {
+            $answerHtml = $candidateAnswerHtml;
+        } else {
+            $answerHtml = $candidateAnswerHtml;
+        }
+
+        return [$answerHtml, $moreHtml, $next];
+    }
+
+    private function isElementInsideTag(DOMElement $element, string $tagName): bool
+    {
+        $tagName = strtolower($tagName);
+        $parent = $element->parentNode;
+
+        while ($parent instanceof DOMElement) {
+            if (strtolower($parent->tagName) === $tagName) {
+                return true;
+            }
+
+            $parent = $parent->parentNode;
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<DOMElement>  $blocks
+     */
+    private function hasFaqBlockquoteAhead(array $blocks, int $startIndex): bool
+    {
+        $count = count($blocks);
+        for ($i = $startIndex; $i < $count; $i++) {
+            $block = $blocks[$i];
+            $tag = strtolower($block->tagName);
+
+            if ($tag === 'blockquote' || $this->isElementInsideTag($block, 'blockquote')) {
+                return true;
+            }
+
+            if ($this->isStrongQuestionParagraph($block)) {
+                return false;
+            }
+
+            $level = $this->htmlHeadingLevel($tag);
+            if ($level !== null) {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Tiêu đề khối FAQ trong thẻ &lt;p&gt; (hiếm) — không nhầm với «Câu hỏi này…» trong câu trả lời.
+     */
+    private function looksLikeStandaloneFaqSectionTitle(string $text): bool
+    {
+        $plain = trim($text);
+        if ($plain === '' || mb_strlen($plain) > 140) {
+            return false;
+        }
+
+        $lower = $this->normalizeForFaqMatch($plain);
+
+        if (preg_match('/\bfaq\b/u', $lower) === 1) {
+            return true;
+        }
+
+        if (preg_match('/câu\s*hỏi\s+(thường\s*gặp|thuc\s*gap|thực\s*tế)/u', $lower) === 1) {
+            return true;
+        }
+
+        return preg_match('/^(hỏi\s*đáp|hoi\s*dap|giải\s*đáp|giai\s*dap)\b/u', $lower) === 1;
+    }
+
+    private function extractStrongQuestionText(DOMElement $paragraph): string
+    {
+        $fromStrong = $this->concatStrongText($paragraph);
+        $text = $fromStrong !== '' ? $fromStrong : $this->elementText($paragraph);
+
+        return $this->normalizeExtractedFaqQuestion($text);
+    }
+
+    private function normalizeExtractedFaqQuestion(string $text): string
+    {
+        $text = trim(str_replace(['**', '*'], '', $text));
+        if ($text === '') {
+            return '';
+        }
+
+        $normalized = preg_replace(
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi))\s*:\s*/iu',
+            '',
+            $text,
+        );
+
+        return trim(is_string($normalized) ? $normalized : $text);
+    }
+
+    private function stripFaqAnswerLabelFromHtml(string $html): string
+    {
+        return (string) preg_replace(
+            '/<strong[^>]*>[^<]*(?:trả\s*lời|tra\s*loi|đáp|dap|^a)\s*:[^<]*<\/strong>\s*/iu',
+            '',
+            $html,
+        );
+    }
+
+    private function concatStrongText(DOMElement $element): string
+    {
+        $parts = [];
+
+        foreach ($element->getElementsByTagName('strong') as $strong) {
+            if (! $strong instanceof DOMElement) {
+                continue;
+            }
+
+            $text = trim((string) $strong->textContent);
+            if ($text !== '') {
+                $parts[] = $text;
+            }
+        }
+
+        return trim(implode(' ', $parts));
+    }
+
+    private function firstElementChildTag(DOMElement $element): ?string
+    {
+        foreach ($element->childNodes as $child) {
+            if ($child instanceof DOMElement) {
+                return strtolower($child->tagName);
+            }
+        }
+
+        return null;
+    }
+
+    private function htmlHeadingLevel(string $tag): ?int
+    {
+        return match ($tag) {
+            'h1' => 1,
+            'h2' => 2,
+            'h3' => 3,
+            'h4' => 4,
+            'h5' => 5,
+            'h6' => 6,
+            default => null,
+        };
+    }
+
+    private function elementText(DOMElement $element): string
+    {
+        return trim(preg_replace('/\s+/u', ' ', (string) $element->textContent) ?? '');
+    }
+
+    private function appendPlaceholderToDom(DOMDocument $dom, DOMElement $container): void
+    {
+        $placeholder = $dom->createElement('p', self::FAQ_SHORTCODE_PLACEHOLDER);
+        $placeholder->setAttribute('class', 'omi-faq-placeholder');
+        $placeholder->setAttribute('data-omi-faq', '1');
+        $container->appendChild($placeholder);
+    }
+
+    private function innerHtmlOfElement(DOMElement $element): string
+    {
+        $html = '';
+        foreach ($element->childNodes as $child) {
+            $html .= $element->ownerDocument?->saveHTML($child) ?? '';
+        }
+
+        return trim($html);
+    }
+
+    private function htmlFragmentToMarkdown(string $html): string
+    {
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div>' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementsByTagName('div')->item(0);
+        if (! $root instanceof DOMElement) {
+            return '';
+        }
+
+        $lines = [];
+        $this->appendDomNodesAsMarkdown($root, $lines);
+
+        return trim(implode("\n", $lines));
+    }
+
+    /**
+     * @param  list<string>  $lines
+     */
+    private function appendDomNodesAsMarkdown(DOMNode $node, array &$lines): void
+    {
+        foreach ($node->childNodes as $child) {
+            if ($child->nodeType === XML_TEXT_NODE) {
+                $text = trim((string) $child->textContent);
+                if ($text !== '') {
+                    $lines[] = $text;
+                }
+
+                continue;
+            }
+
+            if (! $child instanceof DOMElement) {
+                continue;
+            }
+
+            $tag = strtolower($child->tagName);
+            $text = trim(preg_replace('/\s+/u', ' ', (string) $child->textContent) ?? '');
+
+            if ($text === '' && ! in_array($tag, ['ul', 'ol', 'li'], true)) {
+                continue;
+            }
+
+            match ($tag) {
+                'h1' => $lines[] = '# ' . $text,
+                'h2' => $lines[] = '## ' . $text,
+                'h3' => $lines[] = '### ' . $text,
+                'h4' => $lines[] = '#### ' . $text,
+                'h5' => $lines[] = '##### ' . $text,
+                'h6' => $lines[] = '###### ' . $text,
+                'p' => $lines[] = $text,
+                'li' => $lines[] = '- ' . $text,
+                'ul', 'ol' => $this->appendDomNodesAsMarkdown($child, $lines),
+                'br' => $lines[] = '',
+                default => $this->appendDomNodesAsMarkdown($child, $lines),
+            };
+        }
+    }
+
+    private function faqHasAnswer(array $answerLines): bool
+    {
+        foreach ($answerLines as $line) {
+            if (trim($line) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  list<string>  $answerHtml
+     */
+    private function isValidAnswer(array $answerHtml): bool
+    {
+        $text = trim(strip_tags(implode(' ', $answerHtml)));
+
+        return $text !== '';
+    }
+
+    private function htmlTableMeetsFeaturedSnippetThresholds(
+        DOMElement $table,
+        int $minDataRows,
+        int $minCols,
+        int $maxCols,
+    ): bool {
+        $rowColCounts = [];
+
+        foreach ($table->getElementsByTagName('tr') as $row) {
+            if (! $row instanceof DOMElement) {
+                continue;
+            }
+
+            $cellCount = 0;
+            foreach ($row->childNodes as $cell) {
+                if (! $cell instanceof DOMElement) {
+                    continue;
+                }
+
+                $tag = strtolower($cell->tagName);
+                if ($tag === 'td' || $tag === 'th') {
+                    $cellCount++;
+                }
+            }
+
+            if ($cellCount > 0) {
+                $rowColCounts[] = $cellCount;
+            }
+        }
+
+        if ($rowColCounts === []) {
+            return false;
+        }
+
+        $colCount = max($rowColCounts);
+        if ($colCount < $minCols || $colCount > $maxCols) {
+            return false;
+        }
+
+        $dataRowCount = count($rowColCounts) - 1;
+
+        return $dataRowCount >= $minDataRows;
+    }
+}

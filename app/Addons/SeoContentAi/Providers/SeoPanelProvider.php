@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\RegistersAddonDatabase;
+use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -16,6 +18,7 @@ use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\HtmlString;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -41,6 +44,29 @@ class SeoPanelProvider extends PanelProvider
                 view('seo-content-ai::filament.prompt-variable-insert')->render()
             ),
         );
+
+        Route::middleware('api')
+            ->prefix('api')
+            ->group(dirname(__DIR__) . '/routes/api.php');
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
+            CheckMainRole::class,
+        ])
+            ->prefix('seo')
+            ->group(function (): void {
+                Route::get('/articles/{article}/seo-preview', ArticleSeoPreviewController::class)
+                    ->name('seo.articles.seo-preview');
+                Route::get('/articles/{article}/preview', ArticlePreviewController::class)
+                    ->name('seo.articles.preview');
+            });
     }
 
     public function panel(Panel $panel): Panel

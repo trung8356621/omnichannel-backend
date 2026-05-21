@@ -5,17 +5,18 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages\Concerns;
 
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Support\AiModelCatalog;
 
 trait InteractsWithTaskWorkflow
 {
     /**
-     * @return list<array{id: string, name: string, tasks: list<array{id: string, name: string}>}>
+     * @return list<array{id: string, name: string, defaultModel: string, models: array<string, string>, tasks: list<array{id: string, name: string}>}>
      */
     public function getPromptsForBuilder(): array
     {
         return SeoPrompt::query()
             ->where('is_active', true)
-            ->with(['parts' => fn ($q) => $q->orderBy('position')])
+            ->with(['parts' => fn ($q) => $q->orderBy('position'), 'aiConnection'])
             ->orderBy('name')
             ->get()
             ->map(function (SeoPrompt $prompt): array {
@@ -35,6 +36,8 @@ trait InteractsWithTaskWorkflow
                 return [
                     'id' => (string) $prompt->id,
                     'name' => (string) $prompt->name,
+                    'defaultModel' => AiModelCatalog::defaultForConnection($prompt->aiConnection),
+                    'models' => AiModelCatalog::optionsForConnection($prompt->aiConnection),
                     'tasks' => $tasks,
                 ];
             })

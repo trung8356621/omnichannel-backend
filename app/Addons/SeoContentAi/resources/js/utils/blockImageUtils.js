@@ -20,16 +20,39 @@ function figureClassForAlign(align) {
     return ALIGN_CLASSES[align] || '';
 }
 
+function parseWpAttachmentIdFromImg(img) {
+    if (!img) return null;
+    const cls = img.getAttribute('class') ?? '';
+    const m = cls.match(/\bwp-image-(\d+)\b/);
+    if (m) return Number(m[1]);
+    const dataId = Number(img.getAttribute('data-id'));
+    return dataId > 0 ? dataId : null;
+}
+
+function slugFromSrc(src) {
+    if (!src) return '';
+    try {
+        const path = new URL(src, window.location.origin).pathname;
+        const base = path.split('/').pop() || '';
+        const dot = base.lastIndexOf('.');
+        return dot > 0 ? base.slice(0, dot) : base;
+    } catch {
+        return '';
+    }
+}
+
 function parseImageFromFigure(fig, id) {
     const img = fig.querySelector('img');
     if (!img?.getAttribute('src')) return null;
 
     const widthAttr = img.getAttribute('width');
     const heightAttr = img.getAttribute('height');
+    const src = img.getAttribute('src');
 
     return {
         id,
-        src: img.getAttribute('src'),
+        src,
+        slug: slugFromSrc(src),
         alt: img.getAttribute('alt') ?? '',
         title: img.getAttribute('title') ?? '',
         caption: fig.querySelector('figcaption')?.textContent?.trim() ?? '',
@@ -37,6 +60,7 @@ function parseImageFromFigure(fig, id) {
         width: widthAttr ? Number(widthAttr) : null,
         height: heightAttr ? Number(heightAttr) : null,
         wpImageClass: img.getAttribute('class') ?? '',
+        wpAttachmentId: parseWpAttachmentIdFromImg(img),
     };
 }
 
@@ -47,9 +71,12 @@ function parseImageFromImg(img, id) {
     const widthAttr = img.getAttribute('width');
     const heightAttr = img.getAttribute('height');
 
+    const src = img.getAttribute('src');
+
     return {
         id,
-        src: img.getAttribute('src'),
+        src,
+        slug: slugFromSrc(src),
         alt: img.getAttribute('alt') ?? '',
         title: img.getAttribute('title') ?? '',
         caption: parent?.querySelector('figcaption')?.textContent?.trim() ?? '',
@@ -57,6 +84,7 @@ function parseImageFromImg(img, id) {
         width: widthAttr ? Number(widthAttr) : null,
         height: heightAttr ? Number(heightAttr) : null,
         wpImageClass: img.getAttribute('class') ?? '',
+        wpAttachmentId: parseWpAttachmentIdFromImg(img),
     };
 }
 
@@ -180,13 +208,20 @@ export function renderImageFigure(image) {
             ? ` style="width: ${Math.round(image.width)}px"`
             : '';
 
+    let imgClass = image.wpImageClass ?? '';
+    if (image.wpAttachmentId && !/\bwp-image-\d+\b/.test(imgClass)) {
+        const wpClass = `wp-image-${image.wpAttachmentId}`;
+        imgClass = imgClass ? `${imgClass} ${wpClass}` : wpClass;
+    }
+
     const imgAttrs = [
         `src="${escapeAttr(image.src)}"`,
         `alt="${escapeAttr(image.alt)}"`,
         image.title ? `title="${escapeAttr(image.title)}"` : '',
         image.width ? `width="${Math.round(image.width)}"` : '',
         image.height ? `height="${Math.round(image.height)}"` : '',
-        image.wpImageClass ? `class="${escapeAttr(image.wpImageClass)}"` : '',
+        imgClass ? `class="${escapeAttr(imgClass)}"` : '',
+        image.wpAttachmentId ? `data-id="${Math.round(image.wpAttachmentId)}"` : '',
         'draggable="false"',
     ]
         .filter(Boolean)

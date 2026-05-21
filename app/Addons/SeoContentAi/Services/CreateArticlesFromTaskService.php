@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Models\Site;
@@ -39,10 +39,10 @@ final class CreateArticlesFromTaskService
      */
     public function runFromKeywordsForSite(string $keywordsRaw, int $siteId): array
     {
-        $taskId = $this->settings->getTaskId();
+        $taskId = $this->settings->getPublishArticleTaskId();
         if ($taskId === null) {
             throw new \InvalidArgumentException(
-                'Chưa cấu hình quy trình tạo bài viết. Vào SEO → Tùy chỉnh để chọn task.',
+                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Tùy chỉnh để chọn task.',
             );
         }
 
@@ -90,7 +90,8 @@ final class CreateArticlesFromTaskService
                     continue;
                 }
 
-                $this->createDraftArticle($siteId, $keyword, $context->variables, $steps);
+                $article = $this->resolveArticleFromWorkflow($context, $steps, $siteId, $keyword, $context->variables);
+                $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
                 $created++;
                 $messages[] = '«' . $keyword . '»: đã tạo bài nháp và chạy quy trình.';
             } catch (\Throwable $exception) {
@@ -104,6 +105,33 @@ final class CreateArticlesFromTaskService
             'failed' => $failed,
             'messages' => $messages,
         ];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @param  list<array<string, mixed>>  $steps
+     */
+    private function resolveArticleFromWorkflow(
+        TaskTestContext $context,
+        array $steps,
+        int $siteId,
+        string $keyword,
+        array $variables,
+    ): SeoArticle {
+        foreach ($steps as $step) {
+            if (($step['type'] ?? '') === 'action' && is_numeric($step['article_id'] ?? null)) {
+                $article = SeoArticle::query()->find((int) $step['article_id']);
+                if ($article instanceof SeoArticle) {
+                    return $article;
+                }
+            }
+        }
+
+        if ($context->article instanceof SeoArticle) {
+            return $context->article;
+        }
+
+        return $this->createDraftArticle($siteId, $keyword, $variables, $steps);
     }
 
     /**

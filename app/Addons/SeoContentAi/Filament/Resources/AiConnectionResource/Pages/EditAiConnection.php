@@ -12,6 +12,13 @@ class EditAiConnection extends EditRecord
 {
     protected static string $resource = AiConnectionResource::class;
 
+    protected static string $view = 'seo-content-ai::filament.pages.seo-settings-ai-form';
+
+    public function getTitle(): string
+    {
+        return __('Sửa kết nối AI');
+    }
+
     protected function getHeaderActions(): array
     {
         return [

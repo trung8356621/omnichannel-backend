@@ -10,7 +10,9 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Services\PromptTestPublishService;
 use App\Addons\SeoContentAi\Services\WordPressCommentReviewService;
+use App\Addons\SeoContentAi\Support\PromptTokenUsage;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
 use Filament\Actions;
@@ -43,13 +45,16 @@ class TestPrompt extends Page implements HasForms
 
     public ?string $errorMessage = null;
 
+    /** Nhãn token của lần chạy đang xem, VD: "12.450 token". */
+    public ?string $tokenUsageLabel = null;
+
     public bool $isRunning = false;
 
     public ?int $selectedResultId = null;
 
     public ?int $publishArticleId = null;
 
-    public bool $isPublishingComments = false;
+    public bool $isPublishingTest = false;
 
     public function mount(int|string $record): void
     {
@@ -68,6 +73,8 @@ class TestPrompt extends Page implements HasForms
         $latest = $this->promptResults->first();
         if ($latest !== null) {
             $this->selectResult((int) $latest->id);
+        } else {
+            $this->refreshCompiledPreview();
         }
     }
 
@@ -101,18 +108,62 @@ class TestPrompt extends Page implements HasForms
             ->get();
     }
 
-    public function publishCommentsToWordPress(WordPressCommentReviewService $publisher): void
+    public function publishTest(string $mode, PromptTestPublishService $skeletonPublisher, WordPressCommentReviewService $reviewPublisher): void
     {
         if (! filled($this->outputText)) {
             Notification::make()
                 ->title('Chưa có kết quả AI')
-                ->body('Chạy thử prompt trước khi đăng lên WordPress.')
+                ->body('Chạy thử prompt trước khi đăng.')
                 ->warning()
                 ->send();
 
             return;
         }
 
+        $article = $this->resolvePublishTargetArticle();
+        if ($article === null) {
+            return;
+        }
+
+        $variables = $this->normalizedVariableValues();
+
+        $this->isPublishingTest = true;
+
+        try {
+            $result = match ($mode) {
+                'skeleton' => $skeletonPublisher->publishSkeleton($article, (string) $this->outputText, $variables),
+                'article' => $skeletonPublisher->publishArticle($article, (string) $this->outputText, $variables),
+                'reviews' => $reviewPublisher->publishFromAiOutput($article, (string) $this->outputText),
+                default => ['success' => false, 'message' => 'Hành động không hợp lệ.'],
+            };
+
+            $notification = Notification::make()
+                ->title($result['success'] ? 'Thành công' : 'Thất bại')
+                ->body((string) ($result['message'] ?? ''));
+
+            $result['success'] ? $notification->success() : $notification->danger();
+            $notification->send();
+        } finally {
+            $this->isPublishingTest = false;
+        }
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function normalizedVariableValues(): array
+    {
+        $values = $this->form->getState();
+        $normalized = [];
+        foreach ($values as $key => $value) {
+            $normalized[(string) $key] = is_string($value) ? $value : (string) $value;
+        }
+
+        return $normalized;
+    }
+
+    private function resolvePublishTargetArticle(): ?SeoArticle
+    {
         if ($this->publishArticleId === null || $this->publishArticleId <= 0) {
             Notification::make()
                 ->title('Chọn bài viết đích')
@@ -120,41 +171,28 @@ class TestPrompt extends Page implements HasForms
                 ->warning()
                 ->send();
 
-            return;
+            return null;
         }
 
-        $article = SeoArticle::query()
-            ->with('site')
-            ->find($this->publishArticleId);
+        $query = SeoArticle::query()->with('site')->whereKey($this->publishArticleId);
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->whereIn(
+                'site_id',
+                \App\Models\Site::query()->where('user_id', auth()->id())->select('id'),
+            );
+        }
+
+        $article = $query->first();
 
         if ($article === null) {
             Notification::make()
                 ->title('Không tìm thấy bài viết')
                 ->danger()
                 ->send();
-
-            return;
         }
 
-        $this->isPublishingComments = true;
-
-        try {
-            $result = $publisher->publishFromAiOutput($article, (string) $this->outputText);
-
-            $notification = Notification::make()
-                ->title($result['success'] ? 'Đăng WordPress thành công' : 'Đăng WordPress thất bại')
-                ->body((string) ($result['message'] ?? ''));
-
-            if ($result['success']) {
-                $notification->success();
-            } else {
-                $notification->danger();
-            }
-
-            $notification->send();
-        } finally {
-            $this->isPublishingComments = false;
-        }
+        return $article;
     }
 
     public function selectResult(int $resultId): void
@@ -200,6 +238,7 @@ class TestPrompt extends Page implements HasForms
         $this->compiledPreview = null;
         $this->outputText = null;
         $this->errorMessage = null;
+        $this->tokenUsageLabel = null;
     }
 
     public function form(Form $form): Form
@@ -207,6 +246,13 @@ class TestPrompt extends Page implements HasForms
         return $form
             ->schema($this->getVariableFormSchema())
             ->statePath('variableValues');
+    }
+
+    protected function getForms(): array
+    {
+        return [
+            'form',
+        ];
     }
 
     public function getTitle(): string|Htmlable
@@ -227,6 +273,10 @@ class TestPrompt extends Page implements HasForms
                 ->label('Danh sách')
                 ->icon('heroicon-o-arrow-left')
                 ->url(PromptResource::getUrl('index')),
+            Actions\Action::make('refresh_preview')
+                ->label('Làm mới xem trước')
+                ->icon('heroicon-o-arrow-path')
+                ->action(fn () => $this->refreshCompiledPreview()),
         ];
     }
 
@@ -282,10 +332,31 @@ class TestPrompt extends Page implements HasForms
         }
     }
 
+    public function refreshCompiledPreview(): void
+    {
+        $this->getRecord()->refresh();
+        $this->getPrompt()->unsetRelation('parts');
+        $this->getPrompt()->load(['parts' => static fn ($query) => $query->orderBy('position')]);
+
+        $values = $this->form->getState();
+        $normalized = [];
+        foreach ($values as $key => $value) {
+            $normalized[(string) $key] = is_string($value) ? $value : (string) $value;
+        }
+
+        try {
+            $this->compiledPreview = app(PromptRunnerService::class)->compilePrompt(
+                $this->getPrompt(),
+                $normalized,
+            );
+        } catch (\Throwable) {
+            $this->compiledPreview = null;
+        }
+    }
+
     protected function applyResultToView(PromptResult $result): void
     {
         $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
-        $this->compiledPreview = (string) ($snapshot['compiled_prompt'] ?? '');
 
         $savedVariables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
         foreach ($savedVariables as $key => $value) {
@@ -297,6 +368,9 @@ class TestPrompt extends Page implements HasForms
 
         $this->form->fill($this->variableValues);
 
+        $usage = is_array($result->token_usage) ? $result->token_usage : null;
+        $this->tokenUsageLabel = PromptTokenUsage::formatLabel($usage);
+
         if ($result->status === 'completed') {
             $this->outputText = (string) ($result->output_text ?? '');
             $this->errorMessage = null;
@@ -307,6 +381,25 @@ class TestPrompt extends Page implements HasForms
             $this->outputText = null;
             $this->errorMessage = null;
         }
+
+        // Luôn ghép lại từ prompt/parts mới nhất — không dùng snapshot compiled_prompt (có thể là bản cũ).
+        $this->refreshCompiledPreview();
+    }
+
+    public function tokenUsageLabelFor(PromptResult $result): ?string
+    {
+        $usage = is_array($result->token_usage) ? $result->token_usage : null;
+
+        return PromptTokenUsage::formatLabel($usage);
+    }
+
+    public function aiResultSectionHeading(): string
+    {
+        if (filled($this->tokenUsageLabel)) {
+            return 'Kết quả AI (' . $this->tokenUsageLabel . ')';
+        }
+
+        return 'Kết quả AI';
     }
 
     public function resultSummary(PromptResult $result): string

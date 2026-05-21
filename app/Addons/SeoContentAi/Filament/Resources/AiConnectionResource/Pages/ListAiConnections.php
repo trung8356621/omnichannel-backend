@@ -12,6 +12,13 @@ class ListAiConnections extends ListRecords
 {
     protected static string $resource = AiConnectionResource::class;
 
+    protected static string $view = 'seo-content-ai::filament.pages.seo-settings-ai-list';
+
+    public function getTitle(): string
+    {
+        return '';
+    }
+
     protected function getHeaderActions(): array
     {
         return [
