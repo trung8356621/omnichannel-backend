@@ -1,18 +1,56 @@
 <x-filament-panels::page>
     <div
-        x-data
+        x-data="{
+            mediaModalOpen: @entangle('mediaPickerOpen').live,
+            mediaModalMode: 'featured',
+            pickerLoading: @entangle('mediaPickerLoading').live,
+            openArticleMediaModal(mode, blockId = null) {
+                this.mediaModalMode = mode;
+                this.mediaModalOpen = true;
+                this.pickerLoading = true;
+                if (mode === 'editor-block') {
+                    $wire.prepareMediaPicker('editor-block', blockId);
+                } else {
+                    this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
+                    $wire.prepareMediaPicker(mode);
+                }
+            },
+            closeArticleMediaModal() {
+                $wire.closeMediaPicker();
+            },
+        }"
+        x-on:close-article-media-modal.window="closeArticleMediaModal()"
+        x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
+        x-on:seo-article-editor-notify.window="
+            $wire.dispatch('seo-article-editor-notify', {
+                title: $event.detail?.title ?? '',
+                body: $event.detail?.body ?? '',
+                status: $event.detail?.status ?? 'success',
+            })
+        "
+        x-on:open-article-media-modal.window="mediaModalMode = $wire.mediaPickerMode || 'featured'"
+        x-on:flush-article-faqs.window="
+            setTimeout(() => {
+                if ($wire.pendingEditorCollectTarget) {
+                    $wire.finalizePendingEditorCollect();
+                }
+            }, 2500);
+        "
         x-on:editor-html-collected.window="
-            if ($event.detail.target === 'sync') {
-                $wire.syncArticleToWordPress($event.detail.html);
+            const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            if (detail.target === 'sync') {
+                $wire.syncArticleToWordPress(detail.html ?? '');
             } else {
-                $wire.persistArticleLocal($event.detail.html);
+                $wire.persistArticleLocal(detail.html ?? '');
             }
         "
         x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
         @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
         x-on:seo-analyze-draft.window="$wire.analyzeSeoDraft($event.detail.html)"
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
-        x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs)"
+        x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
+        x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"
+        @article-faq-extract-debug-cleared.window="window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'))"
         x-on:extract-article-faqs-with-context.window="$wire.extractFaqsFromSelection($event.detail.html ?? '', $event.detail.articleHtml ?? '')"
         x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
         x-on:check-faq-question.window="
@@ -28,6 +66,7 @@
         "
         class="wp-article-edit -mx-4 max-w-none"
     >
+        <div wire:ignore id="seo-article-ai-launcher-root"></div>
         <div class="wp-article-edit-layout">
             {{-- Cột chính (giống WP post editor) --}}
             <div class="wp-article-edit-main space-y-4">
@@ -81,22 +120,35 @@
                 <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
                 <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
-                <script type="application/json" id="seo-article-meta">@json(['id' => $record->id, 'title' => $articleTitle])</script>
+                <script type="application/json" id="seo-article-meta">@json(['id' => $record->id, 'site_id' => $record->site_id, 'title' => $articleTitle])</script>
                 <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
 
+                <button
+                    type="button"
+                    id="seo-faq-debug-dismiss-wire"
+                    class="hidden"
+                    wire:click="clearFaqExtractDebug"
+                    wire:loading.attr="disabled"
+                    tabindex="-1"
+                    aria-hidden="true"
+                ></button>
+
                 <div wire:ignore id="seo-article-faq-root" class="w-full mt-4"></div>
             </div>
 
-            {{-- Sidebar widgets (ẩn khi chọn text → hiện Chat AI) --}}
+            {{-- Sidebar: widgets thường hoặc Chat AI (mở từ nút tròn góc màn hình) --}}
             <aside
                 class="wp-article-edit-sidebar"
                 x-data="{ aiChatOpen: false }"
-                x-on:seo-editor-text-selection.window="aiChatOpen = Boolean($event.detail?.hasSelection)"
+                x-on:seo-article-ai-chat-open.window="aiChatOpen = true"
+                x-on:seo-article-ai-chat-close.window="aiChatOpen = false"
             >
                 <div x-show="!aiChatOpen" x-cloak class="space-y-4">
+                <div wire:ignore id="seo-article-links-root"></div>
+
                 {{-- Xuất bản --}}
                 <div class="wp-postbox">
                     <div class="wp-postbox-header">
@@ -180,28 +232,38 @@
                         <h2>Ảnh đại diện</h2>
                     </div>
                     <div class="wp-postbox-inside text-center">
-                        @if ($featuredImageUrl)
-                            <img
-                                src="{{ $featuredImageUrl }}"
-                                alt="Ảnh đại diện"
-                                class="mx-auto max-h-40 rounded border border-gray-200 dark:border-gray-700 object-cover"
-                            />
-                            <p class="mt-2 text-xs text-gray-500">Đồng bộ từ WordPress</p>
-                        @else
-                            <div class="py-6 text-gray-400 text-sm">
-                                <svg class="mx-auto h-12 w-12 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                </svg>
-                                <button type="button" class="mt-2 text-sky-600 hover:underline" disabled>
-                                    Đặt ảnh đại diện
-                                </button>
-                                <p class="mt-1 text-xs">Chưa có ảnh trên WordPress</p>
-                            </div>
-                        @endif
+                        <button
+                            type="button"
+                            x-on:click="openArticleMediaModal('featured')"
+                            class="wp-featured-image-picker"
+                            title="Chọn ảnh từ thư viện WordPress"
+                        >
+                            @if ($featuredImageUrl)
+                                <img
+                                    src="{{ $featuredImageUrl }}"
+                                    alt="Ảnh đại diện"
+                                    class="wp-featured-image-picker__img"
+                                />
+                            @else
+                                <span class="wp-featured-image-picker__empty">
+                                    <svg class="mx-auto h-12 w-12 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                    </svg>
+                                    <span class="wp-featured-image-picker__label">Đặt ảnh đại diện</span>
+                                </span>
+                            @endif
+                        </button>
+                        <p class="mt-2 text-xs text-gray-500">
+                            @if ($featuredImageUrl)
+                                Đã lưu cục bộ · «Đồng bộ» để đẩy lên WordPress
+                            @else
+                                Bấm để chọn từ thư viện Media
+                            @endif
+                        </p>
                     </div>
                 </div>
 
-                @if ($this->isProduct())
+                @if ($this->supportsProductGallery())
                     {{-- Album hình ảnh sản phẩm (WooCommerce) --}}
                     <div class="wp-postbox">
                         <div class="wp-postbox-header">
@@ -229,17 +291,17 @@
                             @endif
                             <button
                                 type="button"
+                                x-on:click="openArticleMediaModal('gallery')"
                                 class="wp-product-gallery-add mt-2"
-                                disabled
-                                title="Quản lý album trên WordPress / WooCommerce"
+                                title="Thêm ảnh từ thư viện WordPress"
                             >
                                 Thêm ảnh thư viện sản phẩm
                             </button>
                             <p class="mt-1 text-xs text-gray-500">
                                 @if (count($productGallery) > 0)
-                                    {{ count($productGallery) }} ảnh · đồng bộ từ WordPress
+                                    {{ count($productGallery) }} ảnh · «Đồng bộ» để đẩy lên WordPress
                                 @else
-                                    Chưa có album trên WordPress
+                                    Chưa có ảnh trong album
                                 @endif
                             </p>
                         </div>
@@ -256,6 +318,110 @@
                     class="wp-sidebar-ai-chat"
                 ></div>
             </aside>
+        </div>
+
+        <div
+            x-show="mediaModalOpen"
+            x-cloak
+            class="seo-article-media-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="seo-article-media-modal-title"
+        >
+            <button
+                type="button"
+                class="seo-article-media-modal__backdrop"
+                x-on:click="closeArticleMediaModal()"
+                aria-label="Đóng"
+            ></button>
+            <div class="seo-article-media-modal__panel">
+                <div class="seo-article-media-modal__header">
+                    <h2 id="seo-article-media-modal-title" class="seo-article-media-modal__title">
+                        <span x-text="mediaModalMode === 'gallery' ? 'Chọn ảnh cho album sản phẩm' : (mediaModalMode === 'editor-block' ? 'Chọn ảnh từ thư viện' : 'Chọn ảnh đại diện')"></span>
+                    </h2>
+                    <button type="button" class="seo-article-media-modal__close" x-on:click="closeArticleMediaModal()" aria-label="Đóng">
+                        ×
+                    </button>
+                </div>
+
+                <div class="seo-article-media-modal__toolbar">
+                    <input
+                        type="search"
+                        wire:model.live.debounce.400ms="mediaPickerSearch"
+                        class="seo-article-media-modal__search"
+                        placeholder="Tìm slug, alt, caption (WP search)…"
+                        autocomplete="off"
+                        x-on:keydown.escape="closeArticleMediaModal()"
+                    />
+                </div>
+
+                @if ($mediaPickerError)
+                    <p class="seo-article-media-modal__error">{{ $mediaPickerError }}</p>
+                @endif
+
+                <div class="seo-article-media-modal__body">
+                    <div
+                        x-show="pickerLoading"
+                        x-cloak
+                        class="seo-article-media-modal__skeleton-grid"
+                        aria-busy="true"
+                        aria-label="Đang tải thư viện ảnh"
+                    >
+                        @for ($i = 0; $i < 12; $i++)
+                            <div class="seo-article-media-modal__skeleton"></div>
+                        @endfor
+                    </div>
+
+                    <div x-show="!pickerLoading" x-cloak>
+                        @if (empty($mediaPickerImages) && ! $mediaPickerError)
+                            <p class="seo-article-media-modal__empty">Không có ảnh trong thư viện.</p>
+                        @elseif (! empty($mediaPickerImages))
+                            <div class="seo-article-media-modal__grid">
+                                @foreach ($mediaPickerImages as $image)
+                                    <button
+                                        type="button"
+                                        class="seo-article-media-modal__item"
+                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? $image['id']) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''))"
+                                        wire:key="picker-media-{{ $mediaPickerPage }}-{{ $image['id'] }}"
+                                    >
+                                        <img
+                                            src="{{ $image['url'] }}"
+                                            alt="{{ $image['alt'] ?: $image['slug'] }}"
+                                            loading="lazy"
+                                            class="seo-article-media-modal__thumb"
+                                        />
+                                        @if (filled($image['slug'] ?? ''))
+                                            <span class="seo-article-media-modal__slug">{{ $image['slug'] }}</span>
+                                        @endif
+                                    </button>
+                                @endforeach
+                            </div>
+                        @endif
+                    </div>
+                </div>
+
+                @if ($mediaPickerTotalPages > 1)
+                    <div class="seo-article-media-modal__pagination">
+                        <button
+                            type="button"
+                            class="seo-article-media-modal__page-btn"
+                            wire:click="mediaPickerPreviousPage"
+                            @disabled($mediaPickerPage <= 1)
+                        >
+                            Trang trước
+                        </button>
+                        <span>{{ $mediaPickerPage }} / {{ $mediaPickerTotalPages }}</span>
+                        <button
+                            type="button"
+                            class="seo-article-media-modal__page-btn"
+                            wire:click="mediaPickerNextPage"
+                            @disabled($mediaPickerPage >= $mediaPickerTotalPages)
+                        >
+                            Trang sau
+                        </button>
+                    </div>
+                @endif
+            </div>
         </div>
     </div>
 

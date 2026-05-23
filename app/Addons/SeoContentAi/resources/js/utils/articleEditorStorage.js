@@ -2,6 +2,91 @@ const draftKey = (articleId) => `seo_article_draft_${articleId}`;
 const historyKey = (articleId) => `seo_article_history_${articleId}`;
 const outlineKey = (articleId) => `seo_article_outline_${articleId}`;
 const chatKey = (articleId) => `seo_article_chat_${articleId}`;
+const STORAGE_PREFIX = 'seo_article_';
+
+function isQuotaExceededError(error) {
+    if (!error) return false;
+    return (
+        error?.name === 'QuotaExceededError' ||
+        error?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+        error?.code === 22 ||
+        error?.code === 1014
+    );
+}
+
+function getSeoStorageKeys() {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(STORAGE_PREFIX)) {
+            keys.push(key);
+        }
+    }
+    return keys;
+}
+
+function storageUpdatedAt(key) {
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return 0;
+        const parsed = JSON.parse(raw);
+        return Number(parsed?.updatedAt ?? 0);
+    } catch {
+        return 0;
+    }
+}
+
+function pruneSeoStorage(currentKey, pass = 0) {
+    const keys = getSeoStorageKeys().filter((key) => key !== currentKey);
+    if (!keys.length) return;
+
+    if (pass === 0) {
+        keys.filter((key) => key.includes('_history_') || key.includes('_chat_')).forEach((key) => localStorage.removeItem(key));
+        return;
+    }
+
+    const sorted = keys.sort((a, b) => storageUpdatedAt(a) - storageUpdatedAt(b));
+
+    if (pass === 1) {
+        sorted.slice(0, Math.ceil(sorted.length / 2)).forEach((key) => localStorage.removeItem(key));
+        return;
+    }
+
+    sorted.forEach((key) => localStorage.removeItem(key));
+}
+
+function setItemWithPrune(key, value, label, fallbackValue = null) {
+    for (let pass = 0; pass < 3; pass += 1) {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (error) {
+            if (!isQuotaExceededError(error)) {
+                console.warn(`Không lưu được ${label} localStorage`, error);
+                return false;
+            }
+            pruneSeoStorage(key, pass);
+        }
+    }
+
+    if (fallbackValue !== null) {
+        for (let pass = 0; pass < 2; pass += 1) {
+            try {
+                localStorage.setItem(key, fallbackValue);
+                return true;
+            } catch (error) {
+                if (!isQuotaExceededError(error)) {
+                    console.warn(`Không lưu được ${label} localStorage`, error);
+                    return false;
+                }
+                pruneSeoStorage(key, pass + 1);
+            }
+        }
+    }
+
+    console.warn(`Bỏ qua lưu ${label} localStorage vì vượt quota`);
+    return false;
+}
 
 export function loadDraft(articleId) {
     if (!articleId) return null;
@@ -17,13 +102,22 @@ export function loadDraft(articleId) {
 
 export function saveDraft(articleId, payload) {
     if (!articleId) return;
+    const updatedAt = Date.now();
+    const fullPayload = {
+        ...payload,
+        updatedAt,
+    };
+    const fallbackPayload = {
+        html: typeof payload?.html === 'string' ? payload.html : '',
+        updatedAt,
+    };
+
     try {
-        localStorage.setItem(
+        setItemWithPrune(
             draftKey(articleId),
-            JSON.stringify({
-                ...payload,
-                updatedAt: Date.now(),
-            }),
+            JSON.stringify(fullPayload),
+            'nháp',
+            JSON.stringify(fallbackPayload),
         );
     } catch (e) {
         console.warn('Không lưu được nháp localStorage', e);
@@ -48,13 +142,14 @@ export function loadHistory(articleId) {
 export function saveHistory(articleId, past, future) {
     if (!articleId) return;
     try {
-        localStorage.setItem(
+        setItemWithPrune(
             historyKey(articleId),
             JSON.stringify({
                 past: past ?? [],
                 future: future ?? [],
                 updatedAt: Date.now(),
             }),
+            'lịch sử',
         );
     } catch (e) {
         console.warn('Không lưu được lịch sử localStorage', e);
@@ -76,12 +171,13 @@ export function loadOutline(articleId) {
 export function saveOutline(articleId, markdown) {
     if (!articleId) return;
     try {
-        localStorage.setItem(
+        setItemWithPrune(
             outlineKey(articleId),
             JSON.stringify({
                 markdown: markdown ?? '',
                 updatedAt: Date.now(),
             }),
+            'dàn ý',
         );
     } catch (e) {
         console.warn('Không lưu được dàn ý localStorage', e);
@@ -106,12 +202,13 @@ export function loadChat(articleId) {
 export function saveChat(articleId, messages) {
     if (!articleId) return;
     try {
-        localStorage.setItem(
+        setItemWithPrune(
             chatKey(articleId),
             JSON.stringify({
                 messages: messages ?? [],
                 updatedAt: Date.now(),
             }),
+            'chat',
         );
     } catch (e) {
         console.warn('Không lưu được chat localStorage', e);

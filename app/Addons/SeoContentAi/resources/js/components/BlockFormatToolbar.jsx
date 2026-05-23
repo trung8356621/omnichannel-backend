@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import {
     Bold,
     Italic,
@@ -24,16 +24,19 @@ import {
     Table,
     Trash2,
     ListTree,
+    Smile,
 } from 'lucide-react';
 import ParagraphStyleDropdown from './ParagraphStyleDropdown';
+import EmojiPickerModal from './EmojiPickerModal';
 
 const ICON_SIZE = 16;
 
-function ToolbarButton({ onClick, isActive = false, disabled = false, children, title }) {
+function ToolbarButton({ onClick, onMouseDown, isActive = false, disabled = false, children, title }) {
     return (
         <button
             type="button"
             onClick={onClick}
+            onMouseDown={onMouseDown}
             disabled={disabled}
             title={title}
             className={`seo-toolbar-btn${isActive ? ' is-active' : ''}${disabled ? ' is-disabled' : ''}`}
@@ -48,21 +51,44 @@ function ToolbarGroup({ children }) {
 }
 
 export default function BlockFormatToolbar({ editor, onDelete, canDelete = true, onEditLink }) {
+    const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+    /** Giữ vị trí con trỏ trước khi modal (portal) lấy focus. */
+    const savedSelectionRef = useRef(null);
+
     if (!editor) return null;
 
     const openLinkEditor = () => {
         if (onEditLink) {
             onEditLink();
-            return;
         }
-        const previous = editor.getAttributes('link').href;
-        const url = window.prompt('URL liên kết:', previous || 'https://');
-        if (url === null) return;
-        if (url === '') {
-            editor.chain().focus().extendMarkRange('link').unsetLink().run();
-            return;
+    };
+
+    const openEmojiPicker = () => {
+        const { from, to } = editor.state.selection;
+        savedSelectionRef.current = { from, to };
+        setEmojiPickerOpen(true);
+    };
+
+    const closeEmojiPicker = () => {
+        setEmojiPickerOpen(false);
+        savedSelectionRef.current = null;
+    };
+
+    const insertEmoji = (emoji) => {
+        const saved = savedSelectionRef.current;
+        const docSize = editor.state.doc.content.size;
+
+        let chain = editor.chain().focus();
+
+        if (saved && typeof saved.from === 'number') {
+            const from = Math.min(Math.max(0, saved.from), docSize);
+            const to = Math.min(Math.max(from, saved.to), docSize);
+            chain = chain.setTextSelection({ from, to });
         }
-        editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+
+        chain.insertContent(emoji).run();
+        savedSelectionRef.current = null;
+        setEmojiPickerOpen(false);
     };
 
     return (
@@ -180,6 +206,15 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     >
                         <Unlink size={ICON_SIZE} />
                     </ToolbarButton>
+                    <ToolbarButton
+                        onMouseDown={(e) => {
+                            e.preventDefault();
+                            openEmojiPicker();
+                        }}
+                        title="Chèn emoji"
+                    >
+                        <Smile size={ICON_SIZE} />
+                    </ToolbarButton>
                 </ToolbarGroup>
 
                 <ToolbarGroup>
@@ -280,6 +315,12 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <Trash2 size={ICON_SIZE} />
                 </button>
             </div>
+
+            <EmojiPickerModal
+                open={emojiPickerOpen}
+                onClose={closeEmojiPicker}
+                onSelect={insertEmoji}
+            />
         </div>
     );
 }

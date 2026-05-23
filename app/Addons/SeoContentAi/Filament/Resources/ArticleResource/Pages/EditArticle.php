@@ -17,13 +17,16 @@ use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
+use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Str;
+use Livewire\Attributes\On;
 
 class EditArticle extends EditRecord
 {
@@ -42,7 +45,30 @@ class EditArticle extends EditRecord
     /** @var array<int, array{id: int, url: string}> */
     public array $productGallery = [];
 
+    public bool $mediaPickerOpen = false;
+
+    /** @var 'featured'|'gallery'|'editor-block' */
+    public string $mediaPickerMode = 'featured';
+
+    public ?string $mediaPickerTargetBlockId = null;
+
+    public string $mediaPickerSearch = '';
+
+    /** @var list<array<string, mixed>> */
+    public array $mediaPickerImages = [];
+
+    public int $mediaPickerPage = 1;
+
+    public int $mediaPickerTotalPages = 1;
+
+    public ?string $mediaPickerError = null;
+
+    public bool $mediaPickerLoading = false;
+
     public bool $editingSlug = false;
+
+    /** @var 'save'|'sync'|null Thu thập HTML sau khi flush FAQ (Lưu / Đồng bộ WP). */
+    public ?string $pendingEditorCollectTarget = null;
 
     public string $editorHtml = '';
 
@@ -127,6 +153,216 @@ class EditArticle extends EditRecord
         return $wpPostType === 'product';
     }
 
+    public function isTaxonomyArticle(): bool
+    {
+        return app(WordPressArticleContentService::class)->isTaxonomyRecord($this->record);
+    }
+
+    public function supportsProductGallery(): bool
+    {
+        return $this->isProduct() && ! $this->isTaxonomyArticle();
+    }
+
+    #[On('open-editor-block-media-picker')]
+    public function openEditorBlockMediaPicker(string $blockId): void
+    {
+        $this->prepareMediaPicker('editor-block', $blockId);
+    }
+
+    /**
+     * @param  array{title?: string, body?: string, status?: string}  $payload
+     */
+    #[On('seo-article-editor-notify')]
+    public function handleEditorNotify(array $payload = []): void
+    {
+        $notification = Notification::make()
+            ->title((string) ($payload['title'] ?? ''))
+            ->body((string) ($payload['body'] ?? ''));
+
+        match ((string) ($payload['status'] ?? 'success')) {
+            'danger', 'error' => $notification->danger(),
+            'warning' => $notification->warning(),
+            default => $notification->success(),
+        };
+
+        $notification->send();
+    }
+
+    public function prepareMediaPicker(string $mode = 'featured', ?string $blockId = null): void
+    {
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            Notification::make()
+                ->title('Chưa liên kết WordPress')
+                ->body('Đồng bộ bài từ domain trước khi chọn ảnh.')
+                ->warning()
+                ->send();
+
+            $this->mediaPickerOpen = false;
+            $this->dispatch('close-article-media-modal');
+
+            return;
+        }
+
+        if ($mode === 'editor-block') {
+            $blockId = trim((string) ($blockId ?? ''));
+            if ($blockId === '') {
+                Notification::make()
+                    ->title('Không xác định được khối ảnh')
+                    ->warning()
+                    ->send();
+
+                $this->mediaPickerOpen = false;
+                $this->dispatch('close-article-media-modal');
+
+                return;
+            }
+
+            $this->mediaPickerTargetBlockId = $blockId;
+            $this->mediaPickerMode = 'editor-block';
+        } else {
+            $this->mediaPickerTargetBlockId = null;
+            $this->mediaPickerMode = $mode === 'gallery' ? 'gallery' : 'featured';
+        }
+
+        $this->mediaPickerPage = 1;
+        $this->mediaPickerError = null;
+        $this->mediaPickerImages = [];
+        $this->mediaPickerLoading = true;
+        $this->mediaPickerOpen = true;
+        $this->dispatch('open-article-media-modal');
+        $this->loadMediaPickerImages();
+    }
+
+    public function closeMediaPicker(): void
+    {
+        $this->mediaPickerOpen = false;
+        $this->mediaPickerError = null;
+        $this->mediaPickerImages = [];
+        $this->mediaPickerLoading = false;
+        $this->mediaPickerTargetBlockId = null;
+    }
+
+    public function updatedMediaPickerSearch(): void
+    {
+        $this->mediaPickerPage = 1;
+        $this->loadMediaPickerImages();
+    }
+
+    public function mediaPickerPreviousPage(): void
+    {
+        if ($this->mediaPickerPage <= 1) {
+            return;
+        }
+
+        $this->mediaPickerPage--;
+        $this->loadMediaPickerImages();
+    }
+
+    public function mediaPickerNextPage(): void
+    {
+        if ($this->mediaPickerPage >= $this->mediaPickerTotalPages) {
+            return;
+        }
+
+        $this->mediaPickerPage++;
+        $this->loadMediaPickerImages();
+    }
+
+    public function loadMediaPickerImages(): void
+    {
+        $this->mediaPickerLoading = true;
+        $this->mediaPickerError = null;
+
+        $this->record->loadMissing('site');
+        $site = $this->record->site;
+        if ($site === null) {
+            $this->mediaPickerError = 'Không tìm thấy domain.';
+            $this->mediaPickerLoading = false;
+
+            return;
+        }
+
+        $search = trim($this->mediaPickerSearch);
+
+        $result = app(WordPressMediaLibraryService::class)->fetch(
+            $site,
+            null,
+            $this->mediaPickerPage,
+            48,
+            $search !== '' ? $search : null,
+        );
+
+        $this->mediaPickerImages = is_array($result['images'] ?? null) ? $result['images'] : [];
+        $this->mediaPickerTotalPages = max(1, (int) ($result['total_pages'] ?? 1));
+        $this->mediaPickerPage = max(1, (int) ($result['page'] ?? $this->mediaPickerPage));
+        $this->mediaPickerError = filled($result['error'] ?? null) ? (string) $result['error'] : null;
+        $this->mediaPickerLoading = false;
+    }
+
+    public function selectMediaFromPicker(int $attachmentId, string $url, string $alt = '', string $slug = ''): void
+    {
+        if ($attachmentId <= 0 || trim($url) === '') {
+            return;
+        }
+
+        if ($this->mediaPickerMode === 'editor-block') {
+            $blockId = trim((string) ($this->mediaPickerTargetBlockId ?? ''));
+            if ($blockId === '') {
+                return;
+            }
+
+            $this->dispatch(
+                'editor-block-image-selected',
+                blockId: $blockId,
+                attachmentId: $attachmentId,
+                url: trim($url),
+                alt: trim($alt),
+                slug: trim($slug),
+            );
+
+            $this->mediaPickerTargetBlockId = null;
+            $this->mediaPickerOpen = false;
+            $this->dispatch('close-article-media-modal');
+
+            Notification::make()
+                ->title('Đã chọn ảnh cho khối')
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        $localMedia = app(ArticleMediaLocalService::class);
+
+        if ($this->mediaPickerMode === 'gallery') {
+            if (! $this->supportsProductGallery()) {
+                Notification::make()
+                    ->title('Album không áp dụng')
+                    ->body('Danh mục chỉ hỗ trợ ảnh đại diện.')
+                    ->warning()
+                    ->send();
+
+                return;
+            }
+
+            $this->productGallery = $localMedia->appendGalleryLocal($this->record, $attachmentId, $url);
+            $title = 'Đã thêm vào album (lưu cục bộ)';
+        } else {
+            $localMedia->applyFeaturedLocal($this->record, $attachmentId, $url);
+            $this->featuredImageUrl = trim($url);
+            $title = 'Đã chọn ảnh đại diện (lưu cục bộ)';
+        }
+
+        $this->record->refresh();
+        $this->dispatch('close-article-media-modal');
+
+        Notification::make()
+            ->title($title)
+            ->body('Bấm «Đồng bộ» để đẩy ảnh lên WordPress.')
+            ->success()
+            ->send();
+    }
+
     public function getPermalinkBase(): string
     {
         $this->record->loadMissing('site');
@@ -169,14 +405,26 @@ class EditArticle extends EditRecord
 
     public function requestSaveArticle(): void
     {
+        $this->pendingEditorCollectTarget = 'save';
         $this->dispatch('flush-article-faqs');
-        $this->dispatch('collect-editor-html', target: 'save');
     }
 
     public function requestSyncToWordPress(): void
     {
+        $this->pendingEditorCollectTarget = 'sync';
         $this->dispatch('flush-article-faqs');
-        $this->dispatch('collect-editor-html', target: 'sync');
+    }
+
+    /** Dự phòng khi flush FAQ không gọi được saveArticleFaqs (timeout phía client). */
+    public function finalizePendingEditorCollect(): void
+    {
+        if ($this->pendingEditorCollectTarget === null) {
+            return;
+        }
+
+        $target = $this->pendingEditorCollectTarget;
+        $this->pendingEditorCollectTarget = null;
+        $this->dispatch('collect-editor-html', target: $target);
     }
 
     public function getArticlePreviewUrl(): string
@@ -370,6 +618,12 @@ class EditArticle extends EditRecord
         return app(ArticleFaqExtractDebugService::class)->get($this->record);
     }
 
+    public function clearFaqExtractDebug(): void
+    {
+        app(ArticleFaqExtractDebugService::class)->dismiss($this->record);
+        $this->dispatch('article-faq-extract-debug-cleared');
+    }
+
     /**
      * @param  list<array<string, mixed>>  $faqs
      */
@@ -412,10 +666,18 @@ class EditArticle extends EditRecord
 
     public function saveArticleFaqs(array $faqs): void
     {
-        $count = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+        app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+
+        if ($this->pendingEditorCollectTarget !== null) {
+            $target = $this->pendingEditorCollectTarget;
+            $this->pendingEditorCollectTarget = null;
+            $this->dispatch('collect-editor-html', target: $target);
+
+            return;
+        }
 
         Notification::make()
-            ->title($count > 0 ? 'Đã lưu FAQ' : 'Đã xóa FAQ')
+            ->title(count($faqs) > 0 ? 'Đã lưu FAQ' : 'Đã xóa FAQ')
             ->body('FAQ lưu trên hệ thống SEO. Đồng bộ WordPress khi bấm «Đồng bộ».')
             ->success()
             ->send();

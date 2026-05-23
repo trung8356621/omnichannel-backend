@@ -124,6 +124,7 @@ export function collectImagesFromBlocks(blocks) {
             key: image.id || block.id,
             blockId: block.id,
             wpAttachmentId: image.wpAttachmentId ?? null,
+            seoMediaId: image.seoMediaId ?? null,
             src: image.src,
             slug: image.slug || slugFromUrl(image.src),
             alt: image.alt ?? '',

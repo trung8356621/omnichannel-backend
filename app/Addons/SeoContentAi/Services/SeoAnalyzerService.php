@@ -491,8 +491,8 @@ class SeoAnalyzerService
 
     /**
      * @return array{
-     *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
-     *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
+     *   internal: array<int, array{href:string,text:string,is_nofollow:bool,offset:int}>,
+     *   external: array<int, array{href:string,text:string,is_nofollow:bool,offset:int}>
      * }
      */
     private function extractLinks(string $content, string $domain): array
@@ -506,42 +506,43 @@ class SeoAnalyzerService
             return $result;
         }
 
-        $dom = new DOMDocument();
-        libxml_use_internal_errors(true);
-        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $content, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        libxml_clear_errors();
-
-        $xpath = new DOMXPath($dom);
-        $anchors = $xpath->query('//a[@href]');
-
-        if ($anchors === false) {
+        $pattern = '/<a\b([^>]*\bhref\s*=\s*(["\'])([^"\']+)\2[^>]*)>([\s\S]*?)<\/a>/iu';
+        if (preg_match_all($pattern, $content, $matches, PREG_OFFSET_CAPTURE | PREG_SET_ORDER) === false) {
             return $result;
         }
 
-        foreach ($anchors as $anchor) {
-            $href = trim((string) $anchor->getAttribute('href'));
+        foreach ($matches as $match) {
+            $offset = (int) ($match[0][1] ?? 0);
+            $attrs = (string) ($match[1][0] ?? '');
+            $href = trim(html_entity_decode((string) ($match[3][0] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
             if ($href === '' || str_starts_with($href, '#') || $this->isSpecialSchemeLink($href)) {
                 continue;
             }
 
-            $text = trim((string) $anchor->textContent);
-            $rel = strtolower((string) $anchor->getAttribute('rel'));
-            $isNoFollow = str_contains($rel, 'nofollow');
+            $innerHtml = (string) ($match[4][0] ?? '');
+            $text = trim(preg_replace('/\s+/u', ' ', strip_tags($innerHtml)) ?? '');
 
-            if ($this->isInternalLink($href, $domain)) {
-                $result['internal'][] = [
-                    'href' => $href,
-                    'text' => $text,
-                    'is_nofollow' => $isNoFollow,
-                ];
-                continue;
+            $rel = '';
+            if (preg_match('/\brel\s*=\s*(["\'])([^"\']*)\1/i', $attrs, $relMatch) === 1) {
+                $rel = strtolower((string) ($relMatch[2] ?? ''));
             }
 
-            $result['external'][] = [
+            $isNoFollow = str_contains($rel, 'nofollow');
+
+            $item = [
                 'href' => $href,
                 'text' => $text,
                 'is_nofollow' => $isNoFollow,
+                'offset' => $offset,
             ];
+
+            if ($this->isInternalLink($href, $domain)) {
+                $result['internal'][] = $item;
+                continue;
+            }
+
+            $result['external'][] = $item;
         }
 
         $result['internal'] = $this->deduplicateLinksByHrefAndText($result['internal']);

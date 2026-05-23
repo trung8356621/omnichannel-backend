@@ -3,36 +3,38 @@ import { ExternalLink, Wand2 } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
 
+const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
+
+function isLocalSeoMediaSrc(src) {
+    return typeof src === 'string' && src.includes(LOCAL_MEDIA_PATH);
+}
+
 function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
     const [slug, setSlug] = useState(row.slug ?? '');
-    const [altTitle, setAltTitle] = useState(row.alt || row.title || '');
-    const [caption, setCaption] = useState(row.caption ?? '');
+    const altText = (row.alt || row.title || '').trim();
 
     useEffect(() => {
         setSlug(row.slug ?? '');
-        setAltTitle(row.alt || row.title || '');
-        setCaption(row.caption ?? '');
-    }, [row.slug, row.alt, row.title, row.caption, row.src]);
-
-    const commitMeta = (patch) => {
-        onPatch(row.blockId, patch);
-    };
+    }, [row.slug, row.src]);
 
     return (
         <li className="seo-article-images-row">
-            <button
-                type="button"
-                className="seo-article-images-thumb-btn"
-                onClick={() => onFocusBlock?.(row.blockId)}
-                title="Chuyển tới ảnh trong editor"
-            >
-                <img
-                    key={`${row.blockId}-${row.src}`}
-                    src={row.src}
-                    alt={row.alt || row.title || ''}
-                    className="seo-article-images-thumb"
-                />
-            </button>
+            <div className="seo-article-images-preview">
+                <button
+                    type="button"
+                    className="seo-article-images-thumb-btn"
+                    onClick={() => onFocusBlock?.(row.blockId)}
+                    title="Chuyển tới ảnh trong editor"
+                >
+                    <img
+                        key={`${row.blockId}-${row.src}`}
+                        src={row.src}
+                        alt={altText}
+                        className="seo-article-images-thumb"
+                    />
+                </button>
+                <p className="seo-article-images-alt">{altText || '—'}</p>
+            </div>
 
             <div className="seo-article-images-fields">
                 <div className="seo-article-images-field-row">
@@ -40,6 +42,8 @@ function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
                         Slug tệp (URL)
                         {row.wpAttachmentId ? (
                             <span className="seo-article-images-hint"> — đổi tên trên WordPress</span>
+                        ) : row.seoMediaId ? (
+                            <span className="seo-article-images-hint"> — đổi tên file nội bộ</span>
                         ) : null}
                     </label>
                     <input
@@ -50,7 +54,7 @@ function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
                         onBlur={() => {
                             const trimmed = slug.trim();
                             if (trimmed !== row.slug) {
-                                const ok = onSlugChange?.(row, trimmed, (patch) => commitMeta(patch));
+                                const ok = onSlugChange?.(row, trimmed, (patch) => onPatch?.(row.blockId, patch));
                                 if (ok === false) {
                                     setSlug(row.slug ?? '');
                                 }
@@ -59,43 +63,8 @@ function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
                         placeholder="tu-khoa-chinh-1"
                     />
                     {row.wpAttachmentId ? (
-                        <span className="seo-article-images-wp-id">WP #{row.wpAttachmentId}</span>
+                        <span className="seo-article-images-wp-id">Ảnh nằm trong bài viết khác: WP #{row.wpAttachmentId}</span>
                     ) : null}
-                </div>
-
-                <div className="seo-article-images-field-row">
-                    <label className="seo-image-meta-label">
-                        Alt / Title{' '}
-                        <span className="seo-article-images-hint">(chỉ HTML bài viết)</span>
-                    </label>
-                    <input
-                        type="text"
-                        className="seo-image-meta-input"
-                        value={altTitle}
-                        onChange={(e) => setAltTitle(e.target.value)}
-                        onBlur={() => {
-                            const trimmed = altTitle.trim();
-                            const current = (row.alt || row.title || '').trim();
-                            if (trimmed !== current) {
-                                commitMeta({ alt: trimmed, title: trimmed });
-                            }
-                        }}
-                    />
-                </div>
-
-                <div className="seo-article-images-field-row">
-                    <label className="seo-image-meta-label">Caption</label>
-                    <textarea
-                        className="seo-image-meta-textarea"
-                        rows={2}
-                        value={caption}
-                        onChange={(e) => setCaption(e.target.value)}
-                        onBlur={() => {
-                            if (caption !== row.caption) {
-                                commitMeta({ caption: caption.trim() });
-                            }
-                        }}
-                    />
                 </div>
 
                 <a
@@ -122,6 +91,8 @@ export default function ArticleImagesTab({
     onQuickFixAll,
 }) {
     const images = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
+    const hasWpImages = images.some((row) => row.wpAttachmentId);
+    const hasLocalImages = images.some((row) => !row.wpAttachmentId && isLocalSeoMediaSrc(row.src));
     const keywordSource = (focusKeyword || articleTitle || '').trim();
     const canQuickFix = keywordSource.length > 0 && images.length > 0;
 
@@ -138,10 +109,22 @@ export default function ArticleImagesTab({
             <div className="seo-images-tab-toolbar">
                 <div className="seo-images-tab-intro-wrap">
                     <p className="seo-images-tab-intro">
-                        {images.length} ảnh · Alt/Title và caption chỉ sửa HTML bài viết. Đổi slug sẽ đổi tên file
-                        trên WordPress và thay URL trong mọi bài trên site.
+                        {images.length} ảnh · Alt sửa trong editor hoặc Fix nhanh. Đổi slug để đổi tên file ảnh.
                     </p>
-                    <p className="seo-images-tab-warning">{SLUG_RENAME_WARNING}</p>
+                    {hasLocalImages ? (
+                        <p className="seo-images-tab-info">
+                            Ảnh dán/tải nội bộ (Laravel): đổi slug chỉ đổi file trên server, không ảnh hưởng
+                            WordPress.
+                        </p>
+                    ) : null}
+                    {hasWpImages ? (
+                        <details className="seo-images-tab-warning-details">
+                            <summary className="seo-images-tab-warning-summary">
+                                Lưu ý khi đổi slug ảnh WordPress
+                            </summary>
+                            <p className="seo-images-tab-warning">{SLUG_RENAME_WARNING}</p>
+                        </details>
+                    ) : null}
                 </div>
                 <button
                     type="button"

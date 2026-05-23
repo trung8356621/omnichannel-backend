@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, AlertCircle, AlertTriangle, Link2, ExternalLink } from 'lucide-react';
+import { CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
 
 function scoreColor(score) {
     if (score >= 70) return 'text-emerald-600 dark:text-emerald-400';
@@ -123,64 +123,10 @@ function ContentBonusSection({ contentBonus }) {
     );
 }
 
-function LinksSection({ extractedLinks }) {
-    const internal = extractedLinks?.internal ?? [];
-    const external = extractedLinks?.external ?? [];
-
-    return (
-        <div className="seo-links-panel space-y-4">
-            <div>
-                <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2 flex items-center gap-1.5">
-                    <Link2 size={16} />
-                    Liên kết nội bộ ({internal.length})
-                </h4>
-                {internal.length === 0 ? (
-                    <p className="text-sm text-gray-500 italic">Chưa có link nội bộ trong nội dung.</p>
-                ) : (
-                    <ul className="seo-link-list">
-                        {internal.map((link, i) => (
-                            <li key={`in-${i}`}>
-                                <a href={link.href} target="_blank" rel="noopener noreferrer" className="seo-link-href">
-                                    {link.href}
-                                </a>
-                                {link.text ? <span className="seo-link-text">{link.text}</span> : null}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
-            <div>
-                <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-200 mb-2 flex items-center gap-1.5">
-                    <ExternalLink size={16} />
-                    Liên kết ngoài ({external.length})
-                </h4>
-                {external.length === 0 ? (
-                    <p className="text-sm text-gray-500 italic">Chưa có link ngoài.</p>
-                ) : (
-                    <ul className="seo-link-list">
-                        {external.map((link, i) => (
-                            <li key={`ex-${i}`}>
-                                <a href={link.href} target="_blank" rel="noopener noreferrer" className="seo-link-href">
-                                    {link.href}
-                                </a>
-                                {link.text ? <span className="seo-link-text">{link.text}</span> : null}
-                                {link.is_nofollow ? (
-                                    <span className="seo-link-badge">nofollow</span>
-                                ) : null}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </div>
-        </div>
-    );
-}
-
 export default function SeoScorePanel({
     focusKeyword,
     analysis,
     contentBonus: contentBonusProp,
-    extractedLinks,
     loading,
     analyzing,
 }) {
@@ -220,13 +166,6 @@ export default function SeoScorePanel({
                 <CheckList title="Đạt" icon={CheckCircle2} items={good} tone="good" />
                 <CheckList title="Lỗi" icon={AlertCircle} items={errors} tone="error" />
                 <CheckList title="Cảnh báo" icon={AlertTriangle} items={warnings} tone="warning" />
-            </div>
-
-            <div className="seo-score-links-section">
-                <h3 className="text-sm font-bold text-gray-800 dark:text-gray-200 mb-3 border-b border-gray-200 dark:border-gray-700 pb-2">
-                    Liên kết trích xuất (seo_extracted_links)
-                </h3>
-                <LinksSection extractedLinks={extractedLinks} />
             </div>
         </div>
     );

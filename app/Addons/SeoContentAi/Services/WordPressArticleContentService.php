@@ -77,10 +77,6 @@ class WordPressArticleContentService
 
     public function resolveFeaturedImageUrl(SeoArticle $article): ?string
     {
-        if ($this->isTaxonomyRecord($article)) {
-            return null;
-        }
-
         $cached = trim((string) $this->getMeta($article, 'wp_featured_image_url', ''));
         if ($cached !== '') {
             return $cached;
@@ -210,7 +206,7 @@ class WordPressArticleContentService
         return $this->resolveWpTaxonomy($article) !== null;
     }
 
-    private function resolveWpTaxonomy(SeoArticle $article): ?string
+    public function resolveWpTaxonomy(SeoArticle $article): ?string
     {
         $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
         if ($entity === 'term') {
@@ -267,10 +263,6 @@ class WordPressArticleContentService
             );
         }
 
-        if ($isTaxonomy) {
-            return;
-        }
-
         if (filled($post['featured_image_url'] ?? null)) {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_featured_image_url'],
@@ -321,7 +313,7 @@ class WordPressArticleContentService
      * @param  array<int, mixed>  $items
      * @return array<int, array{id: int, url: string}>
      */
-    private function normalizeProductGallery(array $items): array
+    public function normalizeProductGallery(array $items): array
     {
         $gallery = [];
 
@@ -362,5 +354,28 @@ class WordPressArticleContentService
         }
 
         return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $termId;
+    }
+
+    /**
+     * URL đẩy nội dung từ SEO editor lên WordPress (post hoặc taxonomy term).
+     */
+    public function buildEditorSyncUrl(Site $site, SeoArticle $article): string
+    {
+        $wpId = (int) ($article->wp_post_id ?? 0);
+        if ($wpId <= 0) {
+            return '';
+        }
+
+        $base = $this->getPermalinkBase($site);
+        if ($base === '') {
+            return '';
+        }
+
+        $taxonomy = $this->resolveWpTaxonomy($article);
+        if ($taxonomy !== null) {
+            return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $wpId . '/editor-sync';
+        }
+
+        return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpId . '/editor-sync';
     }
 }

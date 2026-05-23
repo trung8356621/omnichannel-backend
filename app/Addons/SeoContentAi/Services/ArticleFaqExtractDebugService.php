@@ -15,6 +15,8 @@ final class ArticleFaqExtractDebugService
 {
     public const OPTION_PREFIX = 'seo_faq_extract_debug_';
 
+    public const SUPPRESSED_PREFIX = 'seo_faq_extract_debug_suppressed_';
+
     /** @deprecated Chỉ đọc một lần để migrate sang wp_options Laravel */
     private const LEGACY_ARTICLE_META_KEY = 'seo_faq_extract_debug';
 
@@ -34,12 +36,35 @@ final class ArticleFaqExtractDebugService
      */
     public function get(SeoArticle $article): ?array
     {
+        if ($this->isSuppressed($article)) {
+            return null;
+        }
+
         $data = WpOption::get($this->optionName($article), null);
         if (is_array($data)) {
             return $data;
         }
 
         return $this->migrateLegacyArticleMetaDebug($article);
+    }
+
+    public function isSuppressed(SeoArticle $article): bool
+    {
+        $flag = WpOption::get($this->suppressedOptionName($article), null);
+
+        return $flag !== null && $flag !== '';
+    }
+
+    /**
+     * Xóa debug và không tự ghi lại khi mở bài / đồng bộ (nút «Đã fix»).
+     */
+    public function dismiss(SeoArticle $article): void
+    {
+        $this->clear($article);
+
+        WpOption::set($this->suppressedOptionName($article), [
+            'dismissed_at' => now()->toIso8601String(),
+        ]);
     }
 
     public function clear(SeoArticle $article): void
@@ -58,6 +83,10 @@ final class ArticleFaqExtractDebugService
      */
     private function migrateLegacyArticleMetaDebug(SeoArticle $article): ?array
     {
+        if ($this->isSuppressed($article)) {
+            return null;
+        }
+
         $raw = $article->articleMetas()
             ->where('meta_key', self::LEGACY_ARTICLE_META_KEY)
             ->value('meta_value');
@@ -90,6 +119,10 @@ final class ArticleFaqExtractDebugService
         string $reason,
         string $context = 'article',
     ): ?array {
+        if ($this->isSuppressed($article)) {
+            return null;
+        }
+
         /** @var array<string, mixed>|null $heading */
         $heading = $diagnosis['heading'] ?? null;
         $candidates = $diagnosis['question_candidates'] ?? [];
@@ -120,5 +153,10 @@ final class ArticleFaqExtractDebugService
     private function optionName(SeoArticle $article): string
     {
         return self::OPTION_PREFIX . (int) $article->id;
+    }
+
+    private function suppressedOptionName(SeoArticle $article): string
+    {
+        return self::SUPPRESSED_PREFIX . (int) $article->id;
     }
 }

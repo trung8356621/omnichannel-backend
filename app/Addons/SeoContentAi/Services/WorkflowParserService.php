@@ -1529,8 +1529,10 @@ class WorkflowParserService
             '',
             $text,
         );
+        $normalized = is_string($normalized) ? $normalized : $text;
+        $normalized = preg_replace('/^\?\s*/u', '', trim($normalized)) ?? trim($normalized);
 
-        return trim(is_string($normalized) ? $normalized : $text);
+        return trim($normalized);
     }
 
     private function stripFaqAnswerLabelFromHtml(string $html): string

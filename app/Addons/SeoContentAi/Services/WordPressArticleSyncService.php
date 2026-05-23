@@ -45,7 +45,7 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $url = $this->buildSyncUrl($site, $wpPostId);
+        $url = app(WordPressArticleContentService::class)->buildEditorSyncUrl($site, $article);
         if ($url === '') {
             return [
                 'success' => false,
@@ -77,12 +77,21 @@ final class WordPressArticleSyncService
             app(ArticleFaqExtractDebugService::class)->clear($article);
         }
 
+        $virtualComments = app(VirtualCommentService::class)->getFromArticle($article);
+
         $payload = [
             'title' => (string) ($article->title ?? ''),
             'slug' => (string) ($article->slug ?? ''),
             'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
             'post_content' => $postContent !== '' ? $postContent : null,
             'faqs' => $faqs,
+            'virtual_comments' => $virtualComments,
+            'meta_input' => [
+                VirtualCommentService::WP_META_KEY => json_encode(
+                    $virtualComments,
+                    JSON_UNESCAPED_UNICODE,
+                ),
+            ],
         ];
 
         try {
@@ -121,9 +130,19 @@ final class WordPressArticleSyncService
 
             $this->storeWpPostContentMeta($article, $postContent);
 
+            $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
+            $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
+            if ($mediaPush['attempted']) {
+                if ($mediaPush['success']) {
+                    $message .= ' Đã đẩy ảnh đại diện/album lên WordPress.';
+                } else {
+                    $message .= ' Ảnh chưa đẩy được: ' . mb_substr((string) $mediaPush['message'], 0, 200);
+                }
+            }
+
             return [
                 'success' => true,
-                'message' => (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.'),
+                'message' => $message,
                 'faq_count' => count($faqs),
                 'faq_extract_debug' => $faqExtractDebug,
             ];
@@ -163,13 +182,4 @@ final class WordPressArticleSyncService
         );
     }
 
-    private function buildSyncUrl(Site $site, int $wpPostId): string
-    {
-        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
-        if ($base === '') {
-            return '';
-        }
-
-        return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpPostId . '/editor-sync';
-    }
 }

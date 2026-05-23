@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Send, Sparkles, ListTree } from 'lucide-react';
+import { Send, Sparkles, ListTree, X } from 'lucide-react';
 import { loadChat, saveChat } from '../utils/articleEditorStorage';
 
 export default function ArticleAiChatPanel({ articleId }) {
@@ -107,8 +107,17 @@ export default function ArticleAiChatPanel({ articleId }) {
 
     return (
         <div className="seo-ai-chat-panel wp-postbox">
-            <div className="wp-postbox-header">
+            <div className="wp-postbox-header seo-ai-chat-panel__header">
                 <h2>Chat AI</h2>
+                <button
+                    type="button"
+                    className="seo-ai-chat-panel__close"
+                    title="Đóng chat"
+                    aria-label="Đóng chat"
+                    onClick={() => window.dispatchEvent(new CustomEvent('seo-article-ai-chat-close'))}
+                >
+                    <X size={18} />
+                </button>
             </div>
             <div className="seo-ai-chat-body">
                 <div ref={historyRef} className="seo-ai-chat-history">

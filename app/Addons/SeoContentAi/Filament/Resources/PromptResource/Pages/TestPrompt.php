@@ -64,9 +64,7 @@ class TestPrompt extends Page implements HasForms
 
         abort_unless(static::getResource()::canView($this->getRecord()), 403);
 
-        foreach (PromptResource::variableDefinitionsForPrompt($this->getPrompt()) as $definition) {
-            $this->variableValues[(string) $definition['name']] = '';
-        }
+        $this->syncVariableValueKeys();
 
         $this->form->fill($this->variableValues);
 
@@ -76,6 +74,21 @@ class TestPrompt extends Page implements HasForms
         } else {
             $this->refreshCompiledPreview();
         }
+    }
+
+    #[Computed]
+    public function promptUsesInput(): bool
+    {
+        return PromptResource::promptUsesInputVariable($this->getPrompt());
+    }
+
+    /**
+     * @return array<int, array{name: string, label: string, description: ?string}>
+     */
+    #[Computed]
+    public function variableDefinitions(): array
+    {
+        return PromptResource::variableDefinitionsForPrompt($this->getPrompt());
     }
 
     /**
@@ -287,14 +300,22 @@ class TestPrompt extends Page implements HasForms
         $this->outputText = null;
         $this->compiledPreview = null;
 
-        $values = $this->form->getState();
-        $normalized = [];
-        foreach ($values as $key => $value) {
-            $normalized[(string) $key] = is_string($value) ? $value : (string) $value;
+        $normalized = $this->normalizedVariableValues();
+
+        if ($this->promptUsesInput && trim((string) ($normalized['input'] ?? '')) === '') {
+            $this->isRunning = false;
+
+            Notification::make()
+                ->title('Thiếu biến input')
+                ->body('Prompt dùng {{input}} — nhập kết quả mô phỏng từ edge nối vào trước khi chạy thử.')
+                ->warning()
+                ->send();
+
+            return;
         }
 
         try {
-            $result = $runner->run($this->getPrompt(), $normalized);
+            $result = $runner->run($this->getPrompt(), $normalized, null, false);
 
             Notification::make()
                 ->title('Chạy thử thành công')
@@ -361,11 +382,10 @@ class TestPrompt extends Page implements HasForms
         $savedVariables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
         foreach ($savedVariables as $key => $value) {
             $name = (string) $key;
-            if (array_key_exists($name, $this->variableValues)) {
-                $this->variableValues[$name] = is_string($value) ? $value : (string) $value;
-            }
+            $this->variableValues[$name] = is_string($value) ? $value : (string) $value;
         }
 
+        $this->syncVariableValueKeys();
         $this->form->fill($this->variableValues);
 
         $usage = is_array($result->token_usage) ? $result->token_usage : null;
@@ -430,6 +450,20 @@ class TestPrompt extends Page implements HasForms
         return '#' . $result->id;
     }
 
+    protected function syncVariableValueKeys(): void
+    {
+        foreach ($this->variableDefinitions as $definition) {
+            $name = (string) $definition['name'];
+            if (! array_key_exists($name, $this->variableValues)) {
+                $this->variableValues[$name] = '';
+            }
+        }
+
+        if ($this->promptUsesInput && ! array_key_exists('input', $this->variableValues)) {
+            $this->variableValues['input'] = '';
+        }
+    }
+
     /**
      * @return array<int, Forms\Components\Component>
      */
@@ -439,30 +473,73 @@ class TestPrompt extends Page implements HasForms
             return [];
         }
 
-        $definitions = PromptResource::variableDefinitionsForPrompt($this->getPrompt());
+        if ($this->promptUsesInput) {
+            $this->syncVariableValueKeys();
+        }
 
-        if ($definitions === []) {
+        $definitions = $this->variableDefinitions;
+
+        if ($definitions === [] && ! $this->promptUsesInput) {
             return [
                 Forms\Components\Placeholder::make('no_variables')
                     ->label('')
-                    ->content('Prompt này không khai báo biến {{tên}}. Bạn có thể chạy thử trực tiếp.'),
+                    ->content('Prompt này không khai báo biến @{{tên}}. Bạn có thể chạy thử trực tiếp.'),
             ];
         }
 
-        return collect($definitions)
-            ->map(function (array $definition): Forms\Components\Textarea {
-                $field = Forms\Components\Textarea::make((string) $definition['name'])
-                    ->label((string) $definition['label'])
-                    ->rows(2)
-                    ->columnSpanFull();
+        if ($definitions === [] && $this->promptUsesInput) {
+            return [
+                $this->makeInputSupplementField(),
+            ];
+        }
 
-                if (filled($definition['description'] ?? null)) {
-                    $field->helperText((string) $definition['description']);
-                }
+        $inputDefinition = collect($definitions)->firstWhere('name', 'input');
+        $otherDefinitions = collect($definitions)->where('name', '!=', 'input')->values();
 
-                return $field;
-            })
-            ->all();
+        $schema = [];
+
+        if ($inputDefinition !== null) {
+            $schema[] = $this->makeInputSupplementField($inputDefinition);
+        }
+
+        foreach ($otherDefinitions as $definition) {
+            $schema[] = $this->makeVariableField($definition);
+        }
+
+        return $schema;
+    }
+
+    /**
+     * @param  array{name: string, label: string, description: ?string}|null  $definition
+     */
+    protected function makeInputSupplementField(?array $definition = null): Forms\Components\Textarea
+    {
+        $helper = filled($definition['description'] ?? null)
+            ? (string) $definition['description']
+            : 'Trên Workflow Builder, {{input}} nhận kết quả từ bước trước. Khi chạy thử tại đây, dán hoặc nhập nội dung mô phỏng.';
+
+        return Forms\Components\Textarea::make('input')
+            ->label((string) ($definition['label'] ?? 'Kết quả edge nối vào (SEO Flow)'))
+            ->rows(6)
+            ->columnSpanFull()
+            ->helperText($helper);
+    }
+
+    /**
+     * @param  array{name: string, label: string, description: ?string}  $definition
+     */
+    protected function makeVariableField(array $definition): Forms\Components\Textarea
+    {
+        $field = Forms\Components\Textarea::make((string) $definition['name'])
+            ->label((string) $definition['label'])
+            ->rows(2)
+            ->columnSpanFull();
+
+        if (filled($definition['description'] ?? null)) {
+            $field->helperText((string) $definition['description']);
+        }
+
+        return $field;
     }
 
     protected function getPrompt(): SeoPrompt

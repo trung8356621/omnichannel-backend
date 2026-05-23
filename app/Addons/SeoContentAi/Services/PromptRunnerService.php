@@ -15,6 +15,10 @@ use Illuminate\Support\Facades\Http;
 
 final class PromptRunnerService
 {
+    public function __construct(
+        private readonly AiExecutionService $aiExecution,
+    ) {}
+
     private const ROLE_HEADINGS = [
         'role' => 'Vai trò',
         'context' => 'Bối cảnh',
@@ -26,8 +30,12 @@ final class PromptRunnerService
     /**
      * @param  array<string, string>  $variables
      */
-    public function run(SeoPrompt $prompt, array $variables, ?string $modelOverride = null): PromptResult
-    {
+    public function run(
+        SeoPrompt $prompt,
+        array $variables,
+        ?string $modelOverride = null,
+        bool $isTaskMode = true,
+    ): PromptResult {
         $prompt->loadMissing(['parts', 'aiConnection']);
 
         $connection = $prompt->aiConnection;
@@ -60,12 +68,13 @@ final class PromptRunnerService
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
                 'model' => $model,
+                'is_task_mode' => $isTaskMode,
             ],
             'started_at' => now(),
         ]);
 
         try {
-            [$output, $usage] = $this->callProvider($connection, $compiled, $model);
+            [$output, $usage] = $this->callProvider($connection, $prompt, $compiled, $model, $variables, $isTaskMode);
 
             $result->update([
                 'status' => 'completed',
@@ -159,11 +168,20 @@ final class PromptRunnerService
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callProvider(ApiConnection $connection, string $prompt, string $model): array
-    {
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function callProvider(
+        ApiConnection $connection,
+        SeoPrompt $prompt,
+        string $compiled,
+        string $model,
+        array $variables,
+        bool $isTaskMode,
+    ): array {
         return match ($connection->provider) {
-            'gemini' => $this->callGemini($connection, $prompt, $model),
-            'claude' => $this->callClaude($connection, $prompt, $model),
+            'gemini' => $this->callGemini($connection, $compiled, $model),
+            'claude' => $this->callClaude($prompt, $variables, $model, $isTaskMode),
             default => throw new PromptRunException('Nhà cung cấp AI không được hỗ trợ: ' . $connection->provider),
         };
     }
@@ -273,50 +291,20 @@ final class PromptRunnerService
     }
 
     /**
+     * @param  array<string, string>  $variables
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callClaude(ApiConnection $connection, string $prompt, string $model): array
+    private function callClaude(SeoPrompt $prompt, array $variables, string $model, bool $isTaskMode): array
     {
-        $model = $model !== '' ? $model : ($connection->default_model ?: 'claude-3-5-sonnet-20240620');
+        $inputData = trim((string) ($variables['input'] ?? ''));
 
-        $response = Http::timeout(180)
-            ->acceptJson()
-            ->withHeaders([
-                'x-api-key' => $connection->api_key,
-                'anthropic-version' => '2023-06-01',
-            ])
-            ->post('https://api.anthropic.com/v1/messages', [
-                'model' => $model,
-                'max_tokens' => 8192,
-                'messages' => [
-                    [
-                        'role' => 'user',
-                        'content' => $prompt,
-                    ],
-                ],
-            ]);
-
-        if (! $response->successful()) {
-            $message = $response->json('error.message')
-                ?? $response->json('error.type')
-                ?? $response->body();
-
-            throw new PromptRunException('Claude API lỗi: ' . $this->truncateError((string) $message));
-        }
-
-        $text = collect($response->json('content', []))
-            ->where('type', 'text')
-            ->pluck('text')
-            ->filter()
-            ->implode("\n");
-
-        if ($text === '') {
-            throw new PromptRunException('Claude không trả về nội dung.');
-        }
-
-        $usage = $response->json('usage');
-
-        return [$text, is_array($usage) ? $usage : null];
+        return $this->aiExecution->executeClaude(
+            $prompt,
+            $inputData !== '' ? $inputData : null,
+            $isTaskMode,
+            $variables,
+            $model !== '' ? $model : null,
+        );
     }
 
     private function truncateError(string $message): string

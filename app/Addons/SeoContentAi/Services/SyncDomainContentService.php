@@ -287,6 +287,14 @@ class SyncDomainContentService
                 ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
             );
         }
+
+        $virtualComments = $item['virtual_comments'] ?? null;
+        if (is_array($virtualComments) && $virtualComments !== []) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => VirtualCommentService::ARTICLE_META_KEY],
+                ['meta_value' => json_encode($virtualComments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+            );
+        }
     }
 
     /**

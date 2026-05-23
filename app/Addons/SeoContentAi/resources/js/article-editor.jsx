@@ -3,7 +3,53 @@ import { createRoot } from 'react-dom/client';
 import SeoArticleEditor from './components/SeoArticleEditor';
 import ArticleAiChatPanel from './components/ArticleAiChatPanel';
 import ArticleFaqEditor from './components/ArticleFaqEditor';
+import ArticleLinksSidebar from './components/ArticleLinksSidebar';
+import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
+
+/** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
+function normalizeLivewireEventDetail(payload) {
+    if (payload == null) {
+        return {};
+    }
+    if (Array.isArray(payload)) {
+        if (payload.length === 1 && payload[0] != null && typeof payload[0] === 'object') {
+            return payload[0];
+        }
+
+        return { params: payload };
+    }
+
+    return typeof payload === 'object' ? payload : {};
+}
+
+function registerArticleEditorLivewireBridge() {
+    if (window.__seoArticleLivewireBridgeRegistered) {
+        return;
+    }
+    window.__seoArticleLivewireBridgeRegistered = true;
+
+    const forward = (name) => (payload) => {
+        window.dispatchEvent(
+            new CustomEvent(name, {
+                detail: normalizeLivewireEventDetail(payload),
+            }),
+        );
+    };
+
+    if (typeof Livewire !== 'undefined') {
+        Livewire.on('collect-editor-html', forward('collect-editor-html'));
+        Livewire.on('article-faq-extract-debug-cleared', () => {
+            window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'));
+        });
+        Livewire.on('editor-block-image-selected', forward('editor-block-image-selected'));
+    }
+}
+
+document.addEventListener('livewire:init', registerArticleEditorLivewireBridge);
+if (typeof Livewire !== 'undefined') {
+    registerArticleEditorLivewireBridge();
+}
 
 const rootElement = document.getElementById('seo-article-editor-root');
 
@@ -14,6 +60,7 @@ if (rootElement) {
     let editorSettings = { history_step: 20 };
     let initialPostImages = [];
     let articleId = null;
+    let siteId = null;
     let articleTitle = '';
 
     try {
@@ -82,6 +129,7 @@ if (rootElement) {
     root.render(
         <SeoArticleEditor
             articleId={articleId}
+            siteId={siteId}
             initialHtml={initialHtml}
             initialOutline={initialOutline}
             initialSeo={initialSeo}
@@ -90,6 +138,16 @@ if (rootElement) {
             editorSettings={editorSettings}
         />,
     );
+
+    const linksRoot = document.getElementById('seo-article-links-root');
+    if (linksRoot) {
+        createRoot(linksRoot).render(<ArticleLinksSidebar />);
+    }
+
+    const launcherRoot = document.getElementById('seo-article-ai-launcher-root');
+    if (launcherRoot) {
+        createRoot(launcherRoot).render(<ArticleAiFloatingLauncher />);
+    }
 
     const chatRoot = document.getElementById('seo-article-ai-chat-root');
     if (chatRoot) {

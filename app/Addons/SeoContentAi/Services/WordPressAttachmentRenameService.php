@@ -18,20 +18,29 @@ final class WordPressAttachmentRenameService
      */
     public function renameBatch(SeoArticle $article, array $items): array
     {
-        $normalized = $this->normalizeItems($items);
-        if ($normalized === []) {
-            return [
-                'success' => false,
-                'message' => 'Không có ảnh WordPress hợp lệ để đổi tên.',
-            ];
-        }
-
         $article->loadMissing('site');
         $site = $article->site;
         if (! $site instanceof Site) {
             return [
                 'success' => false,
                 'message' => 'Bài viết chưa gắn domain.',
+            ];
+        }
+
+        return $this->renameForSite($site, $items);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array{success: bool, message: string, renamed_count?: int, posts_updated?: int, renamed?: array<int, mixed>, errors?: array<int, mixed>}
+     */
+    public function renameForSite(Site $site, array $items): array
+    {
+        $normalized = $this->normalizeItems($items);
+        if ($normalized === []) {
+            return [
+                'success' => false,
+                'message' => 'Không có ảnh WordPress hợp lệ để đổi tên.',
             ];
         }
 
@@ -105,7 +114,7 @@ final class WordPressAttachmentRenameService
             ];
         } catch (Throwable $e) {
             Log::error('WordPress attachment rename failed', [
-                'article_id' => $article->id,
+                'site_id' => $site->id,
                 'error' => $e->getMessage(),
             ]);
 

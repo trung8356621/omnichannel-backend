@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Providers;
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -48,6 +50,52 @@ class SeoPanelProvider extends PanelProvider
         Route::middleware('api')
             ->prefix('api')
             ->group(dirname(__DIR__) . '/routes/api.php');
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
+            CheckMainRole::class,
+        ])
+            ->prefix('api/seo/media')
+            ->group(function (): void {
+                Route::post('/upload', [SeoMediaController::class, 'upload'])
+                    ->name('seo.media.upload');
+                Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
+                    ->whereNumber('media')
+                    ->name('seo.media.rename');
+            });
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
+            CheckMainRole::class,
+        ])
+            ->prefix('api/seo/watermark')
+            ->group(function (): void {
+                Route::get('/settings', [SeoWatermarkController::class, 'showSettings'])
+                    ->name('seo.watermark.settings.show');
+                Route::post('/settings', [SeoWatermarkController::class, 'saveSettings'])
+                    ->name('seo.watermark.settings.save');
+                Route::post('/batch', [SeoWatermarkController::class, 'applyBatch'])
+                    ->name('seo.watermark.batch');
+                Route::post('/media/{media}/save', [SeoWatermarkController::class, 'saveMediaWatermark'])
+                    ->whereNumber('media')
+                    ->name('seo.watermark.media.save');
+                Route::post('/save-new', [SeoWatermarkController::class, 'saveNewFromCanvas'])
+                    ->name('seo.watermark.save-new');
+            });
 
         Route::middleware([
             EncryptCookies::class,

@@ -358,6 +358,24 @@ class PromptResource extends Resource
         ];
     }
 
+    public static function promptUsesInputVariable(SeoPrompt $prompt): bool
+    {
+        $declared = collect(is_array($prompt->variables) ? $prompt->variables : []);
+
+        if ($declared->contains(static fn ($row): bool => trim((string) ($row['name'] ?? '')) === 'input')) {
+            return true;
+        }
+
+        $parts = $prompt->parts()
+            ->orderBy('position')
+            ->get()
+            ->map(static fn ($part): array => self::builderItemFromPart($part))
+            ->values()
+            ->all();
+
+        return in_array('input', self::extractVariableNamesFromParts($parts), true);
+    }
+
     /**
      * @return array<int, array{name: string, label: string, description: ?string}>
      */
@@ -373,8 +391,7 @@ class PromptResource extends Resource
             ->values()
             ->all();
 
-        $names = collect(['input'])
-            ->merge($declared->pluck('name'))
+        $names = $declared->pluck('name')
             ->filter()
             ->merge(self::extractVariableNamesFromParts($parts))
             ->unique()

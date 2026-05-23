@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RefreshCw, Plus, Trash2, AlertCircle } from 'lucide-react';
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
@@ -63,7 +63,7 @@ const contextLabels = {
     wp_domain_sync: 'Đồng bộ domain từ WordPress',
 };
 
-function FaqExtractDebugBanner({ debug, onDismiss }) {
+function FaqExtractDebugBanner({ debug, onDismiss, onFixed }) {
     if (!debug || typeof debug !== 'object') {
         return null;
     }
@@ -82,9 +82,14 @@ function FaqExtractDebugBanner({ debug, onDismiss }) {
         <div className="seo-faq-extract-debug" role="alert">
             <div className="seo-faq-extract-debug__head">
                 <strong>Debug tách FAQ</strong>
-                <button type="button" className="seo-faq-extract-debug__dismiss" onClick={onDismiss}>
-                    Ẩn
-                </button>
+                <div className="seo-faq-extract-debug__actions">
+                    <button type="button" className="seo-faq-extract-debug__fixed" onClick={onFixed}>
+                        Đã fix
+                    </button>
+                    <button type="button" className="seo-faq-extract-debug__dismiss" onClick={onDismiss}>
+                        Ẩn
+                    </button>
+                </div>
             </div>
             {debug.article_id ? (
                 <p className="seo-faq-extract-debug__option text-xs opacity-80">
@@ -155,6 +160,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
     );
     const faqsRef = React.useRef(faqs);
     faqsRef.current = faqs;
+    const skipBlurDuplicateCheckRef = useRef(false);
     const [renewingIndex, setRenewingIndex] = useState(null);
     const [saveStatus, setSaveStatus] = useState('saved');
 
@@ -188,6 +194,38 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         },
         [debouncedSave],
     );
+
+    const publishFaqsForLinks = useCallback(() => {
+        const items = faqs
+            .map((row, index) => ({
+                text: String(row.question ?? '').trim(),
+                index,
+            }))
+            .filter((item) => item.text !== '');
+
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-faqs-updated', {
+                detail: { faq: items },
+            }),
+        );
+    }, [faqs]);
+
+    useEffect(() => {
+        publishFaqsForLinks();
+    }, [publishFaqsForLinks]);
+
+    useEffect(() => {
+        const onFaqNavigate = () => {
+            skipBlurDuplicateCheckRef.current = true;
+            window.setTimeout(() => {
+                skipBlurDuplicateCheckRef.current = false;
+            }, 400);
+        };
+
+        window.addEventListener('seo-editor-faq-navigate', onFaqNavigate);
+
+        return () => window.removeEventListener('seo-editor-faq-navigate', onFaqNavigate);
+    }, []);
 
     const updateRow = useCallback(
         (index, patch) => {
@@ -282,7 +320,12 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         window.addEventListener('article-faq-renewed', onRenewed);
         window.addEventListener('faq-duplicate-checked', onDuplicateResult);
         window.addEventListener('article-faqs-extracted', onExtracted);
+        const onExtractDebugCleared = () => {
+            setExtractDebug(null);
+        };
+
         window.addEventListener('article-faq-extract-debug', onExtractDebug);
+        window.addEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
         window.addEventListener('flush-article-faqs', flushFaqs);
 
         return () => {
@@ -290,6 +333,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
             window.removeEventListener('faq-duplicate-checked', onDuplicateResult);
             window.removeEventListener('article-faqs-extracted', onExtracted);
             window.removeEventListener('article-faq-extract-debug', onExtractDebug);
+            window.removeEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
             window.removeEventListener('flush-article-faqs', flushFaqs);
         };
     }, [debouncedSave, flushFaqs]);
@@ -346,7 +390,14 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                 </div>
             </div>
             <div className="wp-postbox-inside space-y-4">
-                <FaqExtractDebugBanner debug={extractDebug} onDismiss={() => setExtractDebug(null)} />
+                <FaqExtractDebugBanner
+                    debug={extractDebug}
+                    onDismiss={() => setExtractDebug(null)}
+                    onFixed={() => {
+                        setExtractDebug(null);
+                        document.getElementById('seo-faq-debug-dismiss-wire')?.click();
+                    }}
+                />
                 {faqs.length === 0 ? (
                     <p className="text-sm text-gray-500 italic">
                         Chưa có FAQ. Chọn đoạn FAQ trong editor → «Tách FAQ» (sidebar), chạy quy trình, hoặc «Thêm câu».
@@ -355,6 +406,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                     faqs.map((row, index) => (
                         <div
                             key={row.id ?? `new-${index}`}
+                            data-seo-faq-index={index}
                             className={`seo-faq-item ${row.duplicate ? 'is-duplicate' : ''}`}
                         >
                             <div className="seo-faq-item__head">
@@ -389,9 +441,12 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                                 placeholder="Nhập câu hỏi…"
                                 maxLength={500}
                                 onChange={(e) => updateRow(index, { question: e.target.value })}
-                                onBlur={(e) =>
-                                    requestCrossDuplicateCheck(index, e.target.value, row.id)
-                                }
+                                onBlur={(e) => {
+                                    if (skipBlurDuplicateCheckRef.current) {
+                                        return;
+                                    }
+                                    requestCrossDuplicateCheck(index, e.target.value, row.id);
+                                }}
                             />
                             {row.duplicate ? (
                                 <p className="seo-faq-duplicate-msg">

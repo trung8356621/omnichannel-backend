@@ -1,7 +1,9 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlignCenter, AlignLeft, AlignRight, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
+import { processClipboardImagePaste } from '../utils/seoMediaApi';
+import { ImageBlockPickerBox } from './BlockInsertMenu';
 
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: 'Căn trái' },
@@ -123,9 +125,13 @@ export default function ImageBlockEditor({
     onUpdate,
     onDelete,
     canDeleteBlock,
+    articleId = null,
+    siteId = null,
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
+    const [pasteUploading, setPasteUploading] = useState(false);
     const toolbarRef = useRef(null);
+    const emptyFrameRef = useRef(null);
 
     const image = useMemo(() => {
         if (block.image) return block.image;
@@ -141,8 +147,84 @@ export default function ImageBlockEditor({
     useEffect(() => {
         if (!isActive) {
             setEditingMeta(false);
+            setPasteUploading(false);
         }
     }, [isActive]);
+
+    const applyUploadedImageToBlock = useCallback(
+        (data) => {
+            const url = (data?.url ?? '').trim();
+            if (!url) return;
+
+            const slug = (data?.slug ?? '').trim();
+            commitImage({
+                src: url,
+                alt: slug,
+                title: slug,
+                slug: slug || undefined,
+                seoMediaId: data?.id != null ? Number(data.id) : undefined,
+            });
+        },
+        // commitImage closes over onUpdate — stable enough per block session
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [onUpdate, block.id],
+    );
+
+    const handleEmptyFramePaste = useCallback(
+        (event) => {
+            if (pasteUploading) return false;
+
+            const handled = processClipboardImagePaste(event, {
+                articleId,
+                siteId,
+                source: 'clipboard',
+                notifyOnSuccess: false,
+                onUploaded: (data) => {
+                    setPasteUploading(false);
+                    applyUploadedImageToBlock(data);
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: 'Đã dán ảnh vào khối',
+                                body: 'Ảnh đã lưu trên máy chủ.',
+                                status: 'success',
+                            },
+                        }),
+                    );
+                },
+                onError: () => setPasteUploading(false),
+            });
+
+            if (handled) {
+                setPasteUploading(true);
+                event.stopImmediatePropagation();
+            }
+
+            return handled;
+        },
+        [articleId, siteId, pasteUploading, applyUploadedImageToBlock],
+    );
+
+    useEffect(() => {
+        if (!isActive || image) {
+            return undefined;
+        }
+
+        const onWindowPaste = (event) => {
+            handleEmptyFramePaste(event);
+        };
+
+        window.addEventListener('paste', onWindowPaste, true);
+
+        const focusTimer = window.setTimeout(() => {
+            emptyFrameRef.current?.focus({ preventScroll: true });
+        }, 0);
+
+        return () => {
+            window.removeEventListener('paste', onWindowPaste, true);
+            window.clearTimeout(focusTimer);
+        };
+    }, [isActive, image, handleEmptyFramePaste]);
 
     const handlePreviewClick = (e) => {
         if (e.target.closest('a')) {
@@ -189,8 +271,75 @@ export default function ImageBlockEditor({
     }
 
     if (!image) {
+        if (isActive) {
+            return (
+                <div
+                    ref={emptyFrameRef}
+                    className="block-image-active block-image-active--empty"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Khối ảnh — Ctrl+V để dán ảnh từ clipboard"
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <span className="block-editor-badge">Ảnh</span>
+                    <button
+                        type="button"
+                        className="block-image-delete"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => canDeleteBlock && onDelete?.()}
+                        disabled={!canDeleteBlock}
+                        title={canDeleteBlock ? 'Xóa khối ảnh' : 'Không thể xóa block cuối cùng'}
+                    >
+                        <Trash2 size={16} />
+                    </button>
+                    {pasteUploading ? (
+                        <p className="seo-image-block-paste-status" aria-live="polite">
+                            Đang tải ảnh từ clipboard…
+                        </p>
+                    ) : (
+                        <p className="seo-image-block-paste-hint">Hoặc nhấn Ctrl+V để dán ảnh</p>
+                    )}
+                    <ImageBlockPickerBox
+                        onOpenMediaLibrary={(event) => {
+                            event?.preventDefault?.();
+                            event?.stopPropagation?.();
+                            const blockId = block.id;
+                            window.dispatchEvent(
+                                new CustomEvent('seo-open-article-media-picker', {
+                                    detail: { blockId },
+                                }),
+                            );
+                            if (typeof Livewire !== 'undefined') {
+                                Livewire.dispatch('open-editor-block-media-picker', { blockId });
+                            }
+                        }}
+                        onGenerateRequest={(prompt) => {
+                            window.dispatchEvent(
+                                new CustomEvent('seo-editor-image-generate-request', {
+                                    detail: { blockId: block.id, prompt },
+                                }),
+                            );
+                        }}
+                    />
+                </div>
+            );
+        }
+
         return (
-            <div className="seo-block-preview seo-wp-content p-3" dangerouslySetInnerHTML={{ __html: block.content }} />
+            <div
+                className="seo-block-preview seo-block-image-empty-preview p-3 -mx-1 rounded border border-dashed border-gray-300 dark:border-slate-600 cursor-pointer text-center text-sm text-gray-500"
+                onClick={handlePreviewClick}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onActivate();
+                    }
+                }}
+                role="button"
+                tabIndex={0}
+            >
+                Khối ảnh · bấm để chọn hoặc tạo ảnh
+            </div>
         );
     }
 

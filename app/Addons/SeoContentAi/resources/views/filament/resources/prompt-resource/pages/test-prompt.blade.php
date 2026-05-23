@@ -4,8 +4,19 @@
             <x-filament::section heading="Biến đầu vào">
                 <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
                     Model AI được chọn trên widget <strong>Khối Prompt</strong> trong Workflow Builder.
-                    Biến <code>{{input}}</code> nhận kết quả từ edge nối vào khi chạy quy trình.
+                    @if ($this->promptUsesInput)
+                        Biến <code>@verbatim{{input}}@endverbatim</code> nhận kết quả từ edge nối vào khi chạy quy trình — khi test thủ công, điền vào ô bên dưới.
+                    @else
+                        Điền các biến <code>@verbatim{{tên}}@endverbatim</code> được prompt sử dụng (nếu có).
+                    @endif
                 </p>
+
+                @if ($this->promptUsesInput && blank($variableValues['input'] ?? ''))
+                    <div class="seo-prompt-test-input-alert" role="status">
+                        Prompt cần <strong>@verbatim{{input}}@endverbatim</strong> — nhập nội dung mô phỏng từ bước trước trước khi bấm «Chạy thử».
+                    </div>
+                @endif
+
                 <form wire:submit="runTest" class="space-y-4">
                     {{ $this->form }}
 
@@ -208,6 +219,23 @@
     </div>
 
     <style>
+        .seo-prompt-test-input-alert {
+            margin: 0 0 1rem;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            border: 1px solid #fcd34d;
+            background: #fffbeb;
+            font-size: 0.8125rem;
+            line-height: 1.45;
+            color: #92400e;
+        }
+
+        .dark .seo-prompt-test-input-alert {
+            border-color: #b45309;
+            background: rgba(180, 83, 9, 0.15);
+            color: #fcd34d;
+        }
+
         .seo-prompt-test-layout {
             display: grid;
             grid-template-columns: minmax(0, 1fr);

@@ -9,10 +9,12 @@
         "php": "^8.2",
         "bezhansalleh/filament-language-switch": "^3.1",
         "filament/filament": "^3.2",
+        "intervention/image-laravel": "^4.0",
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.0",
         "laravel/socialite": "^5.24",
-        "laravel/tinker": "^2.10.1"
+        "laravel/tinker": "^2.10.1",
+        "mozex/anthropic-laravel": "^1.7"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

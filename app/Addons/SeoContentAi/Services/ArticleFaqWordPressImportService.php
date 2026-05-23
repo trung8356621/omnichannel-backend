@@ -46,6 +46,16 @@ final class ArticleFaqWordPressImportService
         $bestRows = count($htmlRows) >= count($wpFaqs) ? $htmlRows : $wpFaqs;
 
         if ($bestRows === []) {
+            if ($existingCount > 0 || $this->extractDebug->isSuppressed($article)) {
+                return [
+                    'imported' => false,
+                    'faq_count' => $existingCount,
+                    'faqs' => $this->faqEditor->payloadForArticle($article),
+                    'editor_html' => null,
+                    'extract_debug' => null,
+                ];
+            }
+
             $diagnosis = $this->workflowParser->diagnoseManualFaqExtract($html);
             $extractDebug = $this->extractDebug->recordFromContentDiagnosis(
                 $article,

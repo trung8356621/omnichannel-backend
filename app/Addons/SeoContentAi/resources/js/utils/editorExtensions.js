@@ -1,4 +1,6 @@
 import StarterKit from '@tiptap/starter-kit';
+import Image from '@tiptap/extension-image';
+import Heading from '@tiptap/extension-heading';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import TextAlign from '@tiptap/extension-text-align';
@@ -12,13 +14,53 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 
+/** Giữ class Tailwind / WP trên h1–h6 khi round-trip HTML. */
+const PreservedHeading = Heading.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            class: {
+                default: null,
+                parseHTML: (element) => element.getAttribute('class'),
+                renderHTML: (attributes) => {
+                    if (!attributes.class) {
+                        return {};
+                    }
+
+                    return { class: attributes.class };
+                },
+            },
+        };
+    },
+});
+
+const SeoEditorImage = Image.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            'data-seo-media-id': {
+                default: null,
+                parseHTML: (element) => element.getAttribute('data-seo-media-id'),
+                renderHTML: (attributes) => {
+                    if (!attributes['data-seo-media-id']) {
+                        return {};
+                    }
+
+                    return { 'data-seo-media-id': attributes['data-seo-media-id'] };
+                },
+            },
+        };
+    },
+});
+
 export const articleEditorExtensions = [
     StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4, 5, 6] },
+        heading: false,
         horizontalRule: true,
         link: false,
         underline: false,
     }),
+    PreservedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
     Underline,
     Subscript,
     Superscript,
@@ -38,4 +80,11 @@ export const articleEditorExtensions = [
     TableRow,
     TableHeader,
     TableCell,
+    SeoEditorImage.configure({
+        inline: false,
+        allowBase64: false,
+        HTMLAttributes: {
+            class: 'seo-editor-inline-image max-w-full h-auto my-4 rounded-lg border border-gray-200 dark:border-slate-800 shadow-sm',
+        },
+    }),
 ];

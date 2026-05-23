@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import BlockFormatToolbar from './BlockFormatToolbar';
+import { BlockInsertBar, BlockInsertMenuBar } from './BlockInsertMenu';
+import BlockEditorResizeHandle, { useBlockEditorHeight } from './BlockEditorResizeHandle';
 import LinkEditBubble from './LinkEditBubble';
 import ImageBlockEditor from './ImageBlockEditor';
+import {
+    countMatchingAnchorsInHtml,
+    findBlockIdForExportOffset,
+    scrollToFaqByIndex,
+    scrollToFaqKeyword,
+    scrollToKeywordAnchor,
+} from '../utils/articleLinkScroll';
 import SeoScorePanel from './SeoScorePanel';
 import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
@@ -17,7 +26,9 @@ import {
     confirmSlugRename,
     dispatchWordPressSlugRename,
 } from '../utils/imageSlugRenameConfirm';
+import { renameSeoMedia } from '../utils/seoMediaApi';
 import { articleEditorExtensions } from '../utils/editorExtensions';
+import { createClipboardPasteHandler } from '../utils/seoMediaApi';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import { loadDraft, saveDraft } from '../utils/articleEditorStorage';
@@ -25,9 +36,10 @@ import {
     htmlToPlainText,
     isWordPressImageElement,
     normalizeBlocks,
-    renderImageFigure,
     parseImageFromBlockContent,
+    renderImageFigure,
 } from '../utils/blockImageUtils';
+import { coalesceTiptapExportHtml, flattenHtmlBodyNodes } from '../utils/editorHtmlUtils';
 import { Undo2, Redo2 } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
@@ -35,6 +47,25 @@ import {
 } from '../utils/editorSelectionUtils';
 
 const newBlockId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+
+const createEmptyTextBlock = () => ({
+    id: newBlockId('classic'),
+    type: 'text',
+    isWp: false,
+    prefix: '',
+    content: '<p></p>',
+    suffix: '',
+});
+
+const createEmptyImageBlock = () => ({
+    id: newBlockId('image'),
+    type: 'image',
+    isWp: false,
+    prefix: '',
+    content: '',
+    suffix: '',
+    image: null,
+});
 
 const parseHtmlToBlocks = (html) => {
     if (!html) return [];
@@ -49,7 +80,7 @@ const parseHtmlToBlocks = (html) => {
         const doc = parser.parseFromString(htmlContent, 'text/html');
         const chunks = [];
 
-        Array.from(doc.body.childNodes).forEach((node) => {
+        flattenHtmlBodyNodes(doc.body).forEach((node) => {
             if (node.nodeType === 3 && !node.textContent.trim()) return;
 
             if (node.nodeType === 1 && isWordPressImageElement(node)) {
@@ -140,7 +171,7 @@ const mergeBlockHtmlContents = (rangeBlocks) => {
         if (!raw) return;
 
         const doc = parser.parseFromString(raw, 'text/html');
-        Array.from(doc.body.childNodes).forEach((node) => {
+        flattenHtmlBodyNodes(doc.body).forEach((node) => {
             if (node.nodeType === 3 && !node.textContent?.trim()) return;
             container.appendChild(node.cloneNode(true));
         });
@@ -228,17 +259,25 @@ function ActiveBlockEditor({
     setGlobalEditor,
     onDelete,
     canDeleteBlock,
+    articleId,
+    siteId,
 }) {
     const [linkAnchor, setLinkAnchor] = useState(null);
     const sourceHtml = displayContent ?? block.content;
     const isHydratingRef = useRef(false);
+    const { minHeight, setMinHeight, persistHeight, minH, maxH } = useBlockEditorHeight(block.id);
 
     const pushHtml = useCallback(
         (html) => {
             if (suppressBlockUpdate || isHydratingRef.current) return;
-            onUpdate(html);
+            onUpdate(coalesceTiptapExportHtml(sourceHtml, html));
         },
-        [suppressBlockUpdate, onUpdate],
+        [suppressBlockUpdate, onUpdate, sourceHtml],
+    );
+
+    const clipboardPasteHandler = useCallback(
+        createClipboardPasteHandler({ articleId, siteId }),
+        [articleId, siteId],
     );
 
     const editor = useEditor({
@@ -255,6 +294,7 @@ function ActiveBlockEditor({
                 class: 'prose prose-slate max-w-none dark:prose-invert min-h-[48px] focus:outline-none tiptap-editor-content',
                 'data-placeholder': 'Nhập nội dung…',
             },
+            handlePaste: clipboardPasteHandler,
         },
     });
 
@@ -362,9 +402,16 @@ function ActiveBlockEditor({
                 canDelete={canDeleteBlock}
                 onEditLink={openLinkEditorAtSelection}
             />
-            <div className="px-2 pb-2">
+            <div className="seo-block-editor-body px-2 pb-2" style={{ minHeight }}>
                 <EditorContent editor={editor} />
             </div>
+            <BlockEditorResizeHandle
+                minHeight={minHeight}
+                minH={minH}
+                maxH={maxH}
+                onMinHeightChange={setMinHeight}
+                onResizeEnd={persistHeight}
+            />
             {linkAnchor && editor ? (
                 <LinkEditBubble editor={editor} anchorRect={linkAnchor} onClose={() => setLinkAnchor(null)} />
             ) : null}
@@ -386,6 +433,8 @@ function BlockEditor({
     setGlobalEditor,
     onDelete,
     canDeleteBlock,
+    articleId,
+    siteId,
 }) {
     if (block.type === 'image') {
         return (
@@ -399,6 +448,8 @@ function BlockEditor({
                 onUpdate={onUpdate}
                 onDelete={onDelete}
                 canDeleteBlock={canDeleteBlock}
+                articleId={articleId}
+                siteId={siteId}
             />
         );
     }
@@ -476,6 +527,7 @@ const TABS = [
 
 export default function SeoArticleEditor({
     articleId,
+    siteId = null,
     initialHtml,
     initialOutline = '',
     initialSeo,
@@ -495,6 +547,7 @@ export default function SeoArticleEditor({
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
+    const [insertMenu, setInsertMenu] = useState(null);
     const pendingQuickFixKeywordRef = useRef('');
 
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
@@ -506,12 +559,26 @@ export default function SeoArticleEditor({
         initialSeo?.extracted_links ?? { internal: [], external: [] },
     );
 
+    const publishExtractedLinks = useCallback((links) => {
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-links-updated', {
+                detail: { links },
+            }),
+        );
+    }, []);
+
     const blocksRef = useRef(blocks);
     blocksRef.current = blocks;
     const tempMergeRef = useRef(tempMerge);
     tempMergeRef.current = tempMerge;
     const blockFlushRef = useRef(null);
+    const activeBlockIdRef = useRef(null);
+    const linkScrollTokenRef = useRef(0);
     const intraSelectionRef = useRef({ text: '', html: '' });
+
+    useEffect(() => {
+        activeBlockIdRef.current = activeBlockId;
+    }, [activeBlockId]);
 
     const getExportHtml = useCallback(() => exportBlocksToHtml(blocksRef.current), []);
 
@@ -656,6 +723,29 @@ export default function SeoArticleEditor({
                 return true;
             }
 
+            if (row.seoMediaId) {
+                renameSeoMedia(row.seoMediaId, trimmed)
+                    .then((data) => {
+                        applyPatch({
+                            slug: data.slug,
+                            src: data.url,
+                        });
+                    })
+                    .catch((error) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: 'Không đổi được slug ảnh',
+                                    body: error?.message ?? 'Thử lại sau.',
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    });
+
+                return true;
+            }
+
             applyPatch({ slug: trimmed });
 
             return true;
@@ -727,6 +817,135 @@ export default function SeoArticleEditor({
         },
         [clearTempMerge, commitActiveBlock],
     );
+
+    const scrollToExtractedLink = useCallback(
+        (detail) => {
+            const text = String(detail?.text ?? '').trim();
+            if (!text) {
+                return;
+            }
+
+            const listIndex = Number(detail?.index) || 0;
+            const linkType = String(detail?.type ?? 'internal');
+            const offset = typeof detail?.offset === 'number' ? detail.offset : null;
+            const scrollToken = ++linkScrollTokenRef.current;
+
+            setActiveTab('editor');
+            clearTempMerge();
+
+            if (linkType === 'faq') {
+                const faqIndex =
+                    typeof detail?.faqIndex === 'number' ? detail.faqIndex : listIndex;
+
+                window.setTimeout(() => {
+                    if (scrollToken !== linkScrollTokenRef.current) {
+                        return;
+                    }
+                    if (!scrollToFaqByIndex(faqIndex)) {
+                        scrollToFaqKeyword(text, 0);
+                    }
+                }, 0);
+                return;
+            }
+
+            const currentBlocks = blocksRef.current;
+            let targetBlockId = offset != null ? findBlockIdForExportOffset(currentBlocks, offset) : null;
+            let localAnchorIndex = listIndex;
+
+            if (!targetBlockId) {
+                let global = 0;
+                for (const block of currentBlocks) {
+                    if (block.type === 'image' || !block.content) {
+                        continue;
+                    }
+                    const count = countMatchingAnchorsInHtml(block.content, text);
+                    if (count === 0) {
+                        continue;
+                    }
+                    if (listIndex < global + count) {
+                        targetBlockId = block.id;
+                        localAnchorIndex = listIndex - global;
+                        break;
+                    }
+                    global += count;
+                }
+            } else {
+                let before = 0;
+                for (const block of currentBlocks) {
+                    if (block.id === targetBlockId) {
+                        break;
+                    }
+                    if (block.type !== 'image' && block.content) {
+                        before += countMatchingAnchorsInHtml(block.content, text);
+                    }
+                }
+                localAnchorIndex = Math.max(0, listIndex - before);
+            }
+
+            if (!targetBlockId) {
+                for (const block of currentBlocks) {
+                    if (block.type !== 'image' && countMatchingAnchorsInHtml(block.content, text) > 0) {
+                        targetBlockId = block.id;
+                        localAnchorIndex = 0;
+                        break;
+                    }
+                }
+            }
+
+            if (!targetBlockId) {
+                window.setTimeout(() => {
+                    if (scrollToken !== linkScrollTokenRef.current) {
+                        return;
+                    }
+                    scrollToFaqKeyword(text, listIndex);
+                }, 0);
+                return;
+            }
+
+            const currentActive = activeBlockIdRef.current;
+            const needsBlockSwitch = currentActive !== targetBlockId;
+
+            if (needsBlockSwitch && currentActive) {
+                commitActiveBlock();
+            }
+
+            if (needsBlockSwitch) {
+                setActiveBlockId(targetBlockId);
+            }
+
+            const runScroll = () => {
+                if (scrollToken !== linkScrollTokenRef.current) {
+                    return;
+                }
+                scrollToKeywordAnchor(targetBlockId, text, localAnchorIndex, {
+                    onMiss: () => scrollToFaqKeyword(text, listIndex),
+                });
+            };
+
+            if (needsBlockSwitch) {
+                window.setTimeout(runScroll, 60);
+            } else {
+                runScroll();
+            }
+        },
+        [clearTempMerge, commitActiveBlock],
+    );
+
+    useEffect(() => {
+        publishExtractedLinks(extractedLinks);
+    }, [extractedLinks, publishExtractedLinks]);
+
+    useEffect(() => {
+        const onScrollToLink = (event) => {
+            scrollToExtractedLink(event.detail ?? {});
+        };
+
+        window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
+
+        return () => {
+            window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
+        };
+    }, [scrollToExtractedLink]);
 
     const deleteBlock = useCallback(
         (id) => {
@@ -805,6 +1024,7 @@ export default function SeoArticleEditor({
 
     const activateBlock = useCallback(
         (id) => {
+            setInsertMenu(null);
             if (tempMergeRef.current) {
                 clearTempMerge();
                 setGlobalEditor(null);
@@ -817,6 +1037,67 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
         },
         [activeBlockId, commitActiveBlock, clearTempMerge],
+    );
+
+    const insertBlockRelative = useCallback(
+        (refBlockId, position, type) => {
+            if (tempMergeRef.current) return;
+
+            commitActiveBlock();
+
+            const newBlock = type === 'image' ? createEmptyImageBlock() : createEmptyTextBlock();
+            const newId = newBlock.id;
+
+            setBlocks((prev) => {
+                const index = prev.findIndex((b) => b.id === refBlockId);
+                if (index < 0) return prev;
+                const insertAt = position === 'before' ? index : index + 1;
+                const next = [...prev];
+                next.splice(insertAt, 0, newBlock);
+                return normalizeBlocks(next);
+            });
+
+            setInsertMenu(null);
+            setActiveBlockId(newId);
+            setGlobalEditor(null);
+        },
+        [commitActiveBlock],
+    );
+
+    const toggleInsertMenu = useCallback((blockId, position) => {
+        setInsertMenu((current) =>
+            current?.blockId === blockId && current?.position === position
+                ? null
+                : { blockId, position },
+        );
+    }, []);
+
+    const moveBlock = useCallback(
+        (blockId, direction) => {
+            if (tempMergeRef.current) {
+                return;
+            }
+
+            commitActiveBlock();
+            setInsertMenu(null);
+
+            setBlocks((prev) => {
+                const index = prev.findIndex((b) => b.id === blockId);
+                if (index < 0) {
+                    return prev;
+                }
+
+                const targetIndex = direction === 'up' ? index - 1 : index + 1;
+                if (targetIndex < 0 || targetIndex >= prev.length) {
+                    return prev;
+                }
+
+                const next = [...prev];
+                [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+                return normalizeBlocks(next);
+            });
+        },
+        [commitActiveBlock],
     );
 
     const startTempMerge = useCallback(
@@ -874,7 +1155,11 @@ export default function SeoArticleEditor({
             setActiveBlockId(null);
             setGlobalEditor(null);
 
-            const target = event.detail?.target ?? 'save';
+            const detail =
+                event.detail != null && typeof event.detail === 'object' && !Array.isArray(event.detail)
+                    ? event.detail
+                    : {};
+            const target = detail.target ?? 'save';
             window.dispatchEvent(
                 new CustomEvent('editor-html-collected', {
                     detail: {
@@ -905,6 +1190,7 @@ export default function SeoArticleEditor({
             }
             if (result.extracted_links) {
                 setExtractedLinks(result.extracted_links);
+                publishExtractedLinks(result.extracted_links);
             }
         };
 
@@ -917,10 +1203,22 @@ export default function SeoArticleEditor({
                 e.target.closest('.seo-link-bubble') ||
                 e.target.closest('.seo-block-images-panel') ||
                 e.target.closest('.seo-ai-chat-panel') ||
-                e.target.closest('.seo-fmt-dropdown-menu')
+                e.target.closest('.seo-ai-fab') ||
+                e.target.closest('.wp-article-links-box') ||
+                e.target.closest('.wp-article-links-keyword') ||
+                e.target.closest('.seo-article-faq-panel') ||
+                e.target.closest('.seo-faq-item') ||
+                e.target.closest('.seo-fmt-dropdown-menu') ||
+                e.target.closest('.seo-block-insert-bar') ||
+                e.target.closest('.seo-block-insert-trigger') ||
+                e.target.closest('.seo-block-insert-menu') ||
+                e.target.closest('.seo-block-editor-resize') ||
+                e.target.closest('.seo-image-block-picker')
             ) {
                 return;
             }
+
+            setInsertMenu(null);
 
             if (tempMergeRef.current) {
                 clearTempMerge();
@@ -937,7 +1235,61 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-analyze-result', handleAnalyzeResult);
         document.addEventListener('mousedown', handleClickOutside);
 
+        const onImageGenerateRequest = (event) => {
+            const blockId = event.detail?.blockId;
+            const prompt = (event.detail?.prompt ?? '').trim();
+            if (!blockId || !prompt) return;
+
+            setBlocks((prev) =>
+                prev.map((b) =>
+                    b.id === blockId
+                        ? {
+                              ...b,
+                              pendingImagePrompt: prompt,
+                          }
+                        : b,
+                ),
+            );
+
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: 'Đã lưu mô tả ảnh',
+                        body: 'Mô tả đã lưu trên bài. Tạo ảnh AI sẽ kết nối workflow sau.',
+                        status: 'success',
+                    },
+                }),
+            );
+        };
+
+        window.addEventListener('seo-editor-image-generate-request', onImageGenerateRequest);
+
+        const onEditorBlockImageSelected = (event) => {
+            const blockId = event.detail?.blockId;
+            const url = (event.detail?.url ?? '').trim();
+            const attachmentId = Number(event.detail?.attachmentId ?? 0);
+            if (!blockId || !url) return;
+
+            const alt = (event.detail?.alt ?? '').trim();
+            const slug = (event.detail?.slug ?? '').trim();
+            const seoMediaId = Number(event.detail?.seoMediaId ?? event.detail?.id ?? 0);
+            const image = {
+                src: url,
+                alt,
+                title: alt,
+                wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
+                seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+                slug: slug || undefined,
+            };
+            const html = renderImageFigure(image);
+            updateBlockContent(blockId, html, image);
+        };
+
+        window.addEventListener('editor-block-image-selected', onEditorBlockImageSelected);
+
         return () => {
+            window.removeEventListener('editor-block-image-selected', onEditorBlockImageSelected);
+            window.removeEventListener('seo-editor-image-generate-request', onImageGenerateRequest);
             window.removeEventListener('collect-editor-html', onCollectEditorHtml);
             window.removeEventListener('extract-article-faqs', enrichExtractFaq);
             window.removeEventListener('article-faqs-extracted', applyEditorHtml);
@@ -980,6 +1332,18 @@ export default function SeoArticleEditor({
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
 
+    const switchTab = useCallback(
+        (tabId) => {
+            if (tabId !== 'editor' && activeBlockId) {
+                commitActiveBlock();
+                setActiveBlockId(null);
+                setGlobalEditor(null);
+            }
+            setActiveTab(tabId);
+        },
+        [activeBlockId, commitActiveBlock],
+    );
+
     return (
         <div className="seo-article-editor-root">
             <EditorBusyOverlay
@@ -997,7 +1361,7 @@ export default function SeoArticleEditor({
                         key={tab.id}
                         type="button"
                         className={`seo-editor-tab ${activeTab === tab.id ? 'is-active' : ''}`}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => switchTab(tab.id)}
                     >
                         {tab.label}
                         {tab.id === 'images' ? (
@@ -1049,44 +1413,111 @@ export default function SeoArticleEditor({
                                 Đang tải nội dung bài viết…
                             </p>
                         ) : (
-                            blocks.map((block) => (
-                                <BlockEditor
-                                    key={block.id}
-                                    block={block}
-                                    isActive={activeBlockId === block.id}
-                                    isHiddenInMerge={
-                                        Boolean(
-                                            tempMerge &&
-                                                tempMerge.rangeIds.includes(block.id) &&
-                                                block.id !== tempMerge.anchorId,
-                                        )
-                                    }
-                                    canShiftMerge={Boolean(activeBlockId && activeBlockId !== block.id)}
-                                    onActivate={() => activateBlock(block.id)}
-                                    onShiftMerge={startTempMerge}
-                                    displayContent={
-                                        tempMerge &&
-                                        activeBlockId === block.id &&
-                                        block.id === tempMerge.anchorId
-                                            ? mergedDisplay
-                                            : undefined
-                                    }
-                                    suppressBlockUpdate={Boolean(
-                                        tempMerge &&
-                                            activeBlockId === block.id &&
-                                            block.id === tempMerge.anchorId,
-                                    )}
-                                    onUpdate={(newContent, imageData) =>
-                                        updateBlockContent(block.id, newContent, imageData)
-                                    }
-                                    onRegisterFlush={
-                                        activeBlockId === block.id ? registerBlockFlush : undefined
-                                    }
-                                    setGlobalEditor={setGlobalEditor}
-                                    onDelete={() => deleteBlock(block.id)}
-                                    canDeleteBlock={blocks.length > 1}
-                                />
-                            ))
+                            blocks.map((block, blockIndex) => {
+                                const isActive = activeBlockId === block.id;
+                                const showInsert = isActive && !tempMerge;
+                                const canMoveUp = blockIndex > 0;
+                                const canMoveDown = blockIndex < blocks.length - 1;
+                                const handleMoveUp = () => moveBlock(block.id, 'up');
+                                const handleMoveDown = () => moveBlock(block.id, 'down');
+                                return (
+                                    <div
+                                        key={block.id}
+                                        data-seo-block-id={block.id}
+                                        className={`seo-editor-block-slot ${isActive ? 'is-active' : ''}`}
+                                    >
+                                        {showInsert ? (
+                                            <>
+                                                <BlockInsertBar
+                                                    position="before"
+                                                    open={
+                                                        insertMenu?.blockId === block.id &&
+                                                        insertMenu?.position === 'before'
+                                                    }
+                                                    onToggle={() => toggleInsertMenu(block.id, 'before')}
+                                                    canMoveUp={canMoveUp}
+                                                    canMoveDown={canMoveDown}
+                                                    onMoveUp={handleMoveUp}
+                                                    onMoveDown={handleMoveDown}
+                                                />
+                                                {insertMenu?.blockId === block.id &&
+                                                insertMenu?.position === 'before' ? (
+                                                    <BlockInsertMenuBar
+                                                        onClose={() => setInsertMenu(null)}
+                                                        onInsert={(type) =>
+                                                            insertBlockRelative(block.id, 'before', type)
+                                                        }
+                                                    />
+                                                ) : null}
+                                            </>
+                                        ) : null}
+
+                                        <BlockEditor
+                                            block={block}
+                                            articleId={articleId}
+                                            siteId={siteId}
+                                            isActive={isActive}
+                                            isHiddenInMerge={
+                                                Boolean(
+                                                    tempMerge &&
+                                                        tempMerge.rangeIds.includes(block.id) &&
+                                                        block.id !== tempMerge.anchorId,
+                                                )
+                                            }
+                                            canShiftMerge={Boolean(activeBlockId && activeBlockId !== block.id)}
+                                            onActivate={() => activateBlock(block.id)}
+                                            onShiftMerge={startTempMerge}
+                                            displayContent={
+                                                tempMerge &&
+                                                activeBlockId === block.id &&
+                                                block.id === tempMerge.anchorId
+                                                    ? mergedDisplay
+                                                    : undefined
+                                            }
+                                            suppressBlockUpdate={Boolean(
+                                                tempMerge &&
+                                                    activeBlockId === block.id &&
+                                                    block.id === tempMerge.anchorId,
+                                            )}
+                                            onUpdate={(newContent, imageData) =>
+                                                updateBlockContent(block.id, newContent, imageData)
+                                            }
+                                            onRegisterFlush={
+                                                isActive ? registerBlockFlush : undefined
+                                            }
+                                            setGlobalEditor={setGlobalEditor}
+                                            onDelete={() => deleteBlock(block.id)}
+                                            canDeleteBlock={blocks.length > 1}
+                                        />
+
+                                        {showInsert ? (
+                                            <>
+                                                <BlockInsertBar
+                                                    position="after"
+                                                    open={
+                                                        insertMenu?.blockId === block.id &&
+                                                        insertMenu?.position === 'after'
+                                                    }
+                                                    onToggle={() => toggleInsertMenu(block.id, 'after')}
+                                                    canMoveUp={canMoveUp}
+                                                    canMoveDown={canMoveDown}
+                                                    onMoveUp={handleMoveUp}
+                                                    onMoveDown={handleMoveDown}
+                                                />
+                                                {insertMenu?.blockId === block.id &&
+                                                insertMenu?.position === 'after' ? (
+                                                    <BlockInsertMenuBar
+                                                        onClose={() => setInsertMenu(null)}
+                                                        onInsert={(type) =>
+                                                            insertBlockRelative(block.id, 'after', type)
+                                                        }
+                                                    />
+                                                ) : null}
+                                            </>
+                                        ) : null}
+                                    </div>
+                                );
+                            })
                         )}
                     </div>
                 </div>
@@ -1111,7 +1542,6 @@ export default function SeoArticleEditor({
                         focusKeyword={focusKeyword}
                         analysis={analysis}
                         contentBonus={contentBonus}
-                        extractedLinks={extractedLinks}
                         loading={!analysis}
                         analyzing={analyzing}
                     />

@@ -29,6 +29,12 @@ function parseWpAttachmentIdFromImg(img) {
     return dataId > 0 ? dataId : null;
 }
 
+function parseSeoMediaIdFromImg(img) {
+    if (!img) return null;
+    const id = Number(img.getAttribute('data-seo-media-id'));
+    return id > 0 ? id : null;
+}
+
 function slugFromSrc(src) {
     if (!src) return '';
     try {
@@ -61,6 +67,7 @@ function parseImageFromFigure(fig, id) {
         height: heightAttr ? Number(heightAttr) : null,
         wpImageClass: img.getAttribute('class') ?? '',
         wpAttachmentId: parseWpAttachmentIdFromImg(img),
+        seoMediaId: parseSeoMediaIdFromImg(img),
     };
 }
 
@@ -85,6 +92,7 @@ function parseImageFromImg(img, id) {
         height: heightAttr ? Number(heightAttr) : null,
         wpImageClass: img.getAttribute('class') ?? '',
         wpAttachmentId: parseWpAttachmentIdFromImg(img),
+        seoMediaId: parseSeoMediaIdFromImg(img),
     };
 }
 
@@ -222,6 +230,7 @@ export function renderImageFigure(image) {
         image.height ? `height="${Math.round(image.height)}"` : '',
         imgClass ? `class="${escapeAttr(imgClass)}"` : '',
         image.wpAttachmentId ? `data-id="${Math.round(image.wpAttachmentId)}"` : '',
+        image.seoMediaId ? `data-seo-media-id="${Math.round(image.seoMediaId)}"` : '',
         'draggable="false"',
     ]
         .filter(Boolean)

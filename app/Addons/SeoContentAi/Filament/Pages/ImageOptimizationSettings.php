@@ -1,0 +1,131 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Filament\Pages;
+
+use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
+use App\Models\Site;
+use Filament\Notifications\Notification;
+use Filament\Pages\Page;
+use Illuminate\Database\Eloquent\Collection;
+use Livewire\Attributes\Url;
+
+class ImageOptimizationSettings extends Page
+{
+    protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
+
+    protected static ?string $navigationLabel = 'Tối ưu hình ảnh';
+
+    protected static ?string $title = 'Cấu hình Tối ưu hóa Hình ảnh';
+
+    protected static ?string $navigationGroup = 'SEO Workspace';
+
+    protected static ?string $navigationParentItem = 'Thư viện hình ảnh';
+
+    protected static ?int $navigationSort = 8;
+
+    protected static string $view = 'seo-content-ai::filament.pages.image-optimization-settings';
+
+    /** @var int|string|null */
+    #[Url]
+    public $siteId = null;
+
+    /** @var array<string, mixed> */
+    public array $data = [];
+
+    public function mount(): void
+    {
+        if ($this->siteId === null || $this->siteId === '') {
+            $firstSite = $this->resolveSitesQuery()->first();
+            $this->siteId = $firstSite instanceof Site ? (int) $firstSite->id : null;
+        } else {
+            $this->siteId = (int) $this->siteId;
+        }
+
+        $this->loadSettings();
+    }
+
+    public function updatedSiteId(mixed $value): void
+    {
+        if ($value === null || $value === '') {
+            $this->siteId = null;
+        } else {
+            $this->siteId = (int) $value;
+        }
+
+        $this->loadSettings();
+    }
+
+    public function loadSettings(): void
+    {
+        $siteId = $this->normalizedSiteId();
+
+        $settings = $siteId !== null
+            ? SeoImageOptimizationSetting::query()->where('site_id', $siteId)->first()
+            : null;
+
+        if ($settings === null) {
+            $settings = SeoImageOptimizationSetting::query()->whereNull('site_id')->first()
+                ?? new SeoImageOptimizationSetting();
+        }
+
+        $this->data = $settings->toFormData();
+    }
+
+    public function save(): void
+    {
+        $siteId = $this->normalizedSiteId();
+
+        $quality = max(10, min(100, (int) ($this->data['quality'] ?? 80)));
+
+        SeoImageOptimizationSetting::query()->updateOrCreate(
+            ['site_id' => $siteId],
+            [
+                'auto_convert_webp' => (bool) ($this->data['auto_convert_webp'] ?? true),
+                'quality' => $quality,
+                'limit_dimensions' => (bool) ($this->data['limit_dimensions'] ?? true),
+                'max_width' => max(100, (int) ($this->data['max_width'] ?? 1200)),
+                'max_height' => max(100, (int) ($this->data['max_height'] ?? 1200)),
+                'clean_filename' => (bool) ($this->data['clean_filename'] ?? true),
+                'auto_alt_tag' => (bool) ($this->data['auto_alt_tag'] ?? true),
+                'alt_tag_pattern' => (string) ($this->data['alt_tag_pattern'] ?? '{post_title} - {focus_keyword}'),
+            ],
+        );
+
+        Notification::make()
+            ->title('Đã lưu cấu hình tối ưu hình ảnh thành công!')
+            ->success()
+            ->send();
+    }
+
+    /**
+     * @return Collection<int, Site>
+     */
+    public function getSitesProperty(): Collection
+    {
+        return $this->resolveSitesQuery()->get();
+    }
+
+    private function normalizedSiteId(): ?int
+    {
+        if ($this->siteId === null || $this->siteId === '') {
+            return null;
+        }
+
+        $id = (int) $this->siteId;
+
+        return $id > 0 ? $id : null;
+    }
+
+    private function resolveSitesQuery()
+    {
+        $query = Site::query()->orderBy('domain');
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->where('user_id', auth()->id());
+        }
+
+        return $query;
+    }
+}

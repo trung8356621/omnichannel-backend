@@ -28,7 +28,7 @@
         </p>
 
         <p class="article-seo-line">
-            <span class="article-seo-line__label">Schema:</span>
+            <span class="article-seo-line__label">Loại:</span>
             <span class="article-seo-line__value">{{ $seo['schema'] }}</span>
         </p>
 
