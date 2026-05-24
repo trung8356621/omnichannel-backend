@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -76,6 +77,7 @@ final class CreateArticlesFromTaskService
         $created = 0;
         $failed = 0;
         $messages = [];
+        $articleIds = [];
 
         foreach ($keywords as $keyword) {
             try {
@@ -93,6 +95,7 @@ final class CreateArticlesFromTaskService
                 $article = $this->resolveArticleFromWorkflow($context, $steps, $siteId, $keyword, $context->variables);
                 $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
                 $created++;
+                $articleIds[] = (int) $article->id;
                 $messages[] = '«' . $keyword . '»: đã tạo bài nháp và chạy quy trình.';
             } catch (\Throwable $exception) {
                 $failed++;
@@ -104,7 +107,18 @@ final class CreateArticlesFromTaskService
             'created' => $created,
             'failed' => $failed,
             'messages' => $messages,
+            'article_ids' => $articleIds,
         ];
+    }
+
+    /**
+     * Chạy quy trình Đăng bài viết (SEO → Tùy chỉnh) cho một từ khóa trên domain cụ thể.
+     *
+     * @return array{created: int, failed: int, messages: list<string>, article_ids: list<int>}
+     */
+    public function runFromSingleKeyword(string $keyword, int $siteId): array
+    {
+        return $this->runFromKeywordsForSite(trim($keyword), $siteId);
     }
 
     /**
@@ -182,19 +196,12 @@ final class CreateArticlesFromTaskService
             return;
         }
 
-        $keyword = Keyword::query()->firstOrCreate(
-            [
-                'site_id' => $article->site_id,
-                'phrase' => trim($phrase),
-            ],
-            [
-                'user_id' => (int) auth()->id(),
-            ],
+        KeywordFocusAttach::attachMainKeyword(
+            $article,
+            (int) $article->site_id,
+            (int) auth()->id(),
+            trim($phrase),
         );
-
-        $article->keywords()->syncWithoutDetaching([
-            $keyword->id => ['weight' => 1],
-        ]);
     }
 
     private function assertSiteAccessible(int $siteId): void

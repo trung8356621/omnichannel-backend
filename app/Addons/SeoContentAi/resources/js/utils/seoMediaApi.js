@@ -1,5 +1,8 @@
 const UPLOAD_URL = '/api/seo/media/upload';
+const PREPARE_EDITOR_URL = '/api/seo/media/prepare-editor';
+const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
+const SAVE_EDITED_URL_TEMPLATE = '/api/seo/media/{id}/save-edited';
 
 /** URL tương đối /storage/... — tránh lệch host/port khi APP_URL khác origin trình duyệt. */
 export function normalizeSeoMediaUrl(url) {
@@ -106,6 +109,130 @@ export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = 
     });
 
     return activeClipboardUpload;
+}
+
+/**
+ * @param {number} mediaId
+ * @param {Blob} blob
+ */
+export async function saveEditedSeoMedia(mediaId, blob) {
+    const url = SAVE_EDITED_URL_TEMPLATE.replace('{id}', String(mediaId));
+    const formData = new FormData();
+    formData.append('image', blob, 'edited-image.png');
+
+    const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message =
+            response.status === 419
+                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
+                : (data.message ?? 'Lỗi lưu ảnh!');
+        throw new Error(message);
+    }
+
+    if (data.url) {
+        const [path, query] = data.url.split('?');
+        const normalized = normalizeSeoMediaUrl(path);
+        data.url = query ? `${normalized}?${query}` : normalized;
+    }
+
+    return data;
+}
+
+/**
+ * @param {{ siteId: number, seoMediaId?: number|null, wpAttachmentId?: number|null, url?: string, slug?: string }} params
+ */
+export async function prepareImageEditorUrl({
+    siteId,
+    seoMediaId = null,
+    wpAttachmentId = null,
+    url = '',
+    slug = '',
+}) {
+    const response = await fetch(PREPARE_EDITOR_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            site_id: siteId,
+            seo_media_id: seoMediaId ?? undefined,
+            wp_attachment_id: wpAttachmentId ?? undefined,
+            url: url || undefined,
+            slug: slug || undefined,
+        }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message =
+            response.status === 419
+                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
+                : (data.message ?? 'Không mở được trình chỉnh sửa.');
+        throw new Error(message);
+    }
+
+    return data;
+}
+
+/**
+ * @param {{ siteId: number, seoMediaId?: number|null, wpAttachmentId?: number|null, url?: string, slug?: string }} params
+ */
+export async function applyWatermarkToImage({
+    siteId,
+    seoMediaId = null,
+    wpAttachmentId = null,
+    url = '',
+    slug = '',
+}) {
+    const response = await fetch(APPLY_WATERMARK_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            site_id: siteId,
+            seo_media_id: seoMediaId ?? undefined,
+            wp_attachment_id: wpAttachmentId ?? undefined,
+            url: url || undefined,
+            slug: slug || undefined,
+        }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message =
+            response.status === 419
+                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
+                : (data.message ?? 'Không áp dụng được đóng dấu.');
+        throw new Error(message);
+    }
+
+    if (data.url) {
+        const [path, query] = String(data.url).split('?');
+        const normalized = normalizeSeoMediaUrl(path);
+        data.url = query ? `${normalized}?${query}` : normalized;
+    }
+
+    return data;
 }
 
 export async function renameSeoMedia(mediaId, newSlug) {

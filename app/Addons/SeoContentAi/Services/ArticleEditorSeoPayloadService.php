@@ -24,6 +24,12 @@ final class ArticleEditorSeoPayloadService
 
         $analysis = $this->decodeArticleMetaJson($article, 'seo_rank_math_score');
         $extractedLinks = $article->resolveExtractedLinks();
+        $bodyHtml = (string) ($article->body ?? '');
+        $suggestedInternalLinks = app(ArticleInternalLinkSuggestionService::class)->suggest(
+            $article,
+            $bodyHtml,
+            $extractedLinks['internal'] ?? [],
+        );
         $contentBonus = $this->contentBonus->resolveForArticle($article);
 
         if (! is_array($analysis) && $article->seo_score !== null) {
@@ -46,6 +52,7 @@ final class ArticleEditorSeoPayloadService
             'analysis' => is_array($analysis) ? $analysis : null,
             'content_bonus' => $contentBonus,
             'extracted_links' => $extractedLinks,
+            'suggested_internal_links' => $suggestedInternalLinks,
         ];
     }
 

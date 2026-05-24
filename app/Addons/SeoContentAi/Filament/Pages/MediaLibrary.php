@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
+use App\Addons\SeoContentAi\Services\SeoMediaWpEditStagingService;
+use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\GeneratedImageLibraryService;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
@@ -79,11 +82,138 @@ class MediaLibrary extends Page
 
     public bool $previewCanOptimize = false;
 
+    public bool $previewCanSyncToWp = false;
+
+    public bool $previewPendingWpSync = false;
+
     public ?string $previewProcessingStatus = null;
 
     #[On('seo-media-library-refresh')]
     public function refreshLibrary(): void
     {
+        $this->loadImages();
+    }
+
+    #[On('seo-magic-eraser-saved')]
+    public function onMagicEraserSaved(string $url, ?int $imageId = null, bool $pendingWpSync = false): void
+    {
+        if (is_array($this->previewImage)) {
+            $this->previewImage['url'] = $url;
+            if ($imageId !== null && $imageId > 0) {
+                $this->previewImage['seo_media_id'] = $imageId;
+            }
+        }
+
+        if ($pendingWpSync) {
+            $this->previewPendingWpSync = true;
+        }
+
+        $mediaId = $imageId ?? (int) ($this->previewImage['seo_media_id'] ?? 0);
+        $media = $mediaId > 0 ? SeoMedia::query()->find($mediaId) : null;
+        if ($media !== null) {
+            $this->previewPendingWpSync = app(SeoMediaWpEditStagingService::class)->canSyncToWordPress($media);
+        } elseif ($pendingWpSync) {
+            $this->previewPendingWpSync = true;
+        }
+
+        $this->previewMessage = 'Đã lưu chỉnh sửa ảnh.';
+        $this->previewMessageType = 'success';
+        $this->previewOpen = true;
+        $this->syncPreviewWpSyncState();
+        $this->loadImages();
+    }
+
+    public function openImageEditor(): void
+    {
+        if ($this->previewImage === null || $this->siteId === null) {
+            return;
+        }
+
+        $site = Site::query()->find($this->siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        try {
+            $resolved = app(SeoMediaImageEditorResolverService::class)
+                ->resolve($site, $this->previewImage);
+        } catch (\Throwable $e) {
+            Notification::make()
+                ->title('Không mở được trình chỉnh sửa')
+                ->body($e->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $imageId = (int) $resolved['seo_media_id'];
+        $this->previewImage['seo_media_id'] = $imageId;
+        if ((int) ($this->previewImage['wp_attachment_id'] ?? 0) > 0) {
+            $this->previewImage['kind'] = 'wordpress';
+        }
+
+        $this->previewPendingWpSync = false;
+        $this->previewOpen = false;
+
+        $this->js('window.open(' . json_encode($resolved['editor_url']) . ', "_blank")');
+    }
+
+    public function previewSyncToWordPress(): void
+    {
+        if ($this->previewImage === null || $this->siteId === null) {
+            return;
+        }
+
+        $site = Site::query()->find($this->siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $mediaId = (int) ($this->previewImage['seo_media_id'] ?? 0);
+        $media = SeoMedia::query()
+            ->where('site_id', $site->id)
+            ->whereKey($mediaId)
+            ->first();
+
+        if ($media === null) {
+            Notification::make()->title('Không tìm thấy bản staging')->warning()->send();
+
+            return;
+        }
+
+        $this->previewBusy = true;
+        $this->previewMessage = null;
+
+        $result = app(SeoMediaWpEditStagingService::class)->syncStagingToWordPress($site, $media);
+
+        $this->previewBusy = false;
+
+        if (! ($result['success'] ?? false)) {
+            $this->previewMessage = (string) ($result['message'] ?? 'Đồng bộ thất bại.');
+            $this->previewMessageType = 'error';
+            Notification::make()->title($this->previewMessage)->warning()->send();
+
+            return;
+        }
+
+        $wpUrl = (string) ($result['url'] ?? $this->previewImage['url'] ?? '');
+        if ($wpUrl !== '') {
+            $this->previewImage['url'] = $wpUrl;
+        }
+
+        $this->previewPendingWpSync = false;
+        $this->previewMessage = (string) ($result['message'] ?? 'Đã đồng bộ lên WordPress.');
+        $this->previewMessageType = 'success';
+        $this->syncPreviewProcessingState($this->previewImage);
+        $this->syncPreviewWpSyncState();
+
+        Notification::make()->title($this->previewMessage)->success()->send();
+
         $this->loadImages();
     }
 
@@ -336,6 +466,11 @@ class MediaLibrary extends Page
             $image['kind'] = 'local';
         }
 
+        if ($this->siteId !== null && $this->siteId > 0) {
+            $image = app(SeoWpMediaEditedPendingService::class)
+                ->applyPendingToImageRow((int) $this->siteId, $image);
+        }
+
         $this->previewImage = $image;
         $this->previewOpen = true;
         $this->previewBusy = false;
@@ -350,6 +485,8 @@ class MediaLibrary extends Page
         $this->previewImage = null;
         $this->previewBusy = false;
         $this->previewMessage = null;
+        $this->previewPendingWpSync = false;
+        $this->previewCanSyncToWp = false;
     }
 
     public function previewApplyWatermark(): void
@@ -395,6 +532,14 @@ class MediaLibrary extends Page
         $this->previewMessageType = 'success';
         $this->syncPreviewProcessingState($this->previewImage);
 
+        $wpAttachmentId = (int) ($this->previewImage['wp_attachment_id'] ?? 0);
+        if ($wpAttachmentId > 0) {
+            app(SeoMediaWpEditStagingService::class)->resetStagingFromWordPressBackup($site, $wpAttachmentId);
+        }
+
+        $this->previewPendingWpSync = false;
+        $this->syncPreviewWpSyncState();
+
         Notification::make()->title($this->previewMessage)->success()->send();
 
         $this->loadImages();
@@ -422,6 +567,33 @@ class MediaLibrary extends Page
         $this->previewCanRestore = (bool) ($state['can_restore'] ?? false);
         $this->previewCanOptimize = (bool) ($state['can_optimize'] ?? false);
         $this->previewProcessingStatus = (string) ($state['status'] ?? 'original');
+        $this->syncPreviewWpSyncState();
+    }
+
+    private function syncPreviewWpSyncState(): void
+    {
+        $this->previewCanSyncToWp = false;
+
+        if (! is_array($this->previewImage) || $this->siteId === null || $this->siteId <= 0) {
+            return;
+        }
+
+        $siteId = (int) $this->siteId;
+        $wpAttachmentId = (int) ($this->previewImage['wp_attachment_id'] ?? $this->previewImage['id'] ?? 0);
+        $pendingService = app(SeoWpMediaEditedPendingService::class);
+
+        if ($wpAttachmentId > 0 && $pendingService->canSyncPending($siteId, $wpAttachmentId)) {
+            $this->previewCanSyncToWp = true;
+            $this->previewPendingWpSync = true;
+
+            return;
+        }
+
+        $mediaId = (int) ($this->previewImage['seo_media_id'] ?? 0);
+        if ($mediaId > 0) {
+            $media = SeoMedia::query()->find($mediaId);
+            $this->previewCanSyncToWp = app(SeoMediaWpEditStagingService::class)->canSyncToWordPress($media);
+        }
     }
 
     private function runPreviewAction(string $action): void

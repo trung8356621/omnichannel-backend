@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -101,9 +103,20 @@ class SeoAnalyzerService
         $focusKeyword = $this->resolveFocusKeyword($article);
 
         if ($focusKeyword === null) {
+            $emptyLinks = ['internal' => [], 'external' => []];
+            $domain = $this->resolveArticleDomain($article, $domainOverride);
+            $emptyLinks = $this->extractLinks($content, $domain);
+
             return array_merge(
                 $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], []),
-                ['extracted_links' => ['internal' => [], 'external' => []]],
+                [
+                    'extracted_links' => $emptyLinks,
+                    'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+                        $article,
+                        $content,
+                        $emptyLinks['internal'] ?? [],
+                    ),
+                ],
             );
         }
 
@@ -119,9 +132,16 @@ class SeoAnalyzerService
 
         $contentBonus = app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content);
 
+        $extractedLinks = $computed['extractedLinks'];
+
         return array_merge($computed['scoreData'], [
-            'extracted_links' => $computed['extractedLinks'],
+            'extracted_links' => $extractedLinks,
             'content_bonus' => $contentBonus,
+            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+                $article,
+                $content,
+                $extractedLinks['internal'] ?? [],
+            ),
         ]);
     }
 
@@ -346,15 +366,46 @@ class SeoAnalyzerService
     {
         $article->links()->delete();
 
+        $article->loadMissing('site');
+        $userId = (int) ($article->site?->user_id ?? 0);
+
         $linksToInsert = [];
         $now = now();
 
         foreach ($extractedLinks['internal'] as $link) {
+            $href = (string) ($link['href'] ?? '');
+            $anchorText = Str::limit(strip_tags((string) ($link['text'] ?? '')), 255);
+            if ($anchorText === '') {
+                continue;
+            }
+
+            $keywordId = null;
+            if (InternalAnchorKeywordFilter::isUsableAnchorPhrase($anchorText, $href)) {
+                $keywordRecord = Keyword::query()->firstOrCreate(
+                    [
+                        'site_id' => $article->site_id,
+                        'phrase' => $anchorText,
+                        'type' => Keyword::TYPE_INTERNAL,
+                    ],
+                    [
+                        'user_id' => $userId,
+                        'target_url' => $href,
+                    ]
+                );
+
+                if ($keywordRecord->target_url === null && $href !== '') {
+                    $keywordRecord->update(['target_url' => $href]);
+                }
+
+                $keywordId = $keywordRecord->id;
+            }
+
             $linksToInsert[] = [
                 'article_id' => $article->id,
+                'keyword_id' => $keywordId,
                 'type' => 'internal',
-                'url' => (string) ($link['href'] ?? ''),
-                'anchor_text' => Str::limit(strip_tags((string) ($link['text'] ?? '')), 500),
+                'url' => $href,
+                'anchor_text' => $anchorText,
                 'is_nofollow' => (bool) ($link['is_nofollow'] ?? false),
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -364,6 +415,7 @@ class SeoAnalyzerService
         foreach ($extractedLinks['external'] as $link) {
             $linksToInsert[] = [
                 'article_id' => $article->id,
+                'keyword_id' => null,
                 'type' => 'external',
                 'url' => (string) ($link['href'] ?? ''),
                 'anchor_text' => Str::limit(strip_tags((string) ($link['text'] ?? '')), 500),

@@ -17,6 +17,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/js/watermark-editor-page.jsx',
                 'app/Addons/SeoContentAi/resources/css/watermark-editor.css',
                 'app/Addons/SeoContentAi/resources/css/image-optimization-settings.css',
+                'app/Addons/SeoContentAi/resources/js/media-image-editor-page.jsx',
             ],
             refresh: true,
         }),

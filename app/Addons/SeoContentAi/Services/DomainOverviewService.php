@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Models\Site;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -21,6 +22,8 @@ final class DomainOverviewService
      *     has_read_token: bool,
      *     has_migration_token: bool,
      *     platform: string,
+     *     seo_plugin: string,
+     *     seo_plugin_fetched_at: string,
      * }
      */
     public function getApiTokenSummary(Site $site): array
@@ -36,6 +39,8 @@ final class DomainOverviewService
             'has_read_token' => $read !== '',
             'has_migration_token' => $migration !== '',
             'platform' => $platform,
+            'seo_plugin' => trim((string) ($site->getMeta(WordPressSiteInfoService::META_PLUGIN) ?? '')),
+            'seo_plugin_fetched_at' => trim((string) ($site->getMeta(WordPressSiteInfoService::META_PLUGIN_FETCHED_AT) ?? '')),
         ];
     }
 
@@ -123,11 +128,27 @@ final class DomainOverviewService
      */
     public function buildArticlesFilterUrlForKeyword(int $siteId, int $keywordId): string
     {
+        return $this->buildArticlesFilterUrlForInternalAnchorKeyword($siteId, $keywordId);
+    }
+
+    public function buildArticlesFilterUrlForMainKeyword(int $siteId, int $keywordId): string
+    {
         return $this->appendArticlesTableFilters(ArticleResource::panelUrl('index'), [
             'site_id' => ['value' => (string) $siteId],
             'keyword' => [
                 'keyword_id' => (string) $keywordId,
-                'internal_link_only' => '1',
+                'usage' => 'main',
+            ],
+        ]);
+    }
+
+    public function buildArticlesFilterUrlForInternalAnchorKeyword(int $siteId, int $keywordId): string
+    {
+        return $this->appendArticlesTableFilters(ArticleResource::panelUrl('index'), [
+            'site_id' => ['value' => (string) $siteId],
+            'keyword' => [
+                'keyword_id' => (string) $keywordId,
+                'usage' => 'internal_link',
             ],
         ]);
     }
@@ -236,18 +257,18 @@ final class DomainOverviewService
 
     public function paginateKeywords(int $siteId, int $perPage = 25): LengthAwarePaginator
     {
-        return Keyword::query()
-            ->where('keywords.site_id', $siteId)
-            ->join('article_keyword', 'article_keyword.keyword_id', '=', 'keywords.id')
-            ->join('articles', function ($join) use ($siteId): void {
-                $join->on('articles.id', '=', 'article_keyword.article_id')
-                    ->where('articles.site_id', '=', $siteId)
-                    ->whereNull('articles.deleted_at');
-            })
-            ->select('keywords.id', 'keywords.phrase')
-            ->selectRaw('COUNT(DISTINCT articles.id) as articles_count')
-            ->groupBy('keywords.id', 'keywords.phrase')
-            ->orderByDesc('articles_count')
+        $query = Keyword::query()
+            ->where('site_id', $siteId);
+
+        InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);
+
+        return $query
+            ->withCount([
+                'mainArticles as main_articles_count',
+                'articlesViaInternalLink as linked_articles_count',
+            ])
+            ->orderByDesc('linked_articles_count')
+            ->orderByDesc('main_articles_count')
             ->paginate($perPage)
             ->withQueryString();
     }

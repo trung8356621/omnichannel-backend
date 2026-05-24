@@ -119,6 +119,7 @@ if (rootElement) {
         if (rawMeta) {
             const meta = JSON.parse(rawMeta);
             articleId = meta?.id ?? null;
+            siteId = meta?.site_id ?? meta?.siteId ?? null;
             articleTitle = meta?.title ?? '';
         }
     } catch (e) {

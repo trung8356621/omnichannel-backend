@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -47,6 +47,15 @@ class SyncDomainContentService
         $url = $this->buildSyncUrl($site);
 
         try {
+            $siteInfoResult = app(WordPressSiteInfoService::class)->fetchAndStore($site);
+            if (! ($siteInfoResult['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => 'Không lấy được thông tin plugin SEO từ WordPress: '
+                        . (string) ($siteInfoResult['message'] ?? 'Lỗi không xác định.'),
+                ];
+            }
+
             $response = Http::timeout(120)
                 ->acceptJson()
                 ->withToken($readToken)
@@ -78,8 +87,24 @@ class SyncDomainContentService
             }
 
             $synced = $this->importItems($site, $items);
+            $counts = is_array($payload['counts'] ?? null) ? $payload['counts'] : [];
 
-            return $this->buildImportSuccessResponse($synced, $isTest, is_array($payload['counts'] ?? null) ? $payload['counts'] : []);
+            $response = [
+                'success' => true,
+                'message' => sprintf(
+                    'Đồng bộ thành công %d mục từ WordPress%s. Plugin SEO: %s.',
+                    array_sum($synced),
+                    $isTest ? ' (chế độ test)' : '',
+                    (string) ($siteInfoResult['site_info']['active'] ?? 'none'),
+                ),
+                'synced' => $synced,
+            ];
+
+            if ($counts !== []) {
+                $response['counts'] = $counts;
+            }
+
+            return $response;
         } catch (Throwable $e) {
             Log::error('SeoContentAi sync failed', [
                 'site_id' => $site->id,
@@ -317,10 +342,11 @@ class SyncDomainContentService
      */
     private function syncSeoMetaFromWordPress(SeoArticle $article, array $item): void
     {
+        $article->articleMetas()->where('meta_key', 'seo_plugin')->delete();
+
         $seo = is_array($item['seo'] ?? null) ? $item['seo'] : [];
 
         $metaMap = [
-            'seo_plugin' => (string) ($seo['plugin'] ?? ''),
             'seo_title' => (string) ($seo['seo_title'] ?? ''),
             'seo_meta_description' => (string) ($seo['meta_description'] ?? ''),
             'seo_focus_keyword' => (string) ($seo['focus_keyword'] ?? ''),
@@ -352,19 +378,7 @@ class SyncDomainContentService
             return;
         }
 
-        $keyword = Keyword::query()->firstOrCreate(
-            [
-                'site_id' => $site->id,
-                'phrase' => $phrase,
-            ],
-            [
-                'user_id' => $userId,
-            ]
-        );
-
-        $article->keywords()->syncWithoutDetaching([
-            $keyword->id => ['weight' => 1.0],
-        ]);
+        KeywordFocusAttach::attachMainKeyword($article, $site->id, $userId, $phrase);
     }
 
     private function buildSyncUrl(Site $site): string

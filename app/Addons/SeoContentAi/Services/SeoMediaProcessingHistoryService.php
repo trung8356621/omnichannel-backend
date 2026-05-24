@@ -136,6 +136,25 @@ final class SeoMediaProcessingHistoryService
         $history->save();
     }
 
+    /**
+     * Ghi nhận đồng bộ bản chỉnh sửa lên WordPress (không phải đóng dấu).
+     */
+    public function markEditorSync(int $siteId, string $source, int $mediaRefId): void
+    {
+        $history = SeoMediaProcessingHistory::query()->firstOrNew([
+            'site_id' => $siteId,
+            'source' => $source,
+            'media_ref_id' => $mediaRefId,
+        ]);
+
+        $history->fill([
+            'is_watermarked' => false,
+            'watermarked_at' => null,
+            'restored_at' => null,
+        ]);
+        $history->save();
+    }
+
     public function markOptimized(int $siteId, string $source, int $mediaRefId): void
     {
         $history = SeoMediaProcessingHistory::query()->firstOrNew([
@@ -207,6 +226,21 @@ final class SeoMediaProcessingHistoryService
     {
         $url = (string) ($imageRow['url'] ?? '');
         $history = $this->findForImage($site, $imageRow);
+        $wpAttachmentId = (int) ($imageRow['wp_attachment_id'] ?? $imageRow['id'] ?? 0);
+
+        $hasPendingEdit = ! empty($imageRow['has_pending_wp_edit']);
+        if (! $hasPendingEdit && $wpAttachmentId > 0) {
+            $hasPendingEdit = app(SeoWpMediaEditedPendingService::class)
+                ->hasPendingEdit((int) $site->id, $wpAttachmentId);
+        }
+
+        if ($hasPendingEdit) {
+            return [
+                'can_restore' => $this->canRestore($history),
+                'can_optimize' => $this->canOptimize($history, $url),
+                'status' => 'edited_pending',
+            ];
+        }
 
         $canRestore = $this->canRestore($history);
         $canOptimize = $this->canOptimize($history, $url);
@@ -215,7 +249,7 @@ final class SeoMediaProcessingHistoryService
         if ($history !== null && $history->isCurrentlyModified()) {
             if ($history->is_optimized) {
                 $status = 'optimized';
-            } elseif ($history->is_watermarked) {
+            } elseif ($history->is_watermarked && ! $this->hasMisleadingWatermarkFlag($site, $wpAttachmentId)) {
                 $status = 'watermarked';
             }
         } elseif ($history !== null && ($history->is_watermarked || $history->is_optimized)) {
@@ -227,6 +261,22 @@ final class SeoMediaProcessingHistoryService
             'can_optimize' => $canOptimize,
             'status' => $status,
         ];
+    }
+
+    /**
+     * Cờ is_watermarked nhầm khi đồng bộ chỉnh sửa (legacy) — ảnh có bản staging editor.
+     */
+    private function hasMisleadingWatermarkFlag(Site $site, int $wpAttachmentId): bool
+    {
+        if ($wpAttachmentId <= 0) {
+            return false;
+        }
+
+        return SeoMedia::query()
+            ->where('site_id', (int) $site->id)
+            ->where('wp_attachment_id', $wpAttachmentId)
+            ->where('source', SeoMediaWpEditStagingService::SOURCE_WP_EDIT_STAGING)
+            ->exists();
     }
 
     public function localBackupRelativePath(SeoMedia $media, ?string $extension = null): string

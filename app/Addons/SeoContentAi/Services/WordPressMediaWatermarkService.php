@@ -257,6 +257,64 @@ final class WordPressMediaWatermarkService
         ];
     }
 
+    /**
+     * Ghi đè attachment WordPress bằng file local (staging đã chỉnh sửa).
+     *
+     * @return array{success: bool, url: string, message: string}
+     */
+    public function replaceAttachmentFromLocalFile(
+        Site $site,
+        int $attachmentId,
+        string $absolutePath,
+        string $mime,
+    ): array {
+        if ($attachmentId <= 0 || ! is_file($absolutePath)) {
+            return [
+                'success' => false,
+                'url' => '',
+                'message' => 'File ảnh không hợp lệ để đồng bộ.',
+            ];
+        }
+
+        $site->loadMissing('metas');
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return [
+                'success' => false,
+                'url' => '',
+                'message' => 'Thiếu Migration/Write token trên domain.',
+            ];
+        }
+
+        $replaceUrlTemplate = $this->buildReplaceUrl($site);
+        if ($replaceUrlTemplate === '') {
+            return [
+                'success' => false,
+                'url' => '',
+                'message' => 'Không xác định được URL WordPress.',
+            ];
+        }
+
+        $mime = $mime !== '' ? $mime : $this->guessMimeFromUrl($absolutePath);
+        $replaceUrl = str_replace('{id}', (string) $attachmentId, $replaceUrlTemplate);
+
+        $upload = $this->postReplacementBinary($writeToken, $replaceUrl, $absolutePath, $mime);
+
+        if (! $upload->successful() || ! ($upload->json('success') ?? false)) {
+            return [
+                'success' => false,
+                'url' => '',
+                'message' => $this->parseWordPressUploadError($upload),
+            ];
+        }
+
+        return [
+            'success' => true,
+            'url' => (string) ($upload->json('url') ?? ''),
+            'message' => 'Đã đồng bộ ảnh lên WordPress.',
+        ];
+    }
+
     public function wpAttachmentHasBackup(int $siteId, int $attachmentId): bool
     {
         return $this->processingHistory->canRestore(

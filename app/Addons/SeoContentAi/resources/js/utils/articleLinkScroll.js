@@ -1,3 +1,5 @@
+import { findPlainTextRangeInRoot } from './articlePlainTextRange';
+
 /**
  * Tìm block chứa offset trong HTML export (join \n\n).
  *
@@ -44,6 +46,21 @@ export function normalizeLinkText(text) {
         .trim();
 }
 
+function normalizeHrefForCompare(href) {
+    const value = String(href ?? '').trim();
+    if (!value) {
+        return '';
+    }
+
+    try {
+        const url = new URL(value, window.location.origin);
+        const pathname = url.pathname.replace(/\/+$/, '');
+        return `${url.origin}${pathname}${url.search}`;
+    } catch {
+        return value.replace(/\/+$/, '');
+    }
+}
+
 /**
  * @param {HTMLAnchorElement|Element} anchor
  * @param {string} targetText
@@ -51,7 +68,7 @@ export function normalizeLinkText(text) {
 export function anchorTextMatches(anchor, targetText) {
     const keyword = normalizeLinkText(targetText);
     if (!keyword) {
-        return false;
+        return true;
     }
 
     const anchorText = normalizeLinkText(anchor.textContent);
@@ -59,21 +76,51 @@ export function anchorTextMatches(anchor, targetText) {
 }
 
 /**
+ * @param {HTMLAnchorElement|Element} anchor
+ * @param {string} href
+ */
+export function anchorHrefMatches(anchor, href) {
+    const targetHref = normalizeHrefForCompare(href);
+    if (!targetHref) {
+        return true;
+    }
+
+    const rawHref = anchor.getAttribute?.('href') ?? '';
+    const normalized = normalizeHrefForCompare(rawHref);
+    if (normalized === targetHref) {
+        return true;
+    }
+
+    // Fallback for relative href rendered in editor.
+    try {
+        const absolute = normalizeHrefForCompare(new URL(rawHref, window.location.origin).toString());
+        return absolute === targetHref;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Đếm thẻ &lt;a&gt; có đúng anchor text (từ khóa), không lọc theo href.
  *
  * @param {string} html
  * @param {string} text
+ * @param {string} [href]
  */
-export function countMatchingAnchorsInHtml(html, text) {
+export function countMatchingAnchorsInHtml(html, text, href = '') {
     const targetText = normalizeLinkText(text);
-    if (!targetText || !html) {
+    if (!html) {
+        return 0;
+    }
+
+    if (!targetText && !normalizeHrefForCompare(href)) {
         return 0;
     }
 
     const doc = new DOMParser().parseFromString(html, 'text/html');
 
-    return [...doc.querySelectorAll('a[href]')].filter((anchor) =>
-        anchorTextMatches(anchor, targetText),
+    return [...doc.querySelectorAll('a[href]')].filter(
+        (anchor) => anchorTextMatches(anchor, targetText) && anchorHrefMatches(anchor, href),
     ).length;
 }
 
@@ -83,14 +130,15 @@ export function countMatchingAnchorsInHtml(html, text) {
  * @param {HTMLElement} root
  * @param {string} text
  * @param {number} matchIndex
+ * @param {string} [href]
  */
-export function findAnchorElementInRoot(root, text, matchIndex = 0) {
+export function findAnchorElementInRoot(root, text, matchIndex = 0, href = '') {
     if (!root) {
         return null;
     }
 
     const targetText = normalizeLinkText(text);
-    if (!targetText) {
+    if (!targetText && !normalizeHrefForCompare(href)) {
         return null;
     }
 
@@ -98,7 +146,7 @@ export function findAnchorElementInRoot(root, text, matchIndex = 0) {
     let seen = 0;
 
     for (const anchor of anchors) {
-        if (!anchorTextMatches(anchor, targetText)) {
+        if (!anchorTextMatches(anchor, targetText) || !anchorHrefMatches(anchor, href)) {
             continue;
         }
         if (seen === matchIndex) {
@@ -130,9 +178,10 @@ export function highlightAnchorElement(el) {
  * @param {string} blockId
  * @param {string} text
  * @param {number} matchIndex
+ * @param {string} [href]
  * @param {{ onDone?: () => void }} [options]
  */
-export function scrollToKeywordAnchor(blockId, text, matchIndex = 0, options = {}) {
+export function scrollToKeywordAnchor(blockId, text, matchIndex = 0, href = '', options = {}) {
     const maxAttempts = 12;
 
     const attempt = (tryNo) => {
@@ -144,7 +193,7 @@ export function scrollToKeywordAnchor(blockId, text, matchIndex = 0, options = {
             return;
         }
 
-        const anchorEl = findAnchorElementInRoot(slot, text, matchIndex);
+        const anchorEl = findAnchorElementInRoot(slot, text, matchIndex, href);
 
         if (anchorEl) {
             anchorEl.scrollIntoView({ behavior: tryNo === 0 ? 'smooth' : 'auto', block: 'center' });
@@ -217,6 +266,118 @@ export function scrollToFaqByIndex(faqIndex) {
  * @param {number} matchIndex
  * @returns {boolean}
  */
+function countOccurrencesCaseInsensitive(haystack, needle) {
+    const h = haystack.toLowerCase();
+    const n = needle.toLowerCase();
+    if (!n) {
+        return 0;
+    }
+
+    let count = 0;
+    let pos = 0;
+
+    while ((pos = h.indexOf(n, pos)) !== -1) {
+        count += 1;
+        pos += n.length;
+    }
+
+    return count;
+}
+
+/**
+ * @param {string} html
+ * @param {string} text
+ */
+export function countPlainTextInHtml(html, text) {
+    const targetText = normalizeLinkText(text);
+    if (!targetText || !html) {
+        return 0;
+    }
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const bodyText = doc.body?.textContent ?? '';
+
+    return countOccurrencesCaseInsensitive(bodyText, targetText);
+}
+
+/**
+ * @param {HTMLElement} root
+ * @param {string} text
+ * @param {number} matchIndex
+ */
+export function findPlainTextMatchInRoot(root, text, matchIndex = 0) {
+    return findPlainTextRangeInRoot(root, text, matchIndex);
+}
+
+/**
+ * @param {string} blockId
+ * @param {string} text
+ * @param {number} matchIndex
+ * @param {{ onDone?: () => void, onMiss?: () => boolean|void }} [options]
+ */
+export function scrollToPlainTextInBlock(blockId, text, matchIndex = 0, options = {}) {
+    const maxAttempts = 12;
+
+    const attempt = (tryNo) => {
+        const slot = document.querySelector(`[data-seo-block-id="${blockId}"]`);
+        if (!slot) {
+            if (tryNo < maxAttempts) {
+                window.requestAnimationFrame(() => attempt(tryNo + 1));
+            }
+            return;
+        }
+
+        const match = findPlainTextMatchInRoot(slot, text, matchIndex);
+
+        if (match) {
+            const range = document.createRange();
+            range.setStart(match.node, match.start);
+            range.setEnd(match.endNode, match.endOffset);
+
+            const mark = document.createElement('mark');
+            mark.className = 'seo-link-scroll-highlight';
+
+            try {
+                range.surroundContents(mark);
+                mark.scrollIntoView({ behavior: tryNo === 0 ? 'smooth' : 'auto', block: 'center' });
+                window.setTimeout(() => {
+                    const parent = mark.parentNode;
+                    if (parent) {
+                        while (mark.firstChild) {
+                            parent.insertBefore(mark.firstChild, mark);
+                        }
+                        parent.removeChild(mark);
+                    }
+                }, 2400);
+                options.onDone?.();
+                return;
+            } catch {
+                range.startContainer.parentElement?.scrollIntoView({
+                    behavior: tryNo === 0 ? 'smooth' : 'auto',
+                    block: 'center',
+                });
+                options.onDone?.();
+                return;
+            }
+        }
+
+        if (tryNo < maxAttempts) {
+            window.requestAnimationFrame(() => attempt(tryNo + 1));
+            return;
+        }
+
+        if (options.onMiss?.() === true) {
+            options.onDone?.(true);
+            return;
+        }
+
+        slot.scrollIntoView({ behavior: 'auto', block: 'center' });
+        options.onDone?.(false);
+    };
+
+    attempt(0);
+}
+
 export function scrollToFaqKeyword(text, matchIndex = 0) {
     const keyword = normalizeLinkText(text);
     if (!keyword) {

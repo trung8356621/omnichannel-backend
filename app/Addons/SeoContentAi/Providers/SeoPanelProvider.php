@@ -66,9 +66,16 @@ class SeoPanelProvider extends PanelProvider
             ->group(function (): void {
                 Route::post('/upload', [SeoMediaController::class, 'upload'])
                     ->name('seo.media.upload');
+                Route::post('/prepare-editor', [SeoMediaController::class, 'prepareEditor'])
+                    ->name('seo.media.prepare-editor');
+                Route::post('/apply-watermark', [SeoMediaController::class, 'applyWatermark'])
+                    ->name('seo.media.apply-watermark');
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
                     ->name('seo.media.rename');
+                Route::post('/{media}/save-edited', [SeoMediaController::class, 'saveEditedImage'])
+                    ->whereNumber('media')
+                    ->name('seo.media.save-edited');
             });
 
         Route::middleware([

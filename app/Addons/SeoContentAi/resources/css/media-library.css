@@ -580,6 +580,28 @@
     color: #fff;
 }
 
+.seo-media-preview-btn.is-edit {
+    background: #7c3aed;
+    border-color: #7c3aed;
+    color: #fff;
+}
+
+.seo-media-preview-btn.is-edit:hover {
+    background: #6d28d9;
+    border-color: #6d28d9;
+}
+
+.seo-media-preview-btn.is-sync-wp {
+    background: #0d9488;
+    border-color: #0d9488;
+    color: #fff;
+}
+
+.seo-media-preview-btn.is-sync-wp:hover {
+    background: #0f766e;
+    border-color: #0f766e;
+}
+
 .seo-media-preview-btn.is-restore {
     background: #b45309;
     border-color: #b45309;

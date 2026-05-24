@@ -293,6 +293,38 @@
                 @endif
 
                 <div class="seo-media-preview-modal__actions">
+                    @php
+                        $canEditImage = ($previewImage['kind'] ?? '') !== 'generated'
+                            && (
+                                (int) ($previewImage['seo_media_id'] ?? 0) > 0
+                                || (int) ($previewImage['wp_attachment_id'] ?? 0) > 0
+                                || ($previewImage['kind'] ?? '') === 'wordpress'
+                            );
+                    @endphp
+                    @if ($canEditImage)
+                        <button
+                            type="button"
+                            class="seo-media-preview-btn is-edit"
+                            wire:click="openImageEditor"
+                            wire:loading.attr="disabled"
+                            wire:target="openImageEditor"
+                        >
+                            <span wire:loading.remove wire:target="openImageEditor">Chỉnh sửa hình ảnh</span>
+                            <span wire:loading wire:target="openImageEditor">Đang chuẩn bị…</span>
+                        </button>
+                    @endif
+                    @if ($previewCanSyncToWp)
+                        <button
+                            type="button"
+                            class="seo-media-preview-btn is-sync-wp"
+                            wire:click="previewSyncToWordPress"
+                            wire:loading.attr="disabled"
+                            wire:target="previewSyncToWordPress"
+                        >
+                            <span wire:loading.remove wire:target="previewSyncToWordPress">Đồng bộ lên WordPress</span>
+                            <span wire:loading wire:target="previewSyncToWordPress">Đang đồng bộ…</span>
+                        </button>
+                    @endif
                     @if ($previewCanRestore)
                         <button
                             type="button"
@@ -337,7 +369,13 @@
                         @if ($previewProcessingStatus === 'watermarked') đã đóng dấu
                         @elseif ($previewProcessingStatus === 'optimized') đã tối ưu
                         @elseif ($previewProcessingStatus === 'restored') đã khôi phục gốc
+                        @elseif ($previewProcessingStatus === 'edited_pending') đã chỉnh sửa (chưa đồng bộ WordPress)
                         @endif
+                    </p>
+                @endif
+                @if ($previewCanSyncToWp)
+                    <p class="seo-media-preview-modal__hint">
+                        Ảnh đã chỉnh sửa và lưu trên server (chưa lên WordPress) — bấm «Đồng bộ lên WordPress» để cập nhật. Sau đồng bộ bản nháp sẽ được xóa khỏi hệ thống.
                     </p>
                 @endif
                 @if (($previewImage['kind'] ?? '') === 'generated')
@@ -346,4 +384,26 @@
             </div>
         </div>
     @endif
+
+    @script
+    <script>
+        window.addEventListener('message', (event) => {
+            if (event.origin !== window.location.origin) {
+                return;
+            }
+            const data = event.data;
+            if (!data || data.type !== 'seo-magic-eraser-saved') {
+                return;
+            }
+            if (typeof Livewire !== 'undefined') {
+                Livewire.dispatch('seo-magic-eraser-saved', {
+                    url: data.url,
+                    imageId: data.imageId ?? null,
+                    pendingWpSync: !!data.pendingWpSync,
+                });
+                Livewire.dispatch('seo-media-library-refresh');
+            }
+        });
+    </script>
+    @endscript
 </x-filament-panels::page>

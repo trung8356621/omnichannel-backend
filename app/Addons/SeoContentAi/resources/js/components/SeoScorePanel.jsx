@@ -79,9 +79,32 @@ function ContentBonusRow({ item, faqCount }) {
     const toneClass = passed
         ? 'seo-content-bonus-row--pass'
         : 'seo-content-bonus-row--fail';
+    const isFeaturedSnippet = item.key === 'featured_snippet';
 
     return (
-        <div className={`seo-content-bonus-row ${toneClass}`}>
+        <div
+            className={`seo-content-bonus-row ${toneClass}${isFeaturedSnippet ? ' is-clickable' : ''}`}
+            role={isFeaturedSnippet ? 'button' : undefined}
+            tabIndex={isFeaturedSnippet ? 0 : undefined}
+            onClick={
+                isFeaturedSnippet
+                    ? () => {
+                        window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-featured-snippet-table'));
+                    }
+                    : undefined
+            }
+            onKeyDown={
+                isFeaturedSnippet
+                    ? (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-featured-snippet-table'));
+                        }
+                    }
+                    : undefined
+            }
+            title={isFeaturedSnippet ? 'Click để nhảy tới bảng Featured Snippet trong bài' : undefined}
+        >
             <div className="seo-content-bonus-row__head">
                 <span className="seo-content-bonus-row__label">{item.label}:</span>
                 <span className="seo-content-bonus-row__points">

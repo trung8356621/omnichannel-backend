@@ -7,11 +7,14 @@ import LinkEditBubble from './LinkEditBubble';
 import ImageBlockEditor from './ImageBlockEditor';
 import {
     countMatchingAnchorsInHtml,
+    countPlainTextInHtml,
     findBlockIdForExportOffset,
     scrollToFaqByIndex,
     scrollToFaqKeyword,
     scrollToKeywordAnchor,
+    scrollToPlainTextInBlock,
 } from '../utils/articleLinkScroll';
+import { wrapFirstPlainTextWithLink } from '../utils/articleLinkInsert';
 import SeoScorePanel from './SeoScorePanel';
 import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
@@ -558,14 +561,59 @@ export default function SeoArticleEditor({
     const [extractedLinks, setExtractedLinks] = useState(
         initialSeo?.extracted_links ?? { internal: [], external: [] },
     );
+    const [suggestedInternalLinks, setSuggestedInternalLinks] = useState(
+        initialSeo?.suggested_internal_links ?? [],
+    );
 
-    const publishExtractedLinks = useCallback((links) => {
+    const enrichLinksWithOccurrences = useCallback((links) => {
+        const source = links && typeof links === 'object' ? links : { internal: [], external: [] };
+        const currentBlocks = blocksRef.current;
+
+        const buildKey = (item) =>
+            `${String(item?.href ?? '').trim()}\u0000${String(item?.text ?? '').trim()}`;
+
+        const countCache = new Map();
+        const withCounts = (items) =>
+            (Array.isArray(items) ? items : []).map((item) => {
+                const key = buildKey(item);
+                if (!countCache.has(key)) {
+                    let count = 0;
+                    for (const block of currentBlocks) {
+                        if (block.type === 'image' || !block.content) {
+                            continue;
+                        }
+                        count += countMatchingAnchorsInHtml(
+                            block.content,
+                            String(item?.text ?? ''),
+                            String(item?.href ?? ''),
+                        );
+                    }
+                    countCache.set(key, Math.max(1, count));
+                }
+
+                return {
+                    ...item,
+                    occurrence_count: countCache.get(key) ?? 1,
+                };
+            });
+
+        return {
+            internal: withCounts(source.internal),
+            external: withCounts(source.external),
+        };
+    }, []);
+
+    const publishExtractedLinks = useCallback((links, suggestedInternal = suggestedInternalLinks) => {
+        const enrichedLinks = enrichLinksWithOccurrences(links);
         window.dispatchEvent(
             new CustomEvent('seo-editor-links-updated', {
-                detail: { links },
+                detail: {
+                    links: enrichedLinks,
+                    suggested_internal: Array.isArray(suggestedInternal) ? suggestedInternal : [],
+                },
             }),
         );
-    }, []);
+    }, [suggestedInternalLinks, enrichLinksWithOccurrences]);
 
     const blocksRef = useRef(blocks);
     blocksRef.current = blocks;
@@ -665,6 +713,7 @@ export default function SeoArticleEditor({
             setAnalysis(initialSeo.analysis ?? null);
             setContentBonus(initialSeo.content_bonus ?? initialSeo.analysis?.content_bonus ?? null);
             setExtractedLinks(initialSeo.extracted_links ?? { internal: [], external: [] });
+            setSuggestedInternalLinks(initialSeo.suggested_internal_links ?? []);
         }
     }, [initialSeo]);
 
@@ -810,23 +859,112 @@ export default function SeoArticleEditor({
 
     const focusImageBlock = useCallback(
         (blockId) => {
+            if (!blockId) {
+                return;
+            }
+
             setActiveTab('editor');
             clearTempMerge();
-            commitActiveBlock();
-            setActiveBlockId(blockId);
+            blockFlushRef.current = null;
+
+            const currentActive = activeBlockIdRef.current;
+            const needsSwitch = currentActive !== blockId;
+
+            if (needsSwitch && currentActive) {
+                commitActiveBlock();
+                blockFlushRef.current = null;
+            }
+
+            if (needsSwitch) {
+                setActiveBlockId(blockId);
+            }
+
+            const jump = () => {
+                const slot = document.querySelector(`[data-seo-block-id="${blockId}"]`);
+                if (!slot) {
+                    return;
+                }
+
+                slot.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                slot.classList.add('seo-link-scroll-highlight');
+                window.setTimeout(() => slot.classList.remove('seo-link-scroll-highlight'), 2400);
+            };
+
+            window.setTimeout(jump, needsSwitch ? 90 : 0);
         },
         [clearTempMerge, commitActiveBlock],
     );
 
+    const scrollToFeaturedSnippetTable = useCallback(() => {
+        const currentBlocks = blocksRef.current;
+        let targetBlockId = null;
+
+        for (const block of currentBlocks) {
+            if (block.type === 'image' || !block.content) {
+                continue;
+            }
+
+            if (/<table\b/i.test(block.content)) {
+                targetBlockId = block.id;
+                break;
+            }
+        }
+
+        if (!targetBlockId) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: 'Không tìm thấy bảng',
+                        body: 'Nội dung hiện tại chưa có bảng để nhảy tới.',
+                        status: 'warning',
+                    },
+                }),
+            );
+            return;
+        }
+
+        setActiveTab('editor');
+        clearTempMerge();
+
+        const currentActive = activeBlockIdRef.current;
+        const needsSwitch = currentActive !== targetBlockId;
+
+        if (needsSwitch && currentActive) {
+            commitActiveBlock();
+        }
+
+        if (needsSwitch) {
+            setActiveBlockId(targetBlockId);
+        }
+
+        const jump = () => {
+            const slot = document.querySelector(`[data-seo-block-id="${targetBlockId}"]`);
+            const table = slot?.querySelector?.('table');
+            const target = table || slot;
+            if (!target) {
+                return;
+            }
+
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            target.classList.add('seo-link-scroll-highlight');
+            window.setTimeout(() => target.classList.remove('seo-link-scroll-highlight'), 2400);
+        };
+
+        window.setTimeout(jump, needsSwitch ? 90 : 0);
+    }, [clearTempMerge, commitActiveBlock]);
+
     const scrollToExtractedLink = useCallback(
         (detail) => {
             const text = String(detail?.text ?? '').trim();
-            if (!text) {
+            const href = String(detail?.href ?? '').trim();
+            const preferHrefMatch = detail?.preferHrefMatch === true;
+            if (!text && !href) {
                 return;
             }
 
             const listIndex = Number(detail?.index) || 0;
             const linkType = String(detail?.type ?? 'internal');
+            const searchPlainText = detail?.searchPlainText === true;
             const offset = typeof detail?.offset === 'number' ? detail.offset : null;
             const scrollToken = ++linkScrollTokenRef.current;
 
@@ -852,13 +990,32 @@ export default function SeoArticleEditor({
             let targetBlockId = offset != null ? findBlockIdForExportOffset(currentBlocks, offset) : null;
             let localAnchorIndex = listIndex;
 
+            if (targetBlockId) {
+                const offsetBlock = currentBlocks.find((block) => block.id === targetBlockId);
+                const countInOffsetBlock = offsetBlock?.content
+                    ? (searchPlainText
+                        ? countPlainTextInHtml(offsetBlock.content, text)
+                        : countMatchingAnchorsInHtml(offsetBlock.content, text, href))
+                    : 0;
+                if (countInOffsetBlock < 1) {
+                    // Offset stale after user edits: fallback to keyword+href scan.
+                    targetBlockId = null;
+                }
+            }
+
             if (!targetBlockId) {
                 let global = 0;
                 for (const block of currentBlocks) {
                     if (block.type === 'image' || !block.content) {
                         continue;
                     }
-                    const count = countMatchingAnchorsInHtml(block.content, text);
+                    const count = searchPlainText
+                        ? countPlainTextInHtml(block.content, text)
+                        : countMatchingAnchorsInHtml(
+                            block.content,
+                            preferHrefMatch ? '' : text,
+                            href,
+                        );
                     if (count === 0) {
                         continue;
                     }
@@ -876,7 +1033,13 @@ export default function SeoArticleEditor({
                         break;
                     }
                     if (block.type !== 'image' && block.content) {
-                        before += countMatchingAnchorsInHtml(block.content, text);
+                        before += searchPlainText
+                            ? countPlainTextInHtml(block.content, text)
+                            : countMatchingAnchorsInHtml(
+                                block.content,
+                                preferHrefMatch ? '' : text,
+                                href,
+                            );
                     }
                 }
                 localAnchorIndex = Math.max(0, listIndex - before);
@@ -884,7 +1047,17 @@ export default function SeoArticleEditor({
 
             if (!targetBlockId) {
                 for (const block of currentBlocks) {
-                    if (block.type !== 'image' && countMatchingAnchorsInHtml(block.content, text) > 0) {
+                    if (block.type === 'image' || !block.content) {
+                        continue;
+                    }
+                    const count = searchPlainText
+                        ? countPlainTextInHtml(block.content, text)
+                        : countMatchingAnchorsInHtml(
+                            block.content,
+                            preferHrefMatch ? '' : text,
+                            href,
+                        );
+                    if (count > 0) {
                         targetBlockId = block.id;
                         localAnchorIndex = 0;
                         break;
@@ -917,7 +1090,13 @@ export default function SeoArticleEditor({
                 if (scrollToken !== linkScrollTokenRef.current) {
                     return;
                 }
-                scrollToKeywordAnchor(targetBlockId, text, localAnchorIndex, {
+                if (searchPlainText) {
+                    scrollToPlainTextInBlock(targetBlockId, text, localAnchorIndex, {
+                        onMiss: () => scrollToFaqKeyword(text, listIndex),
+                    });
+                    return;
+                }
+                scrollToKeywordAnchor(targetBlockId, preferHrefMatch ? '' : text, localAnchorIndex, href, {
                     onMiss: () => scrollToFaqKeyword(text, listIndex),
                 });
             };
@@ -931,21 +1110,89 @@ export default function SeoArticleEditor({
         [clearTempMerge, commitActiveBlock],
     );
 
+    const insertSuggestedLinkIntoContent = useCallback(
+        (detail) => {
+            const text = String(detail?.text ?? '').trim();
+            const href = String(detail?.href ?? '').trim();
+            if (!text || !href) {
+                return;
+            }
+
+            commitActiveBlock();
+            setActiveTab('editor');
+
+            const currentBlocks = blocksRef.current;
+            for (const block of currentBlocks) {
+                if (block.type === 'image' || !block.content) {
+                    continue;
+                }
+
+                const { html, replaced } = wrapFirstPlainTextWithLink(block.content, text, href);
+                if (!replaced) {
+                    continue;
+                }
+
+                updateBlockContent(block.id, html);
+                requestAnalyze();
+
+                window.dispatchEvent(
+                    new CustomEvent('seo-editor-suggested-link-inserted', {
+                        detail: { text, href },
+                    }),
+                );
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Đã chèn link nội bộ',
+                            body: `«${text}»`,
+                            status: 'success',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: 'Không tìm thấy từ khóa',
+                        body: `Không tìm thấy «${text}» (chưa có link) trong nội dung.`,
+                        status: 'warning',
+                    },
+                }),
+            );
+        },
+        [commitActiveBlock, updateBlockContent, requestAnalyze],
+    );
+
     useEffect(() => {
-        publishExtractedLinks(extractedLinks);
-    }, [extractedLinks, publishExtractedLinks]);
+        publishExtractedLinks(extractedLinks, suggestedInternalLinks);
+    }, [extractedLinks, suggestedInternalLinks, publishExtractedLinks]);
 
     useEffect(() => {
         const onScrollToLink = (event) => {
             scrollToExtractedLink(event.detail ?? {});
         };
 
+        const onInsertSuggestedLink = (event) => {
+            insertSuggestedLinkIntoContent(event.detail ?? {});
+        };
+
+        const onScrollToFeaturedSnippetTable = () => {
+            scrollToFeaturedSnippetTable();
+        };
+
         window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
+        window.addEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
+        window.addEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
 
         return () => {
             window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
+            window.removeEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
+            window.removeEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
         };
-    }, [scrollToExtractedLink]);
+    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, scrollToFeaturedSnippetTable]);
 
     const deleteBlock = useCallback(
         (id) => {
@@ -1189,8 +1436,12 @@ export default function SeoArticleEditor({
                 setContentBonus(result.content_bonus);
             }
             if (result.extracted_links) {
+                const suggested = Array.isArray(result.suggested_internal_links)
+                    ? result.suggested_internal_links
+                    : [];
                 setExtractedLinks(result.extracted_links);
-                publishExtractedLinks(result.extracted_links);
+                setSuggestedInternalLinks(suggested);
+                publishExtractedLinks(result.extracted_links, suggested);
             }
         };
 
@@ -1338,6 +1589,7 @@ export default function SeoArticleEditor({
                 commitActiveBlock();
                 setActiveBlockId(null);
                 setGlobalEditor(null);
+                blockFlushRef.current = null;
             }
             setActiveTab(tabId);
         },
@@ -1525,12 +1777,18 @@ export default function SeoArticleEditor({
                 <ArticleImagesTab
                     key={imagesReloadKey}
                     blocks={blocks}
+                    siteId={siteId}
                     focusKeyword={focusKeyword}
                     articleTitle={articleTitle}
                     onPatchImage={patchImageInBlocks}
                     onSlugChange={handleImageSlugChange}
                     onFocusBlock={focusImageBlock}
                     onQuickFixAll={quickFixAllImages}
+                    onNotify={(payload) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                        );
+                    }}
                 />
             ) : activeTab === 'outline' ? (
                 <div className="seo-tab-panel seo-outline-tab">

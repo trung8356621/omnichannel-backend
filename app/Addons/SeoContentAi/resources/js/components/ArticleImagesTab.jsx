@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ExternalLink, Wand2 } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
+import { applyWatermarkToImage, prepareImageEditorUrl } from '../utils/seoMediaApi';
 
 const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
 
@@ -9,13 +10,90 @@ function isLocalSeoMediaSrc(src) {
     return typeof src === 'string' && src.includes(LOCAL_MEDIA_PATH);
 }
 
-function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
+function canProcessArticleImage(row) {
+    const seoMediaId = Number(row.seoMediaId ?? 0);
+    const wpAttachmentId = Number(row.wpAttachmentId ?? 0);
+
+    if (seoMediaId > 0 || wpAttachmentId > 0) {
+        return true;
+    }
+
+    return isLocalSeoMediaSrc(row.src);
+}
+
+function ImageRow({ row, siteId, onPatch, onSlugChange, onFocusBlock, onNotify }) {
     const [slug, setSlug] = useState(row.slug ?? '');
+    const [openingEditor, setOpeningEditor] = useState(false);
+    const [applyingWatermark, setApplyingWatermark] = useState(false);
     const altText = (row.alt || row.title || '').trim();
+    const showActions = canProcessArticleImage(row);
+    const busy = openingEditor || applyingWatermark;
 
     useEffect(() => {
         setSlug(row.slug ?? '');
     }, [row.slug, row.src]);
+
+    const openImageEditor = async () => {
+        if (!siteId || busy) {
+            return;
+        }
+
+        setOpeningEditor(true);
+        try {
+            const data = await prepareImageEditorUrl({
+                siteId,
+                seoMediaId: row.seoMediaId,
+                wpAttachmentId: row.wpAttachmentId,
+                url: row.src,
+                slug: row.slug,
+            });
+            if (data.editor_url) {
+                // noopener khiến window.open trả null dù tab đã mở — không dùng location.assign.
+                window.open(data.editor_url, '_blank', 'noopener,noreferrer');
+            }
+        } catch (error) {
+            onNotify?.({
+                title: 'Không mở được trình chỉnh sửa',
+                body: error?.message ?? 'Thử lại sau.',
+                status: 'danger',
+            });
+        } finally {
+            setOpeningEditor(false);
+        }
+    };
+
+    const handleApplyWatermark = async () => {
+        if (!siteId || busy) {
+            return;
+        }
+
+        setApplyingWatermark(true);
+        try {
+            const data = await applyWatermarkToImage({
+                siteId,
+                seoMediaId: row.seoMediaId,
+                wpAttachmentId: row.wpAttachmentId,
+                url: row.src,
+                slug: row.slug,
+            });
+            if (data.url) {
+                onPatch?.(row.blockId, { src: data.url });
+            }
+            onNotify?.({
+                title: 'Đóng dấu ảnh',
+                body: data.message ?? 'Đã áp dụng đóng dấu.',
+                status: 'success',
+            });
+        } catch (error) {
+            onNotify?.({
+                title: 'Không áp dụng được đóng dấu',
+                body: error?.message ?? 'Thử lại sau.',
+                status: 'danger',
+            });
+        } finally {
+            setApplyingWatermark(false);
+        }
+    };
 
     return (
         <li className="seo-article-images-row">
@@ -76,6 +154,27 @@ function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
                     <ExternalLink size={14} />
                     <span className="truncate">{row.src}</span>
                 </a>
+
+                {showActions ? (
+                    <div className="seo-article-images-actions">
+                        <button
+                            type="button"
+                            className="seo-article-images-edit-btn"
+                            disabled={!siteId || busy}
+                            onClick={openImageEditor}
+                        >
+                            {openingEditor ? 'Đang chuẩn bị…' : 'Chỉnh sửa hình ảnh'}
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-article-images-watermark-btn"
+                            disabled={!siteId || busy}
+                            onClick={handleApplyWatermark}
+                        >
+                            {applyingWatermark ? 'Đang xử lý…' : 'Áp dụng đóng dấu'}
+                        </button>
+                    </div>
+                ) : null}
             </div>
         </li>
     );
@@ -83,12 +182,14 @@ function ImageRow({ row, onPatch, onSlugChange, onFocusBlock }) {
 
 export default function ArticleImagesTab({
     blocks,
+    siteId = null,
     focusKeyword,
     articleTitle = '',
     onPatchImage,
     onSlugChange,
     onFocusBlock,
     onQuickFixAll,
+    onNotify,
 }) {
     const images = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
     const hasWpImages = images.some((row) => row.wpAttachmentId);
@@ -146,9 +247,11 @@ export default function ArticleImagesTab({
                     <ImageRow
                         key={row.blockId}
                         row={row}
+                        siteId={siteId}
                         onPatch={onPatchImage}
                         onSlugChange={onSlugChange}
                         onFocusBlock={onFocusBlock}
+                        onNotify={onNotify}
                     />
                 ))}
             </ul>

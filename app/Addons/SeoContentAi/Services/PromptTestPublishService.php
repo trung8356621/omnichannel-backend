@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\MarkdownOutlineParser;
 use App\Addons\SeoContentAi\Support\MarkdownSemanticKeywordsParser;
@@ -126,19 +126,12 @@ final class PromptTestPublishService
             ['meta_value' => $phrase],
         );
 
-        $keyword = Keyword::query()->firstOrCreate(
-            [
-                'site_id' => $article->site_id,
-                'phrase' => $phrase,
-            ],
-            [
-                'user_id' => (int) auth()->id(),
-            ],
+        KeywordFocusAttach::attachMainKeyword(
+            $article,
+            (int) $article->site_id,
+            (int) auth()->id(),
+            $phrase,
         );
-
-        $article->keywords()->syncWithoutDetaching([
-            $keyword->id => ['weight' => 1],
-        ]);
     }
 
     /**

@@ -17,6 +17,7 @@ class ArticleKeyword extends Model
 
     protected $casts = [
         'weight' => 'decimal:4',
+        'is_main' => 'boolean',
     ];
 
     public function article(): BelongsTo

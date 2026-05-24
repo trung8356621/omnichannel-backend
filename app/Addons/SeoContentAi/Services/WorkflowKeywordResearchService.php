@@ -36,6 +36,7 @@ final class WorkflowKeywordResearchService
             [
                 'phrase' => $focusPhrase,
                 'site_id' => $article->site_id,
+                'type' => Keyword::TYPE_FOCUS,
             ],
             [
                 'user_id' => $userId,
@@ -44,7 +45,7 @@ final class WorkflowKeywordResearchService
         );
 
         $article->keywords()->syncWithoutDetaching([
-            $parentKeyword->id => ['weight' => 1.0],
+            $parentKeyword->id => ['weight' => 1.0, 'is_main' => true],
         ]);
 
         $childrenCount = 0;
@@ -68,6 +69,7 @@ final class WorkflowKeywordResearchService
                     [
                         'phrase' => $phrase,
                         'site_id' => $article->site_id,
+                        'type' => Keyword::TYPE_FOCUS,
                     ],
                     [
                         'user_id' => $userId,

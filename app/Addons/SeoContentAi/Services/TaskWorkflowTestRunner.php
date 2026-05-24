@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
-use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
@@ -726,19 +726,12 @@ final class TaskWorkflowTestRunner
                 ['meta_value' => $focusKeyword],
             );
 
-            $keyword = Keyword::query()->firstOrCreate(
-                [
-                    'site_id' => $siteId,
-                    'phrase' => $focusKeyword,
-                ],
-                [
-                    'user_id' => (int) auth()->id(),
-                ],
+            KeywordFocusAttach::attachMainKeyword(
+                $article,
+                $siteId,
+                (int) auth()->id(),
+                $focusKeyword,
             );
-
-            $article->keywords()->syncWithoutDetaching([
-                $keyword->id => ['weight' => 1],
-            ]);
         }
 
         return $article;

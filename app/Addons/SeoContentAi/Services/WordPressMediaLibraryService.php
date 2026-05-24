@@ -15,8 +15,8 @@ final class WordPressMediaLibraryService
 {
     public function __construct(
         private readonly WordPressArticleContentService $wpContent,
-    ) {
-    }
+        private readonly SeoWpMediaEditedPendingService $editedPending,
+    ) {}
 
     /**
      * @return array{
@@ -122,6 +122,8 @@ final class WordPressMediaLibraryService
                     'date' => (string) ($item['date'] ?? ''),
                 ];
             }
+
+            $images = $this->editedPending->applyPendingEditsToWordPressImages((int) $site->id, $images);
 
             $total = (int) $response->header('X-WP-Total', count($images));
             $totalPages = max(1, (int) $response->header('X-WP-TotalPages', 1));

@@ -238,6 +238,7 @@ class ArticleResource extends Resource
                     ->label('Từ khóa')
                     ->form([
                         Forms\Components\Hidden::make('keyword_id'),
+                        Forms\Components\Hidden::make('usage'),
                         Forms\Components\Hidden::make('internal_link_only'),
                     ])
                     ->query(function (Builder $query, array $data): void {
@@ -246,15 +247,31 @@ class ArticleResource extends Resource
                             return;
                         }
 
+                        $usage = (string) ($data['usage'] ?? '');
+
+                        if ($usage === 'main') {
+                            $query->whereHas('keywords', function (Builder $keywordQuery) use ($keywordId): void {
+                                $keywordQuery
+                                    ->where('keywords.id', $keywordId)
+                                    ->where('article_keyword.is_main', true);
+                            });
+
+                            return;
+                        }
+
+                        if ($usage === 'internal_link' || ($data['internal_link_only'] ?? '') === '1') {
+                            $query->whereHas('links', function (Builder $linkQuery) use ($keywordId): void {
+                                $linkQuery
+                                    ->where('keyword_id', $keywordId)
+                                    ->where('type', 'internal');
+                            });
+
+                            return;
+                        }
+
                         $query->whereHas('keywords', function (Builder $keywordQuery) use ($keywordId): void {
                             $keywordQuery->where('keywords.id', $keywordId);
                         });
-
-                        if (($data['internal_link_only'] ?? '') === '1') {
-                            $query->whereHas('links', function (Builder $linkQuery): void {
-                                $linkQuery->where('type', 'internal');
-                            });
-                        }
                     })
                     ->indicateUsing(function (array $data): ?string {
                         $keywordId = $data['keyword_id'] ?? null;
@@ -270,9 +287,12 @@ class ArticleResource extends Resource
                             return __('Từ khóa') . ' #' . $keywordId;
                         }
 
-                        $suffix = ($data['internal_link_only'] ?? '') === '1'
-                            ? ' (' . __('có link nội bộ') . ')'
-                            : '';
+                        $usage = (string) ($data['usage'] ?? '');
+                        $suffix = match (true) {
+                            $usage === 'main' => ' (' . __('bài viết chính') . ')',
+                            $usage === 'internal_link', ($data['internal_link_only'] ?? '') === '1' => ' (' . __('có link nội bộ') . ')',
+                            default => '',
+                        };
 
                         return __('Từ khóa') . ': ' . $phrase . $suffix;
                     }),

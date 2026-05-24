@@ -9,46 +9,33 @@ use App\Models\Site;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class SeoMedia extends Model
+class SeoWpMediaEditedPending extends Model
 {
     use BelongsToOnDefaultConnection;
 
     protected $connection = 'omi_seo_ai';
 
-    protected $table = 'seo_media';
+    protected $table = 'seo_wp_media_edited_pending';
 
     protected $guarded = [];
 
     protected function casts(): array
     {
         return [
+            'site_id' => 'integer',
             'wp_attachment_id' => 'integer',
-            'wp_synced_at' => 'datetime',
+            'seo_media_id' => 'integer',
+            'edited_at' => 'datetime',
         ];
     }
 
-    public function article(): BelongsTo
+    public function seoMedia(): BelongsTo
     {
-        return $this->belongsTo(SeoArticle::class, 'article_id');
+        return $this->belongsTo(SeoMedia::class, 'seo_media_id');
     }
 
     public function site(): BelongsTo
     {
         return $this->belongsToOnDefaultConnection(Site::class, 'site_id');
-    }
-
-    public function publicUrl(): string
-    {
-        $path = ltrim(str_replace('\\', '/', (string) $this->path), '/');
-        if ($path !== '') {
-            return '/storage/' . $path;
-        }
-
-        $url = (string) $this->url;
-        if (str_starts_with($url, '/storage/')) {
-            return $url;
-        }
-
-        return $url;
     }
 }

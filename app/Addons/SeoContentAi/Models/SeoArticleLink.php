@@ -23,4 +23,9 @@ class SeoArticleLink extends Model
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');
     }
+
+    public function keyword(): BelongsTo
+    {
+        return $this->belongsTo(Keyword::class, 'keyword_id');
+    }
 }
