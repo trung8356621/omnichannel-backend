@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 
+use App\Addons\SeoContentAi\Exceptions\AiModelsNotReadyException;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -175,6 +176,14 @@ class TestTask extends Page implements HasForms
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
+        } catch (AiModelsNotReadyException $exception) {
+            Notification::make()
+                ->title('Cần đồng bộ model AI')
+                ->body($exception->getMessage())
+                ->warning()
+                ->send();
+
+            $this->redirect($exception->overviewUrl(), navigate: true);
         } catch (\Throwable $exception) {
             $this->errorMessage = $exception->getMessage();
 
@@ -242,6 +251,14 @@ class TestTask extends Page implements HasForms
             }
 
             $notification->send();
+        } catch (AiModelsNotReadyException $exception) {
+            Notification::make()
+                ->title('Cần đồng bộ model AI')
+                ->body($exception->getMessage())
+                ->warning()
+                ->send();
+
+            $this->redirect($exception->overviewUrl(), navigate: true);
         } catch (\Throwable $exception) {
             Notification::make()
                 ->title('Chạy lại bước thất bại')

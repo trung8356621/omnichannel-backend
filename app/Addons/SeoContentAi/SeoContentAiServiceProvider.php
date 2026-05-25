@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi;
 
 use App\Addons\RegistersAddonDatabase;
-use App\Addons\SeoContentAi\Providers\SeoPanelProvider;
 use Illuminate\Support\ServiceProvider;
 
 class SeoContentAiServiceProvider extends ServiceProvider
@@ -16,7 +15,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
 
     public function register(): void
     {
-        $this->app->register(SeoPanelProvider::class);
+        //
     }
 
     public function boot(): void

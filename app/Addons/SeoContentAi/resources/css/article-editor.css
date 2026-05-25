@@ -1408,9 +1408,23 @@
     cursor: pointer;
 }
 
-.seo-block-insert-menu__item:hover {
+.seo-block-insert-menu__item:hover:not(:disabled):not(.is-disabled) {
     border-color: #2271b1;
     color: #2271b1;
+}
+
+.seo-block-insert-menu__item.is-disabled,
+.seo-block-insert-menu__item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: #646970;
+    background: #f6f7f7;
+}
+
+.dark .seo-block-insert-menu__item.is-disabled,
+.dark .seo-block-insert-menu__item:disabled {
+    color: #94a3b8;
+    background: rgb(30 41 59);
 }
 
 .dark .seo-block-insert-menu__item {

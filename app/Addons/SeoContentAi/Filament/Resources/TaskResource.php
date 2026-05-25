@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -67,10 +69,18 @@ class TaskResource extends Resource
             ->defaultSort('updated_at', 'desc')
             ->actions([
                 Tables\Actions\Action::make('test')
-                    ->label('Test')
-                    ->icon('heroicon-o-play')
-                    ->color('success')
-                    ->url(fn (SeoTask $record): string => static::getUrl('test', ['record' => $record])),
+                    ->label(fn (): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
+                        ? 'Test'
+                        : 'Đồng bộ model')
+                    ->icon(fn (): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
+                        ? 'heroicon-o-play'
+                        : 'heroicon-o-cpu-chip')
+                    ->color(fn (): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
+                        ? 'success'
+                        : 'warning')
+                    ->url(fn (SeoTask $record): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
+                        ? static::getUrl('test', ['record' => $record])
+                        : SeoSettingsOverview::getUrl()),
                 Tables\Actions\Action::make('open_builder')
                     ->label('Mở Builder')
                     ->icon('heroicon-o-squares-2x2')

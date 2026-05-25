@@ -85,7 +85,7 @@
                 @if ($activeTab === 'original')
                     · WordPress Media API
                 @elseif (in_array($activeTab, ['local', 'generated'], true))
-                    · seo_media + seo_generated_images
+                    · seo_media
                 @endif
             @elseif ($siteId)
                 Chưa có ảnh{{ filled($filterMonth) ? ' trong tháng đã chọn' : '' }}.

@@ -4,15 +4,26 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use Anthropic;
+use Anthropic\Exceptions\ErrorException;
+use Anthropic\Exceptions\TransporterException;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
-use Anthropic;
+use App\Addons\SeoContentAi\Support\AiModelCategory;
+use GuzzleHttp\Client;
+use Throwable;
 
 final class AiExecutionService
 {
+    private const HTTP_TIMEOUT_SECONDS = 180.0;
+
+    private const HTTP_CONNECT_TIMEOUT_SECONDS = 30.0;
+
+    private const MAX_OUTPUT_TOKENS = 8192;
+
     /**
-     * Thực thi gọi API Claude thông qua mozex/anthropic-laravel.
+     * Thực thi gọi API Claude qua mozex/anthropic-laravel (API key từ DB, không dùng .env).
      *
      * @param  array<string, string>  $variables
      * @return array{0: string, 1: array<string, mixed>|null}
@@ -23,8 +34,16 @@ final class AiExecutionService
         bool $isTaskMode = true,
         array $variables = [],
         ?string $modelOverride = null,
+        ?string $compiledPrompt = null,
     ): array {
         $prompt->loadMissing(['parts', 'aiConnection']);
+
+        $promptTool = trim((string) ($prompt->tools ?? 'default'));
+        if ($promptTool === 'image') {
+            throw new PromptRunException(
+                'Prompt công cụ Hình ảnh phải chạy qua MediaGenerationService (Imagen/Nano Banana), không gọi executeClaude.',
+            );
+        }
 
         $connection = $prompt->aiConnection;
         if ($connection === null || $connection->provider !== 'claude') {
@@ -42,44 +61,28 @@ final class AiExecutionService
         $apiKey = $connection->api_key;
         $modelName = trim((string) ($modelOverride ?? ''));
         if ($modelName === '') {
-            $modelName = trim((string) ($connection->default_model ?? ''));
+            $category = AiModelCategory::resolveForPrompt(
+                filled($prompt->model_category ?? null) ? (string) $prompt->model_category : null,
+                'claude',
+            );
+            $routed = app(AiModelRouterService::class)->getActiveModel((int) $connection->id, $category);
+            $modelName = $routed !== null
+                ? (string) $routed->raw_model_name
+                : 'claude-sonnet-4-20250514';
         }
-        if ($modelName === '') {
-            $modelName = 'claude-3-5-sonnet-20240620';
-        }
 
-        $client = Anthropic::factory()->withApiKey($apiKey)->make();
+        $client = Anthropic::factory()
+            ->withApiKey($apiKey)
+            ->withHttpClient($this->createHttpClient())
+            ->make();
 
-        $parts = $prompt->parts()->orderBy('position')->get();
-
-        $systemInstructions = [];
-        $userMessages = [];
-
-        foreach ($parts as $part) {
-            $block = $this->buildPartBlock($part, $variables);
-            if ($block === '') {
-                continue;
-            }
-
-            $type = strtolower((string) $part->role);
-
-            if ($isTaskMode) {
-                if ($type === 'task') {
-                    $userMessages[] = $block;
-                } else {
-                    $systemInstructions[] = $block;
-                }
-            } else {
-                $userMessages[] = $block;
-            }
-        }
+        $compiledPrompt = trim((string) $compiledPrompt);
+        [$systemInstructions, $userMessages] = $compiledPrompt !== ''
+            ? $this->buildMessagesFromCompiled($compiledPrompt, $inputData, $isTaskMode)
+            : $this->buildMessagesFromParts($prompt, $variables, $isTaskMode, $inputData);
 
         if ($userMessages === [] && $systemInstructions === []) {
             throw new PromptRunException('Prompt không có nội dung thành phần nào.');
-        }
-
-        if (! empty($inputData)) {
-            $userMessages[] = "DỮ LIỆU ĐẦU VÀO CẦN XỬ LÝ:\n" . $inputData;
         }
 
         if ($userMessages === []) {
@@ -88,7 +91,7 @@ final class AiExecutionService
 
         $payload = [
             'model' => $modelName,
-            'max_tokens' => 4096,
+            'max_tokens' => self::MAX_OUTPUT_TOKENS,
             'messages' => [
                 [
                     'role' => 'user',
@@ -113,12 +116,116 @@ final class AiExecutionService
                 throw new PromptRunException('Claude không trả về nội dung.');
             }
 
-            return [$text, $response->usage->toArray()];
+            $usage = null;
+            if (isset($response->usage) && method_exists($response->usage, 'toArray')) {
+                $usage = $response->usage->toArray();
+            }
+
+            return [$text, $usage];
         } catch (PromptRunException $exception) {
             throw $exception;
-        } catch (\Throwable $th) {
-            throw new PromptRunException('Lỗi API Claude: ' . $th->getMessage(), (int) $th->getCode(), $th);
+        } catch (ErrorException $exception) {
+            $statusCode = $exception->getStatusCode();
+            $errorType = $exception->getErrorType();
+
+            throw new PromptRunException(
+                'Lỗi Anthropic API'
+                . ($statusCode !== null ? " ({$statusCode})" : '')
+                . ($errorType !== null && $errorType !== '' ? " [{$errorType}]" : '')
+                . ': ' . $exception->getMessage(),
+                (int) ($statusCode ?? 0),
+                $exception,
+            );
+        } catch (TransporterException $exception) {
+            throw new PromptRunException(
+                'Lỗi kết nối máy chủ Anthropic (timeout/mạng): ' . $exception->getMessage(),
+                0,
+                $exception,
+            );
+        } catch (Throwable $th) {
+            throw new PromptRunException('Lỗi không xác định khi gọi Claude: ' . $th->getMessage(), (int) $th->getCode(), $th);
         }
+    }
+
+    private function createHttpClient(): Client
+    {
+        return new Client([
+            'timeout' => self::HTTP_TIMEOUT_SECONDS,
+            'connect_timeout' => self::HTTP_CONNECT_TIMEOUT_SECONDS,
+        ]);
+    }
+
+    /**
+     * Prompt đã compile (chuỗi Task hoặc run đầy đủ). Task mode: tách system (trước ---) / user (sau ---).
+     *
+     * @return array{0: list<string>, 1: list<string>}
+     */
+    private function buildMessagesFromCompiled(string $compiledPrompt, ?string $inputData, bool $isTaskMode): array
+    {
+        $systemInstructions = [];
+        $userMessages = [];
+
+        if ($isTaskMode && str_contains($compiledPrompt, "\n\n---\n\n")) {
+            $segments = explode("\n\n---\n\n", $compiledPrompt);
+            $stepContent = trim((string) array_pop($segments));
+            $systemBody = trim(implode("\n\n---\n\n", $segments));
+
+            if ($systemBody !== '') {
+                $systemInstructions[] = $systemBody;
+            }
+
+            $userMessages[] = $stepContent !== '' ? $stepContent : $compiledPrompt;
+        } else {
+            $userMessages[] = $compiledPrompt;
+        }
+
+        if (! empty($inputData)) {
+            $userMessages[] = "DỮ LIỆU ĐẦU VÀO CẦN XỬ LÝ:\n" . $inputData;
+        }
+
+        return [$systemInstructions, $userMessages];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{0: list<string>, 1: list<string>}
+     */
+    private function buildMessagesFromParts(
+        SeoPrompt $prompt,
+        array $variables,
+        bool $isTaskMode,
+        ?string $inputData,
+    ): array {
+        $parts = $prompt->parts()->orderBy('position')->get();
+
+        $systemInstructions = [];
+        $userMessages = [];
+
+        foreach ($parts as $part) {
+            $type = strtolower((string) $part->role);
+            $block = $this->buildPartBlock($part, $variables);
+            if ($block === '') {
+                continue;
+            }
+
+            if ($isTaskMode) {
+                // Task mode: chỉ khối «task» vào user — tối ưu token; còn lại lên system.
+                if ($type === 'task') {
+                    $userMessages[] = $block;
+                } else {
+                    $systemInstructions[] = $block;
+                }
+            } else {
+                // Test mode: toàn bộ block vào user để kiểm tra luồng thô.
+                $userMessages[] = $block;
+            }
+        }
+
+        if (! empty($inputData)) {
+            $userMessages[] = "DỮ LIỆU ĐẦU VÀO CẦN XỬ LÝ:\n" . $inputData;
+        }
+
+        return [$systemInstructions, $userMessages];
     }
 
     /**
@@ -142,6 +249,14 @@ final class AiExecutionService
         $rules = trim((string) ($meta['rules'] ?? ''));
         if ($rules !== '') {
             $formatExtra .= "\nQuy tắc:\n" . $this->substituteVariables($rules, $variables);
+        }
+
+        if ($part->role === 'sub_task') {
+            $specific = trim((string) ($meta['specific_constraints'] ?? ''));
+            if ($specific !== '') {
+                $formatExtra .= "\nRàng buộc riêng (sub-prompt):\n"
+                    . $this->substituteVariables($specific, $variables);
+            }
         }
 
         return $blockTitle . $content . $formatExtra;

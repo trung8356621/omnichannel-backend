@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
+use App\Addons\SeoContentAi\Services\AiModelRouterService;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateAiConnection extends CreateRecord
@@ -22,7 +23,13 @@ class CreateAiConnection extends CreateRecord
     {
         $data['user_id'] = auth()->id();
         $data['is_global'] = $data['is_global'] ?? false;
+        $data['default_model'] = null;
 
         return $data;
+    }
+
+    protected function afterCreate(): void
+    {
+        app(AiModelRouterService::class)->syncModelsForConnection((int) $this->record->id);
     }
 }

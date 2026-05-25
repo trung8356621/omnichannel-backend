@@ -21,7 +21,11 @@ class CreatePrompt extends CreateRecord
 
         $data['user_id'] = auth()->id();
         $data['title'] = $data['name'] ?? $data['title'] ?? '';
-        $data['variables'] = $data['variables'] ?? [];
+        $data['variables'] = PromptResource::sanitizeDeclaredVariables($data['variables'] ?? []);
+
+        if (blank($data['model_category'] ?? null) && filled($data['ai_connection_id'] ?? null)) {
+            $data['model_category'] = PromptResource::defaultModelCategoryForConnection($data['ai_connection_id']);
+        }
 
         return $data;
     }

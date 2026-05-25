@@ -75,8 +75,9 @@ export function BlockInsertTrigger(props) {
 /**
  * @param {() => void} onClose
  * @param {(type: 'text'|'image'|'faq') => void} onInsert
+ * @param {boolean} [faqShortcodeDisabled]
  */
-export function BlockInsertMenuBar({ onClose, onInsert }) {
+export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = false }) {
     const ref = useRef(null);
 
     useEffect(() => {
@@ -108,8 +109,18 @@ export function BlockInsertMenuBar({ onClose, onInsert }) {
             </button>
             <button
                 type="button"
-                className="seo-block-insert-menu__item"
-                onClick={() => onInsert('faq')}
+                className={`seo-block-insert-menu__item${faqShortcodeDisabled ? ' is-disabled' : ''}`}
+                disabled={faqShortcodeDisabled}
+                title={
+                    faqShortcodeDisabled
+                        ? 'Bài đã có shortcode [omi_faq] — chỉ dùng một khối FAQ'
+                        : 'Chèn shortcode [omi_faq]'
+                }
+                onClick={() => {
+                    if (!faqShortcodeDisabled) {
+                        onInsert('faq');
+                    }
+                }}
             >
                 <HelpCircle size={18} strokeWidth={1.75} />
                 <span>Shortcode FAQ</span>

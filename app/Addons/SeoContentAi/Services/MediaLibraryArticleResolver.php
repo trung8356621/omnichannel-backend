@@ -105,9 +105,9 @@ final class MediaLibraryArticleResolver
                     $articleId = $media !== null ? (int) $media : null;
                 }
                 if (($articleId === null || $articleId <= 0) && $kind === 'generated') {
-                    $articleId = \App\Addons\SeoContentAi\Models\SeoGeneratedImage::query()
+                    $articleId = \App\Addons\SeoContentAi\Models\SeoMedia::query()
                         ->where('site_id', $siteId)
-                        ->whereKey((int) ($image['id'] ?? 0))
+                        ->whereKey((int) ($image['seo_media_id'] ?? $image['id'] ?? 0))
                         ->value('article_id');
                     $articleId = $articleId !== null ? (int) $articleId : null;
                 }

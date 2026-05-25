@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
+use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
+use App\Addons\SeoContentAi\Services\AiModelRouterService;
 use App\Addons\SeoContentAi\Services\SeoOverviewSettingsService;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -27,7 +29,14 @@ class SeoSettingsOverview extends Page implements HasForms
     /** @var array<string, mixed> */
     public array $overviewSettingsData = [];
 
-    public function mount(SeoOverviewSettingsService $settings): void
+    /** @var array{connections: list<array<string, mixed>>, total_models: int, last_synced_at: ?string} */
+    public array $aiModelsOverview = [
+        'connections' => [],
+        'total_models' => 0,
+        'last_synced_at' => null,
+    ];
+
+    public function mount(SeoOverviewSettingsService $settings, AiModelRouterService $router): void
     {
         $raw = $settings->getSettings();
 
@@ -38,6 +47,12 @@ class SeoSettingsOverview extends Page implements HasForms
         ];
 
         $this->form->fill($this->overviewSettingsData);
+
+        $this->refreshAiModelsOverview($router);
+
+        if (($this->aiModelsOverview['total_models'] ?? 0) === 0) {
+            $this->syncAllAiModels($router, silent: true);
+        }
     }
 
     public function form(Form $form): Form
@@ -58,6 +73,55 @@ class SeoSettingsOverview extends Page implements HasForms
             ->statePath('overviewSettingsData');
     }
 
+    public function refreshAiModelsOverview(AiModelRouterService $router): void
+    {
+        $this->aiModelsOverview = $router->overviewForUser();
+    }
+
+    public function syncAllAiModels(AiModelRouterService $router, bool $silent = false): void
+    {
+        $result = $router->syncAllConnectionsForUser();
+
+        $this->refreshAiModelsOverview($router);
+
+        if ($silent && $result['ok'] > 0) {
+            return;
+        }
+
+        $notification = Notification::make()
+            ->title($result['failed'] === 0 ? 'Đã đồng bộ model AI' : 'Đồng bộ model AI (một phần)')
+            ->body(
+                'Thành công: ' . $result['ok'] . ', thất bại: ' . $result['failed']
+                . ($result['messages'] !== [] ? "\n" . implode("\n", $result['messages']) : ''),
+            );
+
+        $result['failed'] === 0 ? $notification->success() : $notification->warning();
+        $notification->send();
+    }
+
+    public function syncConnectionAiModels(int $connectionId, AiModelRouterService $router): void
+    {
+        $ok = $router->syncModelsForConnection($connectionId);
+
+        $this->refreshAiModelsOverview($router);
+
+        if ($ok) {
+            Notification::make()
+                ->title('Đã đồng bộ model')
+                ->body('Danh sách model đã cập nhật cho kết nối này.')
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Đồng bộ thất bại')
+            ->body('Kiểm tra API Key và nhà cung cấp (Gemini / Claude).')
+            ->danger()
+            ->send();
+    }
+
     public function saveOverviewSettings(SeoOverviewSettingsService $settings): void
     {
         $data = $this->form->getState();
@@ -71,5 +135,10 @@ class SeoSettingsOverview extends Page implements HasForms
             ->title('Đã lưu cài đặt tổng quan')
             ->success()
             ->send();
+    }
+
+    public function aiConnectionEditUrl(int $connectionId): string
+    {
+        return AiConnectionResource::getUrl('edit', ['record' => $connectionId]);
     }
 }

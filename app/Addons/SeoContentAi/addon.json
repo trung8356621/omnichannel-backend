@@ -1,9 +1,9 @@
 {
-    "name": "SEO Content AI",
-    "slug": "seo-content-ai",
-    "version": "1.0.0",
-    "description": "Tự động tạo bài viết chuẩn SEO bằng công nghệ GPT-4o.",
-    "icon": "heroicon-o-sparkles",
-    "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider",
-    "database": "omi_seo_ai"
+  "name": "SEO Content AI",
+  "slug": "seo-content-ai",
+  "version": "1.0.0",
+  "description": "Quản lý prompt SEO, workflow và tích hợp AI cho nội dung.",
+  "icon": "heroicon-o-sparkles",
+  "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider",
+  "database": "omi_seo_ai"
 }

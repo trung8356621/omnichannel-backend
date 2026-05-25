@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
-use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
+use App\Addons\SeoContentAi\Services\AiModelRouterService;
 use App\Models\ApiConnection;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -77,23 +77,8 @@ class AiConnectionResource extends Resource
                     ->revealable()
                     ->required(fn (string $operation): bool => $operation === 'create')
                     ->dehydrated(fn (?string $state): bool => filled($state))
-                    ->maxLength(65535),
-                Forms\Components\Select::make('default_model')
-                    ->label('Model mặc định')
-                    ->required()
-                    ->native(false)
-                    ->default(fn (Get $get): ?string => $get('provider') === 'gemini'
-                        ? GeminiModelCatalog::defaultModel()
-                        : null)
-                    ->options(fn (Get $get): array => match ($get('provider')) {
-                        'gemini' => GeminiModelCatalog::selectOptions(),
-                        'claude' => [
-                            'claude-3-5-sonnet-20240620' => 'Claude 3.5 Sonnet',
-                            'claude-3-opus-20240229' => 'Claude 3 Opus',
-                            'claude-3-haiku-20240307' => 'Claude 3 Haiku',
-                        ],
-                        default => [],
-                    }),
+                    ->maxLength(65535)
+                    ->helperText('Sau khi lưu, hệ thống tự đồng bộ danh sách model từ API (nút «Đồng bộ model» trên trang sửa).'),
                 Forms\Components\Select::make('status')
                     ->label('Trạng thái')
                     ->options([
@@ -114,7 +99,11 @@ class AiConnectionResource extends Resource
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label('Kết nối')
-                    ->description(fn (ApiConnection $record): string => $record->provider . ' - ' . ($record->default_model ?? '—'))
+                    ->description(fn (ApiConnection $record): string => match ($record->provider) {
+                        'gemini' => 'Google Gemini',
+                        'claude' => 'Anthropic Claude',
+                        default => (string) $record->provider,
+                    })
                     ->searchable()
                     ->sortable(),
             ])

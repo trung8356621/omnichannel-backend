@@ -215,6 +215,7 @@ final class TaskWorkflowTestRunner
                     $prompt,
                     $variables,
                     $model !== '' ? $model : null,
+                    isTaskMode: true,
                 );
                 $output = trim((string) ($result->output_text ?? ''));
 

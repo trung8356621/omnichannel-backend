@@ -6,6 +6,9 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Models\ApiConnection;
 
+/**
+ * Facade cho UI — giá trị là Unified Category, không phải raw model slug.
+ */
 final class AiModelCatalog
 {
     /**
@@ -14,47 +17,21 @@ final class AiModelCatalog
     public static function optionsForConnection(?ApiConnection $connection): array
     {
         if ($connection === null) {
-            return GeminiModelCatalog::selectOptions();
+            return AiModelCategory::promptSelectOptions();
         }
 
-        return match ($connection->provider) {
-            'claude' => self::claudeOptions(),
-            'gemini' => GeminiModelCatalog::selectOptions(),
-            default => [],
-        };
-    }
-
-    public static function defaultForConnection(?ApiConnection $connection): string
-    {
-        if ($connection === null) {
-            return GeminiModelCatalog::defaultModel();
-        }
-
-        $configured = trim((string) ($connection->default_model ?? ''));
-
-        if ($connection->provider === 'gemini') {
-            return $configured !== ''
-                ? GeminiModelCatalog::resolve($configured)
-                : GeminiModelCatalog::defaultModel();
-        }
-
-        if ($connection->provider === 'claude') {
-            return $configured !== '' ? $configured : 'claude-3-5-sonnet-20240620';
-        }
-
-        return $configured;
+        return AiModelCategory::connectionSelectOptions((string) $connection->provider);
     }
 
     /**
-     * @return array<string, string>
+     * Gợi ý category khi chọn kết nối trên form Prompt (theo nhà cung cấp, không lưu trên kết nối).
      */
-    public static function claudeOptions(): array
+    public static function defaultForConnection(?ApiConnection $connection): string
     {
-        return [
-            'claude-sonnet-4-20250514' => 'Claude Sonnet 4',
-            'claude-3-5-sonnet-20240620' => 'Claude 3.5 Sonnet',
-            'claude-3-opus-20240229' => 'Claude 3 Opus',
-            'claude-3-haiku-20240307' => 'Claude 3 Haiku',
-        ];
+        if ($connection === null) {
+            return AiModelCategory::GEMINI_FLASH;
+        }
+
+        return AiModelCategory::defaultForProvider((string) $connection->provider);
     }
 }

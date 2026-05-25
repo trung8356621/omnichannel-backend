@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
+use App\Addons\SeoContentAi\Support\AiModelCategory;
+use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Models\ApiConnection;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -61,15 +65,27 @@ class PromptResource extends Resource
                                             ->options(fn (): array => self::aiConnectionOptions())
                                             ->searchable()
                                             ->required()
+                                            ->live()
                                             ->native(false)
                                             ->placeholder('Chọn AI để thực thi Prompt này'),
+                                        Forms\Components\Select::make('model_category')
+                                            ->label('Lựa chọn Model đại diện')
+                                            ->options(fn (Get $get): array => self::modelCategoryOptionsForConnection($get('ai_connection_id')))
+                                            ->default(fn (Get $get): ?string => self::defaultModelCategoryForConnection($get('ai_connection_id')))
+                                            ->required()
+                                            ->native(false)
+                                            ->helperText('Hệ thống tự chọn phiên bản API tốt nhất và chuyển dự phòng khi hết quota. Công cụ Hình ảnh tự dùng GEMINI Image Pro.'),
                                         Forms\Components\Radio::make('tools')
                                             ->label('Công cụ')
                                             ->options([
-                                                'default' => 'Mặc định',
-                                                'image' => 'Hình ảnh',
-                                                'video' => 'Video',
+                                                'default' => 'Mặc định (văn bản)',
+                                                'image' => 'Hình ảnh (Gemini sinh ảnh)',
+                                                'video' => 'Video (URL thủ công)',
                                             ])
+                                            ->helperText(
+                                                'Chuỗi task + sub_task: bước cha luôn văn bản (GEMINI Flash/Pro); bước con tự sinh ảnh (Imagen 4 / Nano Banana) dù chọn Mặc định hay Hình ảnh. '
+                                                . 'Prompt một bước + Hình ảnh: toàn bộ chạy Imagen/Nano Banana. Gemini 3.1 Flash Lite chỉ là model chữ — không sinh ảnh.',
+                                            )
                                             ->default('default')
                                             ->inline(),
                                         Forms\Components\Toggle::make('is_active')
@@ -77,7 +93,7 @@ class PromptResource extends Resource
                                             ->default(true),
                                     ]),
                                 Forms\Components\Section::make('Khai báo Biến (Variables)')
-                                    ->description('Biến hệ thống {{input}} luôn có sẵn trong SEO Flow — nhận kết quả từ edge nối vào Khối Prompt. Model AI được chọn trên widget Khối Prompt trong Workflow Builder.')
+                                    ->description('Biến mặc định ({{input}}, {{loai_san_pham}}, {{PARENT_RESULT}}, …) có sẵn khi chèn vào nội dung — không cần thêm ở đây. Chỉ khai báo biến tùy chỉnh khác.')
                                     ->schema([
                                         Forms\Components\Repeater::make('variables')
                                             ->label('')
@@ -86,7 +102,19 @@ class PromptResource extends Resource
                                                 Forms\Components\TextInput::make('name')
                                                     ->label('Tên biến (VD: focus_keyword)')
                                                     ->required()
-                                                    ->maxLength(128),
+                                                    ->maxLength(128)
+                                                    ->helperText(
+                                                        fn (?string $state): ?string => PromptLoaiSanPhamVariable::isLoaiSanPhamName((string) $state)
+                                                            ? 'loai_san_pham là biến mặc định — không cần khai báo; dùng nút Chèn biến trong builder.'
+                                                            : null,
+                                                    )
+                                                    ->rules([
+                                                        fn (): \Closure => static function (string $attribute, $value, \Closure $fail): void {
+                                                            if (PromptLoaiSanPhamVariable::isLoaiSanPhamName((string) $value)) {
+                                                                $fail('loai_san_pham là biến mặc định — không thêm vào danh sách khai báo.');
+                                                            }
+                                                        },
+                                                    ]),
                                                 Forms\Components\TextInput::make('description')
                                                     ->label('Ghi chú')
                                                     ->maxLength(255),
@@ -114,8 +142,10 @@ class PromptResource extends Resource
                                                 self::promptPartBlock('role', 'Vai trò'),
                                                 self::promptPartBlock('context', 'Bối cảnh'),
                                                 self::promptPartBlock('task', 'Nhiệm vụ chính', isTask: true),
+                                                self::subTaskBlock(),
                                                 self::promptPartBlock('formatting', 'Định dạng đầu ra'),
                                                 self::promptPartBlock('constraints', 'Ràng buộc / Quy tắc'),
+                                                self::globalConstraintsBlock(),
                                             ])
                                             ->collapsible(),
                                     ]),
@@ -171,15 +201,43 @@ class PromptResource extends Resource
                     default => (string) $ai->provider,
                 };
 
-                $label = $ai->name . ' (' . $providerName;
-                if (filled($ai->default_model)) {
-                    $label .= ' - ' . $ai->default_model;
-                }
-                $label .= ')';
+                $label = $ai->name . ' (' . $providerName . ')';
 
                 return [$ai->id => $label];
             })
             ->all();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function modelCategoryOptionsForConnection(mixed $connectionId): array
+    {
+        if (blank($connectionId)) {
+            return AiModelCategory::promptSelectOptions();
+        }
+
+        $connection = ApiConnection::query()->find((int) $connectionId);
+        if ($connection === null) {
+            return AiModelCategory::promptSelectOptions();
+        }
+
+        $options = AiModelCategory::connectionSelectOptions((string) $connection->provider);
+
+        return $options !== [] ? $options : AiModelCategory::promptSelectOptions();
+    }
+
+    public static function defaultModelCategoryForConnection(mixed $connectionId): ?string
+    {
+        if (blank($connectionId)) {
+            return AiModelCategory::GEMINI_FLASH;
+        }
+
+        $connection = ApiConnection::query()->find((int) $connectionId);
+
+        return $connection !== null
+            ? \App\Addons\SeoContentAi\Support\AiModelCatalog::defaultForConnection($connection)
+            : AiModelCategory::GEMINI_FLASH;
     }
 
     /**
@@ -195,6 +253,7 @@ class PromptResource extends Resource
             ['type' => 'task', 'data' => ['name' => '', 'rules' => '', 'content' => '']],
             ['type' => 'formatting', 'data' => ['content' => '']],
             ['type' => 'constraints', 'data' => ['content' => '']],
+            ['type' => 'global_constraints', 'data' => ['content' => '']],
         ];
     }
 
@@ -218,11 +277,18 @@ class PromptResource extends Resource
                 ->columnSpanFull();
         }
 
-        $schema[] = Forms\Components\Textarea::make('content')
+        $contentField = Forms\Components\Textarea::make('content')
             ->label('Nội dung')
             ->required()
             ->rows(6)
-            ->extraInputAttributes(['data-prompt-content' => '1'])
+            ->extraInputAttributes(['data-prompt-content' => '1']);
+
+        if ($role === 'global_constraints') {
+            $contentField
+                ->helperText('Ràng buộc áp dụng cho toàn bộ chuỗi (nhiệm vụ chính + các sub-prompt). Luôn được đưa vào ngữ cảnh hệ thống khi chạy.');
+        }
+
+        $schema[] = $contentField
             ->hintActions([
                 FormAction::make('choose_template')
                     ->label('Chọn mẫu')
@@ -270,6 +336,77 @@ class PromptResource extends Resource
             ->schema($schema);
     }
 
+    private static function subTaskBlock(): Block
+    {
+        return Block::make('sub_task')
+            ->label(fn (?array $state): string => 'Nhiệm vụ phụ thuộc (Sub-Prompt)'
+                . (filled($state['name'] ?? null) ? ' - ' . $state['name'] : ''))
+            ->schema([
+                Forms\Components\TextInput::make('name')
+                    ->label('Tên Sub-Prompt (Gợi nhớ)')
+                    ->placeholder('Ví dụ: Anh_2_Goc_nghieng, Anh_3_POV...')
+                    ->live(debounce: 500)
+                    ->required(),
+                Forms\Components\Textarea::make('rules')
+                    ->label('Ràng buộc / Quy tắc')
+                    ->placeholder('VD: Bắt buộc có H1, tối thiểu 3 H2…')
+                    ->rows(4)
+                    ->columnSpanFull(),
+                Forms\Components\Textarea::make('specific_constraints')
+                    ->label('Ràng buộc riêng (sub-prompt)')
+                    ->placeholder('VD: Góc máy 45°, nền trắng, không chèn chữ…')
+                    ->helperText('Chỉ áp dụng cho nhiệm vụ phụ thuộc này; khác với quy tắc chung của block.')
+                    ->rows(4)
+                    ->columnSpanFull(),
+                Forms\Components\Textarea::make('content')
+                    ->label('Nội dung Prompt phụ thuộc')
+                    ->helperText('Sử dụng biến {{PARENT_RESULT}} để AI tham chiếu đến kết quả của Prompt cha.')
+                    ->required()
+                    ->rows(6)
+                    ->hintAction(
+                        FormAction::make('insert_variable_sub')
+                            ->label('Chèn biến')
+                            ->icon('heroicon-m-variable')
+                            ->form([
+                                Forms\Components\Select::make('selected_var')
+                                    ->label('Chọn biến')
+                                    ->options(function (Get $get): array {
+                                        $customVars = collect($get('../../variables') ?? [])
+                                            ->pluck('name')
+                                            ->filter()
+                                            ->toArray();
+
+                                        $options = [
+                                            '{{PARENT_RESULT}}' => 'Hệ thống: Kết quả Prompt cha (Text hoặc File URL)',
+                                        ];
+
+                                        foreach ($customVars as $var) {
+                                            $options["{{$var}}"] = "Tự tạo: {{$var}}";
+                                        }
+
+                                        return $options;
+                                    })
+                                    ->required()
+                                    ->searchable(),
+                            ])
+                            ->action(function (Set $set, Get $get, array $data): void {
+                                $current = (string) ($get('content') ?? '');
+                                $insert = (string) ($data['selected_var'] ?? '');
+                                if ($insert === '') {
+                                    return;
+                                }
+
+                                $set('content', trim($current . ' ' . $insert));
+                            }),
+                    ),
+            ]);
+    }
+
+    private static function globalConstraintsBlock(): Block
+    {
+        return self::promptPartBlock('global_constraints', 'Ràng buộc tổng (Global)');
+    }
+
     /**
      * Chuẩn hóa builder state → JSON preview (nhiệm vụ chính: name + rules thành cặp).
      *
@@ -297,6 +434,22 @@ class PromptResource extends Resource
                     ], static fn ($v) => $v !== null);
                 }
 
+                if ($type === 'sub_task') {
+                    $pair = array_filter([
+                        'name' => filled($data['name'] ?? null) ? (string) $data['name'] : null,
+                        'rules' => filled($data['rules'] ?? null) ? trim((string) $data['rules']) : null,
+                        'specific_constraints' => filled($data['specific_constraints'] ?? null)
+                            ? trim((string) $data['specific_constraints'])
+                            : null,
+                    ], static fn ($v) => $v !== null && $v !== '');
+
+                    return array_filter([
+                        'type' => 'sub_task',
+                        'content' => $content !== '' ? $content : null,
+                        'pair' => $pair !== [] ? $pair : null,
+                    ], static fn ($v) => $v !== null);
+                }
+
                 return array_filter([
                     'type' => $type !== '' ? $type : null,
                     'content' => $content !== '' ? $content : null,
@@ -304,6 +457,28 @@ class PromptResource extends Resource
             })
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, string>|null
+     */
+    public static function taskMetaFromBuilderData(string $role, array $data): ?array
+    {
+        $meta = [];
+        $rules = trim((string) ($data['rules'] ?? ''));
+        if ($rules !== '') {
+            $meta['rules'] = $rules;
+        }
+
+        if ($role === 'sub_task') {
+            $specific = trim((string) ($data['specific_constraints'] ?? ''));
+            if ($specific !== '') {
+                $meta['specific_constraints'] = $specific;
+            }
+        }
+
+        return $meta !== [] ? $meta : null;
     }
 
     /**
@@ -319,16 +494,13 @@ class PromptResource extends Resource
         $role = (string) $item['type'];
         $meta = null;
 
-        if ($role === 'task') {
-            $rules = trim((string) ($item['data']['rules'] ?? ''));
-            if ($rules !== '') {
-                $meta = ['rules' => $rules];
-            }
+        if (in_array($role, ['task', 'sub_task'], true)) {
+            $meta = self::taskMetaFromBuilderData($role, is_array($item['data'] ?? null) ? $item['data'] : []);
         }
 
         return [
             'role' => $role,
-            'name' => $role === 'task' && filled($item['data']['name'] ?? null)
+            'name' => in_array($role, ['task', 'sub_task'], true) && filled($item['data']['name'] ?? null)
                 ? (string) $item['data']['name']
                 : null,
             'content' => $content,
@@ -346,10 +518,16 @@ class PromptResource extends Resource
             'content' => $part->content,
         ];
 
-        if ($part->role === 'task') {
+        if (in_array((string) $part->role, ['task', 'sub_task'], true)) {
             $data['name'] = $part->name;
+        }
+
+        if (in_array((string) $part->role, ['task', 'sub_task'], true)) {
             $meta = is_array($part->meta ?? null) ? $part->meta : [];
             $data['rules'] = (string) ($meta['rules'] ?? '');
+            if ((string) $part->role === 'sub_task') {
+                $data['specific_constraints'] = (string) ($meta['specific_constraints'] ?? '');
+            }
         }
 
         return [
@@ -398,6 +576,8 @@ class PromptResource extends Resource
             ->values();
 
         return $names
+            ->reject(static fn (string $name): bool => PromptLoaiSanPhamVariable::isLoaiSanPhamName($name)
+                || strtoupper($name) === 'PARENT_RESULT')
             ->map(static function (string $name) use ($declared, $defaults): array {
                 $row = $declared->firstWhere('name', $name);
 
@@ -407,6 +587,25 @@ class PromptResource extends Resource
                     'description' => filled($row['description'] ?? null) ? (string) $row['description'] : null,
                 ];
             })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Loại biến mặc định khỏi repeater khai báo (vẫn dùng được trong nội dung prompt).
+     *
+     * @param  array<int, array<string, mixed>>|null  $variables
+     * @return array<int, array<string, mixed>>
+     */
+    public static function sanitizeDeclaredVariables(?array $variables): array
+    {
+        return collect($variables ?? [])
+            ->filter(static function (array $row): bool {
+                $name = trim((string) ($row['name'] ?? ''));
+
+                return $name !== '' && ! PromptLoaiSanPhamVariable::isLoaiSanPhamName($name);
+            })
+            ->values()
             ->all();
     }
 
@@ -425,6 +624,19 @@ class PromptResource extends Resource
             'site_short_description' => 'Mô tả ngắn website (domain)',
             'site_cta' => 'CTA / liên hệ website (domain)',
             'site_links' => 'Danh sách link (từ khóa → URL, domain)',
+            'loai_san_pham' => 'Loại sản phẩm (product_cat) — biến mặc định, chạy thử: tên miền → product_cat',
+        ];
+    }
+
+    /**
+     * Biến luôn có trong menu chèn / JSON preview (không cần khai báo trong repeater).
+     *
+     * @return list<string>
+     */
+    public static function defaultRuntimeVariableNames(): array
+    {
+        return [
+            PromptLoaiSanPhamVariable::NAME,
         ];
     }
 
@@ -479,6 +691,7 @@ class PromptResource extends Resource
                 return implode("\n", array_filter([
                     (string) ($data['content'] ?? ''),
                     (string) ($data['rules'] ?? ''),
+                    (string) ($data['specific_constraints'] ?? ''),
                 ]));
             })
             ->join("\n");
@@ -507,6 +720,10 @@ class PromptResource extends Resource
             $options["{{{$key}}}"] = "Mặc định: {{{$key}}} ({$label})";
         }
         foreach ($customVars as $var) {
+            if (array_key_exists($var, $defaultVars)) {
+                continue;
+            }
+
             $options["{{{$var}}}"] = "Tự tạo: {{{$var}}}";
         }
 
@@ -569,10 +786,18 @@ class PromptResource extends Resource
             ->defaultSort('updated_at', 'desc')
             ->actions([
                 Tables\Actions\Action::make('test')
-                    ->label('Test')
-                    ->icon('heroicon-o-play')
-                    ->color('success')
-                    ->url(fn (SeoPrompt $record): string => static::getUrl('test', ['record' => $record])),
+                    ->label(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
+                        ? 'Test'
+                        : 'Đồng bộ model')
+                    ->icon(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
+                        ? 'heroicon-o-play'
+                        : 'heroicon-o-cpu-chip')
+                    ->color(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
+                        ? 'success'
+                        : 'warning')
+                    ->url(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
+                        ? static::getUrl('test', ['record' => $record])
+                        : SeoSettingsOverview::getUrl()),
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])

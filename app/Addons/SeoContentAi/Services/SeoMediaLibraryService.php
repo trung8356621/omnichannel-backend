@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\SeoGeneratedImage;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -25,14 +24,10 @@ class SeoMediaLibraryService
         $perPage = max(1, min(100, $perPage));
         $page = max(1, $page);
 
-        $localRows = $this->queryLocal($site, $month, $search)->get();
-        $generatedRows = $this->queryGenerated($site, $month, $search)->get();
+        $rows = $this->queryMedia($site, $month, $search)->get();
 
-        $merged = $localRows
-            ->map(fn (SeoMedia $media): array => $this->mapLocalItem($media))
-            ->concat(
-                $generatedRows->map(fn (SeoGeneratedImage $row): array => $this->mapGeneratedItem($row)),
-            )
+        $merged = $rows
+            ->map(fn (SeoMedia $media): array => $this->mapMediaItem($media))
             ->sortByDesc('sort_at')
             ->values();
 
@@ -60,7 +55,7 @@ class SeoMediaLibraryService
     /**
      * @return \Illuminate\Database\Eloquent\Builder<SeoMedia>
      */
-    private function queryLocal(Site $site, ?string $month, ?string $search)
+    private function queryMedia(Site $site, ?string $month, ?string $search)
     {
         $query = SeoMedia::query()
             ->where('site_id', $site->id)
@@ -75,30 +70,6 @@ class SeoMediaLibraryService
                 $q->where('slug', 'like', $like)
                     ->orWhere('filename', 'like', $like)
                     ->orWhere('alt_text', 'like', $like);
-            });
-        }
-
-        return $query;
-    }
-
-    /**
-     * @return \Illuminate\Database\Eloquent\Builder<SeoGeneratedImage>
-     */
-    private function queryGenerated(Site $site, ?string $month, ?string $search)
-    {
-        $query = SeoGeneratedImage::query()
-            ->where('site_id', $site->id)
-            ->orderByDesc('created_at');
-
-        $this->applyMonthFilter($query, 'created_at', $month);
-
-        $search = trim((string) $search);
-        if ($search !== '') {
-            $like = '%' . addcslashes($search, '%_\\') . '%';
-            $query->where(function ($q) use ($like): void {
-                $q->where('slug', 'like', $like)
-                    ->orWhere('alt', 'like', $like)
-                    ->orWhere('title', 'like', $like);
             });
         }
 
@@ -126,42 +97,25 @@ class SeoMediaLibraryService
     /**
      * @return array<string, mixed>
      */
-    private function mapLocalItem(SeoMedia $media): array
+    private function mapMediaItem(SeoMedia $media): array
     {
         $createdAt = $media->created_at;
+        $source = (string) $media->source;
+        $kind = str_starts_with($source, 'ai_') ? 'generated' : 'local';
+        $alt = filled($media->alt_text) ? (string) $media->alt_text : (string) $media->slug;
 
         return [
-            'kind' => 'local',
+            'kind' => $kind,
             'id' => (int) $media->id,
             'seo_media_id' => (int) $media->id,
             'article_id' => $media->article_id !== null ? (int) $media->article_id : null,
+            'wp_attachment_id' => $media->wp_attachment_id !== null ? (int) $media->wp_attachment_id : null,
             'slug' => (string) $media->slug,
             'url' => $media->publicUrl(),
-            'alt' => filled($media->alt_text) ? (string) $media->alt_text : (string) $media->slug,
-            'source' => (string) $media->source,
-            'created_at' => $createdAt?->toIso8601String(),
-            'sort_at' => $createdAt?->timestamp ?? 0,
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function mapGeneratedItem(SeoGeneratedImage $row): array
-    {
-        $createdAt = $row->created_at;
-
-        return [
-            'kind' => 'generated',
-            'id' => (int) $row->id,
-            'seo_media_id' => 0,
-            'article_id' => $row->article_id !== null ? (int) $row->article_id : null,
-            'wp_attachment_id' => (int) ($row->wp_attachment_id ?? 0) ?: null,
-            'slug' => (string) $row->slug,
-            'url' => (string) $row->url,
-            'title' => (string) ($row->title ?? ''),
-            'alt' => (string) ($row->alt ?? ''),
-            'source' => 'ai_generated',
+            'title' => '',
+            'alt' => $alt,
+            'source' => $source,
+            'ai_generator' => filled($media->ai_generator) ? (string) $media->ai_generator : null,
             'created_at' => $createdAt?->toIso8601String(),
             'sort_at' => $createdAt?->timestamp ?? 0,
         ];

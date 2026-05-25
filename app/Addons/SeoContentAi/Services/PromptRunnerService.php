@@ -17,24 +17,36 @@ final class PromptRunnerService
 {
     public function __construct(
         private readonly AiExecutionService $aiExecution,
+        private readonly MediaGenerationService $mediaGeneration,
+        private readonly PromptMediaStorageService $promptMediaStorage,
+        private readonly AiModelRouterService $aiModelRouter,
+        private readonly AiModelsReadinessService $aiModelsReadiness,
     ) {}
 
     private const ROLE_HEADINGS = [
         'role' => 'Vai trò',
         'context' => 'Bối cảnh',
         'task' => 'Nhiệm vụ',
+        'sub_task' => 'Nhiệm vụ phụ thuộc',
         'formatting' => 'Định dạng đầu ra',
         'constraints' => 'Ràng buộc',
+        'global_constraints' => 'Ràng buộc tổng (Global)',
     ];
 
     /**
      * @param  array<string, string>  $variables
+     */
+    /**
+     * @param  bool  $runFullDependentChain  false = chỉ chạy task cha (dùng khi test từng bước)
+     * @param  int|null  $onlySubTaskIndex  Chỉ chạy một sub_task (0-based); cần PARENT_RESULT trong $variables
      */
     public function run(
         SeoPrompt $prompt,
         array $variables,
         ?string $modelOverride = null,
         bool $isTaskMode = true,
+        bool $runFullDependentChain = true,
+        ?int $onlySubTaskIndex = null,
     ): PromptResult {
         $prompt->loadMissing(['parts', 'aiConnection']);
 
@@ -51,9 +63,66 @@ final class PromptRunnerService
             throw new PromptRunException('Kết nối AI chưa có API Key.');
         }
 
-        $model = trim((string) ($modelOverride ?? ''));
-        if ($model === '') {
-            $model = AiModelCatalog::defaultForConnection($connection);
+        $this->aiModelsReadiness->assertConnectionReady($connection);
+
+        $toolType = $this->normalizeToolType($prompt);
+
+        if ($toolType === 'image' && $connection->provider !== 'gemini') {
+            throw new PromptRunException(
+                'Prompt công cụ Hình ảnh yêu cầu kết nối Gemini (Imagen / Nano Banana), không dùng Claude.',
+            );
+        }
+
+        $category = filled($modelOverride) && \App\Addons\SeoContentAi\Support\AiModelCategory::isValid($modelOverride)
+            ? $modelOverride
+            : $this->aiModelRouter->resolveCategoryForPrompt($prompt, $toolType);
+
+        // Test chuỗi prompt ảnh: cho phép chạy trực tiếp pipeline ảnh ngay từ nút "Chạy prompt cha".
+        // Mục tiêu: ép kết quả bước 1 phải là URL ảnh để người dùng xác nhận render trước khi chạy sub_task.
+        if (
+            $toolType === 'image'
+            && $onlySubTaskIndex === null
+            && ! $runFullDependentChain
+            && $this->hasDependentSubTasks($prompt)
+        ) {
+            return $this->runDirectImagePreview(
+                $prompt,
+                $variables,
+                $connection,
+                $category,
+                $isTaskMode,
+            );
+        }
+
+        if ($this->hasDependentSubTasks($prompt)) {
+            if ($onlySubTaskIndex !== null) {
+                return $this->runDependentSubTaskStepOnly(
+                    $prompt,
+                    $variables,
+                    $connection,
+                    $category,
+                    $isTaskMode,
+                    $onlySubTaskIndex,
+                );
+            }
+
+            if (! $runFullDependentChain) {
+                return $this->runDependentParentStepOnly(
+                    $prompt,
+                    $variables,
+                    $connection,
+                    $category,
+                    $isTaskMode,
+                );
+            }
+
+            return $this->runDependentSubTaskChain(
+                $prompt,
+                $variables,
+                $connection,
+                $category,
+                $isTaskMode,
+            );
         }
 
         $compiled = $this->compilePrompt($prompt, $variables);
@@ -67,14 +136,97 @@ final class PromptRunnerService
             'input_snapshot' => [
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
-                'model' => $model,
+                'model_category' => $category,
                 'is_task_mode' => $isTaskMode,
+                'tools' => $toolType,
             ],
             'started_at' => now(),
         ]);
 
         try {
-            [$output, $usage] = $this->callProvider($connection, $prompt, $compiled, $model, $variables, $isTaskMode);
+            [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+                $connection,
+                $prompt,
+                $compiled,
+                $variables,
+                $isTaskMode,
+                $toolType,
+                $category,
+            );
+            $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $toolType, $rawModel);
+            $output = $this->enforceMediaOnlyOutput($output, $toolType);
+
+            $result->update([
+                'status' => 'completed',
+                'output_text' => $output,
+                'token_usage' => $usage,
+                'finished_at' => now(),
+                'input_snapshot' => array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    ['raw_model_used' => $rawModel],
+                ),
+            ]);
+        } catch (\Throwable $exception) {
+            $result->update([
+                'status' => 'failed',
+                'error_message' => $exception->getMessage(),
+                'finished_at' => now(),
+            ]);
+
+            throw $exception instanceof PromptRunException
+                ? $exception
+                : new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $result->fresh();
+    }
+
+    /**
+     * Prompt tools=image + có sub_task + mode test từng bước:
+     * bước đầu chạy trực tiếp Imagen/Nano Banana và bắt buộc trả URL ảnh.
+     *
+     * @param  array<string, string>  $variables
+     */
+    private function runDirectImagePreview(
+        SeoPrompt $prompt,
+        array $variables,
+        ApiConnection $connection,
+        string $category,
+        bool $isTaskMode,
+    ): PromptResult {
+        $compiled = $this->compilePrompt($prompt, $variables);
+
+        $result = PromptResult::query()->create([
+            'prompt_id' => $prompt->id,
+            'entity_id' => null,
+            'user_id' => (int) auth()->id(),
+            'site_id' => 0,
+            'status' => 'running',
+            'input_snapshot' => [
+                'variables' => $variables,
+                'compiled_prompt' => $compiled,
+                'model_category' => $category,
+                'is_task_mode' => $isTaskMode,
+                'tools' => 'image',
+                'chain_mode' => true,
+                'chain_step' => 'task',
+                'chain_step_index' => 0,
+                'direct_image_preview' => true,
+            ],
+            'started_at' => now(),
+        ]);
+
+        try {
+            [$output, $usage] = $this->mediaGeneration->executeImage(
+                $connection,
+                $prompt,
+                $compiled,
+                $variables,
+                null,
+            );
+
+            $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, 'image');
+            $output = $this->enforceMediaOnlyOutput($output, 'image');
 
             $result->update([
                 'status' => 'completed',
@@ -95,6 +247,514 @@ final class PromptRunnerService
         }
 
         return $result->fresh();
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{0: string, 1: array<string, mixed>|null, 2: string}
+     */
+    private function executeWithModelRouting(
+        ApiConnection $connection,
+        SeoPrompt $prompt,
+        string $compiled,
+        array $variables,
+        bool $isTaskMode,
+        string $toolType,
+        string $category,
+    ): array {
+        [$output, $usage, $rawModel] = $this->aiModelRouter->executeWithFailover(
+            $connection,
+            $category,
+            fn (string $rawModelName, ?int $modelId): array => $this->callProvider(
+                $connection,
+                $prompt,
+                $compiled,
+                $rawModelName,
+                $variables,
+                $isTaskMode,
+                $toolType,
+            ),
+        );
+
+        return [$output, $usage, $rawModel];
+    }
+
+    public function hasDependentSubTasks(SeoPrompt $prompt): bool
+    {
+        return $this->getDependentSubTaskParts($prompt)->isNotEmpty();
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int, SeoPromptPart>
+     */
+    public function getDependentSubTaskParts(SeoPrompt $prompt): \Illuminate\Support\Collection
+    {
+        return $prompt->parts()
+            ->where('role', 'sub_task')
+            ->orderBy('position')
+            ->get()
+            ->filter(static fn (SeoPromptPart $part): bool => trim((string) $part->content) !== '')
+            ->values();
+    }
+
+    /**
+     * Chỉ chạy khối task cha (test từng bước).
+     *
+     * @param  array<string, string>  $variables
+     */
+    private function runDependentParentStepOnly(
+        SeoPrompt $prompt,
+        array $variables,
+        ApiConnection $connection,
+        string $baseCategory,
+        bool $isTaskMode,
+    ): PromptResult {
+        $parts = $prompt->parts()->orderBy('position')->get();
+        $mainTask = $parts->firstWhere('role', 'task');
+
+        if ($mainTask === null || trim((string) $mainTask->content) === '') {
+            throw new PromptRunException("Prompt thiếu khối 'Nhiệm vụ chính' (task).");
+        }
+
+        $toolType = $this->normalizeToolType($prompt);
+
+        $result = PromptResult::query()->create([
+            'prompt_id' => $prompt->id,
+            'entity_id' => null,
+            'user_id' => (int) auth()->id(),
+            'site_id' => 0,
+            'status' => 'running',
+            'input_snapshot' => [
+                'variables' => $variables,
+                'compiled_prompt' => $this->compileChainStep($prompt, $mainTask, $variables),
+                'model_category' => $baseCategory,
+                'is_task_mode' => $isTaskMode,
+                'tools' => $toolType,
+                'chain_mode' => true,
+                'chain_step' => 'task',
+                'chain_step_index' => 0,
+            ],
+            'started_at' => now(),
+        ]);
+
+        try {
+            [$output, $usage, $rawModel] = $this->executeChainStepWithRouting(
+                $connection,
+                $prompt,
+                $mainTask,
+                $variables,
+                $baseCategory,
+                $isTaskMode,
+                $toolType,
+            );
+
+            $result->update([
+                'status' => 'completed',
+                'output_text' => $output,
+                'token_usage' => $usage,
+                'finished_at' => now(),
+                'input_snapshot' => array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    ['raw_model_used' => $rawModel],
+                ),
+            ]);
+        } catch (\Throwable $exception) {
+            $result->update([
+                'status' => 'failed',
+                'error_message' => $exception->getMessage(),
+                'finished_at' => now(),
+            ]);
+
+            throw $exception instanceof PromptRunException
+                ? $exception
+                : new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $result->fresh();
+    }
+
+    /**
+     * Chỉ chạy một sub_task trong chuỗi (test từng bước; PARENT_RESULT = kết quả bước trước).
+     *
+     * @param  array<string, string>  $variables
+     */
+    private function runDependentSubTaskStepOnly(
+        SeoPrompt $prompt,
+        array $variables,
+        ApiConnection $connection,
+        string $baseCategory,
+        bool $isTaskMode,
+        int $subTaskIndex,
+    ): PromptResult {
+        $subTasks = $this->getDependentSubTaskParts($prompt);
+
+        if ($subTaskIndex < 0 || $subTaskIndex >= $subTasks->count()) {
+            throw new PromptRunException('Không tìm thấy prompt con #' . ($subTaskIndex + 1) . ' trong chuỗi.');
+        }
+
+        if (trim((string) ($variables['PARENT_RESULT'] ?? '')) === '') {
+            throw new PromptRunException('Thiếu {{PARENT_RESULT}} — chạy prompt cha (hoặc bước con trước) trước.');
+        }
+
+        /** @var SeoPromptPart $subTask */
+        $subTask = $subTasks->get($subTaskIndex);
+        $toolType = $this->normalizeToolType($prompt);
+        $stepName = filled($subTask->name) ? (string) $subTask->name : ('Prompt con ' . ($subTaskIndex + 1));
+
+        $result = PromptResult::query()->create([
+            'prompt_id' => $prompt->id,
+            'entity_id' => null,
+            'user_id' => (int) auth()->id(),
+            'site_id' => 0,
+            'status' => 'running',
+            'input_snapshot' => [
+                'variables' => $variables,
+                'compiled_prompt' => $this->compileChainStep($prompt, $subTask, $variables),
+                'model_category' => $baseCategory,
+                'is_task_mode' => $isTaskMode,
+                'tools' => $toolType,
+                'chain_mode' => true,
+                'chain_step' => 'sub_task',
+                'chain_step_index' => $subTaskIndex + 1,
+                'chain_step_name' => $stepName,
+            ],
+            'started_at' => now(),
+        ]);
+
+        try {
+            [$output, $usage, $rawModel] = $this->executeChainStepWithRouting(
+                $connection,
+                $prompt,
+                $subTask,
+                $variables,
+                $baseCategory,
+                $isTaskMode,
+                $toolType,
+            );
+
+            $result->update([
+                'status' => 'completed',
+                'output_text' => $output,
+                'token_usage' => $usage,
+                'finished_at' => now(),
+                'input_snapshot' => array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    ['raw_model_used' => $rawModel],
+                ),
+            ]);
+        } catch (\Throwable $exception) {
+            $result->update([
+                'status' => 'failed',
+                'error_message' => $exception->getMessage(),
+                'finished_at' => now(),
+            ]);
+
+            throw $exception instanceof PromptRunException
+                ? $exception
+                : new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $result->fresh();
+    }
+
+    /**
+     * Chuỗi task → sub_task: mỗi bước cập nhật {{PARENT_RESULT}}; image/video lưu thư viện nội bộ.
+     *
+     * @param  array<string, string>  $variables
+     */
+    private function runDependentSubTaskChain(
+        SeoPrompt $prompt,
+        array $variables,
+        ApiConnection $connection,
+        string $baseCategory,
+        bool $isTaskMode,
+    ): PromptResult {
+        $parts = $prompt->parts()->orderBy('position')->get();
+        $mainTask = $parts->firstWhere('role', 'task');
+        $subTasks = $parts->where('role', 'sub_task')->values();
+
+        if ($mainTask === null || trim((string) $mainTask->content) === '') {
+            throw new PromptRunException("Prompt thiếu khối 'Nhiệm vụ chính' (task).");
+        }
+
+        $toolType = $this->normalizeToolType($prompt);
+        $chainVariables = $variables;
+
+        $result = PromptResult::query()->create([
+            'prompt_id' => $prompt->id,
+            'entity_id' => null,
+            'user_id' => (int) auth()->id(),
+            'site_id' => 0,
+            'status' => 'running',
+            'input_snapshot' => [
+                'variables' => $variables,
+                'compiled_prompt' => $this->compilePrompt($prompt, $variables),
+                'model_category' => $baseCategory,
+                'is_task_mode' => $isTaskMode,
+                'tools' => $toolType,
+                'chain_mode' => true,
+            ],
+            'started_at' => now(),
+        ]);
+
+        $usageAggregate = null;
+        $chainSteps = [];
+
+        try {
+            [$parentOutput, $usage] = $this->executeChainStep(
+                $connection,
+                $prompt,
+                $mainTask,
+                $chainVariables,
+                $baseCategory,
+                $isTaskMode,
+                $toolType,
+            );
+            $usageAggregate = $usage;
+            $chainVariables['PARENT_RESULT'] = $parentOutput;
+            $chainSteps[] = [
+                'role' => 'task',
+                'name' => filled($mainTask->name) ? (string) $mainTask->name : 'Nhiệm vụ chính',
+                'value' => $parentOutput,
+            ];
+
+            $finalOutput = $parentOutput;
+
+            foreach ($subTasks as $subTask) {
+                if (trim((string) $subTask->content) === '') {
+                    continue;
+                }
+
+                [$subOutput, $subUsage] = $this->executeChainStep(
+                    $connection,
+                    $prompt,
+                    $subTask,
+                    $chainVariables,
+                    $baseCategory,
+                    $isTaskMode,
+                    $toolType,
+                );
+                $usageAggregate = $this->mergeUsage($usageAggregate, $subUsage);
+                $chainVariables['PARENT_RESULT'] = $subOutput;
+                $finalOutput = $subOutput;
+                $chainSteps[] = [
+                    'role' => 'sub_task',
+                    'name' => filled($subTask->name) ? (string) $subTask->name : 'Nhiệm vụ phụ thuộc',
+                    'value' => $subOutput,
+                ];
+            }
+
+            $result->update([
+                'status' => 'completed',
+                'output_text' => $finalOutput,
+                'token_usage' => $usageAggregate,
+                'finished_at' => now(),
+                'input_snapshot' => array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    [
+                        'variables' => $chainVariables,
+                        'chain_steps' => $chainSteps,
+                    ],
+                ),
+            ]);
+        } catch (\Throwable $exception) {
+            $result->update([
+                'status' => 'failed',
+                'error_message' => $exception->getMessage(),
+                'finished_at' => now(),
+            ]);
+
+            throw $exception instanceof PromptRunException
+                ? $exception
+                : new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $result->fresh();
+    }
+
+    /**
+     * Một bước trong chuỗi task/sub_task (dùng cho ImageGenerationChainService).
+     *
+     * @param  array<string, string>  $variables
+     */
+    public function runChainStepOutput(
+        SeoPrompt $prompt,
+        SeoPromptPart $stepPart,
+        array $variables,
+        ?string $categoryOverride = null,
+        bool $isTaskMode = true,
+    ): string {
+        $prompt->loadMissing(['parts', 'aiConnection']);
+        $connection = $prompt->aiConnection;
+        if ($connection === null) {
+            throw new PromptRunException('Prompt chưa được gắn kết nối AI.');
+        }
+
+        $this->aiModelsReadiness->assertConnectionReady($connection);
+
+        $toolType = $this->normalizeToolType($prompt);
+        $category = filled($categoryOverride) && \App\Addons\SeoContentAi\Support\AiModelCategory::isValid($categoryOverride)
+            ? $categoryOverride
+            : $this->aiModelRouter->resolveCategoryForPrompt($prompt, $toolType);
+
+        [$output] = $this->executeChainStep(
+            $connection,
+            $prompt,
+            $stepPart,
+            $variables,
+            $category,
+            $isTaskMode,
+            $toolType,
+        );
+
+        return $output;
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{0: string, 1: array<string, mixed>|null}
+     */
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{0: string, 1: array<string, mixed>|null}
+     */
+    private function executeChainStep(
+        ApiConnection $connection,
+        SeoPrompt $prompt,
+        SeoPromptPart $stepPart,
+        array $variables,
+        string $baseCategory,
+        bool $isTaskMode,
+        string $toolType,
+    ): array {
+        [$output, $usage] = $this->executeChainStepWithRouting(
+            $connection,
+            $prompt,
+            $stepPart,
+            $variables,
+            $baseCategory,
+            $isTaskMode,
+            $toolType,
+        );
+
+        return [$output, $usage];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{0: string, 1: array<string, mixed>|null, 2: string}
+     */
+    private function executeChainStepWithRouting(
+        ApiConnection $connection,
+        SeoPrompt $prompt,
+        SeoPromptPart $stepPart,
+        array $variables,
+        string $baseCategory,
+        bool $isTaskMode,
+        string $toolType,
+    ): array {
+        $compiled = $this->compileChainStep($prompt, $stepPart, $variables);
+        $effectiveTool = $this->resolveStepToolType($prompt, $stepPart, $toolType);
+        $stepCategory = $this->resolveStepCategory($prompt, $stepPart, $baseCategory, $effectiveTool);
+
+        [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+            $connection,
+            $prompt,
+            $compiled,
+            $variables,
+            $isTaskMode,
+            $effectiveTool,
+            $stepCategory,
+        );
+
+        $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $effectiveTool, $rawModel);
+        $output = $this->enforceMediaOnlyOutput($output, $effectiveTool);
+
+        return [$output, $usage, $rawModel];
+    }
+
+    private function resolveStepCategory(
+        SeoPrompt $prompt,
+        SeoPromptPart $stepPart,
+        string $baseCategory,
+        string $effectiveToolType,
+    ): string {
+        if ($effectiveToolType === 'image') {
+            return \App\Addons\SeoContentAi\Support\AiModelCategory::IMAGEN_PRO;
+        }
+
+        if ($this->hasDependentSubTasks($prompt) && (string) $stepPart->role === 'task') {
+            return \App\Addons\SeoContentAi\Support\AiModelCategory::GEMINI_FLASH;
+        }
+
+        return $baseCategory;
+    }
+
+    /**
+     * Chuỗi task/sub_task: bước task = văn bản; sub_task = sinh ảnh (Imagen / Nano Banana).
+     * Công cụ «Hình ảnh» không có sub_task → toàn bộ prompt dùng pipeline ảnh.
+     */
+    private function resolveStepToolType(SeoPrompt $prompt, SeoPromptPart $stepPart, string $promptToolType): string
+    {
+        if ($promptToolType === 'video') {
+            return 'video';
+        }
+
+        if ($this->hasDependentSubTasks($prompt)) {
+            return (string) $stepPart->role === 'task' ? 'default' : 'image';
+        }
+
+        if ($promptToolType === 'image') {
+            return 'image';
+        }
+
+        return 'default';
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function compileChainStep(SeoPrompt $prompt, SeoPromptPart $stepPart, array $variables): string
+    {
+        $systemBlocks = [];
+        foreach ($prompt->parts()->orderBy('position')->get() as $part) {
+            if (in_array((string) $part->role, ['task', 'sub_task'], true)) {
+                continue;
+            }
+
+            $block = $this->formatPartBlock($part, $variables);
+            if ($block !== '') {
+                $systemBlocks[] = $block;
+            }
+        }
+
+        $stepBlock = $this->formatPartBlock($stepPart, $variables);
+        if ($stepBlock === '') {
+            throw new PromptRunException('Bước chuỗi prompt không có nội dung.');
+        }
+
+        if ($systemBlocks === []) {
+            return $stepBlock;
+        }
+
+        return implode("\n\n", $systemBlocks) . "\n\n---\n\n" . $stepBlock;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $a
+     * @param  array<string, mixed>|null  $b
+     * @return array<string, mixed>|null
+     */
+    private function mergeUsage(?array $a, ?array $b): ?array
+    {
+        return $b ?? $a;
+    }
+
+    private function normalizeToolType(SeoPrompt $prompt): string
+    {
+        $tool = trim((string) ($prompt->tools ?? 'default'));
+
+        return in_array($tool, ['default', 'image', 'video'], true) ? $tool : 'default';
     }
 
     /**
@@ -130,7 +790,7 @@ final class PromptRunnerService
         }
 
         $heading = self::ROLE_HEADINGS[$part->role] ?? ucfirst((string) $part->role);
-        if ($part->role === 'task' && filled($part->name)) {
+        if (in_array($part->role, ['task', 'sub_task'], true) && filled($part->name)) {
             $heading .= ': ' . $part->name;
         }
 
@@ -142,6 +802,15 @@ final class PromptRunnerService
             $lines[] = '';
             $lines[] = 'Quy tắc:';
             $lines[] = $this->substituteVariables($rules, $variables);
+        }
+
+        if ($part->role === 'sub_task') {
+            $specific = trim((string) ($meta['specific_constraints'] ?? ''));
+            if ($specific !== '') {
+                $lines[] = '';
+                $lines[] = 'Ràng buộc riêng (sub-prompt):';
+                $lines[] = $this->substituteVariables($specific, $variables);
+            }
         }
 
         return implode("\n", $lines);
@@ -178,10 +847,22 @@ final class PromptRunnerService
         string $model,
         array $variables,
         bool $isTaskMode,
+        string $toolType = 'default',
     ): array {
+        if ($toolType === 'video') {
+            throw new PromptRunException(
+                'Công cụ Video: dùng model Veo (veo-3.1-generate-preview, …) — chưa tích hợp poll async trong Prompt. '
+                . 'Tạm thời dán URL video vào PARENT_RESULT hoặc chọn Hình ảnh (Imagen / Nano Banana).',
+            );
+        }
+
+        if ($this->mediaGeneration->shouldUseImagePipeline($prompt, $toolType)) {
+            return $this->mediaGeneration->executeImage($connection, $prompt, $compiled, $variables, $model);
+        }
+
         return match ($connection->provider) {
             'gemini' => $this->callGemini($connection, $compiled, $model),
-            'claude' => $this->callClaude($prompt, $variables, $model, $isTaskMode),
+            'claude' => $this->callClaude($prompt, $variables, $model, $isTaskMode, $compiled),
             default => throw new PromptRunException('Nhà cung cấp AI không được hỗ trợ: ' . $connection->provider),
         };
     }
@@ -294,8 +975,13 @@ final class PromptRunnerService
      * @param  array<string, string>  $variables
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    private function callClaude(SeoPrompt $prompt, array $variables, string $model, bool $isTaskMode): array
-    {
+    private function callClaude(
+        SeoPrompt $prompt,
+        array $variables,
+        string $model,
+        bool $isTaskMode,
+        string $compiled = '',
+    ): array {
         $inputData = trim((string) ($variables['input'] ?? ''));
 
         return $this->aiExecution->executeClaude(
@@ -304,11 +990,32 @@ final class PromptRunnerService
             $isTaskMode,
             $variables,
             $model !== '' ? $model : null,
+            trim($compiled) !== '' ? $compiled : null,
         );
     }
 
     private function truncateError(string $message): string
     {
         return mb_strlen($message) > 500 ? mb_substr($message, 0, 500) . '…' : $message;
+    }
+
+    private function enforceMediaOnlyOutput(string $output, string $toolType): string
+    {
+        if (! in_array($toolType, ['image', 'video'], true)) {
+            return $output;
+        }
+
+        $firstLine = trim(explode("\n", trim($output), 2)[0] ?? '');
+        $isUrl = str_starts_with($firstLine, '/storage/') || (bool) preg_match('#^https?://#i', $firstLine);
+
+        if (! $isUrl) {
+            throw new PromptRunException(
+                $toolType === 'image'
+                    ? 'Hình ảnh lỗi: không nhận được file ảnh hợp lệ từ AI.'
+                    : 'Video lỗi: không nhận được URL video hợp lệ từ AI.',
+            );
+        }
+
+        return $firstLine;
     }
 }

@@ -1772,6 +1772,7 @@ export default function SeoArticleEditor({
                                                 {insertMenu?.blockId === block.id &&
                                                 insertMenu?.position === 'before' ? (
                                                     <BlockInsertMenuBar
+                                                        faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
                                                         onClose={() => setInsertMenu(null)}
                                                         onInsert={(type) =>
                                                             insertBlockRelative(block.id, 'before', type)
@@ -1837,6 +1838,7 @@ export default function SeoArticleEditor({
                                                 {insertMenu?.blockId === block.id &&
                                                 insertMenu?.position === 'after' ? (
                                                     <BlockInsertMenuBar
+                                                        faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
                                                         onClose={() => setInsertMenu(null)}
                                                         onInsert={(type) =>
                                                             insertBlockRelative(block.id, 'after', type)

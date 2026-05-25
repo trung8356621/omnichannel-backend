@@ -3,8 +3,10 @@
         <div class="seo-prompt-test-main">
             <x-filament::section heading="Biến đầu vào">
                 <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                    Model AI được chọn trên widget <strong>Khối Prompt</strong> trong Workflow Builder.
-                    @if ($this->promptUsesInput)
+                    @if ($this->usesStepByStepChain())
+                        Prompt có <strong>prompt con</strong>: bấm «Chạy thử» để chạy prompt cha trước, sau đó chạy từng prompt con bằng nút bên dưới kết quả.
+                        Biến <code>@verbatim{{PARENT_RESULT}}@endverbatim</code> được hệ thống tự gán — không cần nhập.
+                    @elseif ($this->promptUsesInput)
                         Biến <code>@verbatim{{input}}@endverbatim</code> nhận kết quả từ edge nối vào khi chạy quy trình — khi test thủ công, điền vào ô bên dưới.
                     @else
                         Điền các biến <code>@verbatim{{tên}}@endverbatim</code> được prompt sử dụng (nếu có).
@@ -26,26 +28,30 @@
                         wire:loading.attr="disabled"
                         wire:target="runTest"
                     >
-                        <span wire:loading.remove wire:target="runTest">Chạy thử</span>
+                        <span wire:loading.remove wire:target="runTest">
+                            {{ $this->usesStepByStepChain() ? 'Chạy prompt cha' : 'Chạy thử' }}
+                        </span>
                         <span wire:loading wire:target="runTest">Đang gọi AI…</span>
                     </x-filament::button>
                 </form>
             </x-filament::section>
 
-            <x-filament::section heading="Prompt đã ghép (xem trước)">
-                <x-slot name="description">
-                    Ghép từ cấu hình prompt hiện tại trên database (sau khi bạn lưu ở trang Sửa). Kết quả AI bên dưới có thể từ lần chạy cũ trong sidebar.
-                </x-slot>
-                @if (filled($compiledPreview))
-                    <div class="seo-prompt-test-pre-wrap">
-                        <pre class="seo-prompt-test-pre">{{ $compiledPreview }}</pre>
-                    </div>
-                @else
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
-                        Chưa có nội dung xem trước. Nhấn «Làm mới xem trước» hoặc «Chạy thử».
-                    </p>
-                @endif
-            </x-filament::section>
+            @if ($this->shouldShowCompiledPreview())
+                <x-filament::section heading="Prompt đã ghép (xem trước)">
+                    <x-slot name="description">
+                        Ghép từ cấu hình prompt hiện tại trên database (sau khi bạn lưu ở trang Sửa). Kết quả AI bên dưới có thể từ lần chạy cũ trong sidebar.
+                    </x-slot>
+                    @if (filled($compiledPreview))
+                        <div class="seo-prompt-test-pre-wrap">
+                            <pre class="seo-prompt-test-pre">{{ $compiledPreview }}</pre>
+                        </div>
+                    @else
+                        <p class="text-sm text-gray-500 dark:text-gray-400">
+                            Chưa có nội dung xem trước. Nhấn «Làm mới xem trước» hoặc «Chạy thử».
+                        </p>
+                    @endif
+                </x-filament::section>
+            @endif
 
             @if (filled($errorMessage))
                 <x-filament::section heading="Lỗi">
@@ -55,9 +61,51 @@
 
             @if (filled($outputText))
                 <x-filament::section :heading="$this->aiResultSectionHeading()">
-                    <div class="seo-prompt-test-pre-wrap">
-                        <pre class="seo-prompt-test-pre">{{ $outputText }}</pre>
-                    </div>
+                    @if ($this->usesStepByStepChain() && $chainParentCompleted)
+                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                            @if ($chainSubTasksCompleted === 0)
+                                Kết quả <strong>prompt cha</strong>.
+                            @else
+                                Kết quả <strong>prompt con {{ $chainSubTasksCompleted }}</strong>
+                                @if ($chainSubTasksCompleted < count($this->dependentSubTaskSteps))
+                                    — còn {{ count($this->dependentSubTaskSteps) - $chainSubTasksCompleted }} bước.
+                                @else
+                                    — đã xong chuỗi.
+                                @endif
+                            @endif
+                        </p>
+                    @endif
+                    @if ($this->isImageToolPrompt() && $this->currentMediaOutputUrl())
+                        <div class="seo-prompt-test-media-wrap">
+                            <img src="{{ $this->currentMediaOutputUrl() }}" alt="AI generated image" class="seo-prompt-test-image" />
+                        </div>
+                    @elseif ($this->isVideoToolPrompt() && $this->currentMediaOutputUrl())
+                        <div class="seo-prompt-test-media-wrap">
+                            <video controls preload="metadata" class="seo-prompt-test-video">
+                                <source src="{{ $this->currentMediaOutputUrl() }}">
+                            </video>
+                        </div>
+                    @else
+                        <div class="seo-prompt-test-pre-wrap">
+                            <pre class="seo-prompt-test-pre">{{ $outputText }}</pre>
+                        </div>
+                    @endif
+
+                    @if ($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun())
+                        <div class="mt-4">
+                            <x-filament::button
+                                type="button"
+                                icon="heroicon-o-forward"
+                                color="primary"
+                                wire:click="runNextSubTask"
+                                wire:loading.attr="disabled"
+                                wire:target="runNextSubTask"
+                            >
+                                <span wire:loading.remove wire:target="runNextSubTask">{{ $this->nextSubTaskButtonLabel() }}</span>
+                                <span wire:loading wire:target="runNextSubTask">Đang gọi AI…</span>
+                            </x-filament::button>
+                        </div>
+                    @endif
 
                 </x-filament::section>
 
@@ -175,6 +223,14 @@
                                 <span class="seo-history-card__grid">
                                     <span class="seo-history-card__summary">
                                         {{ $this->resultSummary($result) }}@if ($tokenLabel = $this->tokenUsageLabelFor($result)) <span class="seo-history-card__tokens">({{ $tokenLabel }})</span>@endif
+                                    </span>
+                                    @if ($modelUsed = $this->modelUsedLabelFor($result))
+                                        <span class="seo-history-card__model" title="{{ $modelUsed }}">
+                                            Model: {{ $modelUsed }}
+                                        </span>
+                                    @endif
+                                    <span class="seo-history-card__tool seo-history-card__tool--{{ strtolower($this->resultToolBadgeFor($result)) }}">
+                                        {{ $this->resultToolBadgeFor($result) }}
                                     </span>
                                     <span class="seo-history-card__meta">
                                         <span class="seo-history-card__time">
@@ -481,7 +537,21 @@
             white-space: nowrap;
         }
 
+        .seo-history-card__model {
+            display: block;
+            width: 100%;
+            font-size: 0.6875rem;
+            color: #4b5563;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .dark .seo-history-card__tokens {
+            color: #9ca3af;
+        }
+
+        .dark .seo-history-card__model {
             color: #9ca3af;
         }
 
@@ -499,6 +569,37 @@
             white-space: nowrap;
             text-transform: uppercase;
             letter-spacing: 0.02em;
+        }
+
+        .seo-history-card__tool {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            padding: 0.125rem 0.45rem;
+            border-radius: 9999px;
+            font-size: 0.625rem;
+            font-weight: 700;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            border: 1px solid transparent;
+        }
+
+        .seo-history-card__tool--image {
+            background: #dbeafe;
+            color: #1d4ed8;
+            border-color: #93c5fd;
+        }
+
+        .seo-history-card__tool--video {
+            background: #f3e8ff;
+            color: #7e22ce;
+            border-color: #d8b4fe;
+        }
+
+        .seo-history-card__tool--text {
+            background: #ecfccb;
+            color: #3f6212;
+            border-color: #bef264;
         }
 
         .seo-history-card__badge--completed {
@@ -560,6 +661,32 @@
             word-break: break-word;
             background-color: #f3f4f6;
             color: #111827;
+        }
+
+        .seo-prompt-test-media-wrap {
+            border-radius: 0.5rem;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            overflow: hidden;
+        }
+
+        .dark .seo-prompt-test-media-wrap {
+            border-color: #4b5563;
+            background: #111827;
+        }
+
+        .seo-prompt-test-image,
+        .seo-prompt-test-video {
+            width: 100%;
+            max-height: min(30rem, 65vh);
+            display: block;
+            object-fit: contain;
+            background: #fff;
+        }
+
+        .dark .seo-prompt-test-image,
+        .dark .seo-prompt-test-video {
+            background: #111827;
         }
 
         .dark .seo-prompt-test-pre {

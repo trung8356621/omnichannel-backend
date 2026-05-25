@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\SeoGeneratedImage;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Str;
@@ -33,8 +33,9 @@ final class GeneratedImageLibraryService
 
         $filterMonth = trim((string) $filterMonth);
 
-        $query = SeoGeneratedImage::query()
+        $query = SeoMedia::query()
             ->where('site_id', $site->id)
+            ->where('source', 'like', 'ai_%')
             ->orderByDesc('created_at');
 
         if ($filterMonth !== '') {
@@ -73,14 +74,14 @@ final class GeneratedImageLibraryService
             ->forPage($page, $perPage)
             ->get();
 
-        $images = $rows->map(static function (SeoGeneratedImage $row): array {
+        $images = $rows->map(static function (SeoMedia $row): array {
             return [
                 'id' => (string) $row->id,
                 'wp_attachment_id' => (int) ($row->wp_attachment_id ?? 0) ?: null,
-                'url' => (string) $row->url,
+                'url' => $row->publicUrl(),
                 'slug' => (string) $row->slug,
-                'title' => (string) ($row->title ?? ''),
-                'alt' => (string) ($row->alt ?? ''),
+                'title' => '',
+                'alt' => (string) ($row->alt_text ?? ''),
                 'date' => $row->created_at?->toIso8601String() ?? '',
             ];
         })->values()->all();
@@ -107,8 +108,9 @@ final class GeneratedImageLibraryService
             ];
         }
 
-        $image = SeoGeneratedImage::query()
+        $image = SeoMedia::query()
             ->where('site_id', $site->id)
+            ->where('source', 'like', 'ai_%')
             ->whereKey($imageId)
             ->first();
 

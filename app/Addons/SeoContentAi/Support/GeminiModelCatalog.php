@@ -56,15 +56,7 @@ final class GeminiModelCatalog
      */
     public static function selectOptions(): array
     {
-        return [
-            'gemini-3-flash-preview' => 'Gemini 3 Flash Preview (khuyên dùng — AI Studio)',
-            'gemini-3.1-flash-lite' => 'Gemini 3.1 Flash Lite',
-            'gemini-3.1-pro-preview' => 'Gemini 3.1 Pro Preview',
-            'gemini-2.5-flash' => 'Gemini 2.5 Flash',
-            'gemini-2.5-pro' => 'Gemini 2.5 Pro',
-            'gemini-2.0-flash' => 'Gemini 2.0 Flash',
-            'gemini-2.0-flash-lite' => 'Gemini 2.0 Flash Lite',
-        ];
+        return GoogleAiModelRegistry::textSelectOptions();
     }
 
     public static function resolve(string $model): string
@@ -84,10 +76,18 @@ final class GeminiModelCatalog
     public static function modelsToTry(string $requestedModel): array
     {
         $primary = self::resolve($requestedModel !== '' ? $requestedModel : self::defaultModel());
+        if (! GoogleAiModelRegistry::isTextModel($primary)) {
+            $primary = self::defaultModel();
+        }
 
-        return array_values(array_unique(array_merge(
+        $candidates = array_values(array_unique(array_merge(
             [$primary],
             self::fallbackModels(),
         )));
+
+        return array_values(array_filter(
+            $candidates,
+            static fn (string $model): bool => GoogleAiModelRegistry::isTextModel($model),
+        ));
     }
 }

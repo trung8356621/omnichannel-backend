@@ -33,7 +33,13 @@ class EditPrompt extends EditRecord
                 ->values()
                 ->all();
 
-        $data['variables'] = $this->record->variables ?? [];
+        $data['variables'] = PromptResource::sanitizeDeclaredVariables($this->record->variables ?? []);
+
+        if (blank($data['model_category'] ?? null)) {
+            $data['model_category'] = filled($data['ai_connection_id'] ?? null)
+                ? PromptResource::defaultModelCategoryForConnection($data['ai_connection_id'])
+                : \App\Addons\SeoContentAi\Support\AiModelCategory::GEMINI_FLASH;
+        }
 
         return $data;
     }
@@ -47,7 +53,7 @@ class EditPrompt extends EditRecord
             $data['title'] = $data['name'];
         }
 
-        $data['variables'] = $data['variables'] ?? [];
+        $data['variables'] = PromptResource::sanitizeDeclaredVariables($data['variables'] ?? []);
 
         return $data;
     }
