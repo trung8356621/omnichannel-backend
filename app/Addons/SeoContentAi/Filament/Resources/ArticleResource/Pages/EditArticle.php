@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Services\ArticleFaqExtractDebugService;
+use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
@@ -83,7 +84,9 @@ class EditArticle extends EditRecord
     {
         if ((int) ($this->record->wp_post_id ?? 0) > 0) {
             $this->record->loadCount('faqs');
-            if ($this->record->faqs_count === 0) {
+            $needsWpPull = $this->record->faqs_count === 0
+                || ! $this->articleHasStoredWordPressFaqs($this->record);
+            if ($needsWpPull) {
                 app(WordPressArticleContentService::class)->fetchFromWordPress($this->record);
                 $this->record->refresh();
                 $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
@@ -112,6 +115,19 @@ class EditArticle extends EditRecord
         $this->dispatchFaqExtractDebugIfPresent($result['extract_debug'] ?? null);
     }
 
+    private function articleHasStoredWordPressFaqs(\App\Addons\SeoContentAi\Models\SeoArticle $article): bool
+    {
+        $article->loadMissing('articleMetas');
+        $raw = $article->articleMetas->firstWhere('meta_key', 'wp_faqs')?->meta_value;
+        if (! is_string($raw) || trim($raw) === '') {
+            return false;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) && $decoded !== [];
+    }
+
     public function getMaxContentWidth(): MaxWidth|string|null
     {
         return MaxWidth::Full;
@@ -120,8 +136,71 @@ class EditArticle extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            Actions\DeleteAction::make(),
+            Actions\Action::make('restoreFromWordPress')
+                ->label('Khôi phục từ WordPress')
+                ->icon('heroicon-o-arrow-path')
+                ->color('gray')
+                ->iconButton()
+                ->tooltip('Lấy lại bài viết gốc từ WordPress')
+                ->visible(fn (): bool => (int) ($this->record->wp_post_id ?? 0) > 0)
+                ->requiresConfirmation()
+                ->modalHeading('Khôi phục bài gốc WordPress')
+                ->modalDescription('Thay nội dung editor và xóa FAQ panel bằng bản gốc từ WordPress. Các chỉnh sửa chưa lưu hoặc chưa đồng bộ trên SEO sẽ bị ghi đè.')
+                ->modalSubmitActionLabel('Khôi phục')
+                ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
+            Actions\DeleteAction::make()
+                ->icon('heroicon-o-trash')
+                ->iconButton()
+                ->tooltip('Xóa bài viết'),
         ];
+    }
+
+    public function restoreArticleFromWordPress(): void
+    {
+        $restore = app(ArticleFaqWordPressRestoreService::class)->restoreFullArticleFromWordPress($this->record);
+
+        if (! ($restore['restored'] ?? false) || ! filled($restore['editor_html'] ?? null)) {
+            Notification::make()
+                ->title('Không khôi phục được')
+                ->body((string) ($restore['message'] ?? 'Không lấy được nội dung từ WordPress.'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->editorHtml = (string) $restore['editor_html'];
+        $this->record->refresh();
+
+        if (filled($restore['title'] ?? null)) {
+            $this->articleTitle = (string) $restore['title'];
+        }
+
+        if (filled($restore['slug'] ?? null)) {
+            $this->articleSlug = (string) $restore['slug'];
+        }
+
+        $this->featuredImageUrl = app(WordPressArticleContentService::class)->resolveFeaturedImageUrl($this->record);
+        $this->productGallery = $this->isProduct()
+            ? app(WordPressArticleContentService::class)->resolveProductGallery($this->record)
+            : [];
+
+        $this->dispatch(
+            'article-faqs-extracted',
+            faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
+            editorHtml: $this->editorHtml,
+        );
+
+        $this->dispatch('article-faq-extract-debug-cleared');
+        $this->js('window.dispatchEvent(new CustomEvent("article-faq-extract-debug-cleared"))');
+
+        app(SeoAnalyzerService::class)->analyze($this->record->fresh());
+
+        Notification::make()
+            ->title('Đã khôi phục từ WordPress')
+            ->body((string) ($restore['message'] ?? 'Nội dung editor đã thay bằng bản gốc WordPress.'))
+            ->success()
+            ->send();
     }
 
     protected function hydrateArticleState(): void
@@ -666,7 +745,86 @@ class EditArticle extends EditRecord
 
     public function saveArticleFaqs(array $faqs): void
     {
-        app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+        $previousCount = $this->record->faqs()->count();
+        $savedCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+
+        if ($savedCount === 0) {
+            $restore = app(ArticleFaqWordPressRestoreService::class)->restoreWhenFaqsCleared($this->record);
+
+            if ($restore['restored'] && filled($restore['editor_html'] ?? null)) {
+                $this->editorHtml = (string) $restore['editor_html'];
+                $this->record->refresh();
+
+                $this->dispatch(
+                    'article-faqs-extracted',
+                    faqs: [],
+                    editorHtml: $this->editorHtml,
+                );
+
+                if ($this->pendingEditorCollectTarget !== null) {
+                    $target = $this->pendingEditorCollectTarget;
+                    $this->pendingEditorCollectTarget = null;
+                    $this->dispatch('collect-editor-html', target: $target);
+
+                    return;
+                }
+
+                Notification::make()
+                    ->title('Đã xóa FAQ')
+                    ->body((string) ($restore['message'] ?? 'Nội dung bài đã khôi phục từ WordPress.'))
+                    ->success()
+                    ->send();
+
+                return;
+            }
+
+            if ($this->pendingEditorCollectTarget !== null) {
+                $target = $this->pendingEditorCollectTarget;
+                $this->pendingEditorCollectTarget = null;
+                $this->dispatch('collect-editor-html', target: $target);
+
+                return;
+            }
+
+            Notification::make()
+                ->title('Đã xóa FAQ')
+                ->body((string) ($restore['message'] ?? 'FAQ đã xóa trên hệ thống SEO.'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($savedCount < $previousCount) {
+            $restore = app(ArticleFaqWordPressRestoreService::class)->restoreAfterFaqRemoved($this->record, $faqs);
+
+            if ($restore['restored'] && filled($restore['editor_html'] ?? null)) {
+                $this->editorHtml = (string) $restore['editor_html'];
+                $this->record->refresh();
+
+                $this->dispatch(
+                    'article-faqs-extracted',
+                    faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
+                    editorHtml: $this->editorHtml,
+                );
+
+                if ($this->pendingEditorCollectTarget !== null) {
+                    $target = $this->pendingEditorCollectTarget;
+                    $this->pendingEditorCollectTarget = null;
+                    $this->dispatch('collect-editor-html', target: $target);
+
+                    return;
+                }
+
+                Notification::make()
+                    ->title('Đã xóa FAQ')
+                    ->body((string) ($restore['message'] ?? 'Nội dung bài đã khôi phục từ WordPress.'))
+                    ->success()
+                    ->send();
+
+                return;
+            }
+        }
 
         if ($this->pendingEditorCollectTarget !== null) {
             $target = $this->pendingEditorCollectTarget;
@@ -677,7 +835,7 @@ class EditArticle extends EditRecord
         }
 
         Notification::make()
-            ->title(count($faqs) > 0 ? 'Đã lưu FAQ' : 'Đã xóa FAQ')
+            ->title('Đã lưu FAQ')
             ->body('FAQ lưu trên hệ thống SEO. Đồng bộ WordPress khi bấm «Đồng bộ».')
             ->success()
             ->send();

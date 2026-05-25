@@ -1,5 +1,13 @@
 const HEADING_TAG_RE = /^h([1-6])$/i;
 
+export const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
+
+export const FAQ_SHORTCODE_HTML = `<p class="omi-faq-placeholder" data-omi-faq="1">${FAQ_SHORTCODE_PLACEHOLDER}</p>`;
+
+export function isFaqPlaceholderHtml(html) {
+    return /omi-faq-placeholder|\[omi_faq\]/i.test(html || '');
+}
+
 /**
  * Một block chỉ gồm đúng một thẻ heading (thường gặp khi tách block từ WP).
  *
@@ -27,6 +35,18 @@ export function standaloneHeadingLevel(html) {
  * Giữ HTML gốc nếu export làm mất cấp heading.
  */
 export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
+    if (isFaqPlaceholderHtml(originalHtml)) {
+        const exportText = exportedHtml || '';
+        if (!/\[omi_faq\]/i.test(exportText)) {
+            return originalHtml;
+        }
+        if (!/omi-faq-placeholder/i.test(exportText)) {
+            return FAQ_SHORTCODE_HTML;
+        }
+
+        return exportedHtml;
+    }
+
     const originalLevel = standaloneHeadingLevel(originalHtml);
     if (originalLevel === null) {
         return exportedHtml;

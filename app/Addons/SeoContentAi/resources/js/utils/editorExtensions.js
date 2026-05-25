@@ -13,6 +13,38 @@ import { Table } from '@tiptap/extension-table';
 import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
+import Paragraph from '@tiptap/extension-paragraph';
+
+/** Giữ class / data attribute trên paragraph (vd. placeholder FAQ). */
+const PreservedParagraph = Paragraph.extend({
+    addAttributes() {
+        return {
+            ...this.parent?.(),
+            class: {
+                default: null,
+                parseHTML: (element) => element.getAttribute('class'),
+                renderHTML: (attributes) => {
+                    if (!attributes.class) {
+                        return {};
+                    }
+
+                    return { class: attributes.class };
+                },
+            },
+            'data-omi-faq': {
+                default: null,
+                parseHTML: (element) => element.getAttribute('data-omi-faq'),
+                renderHTML: (attributes) => {
+                    if (!attributes['data-omi-faq']) {
+                        return {};
+                    }
+
+                    return { 'data-omi-faq': attributes['data-omi-faq'] };
+                },
+            },
+        };
+    },
+});
 
 /** Giữ class Tailwind / WP trên h1–h6 khi round-trip HTML. */
 const PreservedHeading = Heading.extend({
@@ -56,10 +88,12 @@ const SeoEditorImage = Image.extend({
 export const articleEditorExtensions = [
     StarterKit.configure({
         heading: false,
+        paragraph: false,
         horizontalRule: true,
         link: false,
         underline: false,
     }),
+    PreservedParagraph,
     PreservedHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
     Underline,
     Subscript,

@@ -1,0 +1,74 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Models;
+
+use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Models\Site;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class SeoProjectTask extends Model
+{
+    use BelongsToOnDefaultConnection;
+    public const TYPE_REWRITE = 'rewrite';
+
+    public const TYPE_NEW_KEYWORD = 'new_keyword';
+
+    public const STATUS_PENDING = 'pending';
+
+    public const STATUS_WRITING = 'writing';
+
+    public const STATUS_REVIEWING = 'reviewing';
+
+    public const STATUS_COMPLETED = 'completed';
+
+    public const STATUS_FAILED = 'failed';
+
+    protected $connection = 'omi_seo_ai';
+
+    protected $table = 'seo_project_tasks';
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'site_id' => 'integer',
+        'target_date' => 'date',
+    ];
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsToOnDefaultConnection(Site::class, 'site_id');
+    }
+
+    public function project(): BelongsTo
+    {
+        return $this->belongsTo(SeoProject::class, 'project_id');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function typeOptions(): array
+    {
+        return [
+            self::TYPE_NEW_KEYWORD => 'Viết mới (Từ khóa)',
+            self::TYPE_REWRITE => 'Viết lại (Sửa bài lỗi)',
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function statusOptions(): array
+    {
+        return [
+            self::STATUS_PENDING => 'Chờ làm',
+            self::STATUS_WRITING => 'Đang viết',
+            self::STATUS_REVIEWING => 'Đang duyệt',
+            self::STATUS_COMPLETED => 'Hoàn thành',
+            self::STATUS_FAILED => 'Lỗi',
+        ];
+    }
+}

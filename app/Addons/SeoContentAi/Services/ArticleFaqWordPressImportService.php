@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\FaqRowNormalizer;
 
 /**
  * Import FAQ khi đồng bộ / mở bài từ WordPress (meta WP hoặc quét post_content).
@@ -35,15 +36,20 @@ final class ArticleFaqWordPressImportService
         $article->loadMissing('faqs');
         $existingCount = $article->faqs->count();
 
-        $html = trim($html ?? $this->resolveContentHtml($article));
-        if ($html === '') {
-            return $this->emptyResult($article, $existingCount);
-        }
-
-        $html = $this->workflowParser->preprocessHtmlForFaqExtraction($html);
-        $htmlRows = $this->parseRowsFromHtml($html);
         $wpFaqs = $this->resolveStoredWordPressFaqs($article);
-        $bestRows = count($htmlRows) >= count($wpFaqs) ? $htmlRows : $wpFaqs;
+        $htmlRows = $this->parseRowsFromHtmlCandidates($article, $html);
+        $bestRows = $this->pickBestFaqRows($htmlRows, $wpFaqs);
+
+        if ($bestRows === [] && (int) ($article->wp_post_id ?? 0) > 0) {
+            $post = app(WordPressArticleContentService::class)->fetchFromWordPress($article);
+            if ($post !== []) {
+                $wpFaqs = FaqRowNormalizer::normalizeList($post['faqs'] ?? null);
+                $bestRows = $this->pickBestFaqRows(
+                    $this->parseRowsFromHtmlCandidates($article, $html, $post),
+                    $wpFaqs,
+                );
+            }
+        }
 
         if ($bestRows === []) {
             if ($existingCount > 0 || $this->extractDebug->isSuppressed($article)) {
@@ -56,7 +62,8 @@ final class ArticleFaqWordPressImportService
                 ];
             }
 
-            $diagnosis = $this->workflowParser->diagnoseManualFaqExtract($html);
+            $sourceForDiagnosis = $this->resolveBestSourceHtml($article, $html);
+            $diagnosis = $this->workflowParser->diagnoseManualFaqExtract($sourceForDiagnosis);
             $extractDebug = $this->extractDebug->recordFromContentDiagnosis(
                 $article,
                 $diagnosis,
@@ -73,17 +80,28 @@ final class ArticleFaqWordPressImportService
             ];
         }
 
-        if ($existingCount > 0 && count($bestRows) <= $existingCount) {
-            return [
-                'imported' => false,
-                'faq_count' => $existingCount,
-                'faqs' => $this->faqEditor->payloadForArticle($article),
-                'editor_html' => null,
-                'extract_debug' => null,
-            ];
+        if ($existingCount > 0) {
+            if (count($bestRows) <= $existingCount) {
+                return [
+                    'imported' => false,
+                    'faq_count' => $existingCount,
+                    'faqs' => $this->faqEditor->payloadForArticle($article),
+                    'editor_html' => null,
+                    'extract_debug' => null,
+                ];
+            }
+
+            $article->faqs()->delete();
+            $existingCount = 0;
         }
 
-        return $this->persistImportedFaqs($article, $html, $bestRows);
+        $sourceHtml = $this->resolveBestSourceHtml($article, $html);
+
+        if ($sourceHtml === '') {
+            $sourceHtml = WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        return $this->persistImportedFaqs($article, $sourceHtml, $bestRows);
     }
 
     /**
@@ -107,14 +125,13 @@ final class ArticleFaqWordPressImportService
             $content = trim((string) ($scoring['body'] ?? ''));
         }
 
-        $content = $this->workflowParser->preprocessHtmlForFaqExtraction($content);
-        $htmlRows = $this->parseRowsFromHtml($content);
         $wpFaqs = $this->normalizeWordPressFaqRows($item['faqs'] ?? null);
-        $bestRows = count($htmlRows) >= count($wpFaqs) ? $htmlRows : $wpFaqs;
-
         if ($wpFaqs !== []) {
             $this->persistWordPressFaqsMeta($article, $wpFaqs);
         }
+
+        $htmlRows = $this->parseRowsFromHtmlCandidates($article, $content, $item);
+        $bestRows = $this->pickBestFaqRows($htmlRows, $wpFaqs);
 
         if ($bestRows === []) {
             return [
@@ -124,7 +141,7 @@ final class ArticleFaqWordPressImportService
             ];
         }
 
-        $result = $this->persistImportedFaqs($article, $content, $bestRows);
+        $result = $this->persistImportedFaqs($article, $this->resolveBestSourceHtml($article, $content, $item), $bestRows);
 
         return [
             'imported' => $result['imported'],
@@ -145,12 +162,22 @@ final class ArticleFaqWordPressImportService
      */
     private function persistImportedFaqs(SeoArticle $article, string $sourceHtml, array $rows): array
     {
+        $sourceHtml = trim($sourceHtml);
+        if ($sourceHtml === '' && $rows !== []) {
+            $sourceHtml = WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $sourceHtml);
+
         $this->faqEditor->saveFromEditor($article, $rows);
         $this->extractDebug->clear($article);
 
         $strippedHtml = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($sourceHtml);
-        if ($strippedHtml === '' || ! str_contains($strippedHtml, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)) {
-            $strippedHtml = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($sourceHtml);
+        if (($strippedHtml === '' || ! str_contains($strippedHtml, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)) && $rows !== []) {
+            $strippedHtml = trim($sourceHtml);
+            if (! str_contains($strippedHtml, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)) {
+                $strippedHtml = trim($strippedHtml . "\n\n" . $this->workflowParser->faqPlaceholderHtml());
+            }
         }
 
         if (! str_contains($strippedHtml, 'omi-faq-placeholder')
@@ -177,6 +204,95 @@ final class ArticleFaqWordPressImportService
     }
 
     /**
+     * @param  array<string, mixed>|null  $syncItem
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    private function parseRowsFromHtmlCandidates(SeoArticle $article, ?string $html = null, ?array $syncItem = null): array
+    {
+        $bestRows = [];
+
+        foreach ($this->resolveHtmlCandidates($article, $html, $syncItem) as $candidate) {
+            $rows = $this->parseRowsFromHtml($candidate);
+            if (count($rows) > count($bestRows)) {
+                $bestRows = $rows;
+            }
+        }
+
+        return $bestRows;
+    }
+
+    /**
+     * @param  list<array{question: string, answer: string, more?: string}>  $htmlRows
+     * @param  list<array{question: string, answer: string, more?: string}>  $wpFaqs
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    private function pickBestFaqRows(array $htmlRows, array $wpFaqs): array
+    {
+        if ($wpFaqs === []) {
+            return $htmlRows;
+        }
+
+        if ($htmlRows === []) {
+            return $wpFaqs;
+        }
+
+        return count($wpFaqs) > count($htmlRows) ? $wpFaqs : $htmlRows;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $syncItem
+     * @return list<string>
+     */
+    private function resolveHtmlCandidates(SeoArticle $article, ?string $html = null, ?array $syncItem = null): array
+    {
+        $candidates = [];
+
+        $push = static function (string $value) use (&$candidates): void {
+            $value = trim($value);
+            if ($value !== '' && ! in_array($value, $candidates, true)) {
+                $candidates[] = $value;
+            }
+        };
+
+        $push(trim($html ?? ''));
+        if (trim($html ?? '') === '') {
+            $push($this->resolveContentHtml($article));
+        }
+
+        if (is_array($syncItem)) {
+            $scoring = is_array($syncItem['scoring'] ?? null) ? $syncItem['scoring'] : [];
+            $push((string) ($syncItem['post_content'] ?? ''));
+            $push((string) ($scoring['body'] ?? ''));
+        }
+
+        $article->loadMissing('articleMetas');
+        foreach (['wp_post_content_source', 'wp_post_content'] as $metaKey) {
+            $push((string) ($article->articleMetas->firstWhere('meta_key', $metaKey)?->meta_value ?? ''));
+        }
+
+        return array_map(
+            fn (string $candidate): string => $this->workflowParser->preprocessHtmlForFaqExtraction($candidate),
+            $candidates,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $syncItem
+     */
+    private function resolveBestSourceHtml(SeoArticle $article, ?string $html = null, ?array $syncItem = null): string
+    {
+        foreach ($this->resolveHtmlCandidates($article, $html, $syncItem) as $candidate) {
+            if ($this->parseRowsFromHtml($candidate) !== []) {
+                return $candidate;
+            }
+        }
+
+        $candidates = $this->resolveHtmlCandidates($article, $html, $syncItem);
+
+        return $candidates[0] ?? '';
+    }
+
+    /**
      * @return list<array{question: string, answer: string, more?: string}>
      */
     private function parseRowsFromHtml(string $html): array
@@ -190,27 +306,7 @@ final class ArticleFaqWordPressImportService
      */
     private function normalizeParsedRows(array $parsed): array
     {
-        $rows = [];
-
-        foreach ($parsed as $faq) {
-            if (! is_array($faq)) {
-                continue;
-            }
-
-            $question = trim((string) ($faq['question'] ?? ''));
-            $answer = trim((string) ($faq['answer'] ?? ''));
-            if ($question === '' || $answer === '') {
-                continue;
-            }
-
-            $rows[] = [
-                'question' => $question,
-                'answer' => $answer,
-                'more' => trim((string) ($faq['more'] ?? '')),
-            ];
-        }
-
-        return $rows;
+        return FaqRowNormalizer::normalizeList($parsed);
     }
 
     /**
@@ -234,31 +330,7 @@ final class ArticleFaqWordPressImportService
      */
     private function normalizeWordPressFaqRows(mixed $faqs): array
     {
-        if (! is_array($faqs)) {
-            return [];
-        }
-
-        $rows = [];
-
-        foreach ($faqs as $faq) {
-            if (! is_array($faq)) {
-                continue;
-            }
-
-            $question = trim((string) ($faq['question'] ?? ''));
-            $answer = trim((string) ($faq['answer'] ?? ''));
-            if ($question === '' || $answer === '') {
-                continue;
-            }
-
-            $rows[] = [
-                'question' => $question,
-                'answer' => $answer,
-                'more' => trim((string) ($faq['more'] ?? '')),
-            ];
-        }
-
-        return $rows;
+        return FaqRowNormalizer::normalizeList($faqs);
     }
 
     /**

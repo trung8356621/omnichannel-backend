@@ -34,6 +34,41 @@ class DomainResource extends Resource
     {
         return $form
             ->schema([
+                Forms\Components\TextInput::make('domain')
+                    ->label('Tên miền')
+                    ->placeholder('example.com')
+                    ->required()
+                    ->unique(ignoreRecord: true)
+                    ->maxLength(255)
+                    ->live(onBlur: true)
+                    ->afterStateUpdated(function (?string $state, Set $set): void {
+                        if ($state === null || $state === '') {
+                            return;
+                        }
+                        if (filter_var($state, FILTER_VALIDATE_URL) || str_contains($state, '://')) {
+                            $host = parse_url($state, PHP_URL_HOST);
+                            if (is_string($host) && $host !== '') {
+                                $set('domain', $host);
+                            }
+                        }
+                    })
+                    ->columnSpanFull(),
+
+                Forms\Components\Toggle::make('ssl')
+                    ->label('SSL (HTTPS)')
+                    ->default(true),
+
+                Forms\Components\Select::make('status')
+                    ->label('Trạng thái')
+                    ->options([
+                        'active' => 'Hoạt động',
+                        'inactive' => 'Tắt',
+                        'maintenance' => 'Bảo trì',
+                    ])
+                    ->default('active')
+                    ->required()
+                    ->native(false),
+
                 Forms\Components\Select::make('seo_platform')
                     ->label('Nền tảng')
                     ->options([
@@ -133,13 +168,14 @@ class DomainResource extends Resource
 
     public static function canCreate(): bool
     {
-        return false;
+        return auth()->check();
     }
 
     public static function getPages(): array
     {
         return [
             'index' => Pages\ListDomains::route('/'),
+            'create' => Pages\CreateDomain::route('/create'),
             'edit' => Pages\EditDomain::route('/{record}/edit'),
             'info' => Pages\EditDomainInfo::route('/{record}/info'),
             'general' => Pages\GeneralDomain::route('/{record}/general'),

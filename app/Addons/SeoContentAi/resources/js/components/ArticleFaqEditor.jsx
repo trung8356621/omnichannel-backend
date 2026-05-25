@@ -39,13 +39,36 @@ const applyLocalDuplicates = (rows) => {
     });
 };
 
+const pickFaqField = (row, keys) => {
+    for (const key of keys) {
+        const value = String(row?.[key] ?? '').trim();
+        if (value !== '') {
+            return value;
+        }
+    }
+
+    return '';
+};
+
+const normalizeFaqRowShape = (row) => {
+    const question = pickFaqField(row, ['question', 'q', 'title', 'name', 'label', 'heading']);
+    let answer = pickFaqField(row, ['answer', 'a', 'content', 'body', 'text', 'response', 'value']);
+    const more = pickFaqField(row, ['more', 'see_more', 'seeMore', 'xem_them', 'intro', 'lead']);
+
+    if (answer === '' && more !== '') {
+        answer = more;
+    }
+
+    return {
+        ...row,
+        question: question || row?.question || '',
+        answer: answerHtmlForEditor(answer || row?.answer),
+        more: more || row?.more || '',
+    };
+};
+
 const normalizeFaqRows = (rows) =>
-    applyLocalDuplicates(
-        (rows ?? []).map((row) => ({
-            ...row,
-            answer: answerHtmlForEditor(row.answer),
-        })),
-    );
+    applyLocalDuplicates((rows ?? []).map(normalizeFaqRowShape).filter((row) => String(row.answer ?? '').trim() !== ''));
 
 const reasonLabels = {
     no_pairs: 'Parser không trả về cặp Q/A (tách thủ công)',
@@ -300,8 +323,12 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         };
 
         const onExtracted = (event) => {
-            const incoming = Array.isArray(event.detail?.faqs) ? event.detail.faqs : [];
-            if (incoming.length === 0) {
+            const incoming = Array.isArray(event.detail?.faqs) ? event.detail.faqs : null;
+            if (incoming === null) {
+                return;
+            }
+
+            if (incoming.length === 0 && !event.detail?.editorHtml) {
                 return;
             }
 
@@ -400,7 +427,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                 />
                 {faqs.length === 0 ? (
                     <p className="text-sm text-gray-500 italic">
-                        Chưa có FAQ. Chọn đoạn FAQ trong editor → «Tách FAQ» (sidebar), chạy quy trình, hoặc «Thêm câu».
+                        Chưa có FAQ. Xóa hết FAQ sẽ khôi phục nội dung gốc từ WordPress. Hoặc chọn đoạn FAQ → «Tách FAQ», chạy quy trình, hoặc «Thêm câu».
                     </p>
                 ) : (
                     faqs.map((row, index) => (

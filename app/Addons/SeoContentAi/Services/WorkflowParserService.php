@@ -399,7 +399,7 @@ class WorkflowParserService
 
             if ($this->isStrongQuestionParagraph($block)) {
                 $question = $this->extractStrongQuestionText($block);
-                if ($question === '') {
+                if ($question === '' || $this->isLikelyNonFaqQuestion($question)) {
                     continue;
                 }
 
@@ -427,7 +427,7 @@ class WorkflowParserService
                 }
 
                 $question = $this->normalizeExtractedFaqQuestion($this->elementText($block));
-                if ($question === '') {
+                if ($question === '' || $this->isLikelyNonFaqQuestion($question)) {
                     continue;
                 }
 
@@ -535,19 +535,32 @@ class WorkflowParserService
             $cleanTextStart = is_string($cleanTextStart) ? $cleanTextStart : $text;
 
             if (
-                preg_match('/^(q:|hỏi\s*:)/iu', $cleanTextStart)
+                preg_match('/^(q:|q\s*\d+\s*:|hỏi\s*:)/iu', $cleanTextStart)
                 || preg_match('/^(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $cleanTextStart)
             ) {
                 $isQuestion = true;
             } elseif (in_array($tag, ['p', 'div', 'li'], true)) {
-                $strongs = $node->getElementsByTagName('strong');
-                if ($strongs->length > 0) {
-                    $strongText = mb_strtolower(trim((string) $strongs->item(0)?->textContent));
+                foreach (['strong', 'b'] as $boldTag) {
+                    $boldNodes = $node->getElementsByTagName($boldTag);
+                    if ($boldNodes->length === 0) {
+                        continue;
+                    }
 
-                    if (str_contains($strongText, 'câu hỏi') || str_contains($strongText, 'cau hoi')) {
+                    $boldText = mb_strtolower(trim((string) $boldNodes->item(0)?->textContent));
+
+                    if (str_contains($boldText, 'câu hỏi') || str_contains($boldText, 'cau hoi')) {
                         $isQuestion = true;
-                    } elseif (str_ends_with(trim($text), '?') || str_ends_with(trim($strongText), '?')) {
+                        break;
+                    }
+
+                    if (str_ends_with(trim($text), '?') || str_ends_with(trim($boldText), '?')) {
                         $isQuestion = true;
+                        break;
+                    }
+
+                    if (preg_match('/^q\s*\d+\s*:/iu', $boldText)) {
+                        $isQuestion = true;
+                        break;
                     }
                 }
             }
@@ -561,7 +574,7 @@ class WorkflowParserService
                 }
 
                 $cleanQuestion = preg_replace(
-                    '/^(.*?)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*\d+|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q|Hỏi)\s*:\s*/iu',
+                    '/^(.*?)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*\d+|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d+|Q|Hỏi)\s*:\s*/iu',
                     '',
                     $text,
                 );
@@ -572,6 +585,16 @@ class WorkflowParserService
                 $currentAnswerHtml = [];
             } elseif ($currentQuestion !== null) {
                 if ($tag === 'hr' && $currentAnswerHtml === []) {
+                    continue;
+                }
+
+                if ($tag === 'blockquote') {
+                    $nodeHtml = (string) $dom->saveHTML($node);
+                    if ($currentAnswerHtml === []) {
+                        $nodeHtml = $this->stripFaqAnswerLabelFromHtml($nodeHtml);
+                    }
+                    $currentAnswerHtml[] = $nodeHtml;
+
                     continue;
                 }
 
@@ -695,11 +718,104 @@ class WorkflowParserService
     public const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
 
     /**
+     * Chuẩn hóa câu hỏi để so khớp panel FAQ / nội dung gốc WordPress.
+     */
+    public function normalizeFaqQuestionForMatch(string $text): string
+    {
+        $text = $this->normalizeExtractedFaqQuestion($text);
+        $text = mb_strtolower(trim($text));
+
+        return preg_replace('/\s+/u', ' ', $text) ?? $text;
+    }
+
+    /**
+     * Tiêu đề kiểu «Xem thêm:» — không phải câu hỏi FAQ thật.
+     */
+    public function isLikelyNonFaqQuestion(string $text): bool
+    {
+        $plain = mb_strtolower(trim($this->normalizeExtractedFaqQuestion($text)));
+        $plain = rtrim($plain, ':：');
+
+        return preg_match(
+            '/^(xem\s*th[êe]m|see\s*more|related(?:\s*(?:links|articles|posts))?|đọc\s*thêm|doc\s*them|tìm\s*hiểu\s*thêm|tim\s*hieu\s*them|tham\s*khảo|tham\s*khao|bài\s*viết\s*liên\s*quan|bai\s*viet\s*lien\s*quan|link\s*liên\s*quan)/u',
+            $plain,
+        ) === 1;
+    }
+
+    /**
      * HTML hiển thị placeholder trong editor (khi lưu WordPress chuyển thành shortcode).
      */
     public function faqPlaceholderHtml(): string
     {
         return '<p class="omi-faq-placeholder" data-omi-faq="1">' . self::FAQ_SHORTCODE_PLACEHOLDER . '</p>';
+    }
+
+    /**
+     * Gỡ shortcode / placeholder / khối FAQ render trước khi ghép lại nội dung gốc.
+     */
+    public function stripFaqShortcodeArtifacts(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $html = $this->preprocessHtmlForFaqExtraction($html);
+
+        $html = (string) preg_replace(
+            '/<p[^>]*class="[^"]*omi-faq-placeholder[^"]*"[^>]*>\s*' . preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/') . '\s*<\/p>/iu',
+            '',
+            $html,
+        );
+
+        $html = (string) preg_replace(
+            '/\s*' . preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/') . '\s*/u',
+            '',
+            $html,
+        );
+
+        return trim($html);
+    }
+
+    /**
+     * Dựng lại khối FAQ dạng H2/H3 cho editor (khôi phục từ WordPress).
+     *
+     * @param  list<array{question: string, answer: string, more?: string}>  $faqs
+     */
+    public function buildFaqSectionHtmlForEditor(array $faqs, string $heading = 'FAQ'): string
+    {
+        if ($faqs === []) {
+            return '';
+        }
+
+        $parts = [];
+        $heading = trim($heading);
+        if ($heading !== '') {
+            $parts[] = '<h2>' . htmlspecialchars($heading, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h2>';
+        }
+
+        foreach ($faqs as $faq) {
+            $question = trim((string) ($faq['question'] ?? ''));
+            $answer = trim((string) ($faq['answer'] ?? ''));
+            if ($question === '' || $answer === '') {
+                continue;
+            }
+
+            $parts[] = '<h3>' . htmlspecialchars($question, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h3>';
+
+            $more = trim((string) ($faq['more'] ?? ''));
+            if ($more !== '') {
+                $parts[] = preg_match('/<[a-z][\s\S]*>/i', $more) === 1
+                    ? $more
+                    : '<p>' . nl2br(htmlspecialchars($more, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false) . '</p>';
+            }
+
+            $parts[] = preg_match('/<[a-z][\s\S]*>/i', $answer) === 1
+                ? $answer
+                : '<p>' . nl2br(htmlspecialchars($answer, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false) . '</p>';
+        }
+
+        return implode("\n", $parts);
     }
 
     /**
@@ -823,6 +939,154 @@ class WorkflowParserService
         }
 
         if ($inFaqSection && ! $placeholderAdded) {
+            $this->appendPlaceholderToDom($outDom, $container);
+        }
+
+        return $this->innerHtmlOfElement($container);
+    }
+
+    /**
+     * Giữ tiêu đề FAQ; chỉ cắt các cặp Q/A còn trong panel, giữ block khác (vd. «Xem thêm:»).
+     *
+     * @param  list<string>  $panelQuestions  Câu hỏi FAQ còn lại trong panel (text gốc).
+     */
+    public function stripPanelFaqsFromContent(string $html, array $panelQuestions): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $panelSet = [];
+        foreach ($panelQuestions as $question) {
+            $key = $this->normalizeFaqQuestionForMatch((string) $question);
+            if ($key !== '') {
+                $panelSet[$key] = true;
+            }
+        }
+
+        if ($panelSet === []) {
+            return $html;
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementById('omi-faq-root');
+        if (! $root instanceof DOMElement) {
+            return $html;
+        }
+
+        $outDom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $container = $outDom->createElement('div');
+        $outDom->appendChild($container);
+
+        $inFaqSection = false;
+        $faqSectionLevel = null;
+        $placeholderAdded = false;
+        $sawFaqQuestionInSection = false;
+        $skippingPanelAnswer = false;
+
+        foreach (iterator_to_array($root->childNodes) as $node) {
+            if ($node instanceof DOMElement) {
+                $tag = strtolower($node->tagName);
+                $level = $this->htmlHeadingLevel($tag);
+                $headingLine = $level !== null ? str_repeat('#', $level) . ' ' . $this->elementText($node) : '';
+
+                if ($level !== null && $this->isFaqSectionHeading($headingLine)) {
+                    $container->appendChild($outDom->importNode($node, true));
+                    $inFaqSection = true;
+                    $faqSectionLevel = $level;
+                    $sawFaqQuestionInSection = false;
+                    $skippingPanelAnswer = false;
+
+                    continue;
+                }
+
+                if ($inFaqSection && $faqSectionLevel !== null && $level !== null && $level <= $faqSectionLevel && ! $this->isFaqSectionHeading($headingLine)) {
+                    $inFaqSection = false;
+                    $faqSectionLevel = null;
+                    $skippingPanelAnswer = false;
+                    $container->appendChild($outDom->importNode($node, true));
+
+                    continue;
+                }
+
+                if ($inFaqSection) {
+                    $questionKey = $this->extractFaqQuestionMatchKeyFromElement($node, $inFaqSection);
+                    if ($questionKey !== null) {
+                        $sawFaqQuestionInSection = true;
+
+                        if (isset($panelSet[$questionKey])) {
+                            $skippingPanelAnswer = true;
+
+                            if (! $placeholderAdded) {
+                                $this->appendPlaceholderToDom($outDom, $container);
+                                $placeholderAdded = true;
+                            }
+
+                            continue;
+                        }
+
+                        $skippingPanelAnswer = false;
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    if ($skippingPanelAnswer) {
+                        continue;
+                    }
+
+                    if (! $sawFaqQuestionInSection) {
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    $container->appendChild($outDom->importNode($node, true));
+
+                    continue;
+                }
+
+                $container->appendChild($outDom->importNode($node, true));
+
+                continue;
+            }
+
+            if ($node->nodeType === XML_TEXT_NODE) {
+                $text = trim((string) $node->textContent);
+                if ($text === '') {
+                    continue;
+                }
+
+                if ($inFaqSection) {
+                    if ($skippingPanelAnswer) {
+                        continue;
+                    }
+
+                    if (! $sawFaqQuestionInSection) {
+                        $container->appendChild($outDom->importNode($node, true));
+
+                        continue;
+                    }
+
+                    $container->appendChild($outDom->importNode($node, true));
+
+                    continue;
+                }
+
+                $container->appendChild($outDom->importNode($node, true));
+            }
+        }
+
+        if ($inFaqSection && ! $placeholderAdded && $sawFaqQuestionInSection) {
             $this->appendPlaceholderToDom($outDom, $container);
         }
 
@@ -1302,6 +1566,39 @@ class WorkflowParserService
     /**
      * <p> mà nội dung chính nằm trong <strong> (câu hỏi), không cần chữ «câu hỏi» / «trả lời».
      */
+    private function extractFaqQuestionMatchKeyFromElement(DOMElement $element, bool $inFaqSection): ?string
+    {
+        if (! $inFaqSection) {
+            return null;
+        }
+
+        $tag = strtolower($element->tagName);
+        $level = $this->htmlHeadingLevel($tag);
+
+        if ($level !== null) {
+            $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($element);
+            if ($this->isFaqSectionHeading($headingLine)) {
+                return null;
+            }
+
+            if (in_array($tag, ['h3', 'h4', 'h5', 'h6'], true)) {
+                $question = $this->normalizeExtractedFaqQuestion($this->elementText($element));
+
+                return $question !== '' ? $this->normalizeFaqQuestionForMatch($question) : null;
+            }
+
+            return null;
+        }
+
+        if ($this->isStrongQuestionParagraph($element)) {
+            $question = $this->extractStrongQuestionText($element);
+
+            return $question !== '' ? $this->normalizeFaqQuestionForMatch($question) : null;
+        }
+
+        return null;
+    }
+
     private function isStrongQuestionParagraph(DOMElement $element): bool
     {
         if (strtolower($element->tagName) !== 'p') {
@@ -1312,7 +1609,7 @@ class WorkflowParserService
             return false;
         }
 
-        $strongText = $this->concatStrongText($element);
+        $strongText = $this->concatBoldText($element);
         if (mb_strlen($strongText) < 2) {
             return false;
         }
@@ -1337,7 +1634,8 @@ class WorkflowParserService
             return true;
         }
 
-        return $this->firstElementChildTag($element) === 'strong'
+        return $this->firstElementChildTag($element) !== null
+            && in_array((string) $this->firstElementChildTag($element), ['strong', 'b'], true)
             && mb_strlen($strongText) >= (int) (mb_strlen($fullText) * 0.45);
     }
 
@@ -1362,7 +1660,7 @@ class WorkflowParserService
         $plain = trim(str_replace(['**', '*'], '', $text));
 
         return preg_match(
-            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi))\s*:/iu',
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d+)\s*:/iu',
             $plain,
         ) === 1;
     }
@@ -1433,11 +1731,12 @@ class WorkflowParserService
             $next++;
         }
 
-        // Trả lời trong <blockquote> (nhiều <p><em>…) — gộp toàn bộ, không tách rời vì blockquote.
+        // Trả lời trong <blockquote> — gộp toàn bộ; phần «more» ghép vào answer khi không tách được blockquote.
         if (in_array(true, $candidateInsideBlockquote, true)) {
             $answerHtml = $candidateAnswerHtml;
         } else {
-            $answerHtml = $candidateAnswerHtml;
+            $answerHtml = array_merge($candidateAnswerHtml, $moreHtml);
+            $moreHtml = [];
         }
 
         return [$answerHtml, $moreHtml, $next];
@@ -1511,7 +1810,7 @@ class WorkflowParserService
 
     private function extractStrongQuestionText(DOMElement $paragraph): string
     {
-        $fromStrong = $this->concatStrongText($paragraph);
+        $fromStrong = $this->concatBoldText($paragraph);
         $text = $fromStrong !== '' ? $fromStrong : $this->elementText($paragraph);
 
         return $this->normalizeExtractedFaqQuestion($text);
@@ -1525,7 +1824,7 @@ class WorkflowParserService
         }
 
         $normalized = preg_replace(
-            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi))\s*:\s*/iu',
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*(\d+))\s*:\s*/iu',
             '',
             $text,
         );
@@ -1537,29 +1836,41 @@ class WorkflowParserService
 
     private function stripFaqAnswerLabelFromHtml(string $html): string
     {
-        return (string) preg_replace(
-            '/<strong[^>]*>[^<]*(?:trả\s*lời|tra\s*loi|đáp|dap|^a)\s*:[^<]*<\/strong>\s*/iu',
+        $html = (string) preg_replace(
+            '/<(?:strong|b)[^>]*>[^<]*(?:trả\s*lời|tra\s*loi|đáp|dap|^a)\s*:[^<]*<\/(?:strong|b)>\s*/iu',
             '',
             $html,
         );
+
+        return $html;
     }
 
-    private function concatStrongText(DOMElement $element): string
+    private function concatBoldText(DOMElement $element): string
     {
         $parts = [];
 
-        foreach ($element->getElementsByTagName('strong') as $strong) {
-            if (! $strong instanceof DOMElement) {
-                continue;
-            }
+        foreach (['strong', 'b'] as $tagName) {
+            foreach ($element->getElementsByTagName($tagName) as $bold) {
+                if (! $bold instanceof DOMElement) {
+                    continue;
+                }
 
-            $text = trim((string) $strong->textContent);
-            if ($text !== '') {
-                $parts[] = $text;
+                $text = trim((string) $bold->textContent);
+                if ($text !== '') {
+                    $parts[] = $text;
+                }
             }
         }
 
         return trim(implode(' ', $parts));
+    }
+
+    /**
+     * @deprecated Use concatBoldText()
+     */
+    private function concatStrongText(DOMElement $element): string
+    {
+        return $this->concatBoldText($element);
     }
 
     private function firstElementChildTag(DOMElement $element): ?string

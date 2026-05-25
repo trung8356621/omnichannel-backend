@@ -126,6 +126,18 @@ if (rootElement) {
         console.warn('Invalid article meta JSON', e);
     }
 
+    let initialFaqs = [];
+
+    try {
+        const faqsEl = document.getElementById('seo-article-initial-faqs');
+        const rawFaqs = faqsEl?.textContent?.trim();
+        if (rawFaqs) {
+            initialFaqs = JSON.parse(rawFaqs);
+        }
+    } catch (e) {
+        console.warn('Invalid article FAQs JSON for editor', e);
+    }
+
     const root = createRoot(rootElement);
     root.render(
         <SeoArticleEditor
@@ -135,6 +147,7 @@ if (rootElement) {
             initialOutline={initialOutline}
             initialSeo={initialSeo}
             initialPostImages={initialPostImages}
+            initialFaqs={initialFaqs}
             articleTitle={articleTitle}
             editorSettings={editorSettings}
         />,

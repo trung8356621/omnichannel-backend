@@ -270,6 +270,8 @@ class SyncDomainContentService
                 ['meta_key' => 'wp_post_content'],
                 ['meta_value' => $content],
             );
+
+            app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $content);
         }
 
         $slug = trim((string) ($item['slug'] ?? ''));

@@ -9,8 +9,6 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 final class ArticleFaqHtmlRenderer
 {
     /**
-     * HTML accordion FAQ (không thêm tiêu đề H2 — giữ tiêu đề gốc trong bài).
-     *
      * @return list<array{question: string, answer: string, more?: string}>
      */
     public function resolveFaqs(SeoArticle $article): array
@@ -20,34 +18,57 @@ final class ArticleFaqHtmlRenderer
 
     public function renderAccordionHtml(SeoArticle $article): string
     {
-        $faqs = $this->resolveFaqs($article);
+        return $this->renderAccordionFromRows($this->resolveFaqs($article));
+    }
+
+    /**
+     * @param  list<array{question?: string, answer?: string, more?: string|null}>  $faqs
+     */
+    public function renderAccordionFromRows(array $faqs): string
+    {
         if ($faqs === []) {
             return '';
         }
 
         $parts = ['<div class="omi-faq-container seo-article-preview-faq">'];
+        $index = 0;
 
         foreach ($faqs as $faq) {
-            $question = htmlspecialchars((string) ($faq['question'] ?? ''), ENT_QUOTES, 'UTF-8');
-            $answerRaw = (string) ($faq['answer'] ?? '');
-            $moreRaw = trim((string) ($faq['more'] ?? ''));
-            $answerHtml = preg_match('/<[a-z][\s\S]*>/i', $answerRaw) === 1
-                ? $answerRaw
-                : nl2br(htmlspecialchars($answerRaw, ENT_QUOTES, 'UTF-8'), false);
-            $moreHtml = '';
-            if ($moreRaw !== '') {
-                $moreHtml = preg_match('/<[a-z][\s\S]*>/i', $moreRaw) === 1
-                    ? $moreRaw
-                    : nl2br(htmlspecialchars($moreRaw, ENT_QUOTES, 'UTF-8'), false);
+            if (! is_array($faq)) {
+                continue;
             }
 
-            $parts[] = '<details class="omi-faq-item" open>';
-            $parts[] = '<summary class="omi-faq-item__summary">' . $question . '</summary>';
+            $questionRaw = trim((string) ($faq['question'] ?? ''));
+            $answerRaw = trim((string) ($faq['answer'] ?? ''));
+            $moreRaw = trim((string) ($faq['more'] ?? ''));
+
+            if ($questionRaw === '' || $answerRaw === '') {
+                continue;
+            }
+
+            $question = htmlspecialchars($this->numberedQuestionLabel($questionRaw, $index), ENT_QUOTES, 'UTF-8');
+            $answerHtml = $this->formatFaqHtmlField($answerRaw);
+            $moreHtml = $moreRaw !== '' ? $this->formatFaqHtmlField($moreRaw) : '';
+
+            $openAttr = $index === 0 ? ' open' : '';
+            $parts[] = '<details class="omi-faq-item"' . $openAttr . '>';
+            $parts[] = '<summary class="omi-faq-item__summary">';
+            $parts[] = '<span class="omi-faq-item__chevron" aria-hidden="true"></span>';
+            $parts[] = '<span class="omi-faq-item__question">' . $question . '</span>';
+            $parts[] = '</summary>';
+            $parts[] = '<div class="omi-faq-item__body">';
             if ($moreHtml !== '') {
                 $parts[] = '<div class="omi-faq-item__more">' . $moreHtml . '</div>';
             }
             $parts[] = '<div class="omi-faq-item__answer">' . $answerHtml . '</div>';
+            $parts[] = '</div>';
             $parts[] = '</details>';
+
+            $index++;
+        }
+
+        if ($index === 0) {
+            return '';
         }
 
         $parts[] = '</div>';
@@ -82,5 +103,23 @@ final class ArticleFaqHtmlRenderer
         }
 
         return $body . "\n\n" . $faqHtml;
+    }
+
+    private function numberedQuestionLabel(string $question, int $index): string
+    {
+        if (preg_match('/^\d+[\.\)]\s/u', $question) === 1) {
+            return $question;
+        }
+
+        return ($index + 1) . '. ' . $question;
+    }
+
+    private function formatFaqHtmlField(string $raw): string
+    {
+        if (preg_match('/<[a-z][\s\S]*>/i', $raw) === 1) {
+            return $raw;
+        }
+
+        return nl2br(htmlspecialchars($raw, ENT_QUOTES, 'UTF-8'), false);
     }
 }

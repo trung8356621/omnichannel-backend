@@ -55,6 +55,10 @@ final class ArticleFaqManualExtractService
         foreach ($parsed as $faq) {
             $question = trim((string) ($faq['question'] ?? ''));
             $answerRaw = trim((string) ($faq['answer'] ?? ''));
+            $moreRaw = trim((string) ($faq['more'] ?? ''));
+            if ($moreRaw !== '') {
+                $answerRaw = $answerRaw !== '' ? $answerRaw . "\n" . $moreRaw : $moreRaw;
+            }
             if ($question === '' || $answerRaw === '') {
                 continue;
             }
@@ -62,12 +66,16 @@ final class ArticleFaqManualExtractService
             $incoming[] = [
                 'question' => $question,
                 'answer' => $this->answerToEditorHtml($answerRaw),
-                'more' => trim((string) ($faq['more'] ?? '')),
+                'more' => '',
             ];
         }
 
         if ($incoming === []) {
             $this->failExtract($article, $fragment, $articleHtml, $diagnosis, 'no_valid_pairs');
+        }
+
+        if ($articleHtml !== '') {
+            app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $articleHtml);
         }
 
         $merged = $this->mergeWithExisting($this->faqEditor->payloadForArticle($article), $incoming);

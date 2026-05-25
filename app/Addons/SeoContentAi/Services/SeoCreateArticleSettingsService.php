@@ -22,6 +22,8 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_RENEW_FAQ_PROMPT_ID = 'renew_faq_prompt_id';
 
+    public const KEY_PROJECT_KEYWORDS_PROMPT_ID = 'project_keywords_prompt_id';
+
     /** @deprecated Dùng publish_article_task_id; vẫn đọc/ghi để tương thích wp_options cũ */
     public const KEY_LEGACY_TASK_ID = 'task_id';
 
@@ -33,6 +35,7 @@ final class SeoCreateArticleSettingsService
      *     create_image_task_id: ?int,
      *     create_video_task_id: ?int,
      *     renew_faq_prompt_id: ?int,
+     *     project_keywords_prompt_id: ?int,
      * }
      */
     public function getSettings(): array
@@ -53,7 +56,13 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($data[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
+            self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
         ];
+    }
+
+    public function getProjectKeywordsPromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_PROJECT_KEYWORDS_PROMPT_ID];
     }
 
     public function getRenewFaqPromptId(): ?int
@@ -116,6 +125,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($settings[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
+            self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
             self::KEY_LEGACY_TASK_ID => $publish,
         ], 'no');
     }
@@ -138,6 +148,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_IMAGE => null,
             self::KEY_CREATE_VIDEO => null,
             self::KEY_RENEW_FAQ_PROMPT_ID => null,
+            self::KEY_PROJECT_KEYWORDS_PROMPT_ID => null,
         ];
     }
 

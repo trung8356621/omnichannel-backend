@@ -64,6 +64,22 @@ class SeoSettingsWorkflows extends Page implements HasForms
                     'Tạo video',
                     'Chạy khi có yêu cầu tạo video (prompt công cụ Video).',
                 ),
+                Forms\Components\Section::make('Dự án Content — AI từ khóa')
+                    ->description(
+                        'Prompt sinh danh sách từ khóa khi tạo dự án (nút AI Generator). '
+                        . 'Biến gợi ý: {{project_month}}, {{project_month_label}}, {{days_in_month}}, {{keyword_count}}, '
+                        . '{{project_description}}, {{user_brief}}. '
+                        . 'Đầu ra: mỗi từ khóa một dòng, hoặc JSON mảng chuỗi, hoặc Markdown bullet.'
+                    )
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID)
+                            ->label('Prompt AI từ khóa dự án')
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder('Chọn prompt…'),
+                    ]),
+
                 Forms\Components\Section::make('FAQ trên editor bài viết')
                     ->description('Prompt dùng khi biên tập bấm «Làm mới» một câu FAQ. Gợi ý biến: {{faq_question}}, {{faq_answer}}, {{post_title}}, {{post_content}}, {{site_domain}}. Đầu ra JSON: {"question":"…","answer":"…"} hoặc Markdown H3 + nội dung.')
                     ->schema([
@@ -100,6 +116,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
             SeoCreateArticleSettingsService::KEY_CREATE_IMAGE => $data[SeoCreateArticleSettingsService::KEY_CREATE_IMAGE] ?? null,
             SeoCreateArticleSettingsService::KEY_CREATE_VIDEO => $data[SeoCreateArticleSettingsService::KEY_CREATE_VIDEO] ?? null,
             SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null,
         ]);
 
         Notification::make()

@@ -92,27 +92,128 @@
     background: #0f172a;
 }
 
-.magic-eraser-tool-btn {
-    min-width: 2rem;
-    height: 2rem;
-    padding: 0 0.5rem;
+/* Toolbar icon buttons (SVG) */
+.magic-eraser-tb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
     border: none;
-    border-radius: 0.25rem;
-    background: transparent;
-    color: #94a3b8;
-    font-size: 0.75rem;
-    font-weight: 700;
     cursor: pointer;
+    transition:
+        background 0.15s ease,
+        color 0.15s ease,
+        box-shadow 0.15s ease;
 }
 
-.magic-eraser-tool-btn:hover {
+.magic-eraser-tb-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.magic-eraser-tb-btn--tool {
+    width: 2.25rem;
+    height: 2.25rem;
+    padding: 0;
+    border-radius: 0.35rem;
+    background: transparent;
+    color: #94a3b8;
+}
+
+.magic-eraser-tb-btn--tool:hover:not(:disabled) {
+    background: #1e293b;
+    color: #f8fafc;
+}
+
+.magic-eraser-tb-btn--tool.is-active {
+    background: #f43f5e;
+    color: #fff;
+    box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.4);
+}
+
+.magic-eraser-tb-btn--icon {
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border-radius: 0.35rem;
+    background: transparent;
+    color: #cbd5e1;
+}
+
+.magic-eraser-tb-btn--icon:hover:not(:disabled) {
     background: #1e293b;
     color: #fff;
 }
 
-.magic-eraser-tool-btn.is-active {
-    background: #f43f5e;
+.magic-eraser-tb-btn--action-secondary {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.5rem;
+    background: #1e293b;
+    color: #e2e8f0;
+}
+
+.magic-eraser-tb-btn--action-secondary:hover:not(:disabled) {
+    background: #334155;
+}
+
+.magic-eraser-tb-btn--action-primary {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 0.5rem;
+    background: #059669;
     color: #fff;
+    box-shadow: 0 2px 8px rgba(5, 150, 105, 0.35);
+}
+
+.magic-eraser-tb-btn--action-primary:hover:not(:disabled) {
+    background: #10b981;
+}
+
+.magic-eraser-tb-btn--sidebar {
+    width: 100%;
+    min-height: 2.5rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid #334155;
+    background: #1e293b;
+    color: #e2e8f0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    justify-content: flex-start;
+}
+
+.magic-eraser-tb-btn--sidebar:hover:not(:disabled) {
+    background: #334155;
+    border-color: #475569;
+}
+
+.magic-eraser-sidebar-action-label {
+    flex: 1;
+    text-align: left;
+}
+
+.magic-eraser-tb-btn--fill {
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.65rem 1rem;
+    justify-content: center;
+    gap: 0.5rem;
+    border: none;
+    border-radius: 0.75rem;
+    background: linear-gradient(135deg, #e11d48, #db2777);
+    color: #fff;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    box-shadow: 0 8px 20px rgba(225, 29, 72, 0.25);
+}
+
+.magic-eraser-tb-btn--fill:hover:not(:disabled) {
+    background: linear-gradient(135deg, #f43f5e, #ec4899);
+}
+
+.magic-eraser-tb-btn--fill:disabled {
+    opacity: 0.45;
 }
 
 .magic-eraser-zoom-group {
@@ -160,7 +261,10 @@
 }
 
 .magic-eraser-icon-btn {
-    padding: 0.375rem 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.375rem;
     border: none;
     border-radius: 0.25rem;
     background: transparent;
@@ -190,7 +294,11 @@
 
 .magic-eraser-btn-secondary,
 .magic-eraser-btn-save {
-    padding: 0.375rem 1rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    padding: 0.375rem 0.75rem;
     border: none;
     border-radius: 0.5rem;
     font-size: 0.75rem;
@@ -327,11 +435,12 @@
 .magic-eraser-sidebar {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
-    width: 20rem;
-    padding: 1.25rem;
+    gap: 1rem;
+    width: 22rem;
+    padding: 1rem 1.25rem;
     border-left: 1px solid #1e293b;
     background: #020617;
+    overflow-y: auto;
 }
 
 .magic-eraser-panel {
@@ -367,9 +476,16 @@
 }
 
 .magic-eraser-hex {
+    flex: 1;
+    min-width: 0;
     font-family: ui-monospace, monospace;
     font-size: 0.75rem;
     color: #cbd5e1;
+}
+
+.magic-eraser-color-pick-btn {
+    flex-shrink: 0;
+    margin-left: auto;
 }
 
 .magic-eraser-pick-btn {
@@ -457,17 +573,44 @@
 }
 
 .magic-eraser-shortcuts {
-    padding: 0.75rem 1rem;
+    padding: 0.85rem 1rem;
     border: 1px solid #1e293b;
     border-radius: 0.75rem;
-    background: rgba(15, 23, 42, 0.4);
+    background: rgba(15, 23, 42, 0.55);
 }
 
 .magic-eraser-shortcuts-title {
-    margin: 0 0 0.5rem;
+    margin: 0 0 0.65rem;
     font-size: 0.625rem;
     font-weight: 700;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #94a3b8;
+}
+
+.magic-eraser-shortcuts-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: min(42vh, 22rem);
+    overflow-y: auto;
+    padding-right: 0.15rem;
+}
+
+.magic-eraser-shortcuts-grid::-webkit-scrollbar {
+    width: 5px;
+}
+
+.magic-eraser-shortcuts-grid::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 4px;
+}
+
+.magic-eraser-shortcuts-group-label {
+    margin: 0 0 0.35rem;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
     color: #64748b;
 }
@@ -476,20 +619,52 @@
     margin: 0;
     padding: 0;
     list-style: none;
+}
+
+.magic-eraser-shortcuts-list li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem 0.65rem;
+    align-items: baseline;
+    padding: 0.28rem 0;
     font-size: 0.6875rem;
+    line-height: 1.45;
+    border-bottom: 1px solid rgba(51, 65, 85, 0.45);
+}
+
+.magic-eraser-shortcuts-list li:last-child {
+    border-bottom: none;
+}
+
+.magic-eraser-shortcuts-keys {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.magic-eraser-shortcuts-plus {
+    color: #475569;
+    font-size: 0.55rem;
+    font-weight: 700;
+    user-select: none;
+}
+
+.magic-eraser-shortcuts-desc {
     color: #94a3b8;
-    line-height: 1.6;
 }
 
 .magic-eraser-shortcuts-list kbd {
     display: inline-block;
-    min-width: 1.1rem;
-    padding: 0 0.25rem;
+    padding: 0.12rem 0.35rem;
     border: 1px solid #334155;
-    border-radius: 0.2rem;
-    background: #1e293b;
-    color: #e2e8f0;
-    font-family: ui-monospace, monospace;
-    font-size: 0.625rem;
-    text-align: center;
+    border-radius: 0.25rem;
+    background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+    color: #f1f5f9;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+    box-shadow: 0 1px 0 #020617;
 }

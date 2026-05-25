@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, FileText, Image as ImageIcon, Plus } from 'lucide-react';
+import { ChevronDown, ChevronUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
 
 /**
  * @param {'before'|'after'} position
@@ -74,7 +74,7 @@ export function BlockInsertTrigger(props) {
 
 /**
  * @param {() => void} onClose
- * @param {(type: 'text'|'image') => void} onInsert
+ * @param {(type: 'text'|'image'|'faq') => void} onInsert
  */
 export function BlockInsertMenuBar({ onClose, onInsert }) {
     const ref = useRef(null);
@@ -105,6 +105,14 @@ export function BlockInsertMenuBar({ onClose, onInsert }) {
             >
                 <ImageIcon size={18} strokeWidth={1.75} />
                 <span>Ảnh</span>
+            </button>
+            <button
+                type="button"
+                className="seo-block-insert-menu__item"
+                onClick={() => onInsert('faq')}
+            >
+                <HelpCircle size={18} strokeWidth={1.75} />
+                <span>Shortcode FAQ</span>
             </button>
         </div>
     );

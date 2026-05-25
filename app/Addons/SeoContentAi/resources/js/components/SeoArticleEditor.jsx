@@ -42,7 +42,8 @@ import {
     parseImageFromBlockContent,
     renderImageFigure,
 } from '../utils/blockImageUtils';
-import { coalesceTiptapExportHtml, flattenHtmlBodyNodes } from '../utils/editorHtmlUtils';
+import { coalesceTiptapExportHtml, FAQ_SHORTCODE_HTML, flattenHtmlBodyNodes, isFaqPlaceholderHtml } from '../utils/editorHtmlUtils';
+import FaqAccordionPreview from './FaqAccordionPreview';
 import { Undo2, Redo2 } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
@@ -69,6 +70,18 @@ const createEmptyImageBlock = () => ({
     suffix: '',
     image: null,
 });
+
+const createFaqShortcodeBlock = () => ({
+    id: newBlockId('classic'),
+    type: 'text',
+    isWp: false,
+    prefix: '',
+    content: FAQ_SHORTCODE_HTML,
+    suffix: '',
+});
+
+const articleHasFaqShortcode = (blocks) =>
+    blocks.some((block) => isFaqPlaceholderHtml(block.content || ''));
 
 const parseHtmlToBlocks = (html) => {
     if (!html) return [];
@@ -438,7 +451,11 @@ function BlockEditor({
     canDeleteBlock,
     articleId,
     siteId,
+    panelFaqs,
 }) {
+    const blockHtml = displayContent ?? block.content;
+    const isFaqShortcodeBlock = block.type === 'text' && isFaqPlaceholderHtml(blockHtml);
+
     if (block.type === 'image') {
         return (
             <ImageBlockEditor
@@ -475,6 +492,25 @@ function BlockEditor({
 
     if (isHiddenInMerge) {
         return null;
+    }
+
+    if (isFaqShortcodeBlock) {
+        return (
+            <div
+                className={`seo-faq-shortcode-block${isActive ? ' is-active' : ''}`}
+                onClick={onActivate}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        onActivate();
+                    }
+                }}
+                role="button"
+                tabIndex={0}
+                title="Khối shortcode FAQ — chỉnh nội dung tại panel FAQ bên dưới"
+            >
+                <FaqAccordionPreview faqs={panelFaqs} />
+            </div>
+        );
     }
 
     if (!isActive) {
@@ -535,6 +571,7 @@ export default function SeoArticleEditor({
     initialOutline = '',
     initialSeo,
     initialPostImages = [],
+    initialFaqs = [],
     articleTitle = '',
     editorSettings = {},
 }) {
@@ -551,6 +588,7 @@ export default function SeoArticleEditor({
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
     const [insertMenu, setInsertMenu] = useState(null);
+    const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     const pendingQuickFixKeywordRef = useRef('');
 
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
@@ -1290,9 +1328,29 @@ export default function SeoArticleEditor({
         (refBlockId, position, type) => {
             if (tempMergeRef.current) return;
 
+            if (type === 'faq' && articleHasFaqShortcode(blocksRef.current)) {
+                setInsertMenu(null);
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Đã có shortcode FAQ',
+                            body: 'Bài viết chỉ nên có một [omi_faq].',
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
             commitActiveBlock();
 
-            const newBlock = type === 'image' ? createEmptyImageBlock() : createEmptyTextBlock();
+            const newBlock =
+                type === 'image'
+                    ? createEmptyImageBlock()
+                    : type === 'faq'
+                      ? createFaqShortcodeBlock()
+                      : createEmptyTextBlock();
             const newId = newBlock.id;
 
             setBlocks((prev) => {
@@ -1421,6 +1479,23 @@ export default function SeoArticleEditor({
         window.addEventListener('extract-article-faqs', enrichExtractFaq);
         window.addEventListener('article-faqs-extracted', applyEditorHtml);
 
+        const syncPanelFaqs = (event) => {
+            const fromExtract = event.detail?.faqs;
+            if (Array.isArray(fromExtract)) {
+                setPanelFaqs(fromExtract);
+            }
+        };
+
+        const syncPanelFaqsFromEditor = (event) => {
+            const rows = event.detail?.faq;
+            if (Array.isArray(rows)) {
+                setPanelFaqs(rows);
+            }
+        };
+
+        window.addEventListener('article-faqs-extracted', syncPanelFaqs);
+        window.addEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
+
         const handleAnalyzeResult = (e) => {
             const result = e.detail?.result ?? e.detail;
             if (!result || typeof result !== 'object') return;
@@ -1544,6 +1619,8 @@ export default function SeoArticleEditor({
             window.removeEventListener('collect-editor-html', onCollectEditorHtml);
             window.removeEventListener('extract-article-faqs', enrichExtractFaq);
             window.removeEventListener('article-faqs-extracted', applyEditorHtml);
+            window.removeEventListener('article-faqs-extracted', syncPanelFaqs);
+            window.removeEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
             window.removeEventListener('seo-editor-analyze-result', handleAnalyzeResult);
             document.removeEventListener('mousedown', handleClickOutside);
         };
@@ -1738,6 +1815,7 @@ export default function SeoArticleEditor({
                                                 isActive ? registerBlockFlush : undefined
                                             }
                                             setGlobalEditor={setGlobalEditor}
+                                            panelFaqs={panelFaqs}
                                             onDelete={() => deleteBlock(block.id)}
                                             canDeleteBlock={blocks.length > 1}
                                         />

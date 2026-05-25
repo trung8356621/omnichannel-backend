@@ -130,7 +130,7 @@ class WordPressArticleContentService
     /**
      * @return array<string, mixed>
      */
-    public function fetchFromWordPress(SeoArticle $article): array
+    public function fetchFromWordPress(SeoArticle $article, bool $importFaqs = true): array
     {
         $wpId = (int) ($article->wp_post_id ?? 0);
         if ($wpId <= 0) {
@@ -176,7 +176,7 @@ class WordPressArticleContentService
 
             $post = is_array($payload['post'] ?? null) ? $payload['post'] : [];
 
-            $this->persistFetchedMeta($article, $post, $taxonomy !== null);
+            $this->persistFetchedMeta($article, $post, $taxonomy !== null, $importFaqs);
 
             return $post;
         } catch (Throwable $e) {
@@ -240,13 +240,16 @@ class WordPressArticleContentService
     /**
      * @param  array<string, mixed>  $post
      */
-    private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy): void
+    private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy, bool $importFaqs = true): void
     {
         if (array_key_exists('post_content', $post)) {
+            $rawContent = (string) $post['post_content'];
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_content'],
-                ['meta_value' => (string) $post['post_content']],
+                ['meta_value' => $rawContent],
             );
+
+            app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $rawContent);
         }
 
         if (filled($post['slug'] ?? null)) {
@@ -281,7 +284,14 @@ class WordPressArticleContentService
             app(ArticlePostImagesService::class)->importFromSyncItem($article, $post);
         }
 
-        if (is_array($post['faqs'] ?? null)) {
+        if (is_array($post['faqs'] ?? null) && $post['faqs'] !== []) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_faqs'],
+                ['meta_value' => json_encode($post['faqs'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+            );
+        }
+
+        if ($importFaqs && is_array($post['faqs'] ?? null)) {
             app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
         }
     }

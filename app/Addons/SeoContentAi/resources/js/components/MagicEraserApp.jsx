@@ -1,5 +1,27 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+    Brush,
+    Circle,
+    Eraser,
+    Maximize2,
+    PaintBucket,
+    Pentagon,
+    Pipette,
+    Redo2,
+    Save,
+    Square,
+    Undo2,
+    X,
+    ZoomIn,
+    ZoomOut,
+} from 'lucide-react';
 import { saveEditedSeoMedia } from '../utils/seoMediaApi';
+import {
+    MAGIC_ERASER_SHORTCUT_GROUPS,
+    TOOL_SHORTCUT_LABELS,
+    toolFromKeyboardEvent,
+} from './magicEraserShortcuts';
+import { MagicEraserShortcutsPanel, MagicEraserToolbarButton } from './MagicEraserToolbar';
 
 const TOOL_BRUSH = 'brush';
 const TOOL_EYEDROPPER = 'eyedropper';
@@ -610,6 +632,27 @@ export default function MagicEraserApp({
                 return;
             }
 
+            const toolShortcut = toolFromKeyboardEvent(e);
+            if (toolShortcut) {
+                e.preventDefault();
+                const toolMap = {
+                    brush: TOOL_BRUSH,
+                    rect: TOOL_RECT,
+                    ellipse: TOOL_ELLIPSE,
+                    polygon: TOOL_POLYGON,
+                    eyedropper: TOOL_EYEDROPPER,
+                };
+                setActiveTool(toolMap[toolShortcut]);
+                if (toolShortcut === 'polygon') {
+                    setPolygonPoints([]);
+                    clearPreviewCanvas();
+                } else if (toolShortcut !== 'eyedropper') {
+                    setPolygonPoints([]);
+                }
+
+                return;
+            }
+
             if (mod && (key === 'z' || key === 'y')) {
                 e.preventDefault();
                 if (key === 'y' || (key === 'z' && e.shiftKey)) {
@@ -690,46 +733,6 @@ export default function MagicEraserApp({
             if (key === 'backspace' && activeTool === TOOL_POLYGON && polygonPoints.length) {
                 e.preventDefault();
                 setPolygonPoints((pts) => pts.slice(0, -1));
-
-                return;
-            }
-
-            if (key === 'b') {
-                e.preventDefault();
-                setActiveTool(TOOL_BRUSH);
-                setPolygonPoints([]);
-
-                return;
-            }
-
-            if (key === 'i') {
-                e.preventDefault();
-                setActiveTool(TOOL_EYEDROPPER);
-
-                return;
-            }
-
-            if (key === 'r' || key === 'm') {
-                e.preventDefault();
-                setActiveTool(TOOL_RECT);
-                setPolygonPoints([]);
-
-                return;
-            }
-
-            if (key === 'o') {
-                e.preventDefault();
-                setActiveTool(TOOL_ELLIPSE);
-                setPolygonPoints([]);
-
-                return;
-            }
-
-            if (key === 'p' || key === 'l') {
-                e.preventDefault();
-                setActiveTool(TOOL_POLYGON);
-                setPolygonPoints([]);
-                clearPreviewCanvas();
 
                 return;
             }
@@ -964,120 +967,108 @@ export default function MagicEraserApp({
                 <div className="magic-eraser-topbar">
                     <div className="magic-eraser-topbar-left">
                         <div className="magic-eraser-tool-group" role="toolbar" aria-label="Công cụ">
-                            <button
-                                type="button"
-                                className={`magic-eraser-tool-btn ${activeTool === TOOL_BRUSH ? 'is-active' : ''}`}
+                            <MagicEraserToolbarButton
+                                icon={Brush}
+                                label="Cọ vẽ"
+                                shortcut={TOOL_SHORTCUT_LABELS.brush}
+                                active={activeTool === TOOL_BRUSH}
                                 onClick={() => setActiveTool(TOOL_BRUSH)}
-                                title="Cọ (B)"
-                            >
-                                B
-                            </button>
-                            <button
-                                type="button"
-                                className={`magic-eraser-tool-btn ${activeTool === TOOL_RECT ? 'is-active' : ''}`}
+                            />
+                            <MagicEraserToolbarButton
+                                icon={Square}
+                                label="Hình chữ nhật"
+                                shortcut={TOOL_SHORTCUT_LABELS.rect}
+                                active={activeTool === TOOL_RECT}
                                 onClick={() => setActiveTool(TOOL_RECT)}
-                                title="Hình chữ nhật (M/R)"
-                            >
-                                ▭
-                            </button>
-                            <button
-                                type="button"
-                                className={`magic-eraser-tool-btn ${activeTool === TOOL_ELLIPSE ? 'is-active' : ''}`}
+                            />
+                            <MagicEraserToolbarButton
+                                icon={Circle}
+                                label="Hình tròn / elip"
+                                shortcut={TOOL_SHORTCUT_LABELS.ellipse}
+                                active={activeTool === TOOL_ELLIPSE}
                                 onClick={() => setActiveTool(TOOL_ELLIPSE)}
-                                title="Hình tròn/Elip (O)"
-                            >
-                                ○
-                            </button>
-                            <button
-                                type="button"
-                                className={`magic-eraser-tool-btn ${activeTool === TOOL_POLYGON ? 'is-active' : ''}`}
+                            />
+                            <MagicEraserToolbarButton
+                                icon={Pentagon}
+                                label="Đa giác"
+                                shortcut={TOOL_SHORTCUT_LABELS.polygon}
+                                active={activeTool === TOOL_POLYGON}
                                 onClick={() => {
                                     setActiveTool(TOOL_POLYGON);
                                     setPolygonPoints([]);
                                 }}
-                                title="Đa giác — click từng điểm, Enter đóng (P)"
-                            >
-                                ⬠
-                            </button>
-                            <button
-                                type="button"
-                                className={`magic-eraser-tool-btn ${activeTool === TOOL_EYEDROPPER ? 'is-active' : ''}`}
+                            />
+                            <MagicEraserToolbarButton
+                                icon={Pipette}
+                                label="Hút màu"
+                                shortcut={TOOL_SHORTCUT_LABELS.eyedropper}
+                                active={activeTool === TOOL_EYEDROPPER}
                                 onClick={() => setActiveTool(TOOL_EYEDROPPER)}
-                                title="Hút màu (I)"
-                            >
-                                I
-                            </button>
+                            />
                         </div>
                         <div className="magic-eraser-zoom-group">
-                            <button
-                                type="button"
-                                className="magic-eraser-icon-btn"
+                            <MagicEraserToolbarButton
+                                icon={ZoomOut}
+                                label="Thu nhỏ"
+                                shortcut="Ctrl+-"
+                                variant="icon"
                                 onClick={() => changeZoom(-ZOOM_STEP)}
-                                title="Thu nhỏ (Ctrl+-)"
-                            >
-                                −
-                            </button>
+                            />
                             <span className="magic-eraser-zoom-label">{zoomPercent}%</span>
-                            <button
-                                type="button"
-                                className="magic-eraser-icon-btn"
+                            <MagicEraserToolbarButton
+                                icon={ZoomIn}
+                                label="Phóng to"
+                                shortcut="Ctrl++"
+                                variant="icon"
                                 onClick={() => changeZoom(ZOOM_STEP)}
-                                title="Phóng to (Ctrl++)"
-                            >
-                                +
-                            </button>
-                            <button
-                                type="button"
-                                className="magic-eraser-icon-btn magic-eraser-fit-btn"
+                            />
+                            <MagicEraserToolbarButton
+                                icon={Maximize2}
+                                label="Vừa khung"
+                                shortcut="Ctrl+0"
+                                variant="icon"
                                 onClick={fitZoomToView}
-                                title="Vừa khung (Ctrl+0)"
-                            >
-                                ⊡
-                            </button>
+                            />
                         </div>
                     </div>
 
                     <div className="magic-eraser-undo-group">
-                        <button
-                            type="button"
-                            onClick={handleUndo}
+                        <MagicEraserToolbarButton
+                            icon={Undo2}
+                            label="Hoàn tác"
+                            shortcut="Ctrl+Z"
+                            variant="icon"
                             disabled={historyStep <= 0}
-                            title="Hoàn tác (Ctrl+Z)"
-                            className="magic-eraser-icon-btn"
-                        >
-                            ↶
-                        </button>
+                            onClick={handleUndo}
+                        />
                         <div className="magic-eraser-divider" />
-                        <button
-                            type="button"
-                            onClick={handleRedo}
+                        <MagicEraserToolbarButton
+                            icon={Redo2}
+                            label="Làm lại"
+                            shortcut="Ctrl+Y"
+                            variant="icon"
                             disabled={historyStep >= history.length - 1}
-                            title="Làm lại (Ctrl+Y)"
-                            className="magic-eraser-icon-btn"
-                        >
-                            ↷
-                        </button>
+                            onClick={handleRedo}
+                        />
                     </div>
 
                     <div className="magic-eraser-topbar-actions">
-                        <button
-                            type="button"
+                        <MagicEraserToolbarButton
+                            icon={X}
+                            label="Đóng"
+                            shortcut="Esc"
+                            variant="action-secondary"
+                            disabled={isProcessing}
                             onClick={onClose}
+                        />
+                        <MagicEraserToolbarButton
+                            icon={Save}
+                            label={isProcessing ? 'Đang lưu…' : 'Lưu ảnh'}
+                            shortcut="Ctrl+S"
+                            variant="action-primary"
                             disabled={isProcessing}
-                            className="magic-eraser-btn-secondary"
-                            title="Đóng (Esc)"
-                        >
-                            Hủy
-                        </button>
-                        <button
-                            type="button"
                             onClick={handleSaveImage}
-                            disabled={isProcessing}
-                            className="magic-eraser-btn-save"
-                            title="Lưu (Ctrl+S)"
-                        >
-                            {isProcessing ? 'Đang lưu...' : 'Lưu (Ctrl+S)'}
-                        </button>
+                        />
                     </div>
                 </div>
 
@@ -1123,20 +1114,32 @@ export default function MagicEraserApp({
 
                     <div className="magic-eraser-sidebar">
                         <div className="magic-eraser-panel">
-                            <h4 className="magic-eraser-panel-title">Màu (I)</h4>
+                            <h4 className="magic-eraser-panel-title">Màu ({TOOL_SHORTCUT_LABELS.eyedropper})</h4>
                             <div className="magic-eraser-color-row">
                                 <input
                                     type="color"
                                     value={fillColor}
                                     onChange={(e) => setFillColor(e.target.value)}
                                     className="magic-eraser-color-input"
+                                    aria-label="Chọn màu tô"
                                 />
                                 <span className="magic-eraser-hex">{fillColor}</span>
+                                <MagicEraserToolbarButton
+                                    icon={Pipette}
+                                    label="Hút màu"
+                                    shortcut={TOOL_SHORTCUT_LABELS.eyedropper}
+                                    variant="tool"
+                                    active={activeTool === TOOL_EYEDROPPER}
+                                    onClick={() => setActiveTool(TOOL_EYEDROPPER)}
+                                    className="magic-eraser-color-pick-btn"
+                                />
                             </div>
                         </div>
 
                         <div className="magic-eraser-panel">
-                            <h4 className="magic-eraser-panel-title">Cọ (B) · [ ]</h4>
+                            <h4 className="magic-eraser-panel-title">
+                                Cọ ({TOOL_SHORTCUT_LABELS.brush}) · [ ]
+                            </h4>
                             <div className="magic-eraser-brush-row">
                                 <input
                                     type="range"
@@ -1148,15 +1151,17 @@ export default function MagicEraserApp({
                                 />
                                 <span className="magic-eraser-brush-size">{brushSize}px</span>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => handleClearMask(true)}
+                            <MagicEraserToolbarButton
+                                icon={Eraser}
+                                label="Bỏ chọn"
+                                shortcut="Ctrl+D"
+                                variant="sidebar"
+                                className="magic-eraser-sidebar-action"
                                 disabled={!hasDrawn && polygonPoints.length === 0}
-                                className="magic-eraser-btn-clear"
-                                title="Bỏ chọn (Ctrl+D)"
+                                onClick={() => handleClearMask(true)}
                             >
-                                Bỏ chọn (Ctrl+D)
-                            </button>
+                                <span className="magic-eraser-sidebar-action-label">Bỏ chọn</span>
+                            </MagicEraserToolbarButton>
                         </div>
 
                         {activeTool === TOOL_POLYGON && (
@@ -1165,46 +1170,33 @@ export default function MagicEraserApp({
                                     Click từng điểm · Enter hoặc click điểm đầu để đóng · Esc hủy ·
                                     Backspace xóa điểm cuối
                                 </p>
-                                <button
-                                    type="button"
-                                    className="magic-eraser-btn-clear"
+                                <MagicEraserToolbarButton
+                                    icon={Pentagon}
+                                    label="Đóng đa giác"
+                                    shortcut="Enter"
+                                    variant="sidebar"
+                                    className="magic-eraser-sidebar-action"
                                     disabled={polygonPoints.length < 3}
                                     onClick={commitPolygon}
                                 >
-                                    Đóng đa giác (Enter)
-                                </button>
+                                    <span className="magic-eraser-sidebar-action-label">Đóng đa giác</span>
+                                </MagicEraserToolbarButton>
                             </div>
                         )}
 
-                        <div className="magic-eraser-shortcuts">
-                            <p className="magic-eraser-shortcuts-title">Phím tắt</p>
-                            <ul className="magic-eraser-shortcuts-list">
-                                <li>
-                                    <kbd>Space</kbd> giữ + kéo — di chuyển ảnh
-                                </li>
-                                <li>
-                                    <kbd>Ctrl</kbd>+cuộn — zoom tại con trỏ
-                                </li>
-                                <li>
-                                    <kbd>B</kbd> Cọ · <kbd>M</kbd> Vuông · <kbd>O</kbd> Tròn · <kbd>P</kbd>{' '}
-                                    Đa giác
-                                </li>
-                                <li>
-                                    <kbd>Enter</kbd> Tô · <kbd>Ctrl</kbd>+<kbd>Z</kbd> Hoàn tác
-                                </li>
-                            </ul>
-                        </div>
+                        <MagicEraserShortcutsPanel groups={MAGIC_ERASER_SHORTCUT_GROUPS} />
 
                         <div className="magic-eraser-panel-footer">
-                            <button
-                                type="button"
-                                onClick={handleFillColor}
+                            <MagicEraserToolbarButton
+                                icon={PaintBucket}
+                                label="Tô màu vùng chọn"
+                                shortcut="Enter"
+                                variant="fill"
                                 disabled={!hasDrawn || isProcessing}
-                                className="magic-eraser-btn-fill"
-                                title="Tô màu (Enter)"
+                                onClick={handleFillColor}
                             >
-                                Tô màu (Enter)
-                            </button>
+                                <span className="magic-eraser-sidebar-action-label">Tô màu</span>
+                            </MagicEraserToolbarButton>
                         </div>
                     </div>
                 </div>

@@ -57,25 +57,13 @@
         .seo-preview-content table { width: 100%; border-collapse: collapse; }
         .seo-preview-content th,
         .seo-preview-content td { border: 1px solid #e5e7eb; padding: 0.5rem; }
-        .omi-faq-container { margin-top: 1.5rem; }
-        .omi-faq-item {
-            margin-bottom: 0.75rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 0.75rem 1rem;
-            background: #fafafa;
-        }
-        .omi-faq-item__summary {
-            font-weight: 700;
-            cursor: pointer;
-            list-style: none;
-        }
-        .omi-faq-item__summary::-webkit-details-marker { display: none; }
-        .omi-faq-item__answer {
-            margin-top: 0.75rem;
-            color: #4b5563;
-        }
     </style>
+    @php
+        $faqCssPath = app_path('Addons/SeoContentAi/resources/css/omi-faq-accordion.css');
+    @endphp
+    @if (is_file($faqCssPath))
+        <style>{!! file_get_contents($faqCssPath) !!}</style>
+    @endif
 </head>
 <body>
     <div class="seo-preview-bar">

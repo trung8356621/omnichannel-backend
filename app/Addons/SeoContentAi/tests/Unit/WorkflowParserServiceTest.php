@@ -444,4 +444,63 @@ HTML;
         $this->assertStringContainsString('[omi_faq]', $stripped);
         $this->assertStringNotContainsString('Trả lời A.', $stripped);
     }
+
+    public function test_parse_faqs_b_tag_blockquote_manual_fragment(): void
+    {
+        $parser = $this->parser();
+
+        $html = <<<'HTML'
+<p><b>Q1: Chất liệu vải xưởng dùng may balo trẻ em có đảm bảo an toàn cho sức khỏe của bé không?</b></p>
+<blockquote><p>An toàn của trẻ là ưu tiên số một của chúng tôi. Toàn bộ nguồn vải dù, <a href="https://example.com">vải Oxford</a> hay Canvas được xưởng sử dụng đều trải qua kiểm định, cam kết không chứa formaldehyde và các hóa chất tồn dư độc hại.</p></blockquote>
+HTML;
+
+        $faqs = $parser->parseFaqsFromHtml($html, treatAllAsFaqSection: true);
+
+        $this->assertCount(1, $faqs);
+        $this->assertStringContainsString('an toàn cho sức khỏe', mb_strtolower($faqs[0]['question']));
+        $this->assertStringContainsString('formaldehyde', mb_strtolower($faqs[0]['answer']));
+        $this->assertStringContainsString('vải Oxford', $faqs[0]['answer']);
+    }
+
+    public function test_is_likely_non_faq_question_skips_xem_them(): void
+    {
+        $parser = $this->parser();
+
+        $this->assertTrue($parser->isLikelyNonFaqQuestion('Xem thêm:'));
+        $this->assertTrue($parser->isLikelyNonFaqQuestion('See more'));
+
+        $html = <<<'HTML'
+<h2>Câu hỏi thường gặp</h2>
+<h3>Câu hỏi thật?</h3>
+<p>Trả lời thật.</p>
+<h3>Xem thêm:</h3>
+<ul><li><a href="/a">Link A</a></li></ul>
+HTML;
+
+        $faqs = $parser->parseFaqsFromHtml($html, treatAllAsFaqSection: false);
+
+        $this->assertCount(1, $faqs);
+        $this->assertStringContainsString('Câu hỏi thật', $faqs[0]['question']);
+    }
+
+    public function test_strip_panel_faqs_keeps_xem_them_in_body(): void
+    {
+        $parser = $this->parser();
+
+        $html = <<<'HTML'
+<p>Mở bài.</p>
+<h2>Câu hỏi thường gặp</h2>
+<h3>Chính sách giao hàng thế nào?</h3>
+<p>Bảo hành 6–12 tháng.</p>
+<h3>Xem thêm:</h3>
+<ul><li><a href="/ykk">khóa kéo YKK</a></li></ul>
+HTML;
+
+        $stripped = $parser->stripPanelFaqsFromContent($html, ['Chính sách giao hàng thế nào?']);
+
+        $this->assertStringContainsString('[omi_faq]', $stripped);
+        $this->assertStringNotContainsString('Bảo hành 6–12 tháng', $stripped);
+        $this->assertStringContainsString('href="/ykk"', $stripped);
+        $this->assertStringContainsString('khóa kéo YKK', html_entity_decode($stripped, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
 }

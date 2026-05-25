@@ -64,6 +64,8 @@ final class ArticleFaqBodySyncService
         $this->faqEditor->saveFromEditor($article, $parsed);
         $this->extractDebug->clear($article);
 
+        app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $html);
+
         $strippedHtml = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($html);
         if (str_contains($strippedHtml, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)
             && ! str_contains($strippedHtml, 'omi-faq-placeholder')
