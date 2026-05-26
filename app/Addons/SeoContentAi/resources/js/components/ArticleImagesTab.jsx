@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Wand2 } from 'lucide-react';
+import { ExternalLink, Scissors, Wand2 } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
-import { applyWatermarkToImage, prepareImageEditorUrl } from '../utils/seoMediaApi';
+import { applyWatermarkToImage, buildMediaImageEditorUrl, prepareImageEditorUrl } from '../utils/seoMediaApi';
 
 const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
 
@@ -21,7 +21,7 @@ function canProcessArticleImage(row) {
     return isLocalSeoMediaSrc(row.src);
 }
 
-function ImageRow({ row, siteId, onPatch, onSlugChange, onFocusBlock, onNotify }) {
+function ImageRow({ row, siteId, articleId, onPatch, onSlugChange, onFocusBlock, onNotify }) {
     const [slug, setSlug] = useState(row.slug ?? '');
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
@@ -93,6 +93,22 @@ function ImageRow({ row, siteId, onPatch, onSlugChange, onFocusBlock, onNotify }
         } finally {
             setApplyingWatermark(false);
         }
+    };
+
+    const openImageSplitter = () => {
+        const splitterUrl = buildMediaImageEditorUrl({
+            seoMediaId: row.seoMediaId,
+            tab: 'splitter',
+        });
+        if (!splitterUrl) {
+            onNotify?.({
+                title: 'Không mở được tách lưới',
+                body: 'Ảnh cần có ID Laravel (seo_media) hoặc ID WordPress.',
+                status: 'warning',
+            });
+            return;
+        }
+        window.open(splitterUrl, '_blank', 'noopener,noreferrer');
     };
 
     return (
@@ -173,6 +189,15 @@ function ImageRow({ row, siteId, onPatch, onSlugChange, onFocusBlock, onNotify }
                         >
                             {applyingWatermark ? 'Đang xử lý…' : 'Áp dụng đóng dấu'}
                         </button>
+                        <button
+                            type="button"
+                            className="seo-article-images-watermark-btn"
+                            disabled={!siteId || busy}
+                            onClick={openImageSplitter}
+                        >
+                            <Scissors size={14} />
+                            Tách theo lưới
+                        </button>
                     </div>
                 ) : null}
             </div>
@@ -183,6 +208,7 @@ function ImageRow({ row, siteId, onPatch, onSlugChange, onFocusBlock, onNotify }
 export default function ArticleImagesTab({
     blocks,
     siteId = null,
+    articleId = null,
     focusKeyword,
     articleTitle = '',
     onPatchImage,
@@ -248,6 +274,7 @@ export default function ArticleImagesTab({
                         key={row.blockId}
                         row={row}
                         siteId={siteId}
+                        articleId={articleId}
                         onPatch={onPatchImage}
                         onSlugChange={onSlugChange}
                         onFocusBlock={onFocusBlock}

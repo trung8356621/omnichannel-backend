@@ -54,14 +54,30 @@
                 </label>
 
                 @if ($data['limit_dimensions'] ?? false)
+                    <p class="seo-image-opt__hint">
+                        Chỉ nhập <strong>một</strong> chiều: có width thì giới hạn theo chiều rộng, có height thì theo chiều cao.
+                        Để trống chiều còn lại để giữ tỉ lệ ảnh (không bị méo hoặc cắt).
+                    </p>
                     <div class="seo-image-opt__dims">
                         <div>
                             <label class="seo-image-opt__field-label">Chiều rộng tối đa (px)</label>
-                            <input type="number" min="100" wire:model="data.max_width" class="seo-image-opt__input" />
+                            <input
+                                type="number"
+                                min="0"
+                                wire:model="data.max_width"
+                                class="seo-image-opt__input"
+                                placeholder="Ví dụ: 1024"
+                            />
                         </div>
                         <div>
                             <label class="seo-image-opt__field-label">Chiều cao tối đa (px)</label>
-                            <input type="number" min="100" wire:model="data.max_height" class="seo-image-opt__input" />
+                            <input
+                                type="number"
+                                min="0"
+                                wire:model="data.max_height"
+                                class="seo-image-opt__input"
+                                placeholder="Để trống nếu chỉ giới hạn width"
+                            />
                         </div>
                     </div>
                 @endif

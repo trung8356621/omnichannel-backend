@@ -54,6 +54,7 @@ function MagicEraserMount() {
         <MagicEraserApp
             imageUrl={imageUrl}
             imageId={imageId}
+            seoMediaId={imageId}
             onClose={() => {
                 setOpen(false);
                 setImageUrl('');

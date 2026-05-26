@@ -7,19 +7,27 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Exceptions\AiModelsNotReadyException;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
+use App\Addons\SeoContentAi\Filament\Pages\MediaImageEditor;
+use App\Addons\SeoContentAi\Filament\Pages\MediaLibrary;
+use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\PromptTestPublishService;
+use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\WordPressCommentReviewService;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\PromptTokenUsage;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
+use App\Models\Site;
 use Filament\Forms\Get;
 use Illuminate\Support\Collection;
+use Illuminate\Support\HtmlString;
 use Livewire\Attributes\Computed;
 use Filament\Actions;
 use Filament\Forms;
@@ -246,10 +254,10 @@ class TestPrompt extends Page implements HasForms
         if ($this->promptUsesLoaiSanPham) {
             $normalized = PromptLoaiSanPhamVariable::mergeIntoVariables($normalized);
 
-            return PromptLoaiSanPhamVariable::withAliases($normalized);
+            return Utf8Sanitizer::variables(PromptLoaiSanPhamVariable::withAliases($normalized));
         }
 
-        return $normalized;
+        return Utf8Sanitizer::variables($normalized);
     }
 
     private function resolvePublishTargetArticle(): ?SeoArticle
@@ -676,6 +684,10 @@ class TestPrompt extends Page implements HasForms
             $this->variableValues[$name] = is_string($value) ? $value : (string) $value;
         }
 
+        if ($this->promptUsesLoaiSanPham) {
+            $this->stripLoaiSanPhamComputedVariableKeys();
+        }
+
         $this->syncVariableValueKeys();
         $this->form->fill($this->variableValues);
 
@@ -765,6 +777,275 @@ class TestPrompt extends Page implements HasForms
         return trim((string) ($this->getPrompt()->tools ?? 'default')) === 'video';
     }
 
+    public function testResultSiteId(): ?int
+    {
+        $media = $this->testResultSeoMedia();
+        if ($media !== null && (int) ($media->site_id ?? 0) > 0) {
+            return (int) $media->site_id;
+        }
+
+        if ($this->promptUsesLoaiSanPham) {
+            $siteId = (int) ($this->normalizedVariableValues()[PromptLoaiSanPhamVariable::SITE_FIELD] ?? 0);
+            if ($siteId > 0) {
+                return $siteId;
+            }
+        }
+
+        if ($this->publishArticleId !== null && $this->publishArticleId > 0) {
+            $siteId = (int) (SeoArticle::query()->whereKey($this->publishArticleId)->value('site_id') ?? 0);
+            if ($siteId > 0) {
+                return $siteId;
+            }
+        }
+
+        return null;
+    }
+
+    public function testResultSeoMedia(): ?SeoMedia
+    {
+        $url = $this->currentMediaOutputUrl();
+        if ($url === null) {
+            return null;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path) || ! str_starts_with($path, '/storage/')) {
+            return null;
+        }
+
+        $relative = ltrim(substr($path, strlen('/storage/')), '/');
+        if ($relative === '') {
+            return null;
+        }
+
+        return SeoMedia::query()
+            ->where('path', $relative)
+            ->orWhere('url', $url)
+            ->orWhere('url', 'like', '%' . $relative)
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function testResultImageRow(): array
+    {
+        $url = (string) ($this->currentMediaOutputUrl() ?? '');
+        $media = $this->testResultSeoMedia();
+        $siteId = $this->testResultSiteId();
+        $kind = 'local';
+
+        if ($media !== null) {
+            $source = (string) $media->source;
+            if (str_starts_with($source, 'ai_') && (int) ($media->site_id ?? 0) <= 0 && ($siteId === null || $siteId <= 0)) {
+                $kind = 'generated';
+            }
+        }
+
+        return [
+            'url' => $url,
+            'seo_media_id' => $media !== null ? (int) $media->id : 0,
+            'wp_attachment_id' => $media !== null ? (int) ($media->wp_attachment_id ?? 0) : 0,
+            'slug' => $media !== null ? (string) ($media->slug ?? '') : '',
+            'kind' => $kind,
+            'article_id' => $this->publishArticleId,
+        ];
+    }
+
+    public function testResultImageSplitterUrl(): ?string
+    {
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            return null;
+        }
+
+        return MediaImageEditor::urlForMedia((int) $media->id, 'splitter');
+    }
+
+    public function testResultCanOpenImageEditor(): bool
+    {
+        return $this->testResultSeoMedia() !== null
+            && ! $this->testResultNeedsSiteForMediaActions();
+    }
+
+    public function openResultImageEditor(): void
+    {
+        $siteId = $this->testResultSiteId();
+        if ($siteId === null || $siteId <= 0) {
+            Notification::make()
+                ->title('Chưa chọn tên miền')
+                ->body('Chọn tên miền hoặc bài viết đích trước khi chỉnh sửa ảnh.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $site = Site::query()->find($siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            Notification::make()
+                ->title('Không tìm thấy file ảnh')
+                ->body('Ảnh chưa được lưu trên server — chạy lại prompt.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ((int) ($media->site_id ?? 0) <= 0) {
+            $media->update(['site_id' => $siteId]);
+            $media->refresh();
+        }
+
+        $imageRow = $this->testResultImageRow();
+        $imageRow['seo_media_id'] = (int) $media->id;
+        $imageRow['kind'] = 'local';
+
+        try {
+            $resolved = app(SeoMediaImageEditorResolverService::class)
+                ->resolve($site, $imageRow);
+        } catch (\Throwable $e) {
+            Notification::make()
+                ->title('Không mở được trình chỉnh sửa')
+                ->body($e->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->js('window.open(' . json_encode($resolved['editor_url']) . ', "_blank")');
+    }
+
+    public function testResultMediaLibraryUrl(): ?string
+    {
+        $siteId = $this->testResultSiteId();
+        if ($siteId === null || $siteId <= 0) {
+            return null;
+        }
+
+        return MediaLibrary::getUrl(['siteId' => $siteId]);
+    }
+
+    public function testResultNeedsSiteForMediaActions(): bool
+    {
+        return $this->testResultSiteId() === null || $this->testResultSiteId() <= 0;
+    }
+
+    public function testResultIsGeneratedMedia(): bool
+    {
+        return ($this->testResultImageRow()['kind'] ?? '') === 'generated';
+    }
+
+    public function assignResultToSiteLibrary(): void
+    {
+        $siteId = $this->testResultSiteId();
+        if ($siteId === null || $siteId <= 0) {
+            Notification::make()
+                ->title('Chưa chọn tên miền')
+                ->body('Chọn tên miền ở biến loại sản phẩm hoặc chọn bài viết đích (đã đồng bộ WP) trước khi gán ảnh vào thư viện.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            Notification::make()
+                ->title('Không tìm thấy file ảnh')
+                ->body('Ảnh AI chưa được lưu trên server — chạy lại prompt hoặc kiểm tra đường dẫn /storage/.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ((int) ($media->site_id ?? 0) === $siteId) {
+            Notification::make()
+                ->title('Ảnh đã thuộc thư viện domain này')
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        $media->update(['site_id' => $siteId]);
+
+        Notification::make()
+            ->title('Đã gán ảnh vào thư viện')
+            ->body('Có thể áp dụng đóng dấu hoặc mở thư viện hình ảnh.')
+            ->success()
+            ->send();
+    }
+
+    public function applyResultWatermark(): void
+    {
+        $siteId = $this->testResultSiteId();
+        if ($siteId === null || $siteId <= 0) {
+            Notification::make()
+                ->title('Chưa chọn tên miền')
+                ->body('Chọn tên miền hoặc bài viết đích trước khi đóng dấu. Với ảnh Gen AI, bấm «Gán vào thư viện» trước.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $site = Site::query()->find($siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $media = $this->testResultSeoMedia();
+        if ($media !== null && (int) ($media->site_id ?? 0) <= 0) {
+            $media->update(['site_id' => $siteId]);
+            $media->refresh();
+        }
+
+        $imageRow = $this->testResultImageRow();
+        if (($imageRow['kind'] ?? '') === 'generated') {
+            Notification::make()
+                ->title('Ảnh Gen AI chưa gán domain')
+                ->body('Bấm «Gán vào thư viện» rồi thử đóng dấu lại.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $result = app(SeoMediaLibraryImageActionService::class)->applyWatermark($site, $imageRow);
+
+        if (! ($result['success'] ?? false)) {
+            Notification::make()
+                ->title((string) ($result['message'] ?? 'Không áp dụng được đóng dấu.'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $newUrl = (string) ($result['url'] ?? $imageRow['url']);
+        if ($newUrl !== '') {
+            $this->outputText = $newUrl;
+        }
+
+        Notification::make()
+            ->title((string) ($result['message'] ?? 'Đã áp dụng đóng dấu.'))
+            ->success()
+            ->send();
+    }
+
     public function resultSummary(PromptResult $result): string
     {
         $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
@@ -807,16 +1088,31 @@ class TestPrompt extends Page implements HasForms
         }
 
         if ($this->promptUsesLoaiSanPham) {
+            $this->stripLoaiSanPhamComputedVariableKeys();
+
             foreach ([
                 PromptLoaiSanPhamVariable::SITE_FIELD => '',
                 PromptLoaiSanPhamVariable::CATEGORY_FIELD => '',
                 PromptLoaiSanPhamVariable::CUSTOM_FIELD => '',
-                PromptLoaiSanPhamVariable::NAME => '',
             ] as $key => $default) {
                 if (! array_key_exists($key, $this->variableValues)) {
                     $this->variableValues[$key] = $default;
                 }
             }
+        }
+    }
+
+    /**
+     * Bỏ khóa chỉ dùng khi compile — không bind Filament/Alpine (tránh entangle lỗi).
+     */
+    protected function stripLoaiSanPhamComputedVariableKeys(): void
+    {
+        foreach ([
+            PromptLoaiSanPhamVariable::NAME,
+            'LOAI_SAN_PHAM',
+            'loai_san_pham_preview',
+        ] as $key) {
+            unset($this->variableValues[$key]);
         }
     }
 
@@ -889,7 +1185,6 @@ class TestPrompt extends Page implements HasForms
                     ->native(false)
                     ->afterStateUpdated(function (Forms\Set $set): void {
                         $set(PromptLoaiSanPhamVariable::CATEGORY_FIELD, null);
-                        $set(PromptLoaiSanPhamVariable::NAME, '');
                     }),
                 Forms\Components\Select::make(PromptLoaiSanPhamVariable::CATEGORY_FIELD)
                     ->label('Danh mục sản phẩm (product_cat)')
@@ -899,41 +1194,32 @@ class TestPrompt extends Page implements HasForms
                     ->searchable()
                     ->required(fn (Get $get): bool => trim((string) $get(PromptLoaiSanPhamVariable::CUSTOM_FIELD)) === '')
                     ->native(false)
-                    ->disabled(fn (Get $get): bool => blank($get(PromptLoaiSanPhamVariable::SITE_FIELD)))
                     ->helperText('Tùy chọn nếu đã điền Custom. Lấy từ danh mục đồng bộ (product_category); đồng bộ domain trước nếu danh sách trống.')
-                    ->live()
-                    ->afterStateUpdated(function (Forms\Set $set, Get $get) use ($options): void {
-                        $set(
-                            PromptLoaiSanPhamVariable::NAME,
-                            $options->buildCompositeValue(
-                                (int) $get(PromptLoaiSanPhamVariable::SITE_FIELD),
-                                (int) $get(PromptLoaiSanPhamVariable::CATEGORY_FIELD),
-                                trim((string) $get(PromptLoaiSanPhamVariable::CUSTOM_FIELD)),
-                            ),
-                        );
-                    }),
+                    ->hidden(fn (Get $get): bool => blank($get(PromptLoaiSanPhamVariable::SITE_FIELD)))
+                    ->live(),
                 Forms\Components\TextInput::make(PromptLoaiSanPhamVariable::CUSTOM_FIELD)
                     ->label('Custom')
                     ->placeholder('VD: túi vải, balo laptop, Cặp học sinh…')
                     ->helperText('Có thể dùng thay cho product_cat khi chạy thử.')
                     ->maxLength(500)
-                    ->live(debounce: 400)
-                    ->afterStateUpdated(function (Forms\Set $set, Get $get) use ($options): void {
-                        $set(
-                            PromptLoaiSanPhamVariable::NAME,
-                            $options->buildCompositeValue(
-                                (int) $get(PromptLoaiSanPhamVariable::SITE_FIELD),
-                                (int) $get(PromptLoaiSanPhamVariable::CATEGORY_FIELD),
-                                trim((string) $get(PromptLoaiSanPhamVariable::CUSTOM_FIELD)),
-                            ),
-                        );
-                    }),
-                Forms\Components\Textarea::make(PromptLoaiSanPhamVariable::NAME)
+                    ->live(debounce: 400),
+                Forms\Components\Placeholder::make('loai_san_pham_preview')
+                    ->dehydrated(false)
                     ->label('Giá trị gửi vào {{loai_san_pham}} / {{LOAI_SAN_PHAM}}')
-                    ->rows(2)
-                    ->disabled()
-                    ->dehydrated()
-                    ->helperText('Tự động ghép từ danh mục + custom.'),
+                    ->content(function (Get $get) use ($options): HtmlString {
+                        $text = $options->buildCompositeValue(
+                            (int) $get(PromptLoaiSanPhamVariable::SITE_FIELD),
+                            (int) $get(PromptLoaiSanPhamVariable::CATEGORY_FIELD),
+                            trim((string) $get(PromptLoaiSanPhamVariable::CUSTOM_FIELD)),
+                        );
+
+                        return new HtmlString(
+                            $text !== ''
+                                ? '<span class="text-sm font-medium text-gray-950 dark:text-white">' . e($text) . '</span>'
+                                : '<span class="text-sm text-gray-500">—</span>',
+                        );
+                    })
+                    ->helperText('Tự động ghép từ danh mục + custom khi chạy thử.'),
             ])
             ->columnSpanFull();
     }

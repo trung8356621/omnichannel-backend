@@ -147,6 +147,83 @@ final class WordPressMediaLibraryService
     }
 
     /**
+     * @return array{kind: string, id: int, wp_attachment_id: int, url: string, slug: string, title: string, alt: string}|null
+     */
+    public function fetchAttachmentById(Site $site, int $attachmentId): ?array
+    {
+        if ($attachmentId <= 0) {
+            return null;
+        }
+
+        $site->loadMissing('metas');
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return null;
+        }
+
+        $base = $this->wpContent->getPermalinkBase($site);
+        if ($base === '') {
+            return null;
+        }
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken($readToken)
+                ->get($base . '/wp-json/wp/v2/media/' . $attachmentId);
+
+            if (! $response->successful()) {
+                return null;
+            }
+
+            $item = $response->json();
+            if (! is_array($item)) {
+                return null;
+            }
+
+            $id = (int) ($item['id'] ?? 0);
+            $url = trim((string) ($item['source_url'] ?? ''));
+            if ($id <= 0 || $url === '') {
+                return null;
+            }
+
+            $title = $item['title'] ?? '';
+            if (is_array($title)) {
+                $title = (string) ($title['rendered'] ?? '');
+            }
+
+            $alt = (string) ($item['alt_text'] ?? '');
+            if ($alt === '' && is_array($item['meta'] ?? null)) {
+                $alt = (string) ($item['meta']['_wp_attachment_image_alt'] ?? '');
+            }
+
+            $row = [
+                'kind' => 'wordpress',
+                'id' => $id,
+                'wp_attachment_id' => $id,
+                'seo_media_id' => 0,
+                'url' => $url,
+                'slug' => trim((string) ($item['slug'] ?? '')),
+                'title' => html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                'alt' => $alt,
+                'date' => (string) ($item['date'] ?? ''),
+            ];
+
+            $merged = $this->editedPending->applyPendingEditsToWordPressImages((int) $site->id, [$row]);
+
+            return $merged[0] ?? $row;
+        } catch (Throwable $e) {
+            Log::warning('WordPress media attachment fetch failed', [
+                'site_id' => $site->id,
+                'attachment_id' => $attachmentId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
      * @return array{success: bool, message: string}
      */
     public function updateSlug(Site $site, int $attachmentId, string $newSlug, string $oldUrl = ''): array

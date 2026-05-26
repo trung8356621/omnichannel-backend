@@ -14,6 +14,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/js/article-editor.jsx',
                 'app/Addons/SeoContentAi/resources/js/article-seo-preview.jsx',
                 'app/Addons/SeoContentAi/resources/css/media-library.css',
+                'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
                 'app/Addons/SeoContentAi/resources/js/watermark-editor-page.jsx',
                 'app/Addons/SeoContentAi/resources/css/watermark-editor.css',
                 'app/Addons/SeoContentAi/resources/css/image-optimization-settings.css',
@@ -24,6 +25,33 @@ export default defineConfig({
         react(),
         tailwindcss(),
     ],
+    build: {
+        chunkSizeWarningLimit: 1000,
+        rollupOptions: {
+            output: {
+                manualChunks(id) {
+                    if (!id.includes('node_modules')) {
+                        return undefined;
+                    }
+
+                    const parts = id.split('node_modules/')[1]?.split('/') ?? [];
+                    const pkgName = parts[0]?.startsWith('@') ? `${parts[0]}/${parts[1]}` : parts[0];
+
+                    // React core (avoid matching @tiptap/react, @react-aria, ...)
+                    if (['react', 'react-dom', 'scheduler', 'use-sync-external-store'].includes(pkgName)) {
+                        return 'react-vendor';
+                    }
+
+                    // Tiptap + ProseMirror
+                    if (pkgName?.startsWith('@tiptap/') || pkgName?.startsWith('prosemirror-')) {
+                        return 'tiptap-vendor';
+                    }
+
+                    return 'vendor';
+                },
+            },
+        },
+    },
     resolve: {
         alias: {
             '@seo-addon': path.resolve(__dirname, 'app/Addons/SeoContentAi/resources/js'),

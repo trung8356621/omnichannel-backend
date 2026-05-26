@@ -1,5 +1,6 @@
 import { normalizeLinkText } from './articleLinkScroll';
 import { findPlainTextRangeInRoot, wrapTextRangeWithLink } from './articlePlainTextRange';
+import { SEO_EDITOR_LINK_CLASS, stripEditorTransientMarkup } from './articleEditorTransientMarkup';
 
 /**
  * Bọc lần xuất hiện đầu tiên của cụm từ (chưa nằm trong thẻ a) thành link nội bộ.
@@ -29,7 +30,7 @@ export function wrapFirstPlainTextWithLink(html, phrase, href) {
     const ok = wrapTextRangeWithLink(doc, match, url);
 
     return {
-        html: body.innerHTML,
+        html: stripEditorTransientMarkup(body.innerHTML),
         replaced: ok,
     };
 }

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
@@ -145,7 +146,6 @@ class PromptResource extends Resource
                                                 self::subTaskBlock(),
                                                 self::promptPartBlock('formatting', 'Định dạng đầu ra'),
                                                 self::promptPartBlock('constraints', 'Ràng buộc / Quy tắc'),
-                                                self::globalConstraintsBlock(),
                                             ])
                                             ->collapsible(),
                                     ]),
@@ -162,7 +162,7 @@ class PromptResource extends Resource
                                                 ];
                                                 $jsonStr = json_encode(
                                                     $payload,
-                                                    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE
+                                                    JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
                                                 );
 
                                                 return new HtmlString(
@@ -253,7 +253,6 @@ class PromptResource extends Resource
             ['type' => 'task', 'data' => ['name' => '', 'rules' => '', 'content' => '']],
             ['type' => 'formatting', 'data' => ['content' => '']],
             ['type' => 'constraints', 'data' => ['content' => '']],
-            ['type' => 'global_constraints', 'data' => ['content' => '']],
         ];
     }
 
@@ -282,11 +281,6 @@ class PromptResource extends Resource
             ->required()
             ->rows(6)
             ->extraInputAttributes(['data-prompt-content' => '1']);
-
-        if ($role === 'global_constraints') {
-            $contentField
-                ->helperText('Ràng buộc áp dụng cho toàn bộ chuỗi (nhiệm vụ chính + các sub-prompt). Luôn được đưa vào ngữ cảnh hệ thống khi chạy.');
-        }
 
         $schema[] = $contentField
             ->hintActions([
@@ -402,9 +396,16 @@ class PromptResource extends Resource
             ]);
     }
 
-    private static function globalConstraintsBlock(): Block
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    public static function filterDeprecatedPromptDataItems(array $items): array
     {
-        return self::promptPartBlock('global_constraints', 'Ràng buộc tổng (Global)');
+        return array_values(array_filter(
+            $items,
+            static fn (array $item): bool => (string) ($item['type'] ?? '') !== 'global_constraints',
+        ));
     }
 
     /**
@@ -466,13 +467,13 @@ class PromptResource extends Resource
     public static function taskMetaFromBuilderData(string $role, array $data): ?array
     {
         $meta = [];
-        $rules = trim((string) ($data['rules'] ?? ''));
+        $rules = trim(Utf8Sanitizer::string((string) ($data['rules'] ?? '')));
         if ($rules !== '') {
             $meta['rules'] = $rules;
         }
 
         if ($role === 'sub_task') {
-            $specific = trim((string) ($data['specific_constraints'] ?? ''));
+            $specific = trim(Utf8Sanitizer::string((string) ($data['specific_constraints'] ?? '')));
             if ($specific !== '') {
                 $meta['specific_constraints'] = $specific;
             }
@@ -486,12 +487,17 @@ class PromptResource extends Resource
      */
     public static function partAttributesFromBuilderItem(array $item, int $index): ?array
     {
-        $content = trim((string) ($item['data']['content'] ?? ''));
+        $content = trim(Utf8Sanitizer::string((string) ($item['data']['content'] ?? '')));
         if ($content === '' || empty($item['type'])) {
             return null;
         }
 
         $role = (string) $item['type'];
+
+        if ($role === 'global_constraints') {
+            return null;
+        }
+
         $meta = null;
 
         if (in_array($role, ['task', 'sub_task'], true)) {
@@ -501,7 +507,7 @@ class PromptResource extends Resource
         return [
             'role' => $role,
             'name' => in_array($role, ['task', 'sub_task'], true) && filled($item['data']['name'] ?? null)
-                ? (string) $item['data']['name']
+                ? Utf8Sanitizer::string((string) $item['data']['name'])
                 : null,
             'content' => $content,
             'position' => $index,

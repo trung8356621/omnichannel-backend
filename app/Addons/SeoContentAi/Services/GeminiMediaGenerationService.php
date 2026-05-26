@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
 
@@ -23,7 +24,7 @@ final class GeminiMediaGenerationService
      */
     public function generateImage(ApiConnection $connection, string $prompt, ?string $preferredModel = null): array
     {
-        $prompt = $this->normalizeImagePrompt($prompt);
+        $prompt = $this->normalizeImagePrompt(Utf8Sanitizer::string($prompt));
         $models = GoogleAiModelRegistry::imageModelsToTry($preferredModel);
         $lastError = null;
 

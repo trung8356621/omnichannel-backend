@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 
 /**
@@ -204,18 +205,22 @@ final class MediaGenerationService
     {
         $parent = trim((string) ($variables['PARENT_RESULT'] ?? ''));
         if ($parent !== '' && ! str_starts_with($parent, '/storage/')) {
-            $parent = mb_substr($parent, 0, 1800);
+            $parent = Utf8Sanitizer::string(mb_substr($parent, 0, 1800));
 
-            return "Generate exactly ONE image. Do not output markdown or explanation.\n\n"
+            return Utf8Sanitizer::string(
+                "Generate exactly ONE image. Do not output markdown or explanation.\n\n"
                 . "Use the following brief from previous step as context:\n"
                 . $parent
                 . "\n\nRender instructions for this step:\n"
-                . $compiled;
+                . $compiled,
+            );
         }
 
-        return "Generate exactly ONE image. Do not write instructions, Midjourney prompts, or markdown — output the image.\n\n"
+        return Utf8Sanitizer::string(
+            "Generate exactly ONE image. Do not write instructions, Midjourney prompts, or markdown — output the image.\n\n"
             . "Visual specification:\n\n"
-            . $compiled;
+            . $compiled,
+        );
     }
 
     private function normalizePromptTool(SeoPrompt $prompt): string

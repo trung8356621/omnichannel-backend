@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
+use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
 
@@ -17,7 +19,20 @@ class EditPrompt extends EditRecord
 
     protected function getHeaderActions(): array
     {
+        $readiness = app(AiModelsReadinessService::class);
+        $record = $this->getRecord();
+        $isReady = $readiness->isPromptReady($record);
+
         return [
+            Actions\Action::make('test')
+                ->label($isReady ? 'Chạy thử' : 'Đồng bộ model')
+                ->icon($isReady ? 'heroicon-o-play' : 'heroicon-o-cpu-chip')
+                ->color($isReady ? 'success' : 'warning')
+                ->url(
+                    $isReady
+                        ? PromptResource::getUrl('test', ['record' => $record])
+                        : SeoSettingsOverview::getUrl(),
+                ),
             Actions\DeleteAction::make(),
         ];
     }
@@ -28,10 +43,12 @@ class EditPrompt extends EditRecord
 
         $data['prompt_data'] = $parts->isEmpty()
             ? PromptResource::defaultPromptDataTemplate()
-            : $parts
-                ->map(static fn ($part): array => PromptResource::builderItemFromPart($part))
-                ->values()
-                ->all();
+            : PromptResource::filterDeprecatedPromptDataItems(
+                $parts
+                    ->map(static fn ($part): array => PromptResource::builderItemFromPart($part))
+                    ->values()
+                    ->all(),
+            );
 
         $data['variables'] = PromptResource::sanitizeDeclaredVariables($this->record->variables ?? []);
 

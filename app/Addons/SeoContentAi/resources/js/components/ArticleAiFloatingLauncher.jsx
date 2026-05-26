@@ -81,7 +81,7 @@ export default function ArticleAiFloatingLauncher() {
                         onClick={openChat}
                     >
                         <MessageCircle size={16} aria-hidden />
-                        Chat AI
+                        AI ảnh & video
                     </button>
                 </div>
             ) : null}

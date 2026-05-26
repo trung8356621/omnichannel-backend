@@ -1,7 +1,10 @@
 <x-filament-panels::page>
-    @vite('app/Addons/SeoContentAi/resources/css/media-library.css')
+    @vite([
+        'app/Addons/SeoContentAi/resources/css/media-library.css',
+        'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
+    ])
 
-    <div class="seo-media-library">
+    <div class="seo-media-library" x-data="seoMediaLibraryActions">
         <div class="seo-media-library-tabs-bar">
             <button
                 type="button"
@@ -70,6 +73,99 @@
             </div>
         </div>
 
+        @if ($siteId && ! empty($images))
+            <div class="seo-media-library-resize-bar">
+                <div class="seo-media-library-resize-bar__left">
+                    <span class="seo-media-library-resize-bar__label">
+                        Đã chọn: <strong>{{ count($selectedKeys) }}</strong>
+                    </span>
+                    @if (count($selectedKeys) > 0)
+                        <button
+                            type="button"
+                            class="seo-media-library-resize-bar__link"
+                            wire:click="clearImageSelection"
+                            wire:loading.attr="disabled"
+                            wire:target="resizeSelectedImages"
+                        >
+                            Bỏ chọn
+                        </button>
+                    @endif
+                </div>
+                <div class="seo-media-library-resize-bar__controls">
+                    <label class="seo-media-library-resize-field">
+                        <span>Width</span>
+                        <input
+                            type="number"
+                            min="1"
+                            wire:model="resizeWidth"
+                            placeholder="px"
+                            class="seo-media-library-resize-input"
+                            wire:loading.attr="disabled"
+                            wire:target="resizeSelectedImages"
+                        />
+                    </label>
+                    <span class="seo-media-library-resize-times">×</span>
+                    <label class="seo-media-library-resize-field">
+                        <span>Height</span>
+                        <input
+                            type="number"
+                            min="1"
+                            wire:model="resizeHeight"
+                            placeholder="px"
+                            class="seo-media-library-resize-input"
+                            wire:loading.attr="disabled"
+                            wire:target="resizeSelectedImages"
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        class="seo-media-library-resize-submit"
+                        wire:click="resizeSelectedImages"
+                        wire:loading.attr="disabled"
+                        wire:target="resizeSelectedImages,deleteSelectedImages"
+                        @disabled(count($selectedKeys) === 0)
+                    >
+                        <span wire:loading.remove wire:target="resizeSelectedImages">Resize ảnh</span>
+                        <span wire:loading wire:target="resizeSelectedImages">Đang resize…</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="seo-media-library-bar-icon-btn seo-media-library-bar-action-btn"
+                        title="Tải toàn bộ ảnh đã chọn"
+                        aria-label="Tải toàn bộ ảnh đã chọn"
+                        @click="downloadSelected()"
+                        @disabled(count($selectedKeys) === 0)
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 1 0-1.09-1.03l-2.955 3.129V2.75Z"/>
+                            <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z"/>
+                        </svg>
+                        <span>Tải</span>
+                    </button>
+                    <button
+                        type="button"
+                        class="seo-media-library-bar-icon-btn seo-media-library-bar-action-btn is-danger"
+                        title="Xóa toàn bộ ảnh đã chọn"
+                        aria-label="Xóa toàn bộ ảnh đã chọn"
+                        wire:click="deleteSelectedImages"
+                        wire:loading.attr="disabled"
+                        wire:target="deleteSelectedImages"
+                        wire:confirm="Xóa {{ count($selectedKeys) }} ảnh đã chọn? Hành động không hoàn tác."
+                        @disabled(count($selectedKeys) === 0)
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>
+                        </svg>
+                        <span wire:loading.remove wire:target="deleteSelectedImages">Xóa</span>
+                        <span wire:loading wire:target="deleteSelectedImages">…</span>
+                    </button>
+                </div>
+                <p class="seo-media-library-resize-hint">
+                    Click / Shift+click chọn dải. «Tải» / «Xóa» áp dụng cho toàn bộ ảnh đã chọn.
+                </p>
+            </div>
+        @endif
+
         @if ($activeTab !== 'watermark-config')
         <div class="seo-media-library-meta" wire:loading.remove wire:target="activeTab,siteId,filterMonth,filterSearch,page,loadImages,previousPage,nextPage,clearMonthFilter,clearSearchFilter,previewApplyWatermark,previewOptimize">
             @if ($total > 0)
@@ -103,11 +199,11 @@
             </div>
         @elseif (in_array($activeTab, ['local', 'generated'], true))
             <div class="seo-media-library-alert">
-                Ảnh upload/dán và đợ Gen AI. Click ảnh để phóng to, đóng dấu hoặc tối ưu (bỏ qua .webp khi chỉ tối ưu).
+                Click / Shift+click chọn — double-click xem / đóng dấu. Tải hoặc xóa ở góc ảnh hoặc thanh công cụ.
             </div>
         @else
             <div class="seo-media-library-alert">
-                Tab Gốc từ WordPress. Click ảnh để xem, đóng dấu hoặc tối ưu tại chỗ.
+                Tab Gốc (WP). Shift+click chọn dải — xóa chỉ bản staging Laravel (nếu có).
             </div>
         @endif
 
@@ -136,21 +232,68 @@
                         $articleId = (int) ($image['article_id'] ?? 0);
                         $articleEditUrl = $image['article_edit_url'] ?? null;
                     @endphp
-                    <article class="seo-media-library-card" wire:key="media-{{ $itemKind }}-{{ $image['id'] }}">
-                        <button
-                            type="button"
-                            class="seo-media-library-thumb-wrap seo-media-library-thumb-btn"
-                            wire:click="openImagePreview(@js($image))"
-                            title="Xem và xử lý ảnh"
-                        >
-                            <img
-                                src="{{ $image['url'] }}"
-                                alt="{{ $image['alt'] ?: $image['slug'] }}"
-                                class="seo-media-library-thumb"
-                                loading="lazy"
-                                onerror="this.src='https://placehold.co/400x400?text=No+Image'"
-                            />
-                        </button>
+                    @php
+                        $downloadName = ($image['slug'] ?? 'image') . '.' . pathinfo(parse_url($image['url'] ?? '', PHP_URL_PATH) ?? '', PATHINFO_EXTENSION);
+                        if (! str_contains($downloadName, '.')) {
+                            $downloadName .= '.jpg';
+                        }
+                    @endphp
+                    <article
+                        class="seo-media-library-card{{ $this->isImageSelected($editKey) ? ' is-selected' : '' }}"
+                        wire:key="media-{{ $itemKind }}-{{ $image['id'] }}"
+                        data-image-url="{{ $image['url'] }}"
+                        data-image-slug="{{ $image['slug'] ?? 'image' }}"
+                        data-download-name="{{ $downloadName }}"
+                    >
+                        <div class="seo-media-library-thumb-wrap">
+                            <button
+                                type="button"
+                                class="seo-media-library-thumb-btn"
+                                title="Click chọn · Shift+click chọn dải · Double-click xem"
+                                x-on:click="
+                                    clearTimeout($el._selectTimer);
+                                    $el._selectTimer = setTimeout(() => $wire.handleImageSelectClick(@js($editKey), $event.shiftKey), 220);
+                                "
+                                x-on:dblclick.prevent="
+                                    clearTimeout($el._selectTimer);
+                                    $wire.openImagePreview(@js($image));
+                                "
+                            >
+                                <img
+                                    src="{{ $image['url'] }}"
+                                    alt="{{ $image['alt'] ?: $image['slug'] }}"
+                                    class="seo-media-library-thumb"
+                                    loading="lazy"
+                                    onerror="this.src='https://placehold.co/400x400?text=No+Image'"
+                                />
+                            </button>
+                            <div class="seo-media-library-card-actions">
+                                <button
+                                    type="button"
+                                    class="seo-media-library-card-icon-btn"
+                                    title="Tải ảnh"
+                                    aria-label="Tải ảnh"
+                                    @click.stop="downloadCard($el.closest('.seo-media-library-card'))"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 1 0-1.09-1.03l-2.955 3.129V2.75Z"/>
+                                        <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z"/>
+                                    </svg>
+                                </button>
+                                <button
+                                    type="button"
+                                    class="seo-media-library-card-icon-btn is-danger"
+                                    title="Xóa ảnh"
+                                    aria-label="Xóa ảnh"
+                                    wire:click.stop="deleteLibraryImage(@js($editKey))"
+                                    wire:confirm="Xóa ảnh này? Hành động không hoàn tác."
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                        <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
 
                         <div class="seo-media-library-body">
                             <div class="seo-media-library-slug-wrap">
@@ -349,6 +492,25 @@
                             <span wire:loading wire:target="previewApplyWatermark">Đang xử lý…</span>
                         </button>
                     @endif
+                    @php
+                        $splitterSeoMediaId = (int) ($previewImage['seo_media_id'] ?? 0);
+                        if ($splitterSeoMediaId <= 0 && (string) ($previewImage['kind'] ?? '') !== 'wordpress') {
+                            $splitterSeoMediaId = (int) ($previewImage['id'] ?? 0);
+                        }
+                        $splitterUrl = $splitterSeoMediaId > 0
+                            ? \App\Addons\SeoContentAi\Filament\Pages\MediaImageEditor::urlForMedia($splitterSeoMediaId, 'splitter')
+                            : null;
+                    @endphp
+                    @if ($splitterUrl)
+                        <a
+                            href="{{ $splitterUrl }}"
+                            class="seo-media-preview-btn"
+                            target="_blank"
+                            rel="noopener"
+                        >
+                            Tách theo lưới
+                        </a>
+                    @endif
                     @if ($previewCanOptimize)
                         <button
                             type="button"
@@ -385,25 +547,4 @@
         </div>
     @endif
 
-    @script
-    <script>
-        window.addEventListener('message', (event) => {
-            if (event.origin !== window.location.origin) {
-                return;
-            }
-            const data = event.data;
-            if (!data || data.type !== 'seo-magic-eraser-saved') {
-                return;
-            }
-            if (typeof Livewire !== 'undefined') {
-                Livewire.dispatch('seo-magic-eraser-saved', {
-                    url: data.url,
-                    imageId: data.imageId ?? null,
-                    pendingWpSync: !!data.pendingWpSync,
-                });
-                Livewire.dispatch('seo-media-library-refresh');
-            }
-        });
-    </script>
-    @endscript
 </x-filament-panels::page>

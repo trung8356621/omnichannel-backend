@@ -79,14 +79,30 @@ class ImageOptimizationSettings extends Page
 
         $quality = max(10, min(100, (int) ($this->data['quality'] ?? 80)));
 
+        $maxWidthRaw = $this->data['max_width'] ?? null;
+        $maxHeightRaw = $this->data['max_height'] ?? null;
+        $maxWidth = ($maxWidthRaw === null || $maxWidthRaw === '')
+            ? 0
+            : max(0, (int) $maxWidthRaw);
+        $maxHeight = ($maxHeightRaw === null || $maxHeightRaw === '')
+            ? 0
+            : max(0, (int) $maxHeightRaw);
+
+        if ($maxWidth > 0) {
+            $maxWidth = max(100, $maxWidth);
+        }
+        if ($maxHeight > 0) {
+            $maxHeight = max(100, $maxHeight);
+        }
+
         SeoImageOptimizationSetting::query()->updateOrCreate(
             ['site_id' => $siteId],
             [
                 'auto_convert_webp' => (bool) ($this->data['auto_convert_webp'] ?? true),
                 'quality' => $quality,
                 'limit_dimensions' => (bool) ($this->data['limit_dimensions'] ?? true),
-                'max_width' => max(100, (int) ($this->data['max_width'] ?? 1200)),
-                'max_height' => max(100, (int) ($this->data['max_height'] ?? 1200)),
+                'max_width' => $maxWidth,
+                'max_height' => $maxHeight,
                 'clean_filename' => (bool) ($this->data['clean_filename'] ?? true),
                 'auto_alt_tag' => (bool) ($this->data['auto_alt_tag'] ?? true),
                 'alt_tag_pattern' => (string) ($this->data['alt_tag_pattern'] ?? '{post_title} - {focus_keyword}'),

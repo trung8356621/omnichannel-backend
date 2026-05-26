@@ -66,6 +66,12 @@ class SeoPanelProvider extends PanelProvider
             ->group(function (): void {
                 Route::post('/upload', [SeoMediaController::class, 'upload'])
                     ->name('seo.media.upload');
+                Route::post('/import-url', [SeoMediaController::class, 'importFromUrl'])
+                    ->name('seo.media.import-url');
+                Route::get('/splitter-source', [SeoMediaController::class, 'splitterSource'])
+                    ->name('seo.media.splitter-source');
+                Route::post('/save-split', [SeoMediaController::class, 'saveSplit'])
+                    ->name('seo.media.save-split');
                 Route::post('/prepare-editor', [SeoMediaController::class, 'prepareEditor'])
                     ->name('seo.media.prepare-editor');
                 Route::post('/apply-watermark', [SeoMediaController::class, 'applyWatermark'])

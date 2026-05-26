@@ -54,16 +54,26 @@ class SeoSettingsWorkflows extends Page implements HasForms
                     'Đăng review',
                     'Chạy khi đăng bình luận / review lên WordPress.',
                 ),
-                $this->taskSelect(
-                    SeoCreateArticleSettingsService::KEY_CREATE_IMAGE,
-                    'Tạo ảnh',
-                    'Chạy khi có yêu cầu tạo hoặc xử lý ảnh (prompt công cụ Hình ảnh).',
-                ),
-                $this->taskSelect(
-                    SeoCreateArticleSettingsService::KEY_CREATE_VIDEO,
-                    'Tạo video',
-                    'Chạy khi có yêu cầu tạo video (prompt công cụ Video).',
-                ),
+                Forms\Components\Section::make('Editor bài viết — Tạo ảnh / video')
+                    ->description(
+                        'Prompt chạy khi biên tập bấm «Tạo ảnh» hoặc «Tạo video» trên panel AI. '
+                        . 'Gợi ý biến: {{post_title}}, {{post_content}}, {{focus_keyword}}, {{selected_text}}, '
+                        . '{{selected_html}}, {{user_brief}}, {{input}}, {{site_domain}}.'
+                    )
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_IMAGE)
+                            ->label('Prompt tạo ảnh')
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeImagePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder('Chọn prompt Hình ảnh…'),
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_VIDEO)
+                            ->label('Prompt tạo video')
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeVideoPromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder('Chọn prompt Video…'),
+                    ]),
                 Forms\Components\Section::make('Dự án Content — AI từ khóa')
                     ->description(
                         'Prompt sinh danh sách từ khóa khi tạo dự án (nút AI Generator). '

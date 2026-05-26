@@ -1,18 +1,13 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Send, Sparkles, ListTree, X } from 'lucide-react';
-import { loadChat, saveChat } from '../utils/articleEditorStorage';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ImageIcon, ListTree, Video, X } from 'lucide-react';
 
 export default function ArticleAiChatPanel({ articleId }) {
-    const [messages, setMessages] = useState([]);
     const [selectedText, setSelectedText] = useState('');
     const [selectedHtml, setSelectedHtml] = useState('');
+    const [activeBlockId, setActiveBlockId] = useState('');
     const [input, setInput] = useState('');
-    const [sending, setSending] = useState(false);
-    const historyRef = useRef(null);
-
-    useEffect(() => {
-        setMessages(articleId ? loadChat(articleId) : []);
-    }, [articleId]);
+    const [generatingImage, setGeneratingImage] = useState(false);
+    const [generatingVideo, setGeneratingVideo] = useState(false);
 
     useEffect(() => {
         const onSelection = (e) => {
@@ -24,6 +19,7 @@ export default function ArticleAiChatPanel({ articleId }) {
                 setSelectedText('');
                 setSelectedHtml('');
             }
+            setActiveBlockId((detail.activeBlockId ?? '').trim());
         };
 
         window.addEventListener('seo-editor-text-selection', onSelection);
@@ -31,20 +27,28 @@ export default function ArticleAiChatPanel({ articleId }) {
     }, []);
 
     useEffect(() => {
-        if (historyRef.current) {
-            historyRef.current.scrollTop = historyRef.current.scrollHeight;
-        }
-    }, [messages]);
-
-    const persistMessages = useCallback(
-        (next) => {
-            setMessages(next);
-            if (articleId) {
-                saveChat(articleId, next);
+        const onMediaFailed = (e) => {
+            const type = e.detail?.type;
+            if (type === 'image') {
+                setGeneratingImage(false);
+            } else if (type === 'video') {
+                setGeneratingVideo(false);
             }
-        },
-        [articleId],
-    );
+        };
+
+        const onImageDone = () => setGeneratingImage(false);
+        const onVideoDone = () => setGeneratingVideo(false);
+
+        window.addEventListener('article-ai-media-failed', onMediaFailed);
+        window.addEventListener('article-ai-image-generated', onImageDone);
+        window.addEventListener('article-ai-video-generated', onVideoDone);
+
+        return () => {
+            window.removeEventListener('article-ai-media-failed', onMediaFailed);
+            window.removeEventListener('article-ai-image-generated', onImageDone);
+            window.removeEventListener('article-ai-video-generated', onVideoDone);
+        };
+    }, []);
 
     const handleExtractFaq = useCallback(() => {
         const html = selectedHtml.trim();
@@ -75,116 +79,92 @@ export default function ArticleAiChatPanel({ articleId }) {
         return () => window.removeEventListener('extract-article-faqs-from-toolbar', onToolbarExtract);
     }, [handleExtractFaq]);
 
-    const handleSend = () => {
-        const prompt = input.trim();
-        if (!prompt || !selectedText.trim() || sending) return;
+    const dispatchGenerate = useCallback(
+        (type) => {
+            const userBrief = input.trim();
+            const selectionText = selectedText.trim();
+            const selectionHtml = selectedHtml.trim();
 
-        setSending(true);
-        const userMsg = {
-            id: Date.now(),
-            role: 'user',
-            content: prompt,
-            quote: selectedText,
-            ts: Date.now(),
-        };
+            if (!userBrief && !selectionText) {
+                return;
+            }
 
-        const withUser = [...messages, userMsg];
-        persistMessages(withUser);
-        setInput('');
-
-        setTimeout(() => {
-            const assistantMsg = {
-                id: Date.now() + 1,
-                role: 'assistant',
-                content:
-                    'Đây là phản hồi demo từ AI cho đoạn đã chọn. Tích hợp API thật sẽ thay thế nội dung này.',
-                ts: Date.now(),
+            const detail = {
+                selectionText,
+                selectionHtml,
+                userBrief,
+                activeBlockId,
+                articleId,
             };
-            persistMessages([...withUser, assistantMsg]);
-            setSending(false);
-        }, 600);
-    };
+
+            if (type === 'image') {
+                setGeneratingImage(true);
+                window.dispatchEvent(new CustomEvent('generate-article-image', { detail }));
+            } else {
+                setGeneratingVideo(true);
+                window.dispatchEvent(new CustomEvent('generate-article-video', { detail }));
+            }
+        },
+        [activeBlockId, articleId, input, selectedHtml, selectedText],
+    );
+
+    const canGenerate = Boolean(input.trim() || selectedText.trim());
+    const busy = generatingImage || generatingVideo;
 
     return (
         <div className="seo-ai-chat-panel wp-postbox">
             <div className="wp-postbox-header seo-ai-chat-panel__header">
-                <h2>Chat AI</h2>
+                <h2>AI ảnh &amp; video</h2>
                 <button
                     type="button"
                     className="seo-ai-chat-panel__close"
-                    title="Đóng chat"
-                    aria-label="Đóng chat"
+                    title="Đóng panel"
+                    aria-label="Đóng panel"
                     onClick={() => window.dispatchEvent(new CustomEvent('seo-article-ai-chat-close'))}
                 >
                     <X size={18} />
                 </button>
             </div>
             <div className="seo-ai-chat-body">
-                <div ref={historyRef} className="seo-ai-chat-history">
-                    {messages.length === 0 ? (
-                        <p className="seo-ai-chat-empty">Chưa có hội thoại cho bài viết này.</p>
-                    ) : (
-                        <ul className="seo-ai-chat-list">
-                            {messages.map((msg) => (
-                                <li
-                                    key={msg.id}
-                                    className={`seo-ai-chat-msg is-${msg.role}`}
-                                >
-                                    <span className="seo-ai-chat-msg-role">
-                                        {msg.role === 'user' ? 'Bạn' : 'AI'}
-                                    </span>
-                                    {msg.quote ? (
-                                        <blockquote className="seo-ai-chat-msg-quote">
-                                            {msg.quote}
-                                        </blockquote>
-                                    ) : null}
-                                    <p className="seo-ai-chat-msg-text">{msg.content}</p>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-
                 <div className="seo-ai-chat-compose">
-                    <p className="seo-ai-chat-compose-label">
-                        <Sparkles size={14} className="inline -mt-0.5 mr-1" />
-                        Nội dung đoạn đang sửa
-                    </p>
-                    <blockquote className="seo-ai-chat-selected">
-                        {selectedText || '—'}
-                    </blockquote>
                     <textarea
                         className="seo-ai-chat-input"
-                        rows={3}
+                        rows={5}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder="Nhập yêu cầu cho AI với đoạn đã chọn…"
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleSend();
-                            }
-                        }}
+                        placeholder="Mô tả ảnh/video hoặc yêu cầu bổ sung cho đoạn đang chọn…"
+                        disabled={busy}
                     />
                     <div className="seo-ai-chat-actions">
                         <button
                             type="button"
                             className="seo-ai-chat-extract-faq"
                             onClick={handleExtractFaq}
-                            disabled={!selectedText.trim()}
-                            title="Bóc tách FAQ từ đoạn đang chọn (hoặc cả block đang sửa) và lưu xuống panel FAQ"
+                            disabled={!selectedText.trim() || busy}
+                            title="Bóc tách FAQ từ đoạn đang chọn"
                         >
                             <ListTree size={15} />
                             Tách FAQ
                         </button>
                         <button
                             type="button"
-                            className="seo-ai-chat-send"
-                            onClick={handleSend}
-                            disabled={!input.trim() || !selectedText.trim() || sending}
+                            className="seo-ai-chat-generate-image"
+                            onClick={() => dispatchGenerate('image')}
+                            disabled={!canGenerate || busy}
+                            title="Chạy prompt Tạo ảnh (Quy trình)"
                         >
-                            <Send size={15} />
-                            Chat AI
+                            <ImageIcon size={15} />
+                            {generatingImage ? 'Đang tạo ảnh…' : 'Tạo ảnh'}
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-ai-chat-generate-video"
+                            onClick={() => dispatchGenerate('video')}
+                            disabled={!canGenerate || busy}
+                            title="Chạy prompt Tạo video (Quy trình)"
+                        >
+                            <Video size={15} />
+                            {generatingVideo ? 'Đang tạo video…' : 'Tạo video'}
                         </button>
                     </div>
                 </div>

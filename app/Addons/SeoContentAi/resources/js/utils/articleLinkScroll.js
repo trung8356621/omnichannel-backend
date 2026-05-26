@@ -1,4 +1,8 @@
 import { findPlainTextRangeInRoot } from './articlePlainTextRange';
+import {
+    SEO_EDITOR_LINK_MARK_CLASS,
+    SEO_EDITOR_LINK_SCROLL_LEGACY_CLASS,
+} from './articleEditorTransientMarkup';
 
 /**
  * Tìm block chứa offset trong HTML export (join \n\n).
@@ -335,7 +339,7 @@ export function scrollToPlainTextInBlock(blockId, text, matchIndex = 0, options 
             range.setEnd(match.endNode, match.endOffset);
 
             const mark = document.createElement('mark');
-            mark.className = 'seo-link-scroll-highlight';
+            mark.className = `${SEO_EDITOR_LINK_MARK_CLASS} ${SEO_EDITOR_LINK_SCROLL_LEGACY_CLASS}`;
 
             try {
                 range.surroundContents(mark);

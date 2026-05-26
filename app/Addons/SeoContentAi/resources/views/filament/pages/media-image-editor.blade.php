@@ -5,7 +5,11 @@
     id="seo-media-image-editor-root"
     data-image-url="{{ $imageUrl }}"
     data-image-id="{{ $imageId }}"
+    data-seo-media-id="{{ $imageId }}"
     data-wp-attachment-id="{{ $wpAttachmentId }}"
+    data-site-id="{{ $siteId }}"
+    data-article-id="{{ $articleId }}"
     data-pending-wp-sync="{{ $pendingWpSync ? '1' : '0' }}"
     data-library-url="{{ \App\Addons\SeoContentAi\Filament\Pages\MediaLibrary::getUrl() }}"
+    data-initial-tab="{{ $tab ?? '' }}"
 ></div>

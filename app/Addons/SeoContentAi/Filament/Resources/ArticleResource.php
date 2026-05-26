@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -75,6 +76,16 @@ class ArticleResource extends Resource
         return $table
             ->recordAction('edit')
             ->columns([
+                Tables\Columns\TextColumn::make('wp_data_out_of_sync')
+                    ->label('')
+                    ->badge()
+                    ->color('danger')
+                    ->getStateUsing(function (SeoArticle $record): ?string {
+                        return app(ArticleWordPressSyncFlagService::class)->hasDataOutOfSync($record)
+                            ? 'Dữ liệu không đồng bộ, vui lòng xem lại.'
+                            : null;
+                    })
+                    ->placeholder(''),
                 Tables\Columns\TextColumn::make('title')
                     ->label('Tiêu đề')
                     ->searchable()

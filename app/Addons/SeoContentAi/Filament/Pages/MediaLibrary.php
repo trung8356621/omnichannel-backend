@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Services\SeoMediaWpEditStagingService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\GeneratedImageLibraryService;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
+use App\Addons\SeoContentAi\Services\SeoMediaLibraryDeleteService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
@@ -87,6 +88,17 @@ class MediaLibrary extends Page
     public bool $previewPendingWpSync = false;
 
     public ?string $previewProcessingStatus = null;
+
+    /** @var list<string> */
+    public array $selectedKeys = [];
+
+    public ?string $selectionAnchorKey = null;
+
+    public ?string $resizeWidth = null;
+
+    public ?string $resizeHeight = null;
+
+    public bool $resizeBusy = false;
 
     #[On('seo-media-library-refresh')]
     public function refreshLibrary(): void
@@ -385,6 +397,8 @@ class MediaLibrary extends Page
     public function loadImages(): void
     {
         $this->cancelSlugEdit();
+        $this->selectedKeys = [];
+        $this->selectionAnchorKey = null;
         $this->loadError = null;
         $this->images = [];
         $this->total = 0;
@@ -456,6 +470,265 @@ class MediaLibrary extends Page
     public function getSitesProperty(): Collection
     {
         return $this->resolveSitesQuery()->get();
+    }
+
+    public function handleImageSelectClick(string $key, bool $shiftKey = false): void
+    {
+        if ($shiftKey && filled($this->selectionAnchorKey)) {
+            $this->selectImageRange($this->selectionAnchorKey, $key);
+
+            return;
+        }
+
+        $this->toggleImageSelection($key);
+        $this->selectionAnchorKey = $key;
+    }
+
+    public function toggleImageSelection(string $key): void
+    {
+        $index = array_search($key, $this->selectedKeys, true);
+        if ($index !== false) {
+            unset($this->selectedKeys[$index]);
+            $this->selectedKeys = array_values($this->selectedKeys);
+
+            return;
+        }
+
+        $this->selectedKeys[] = $key;
+    }
+
+    public function selectImageRange(string $fromKey, string $toKey): void
+    {
+        $keys = array_map(
+            fn (array $image): string => $this->imageSelectionKey($image),
+            $this->images,
+        );
+
+        $fromIndex = array_search($fromKey, $keys, true);
+        $toIndex = array_search($toKey, $keys, true);
+
+        if ($fromIndex === false || $toIndex === false) {
+            return;
+        }
+
+        $start = min((int) $fromIndex, (int) $toIndex);
+        $end = max((int) $fromIndex, (int) $toIndex);
+
+        $this->selectedKeys = array_values(array_slice($keys, $start, $end - $start + 1));
+    }
+
+    public function clearImageSelection(): void
+    {
+        $this->selectedKeys = [];
+        $this->selectionAnchorKey = null;
+    }
+
+    public function isImageSelected(string $key): bool
+    {
+        return in_array($key, $this->selectedKeys, true);
+    }
+
+    public function resizeSelectedImages(): void
+    {
+        if ($this->siteId === null || $this->siteId <= 0) {
+            Notification::make()
+                ->title('Chọn tên miền')
+                ->body('Chọn domain trước khi resize.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($this->selectedKeys === []) {
+            Notification::make()
+                ->title('Chưa chọn ảnh')
+                ->body('Click ảnh để chọn — double-click để xem / xử lý.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $targetWidth = filled($this->resizeWidth)
+            ? max(1, (int) $this->resizeWidth)
+            : null;
+        $targetHeight = filled($this->resizeHeight)
+            ? max(1, (int) $this->resizeHeight)
+            : null;
+
+        if ($targetWidth === null && $targetHeight === null) {
+            Notification::make()
+                ->title('Thiếu kích thước')
+                ->body('Nhập Width hoặc Height (px). Cả hai: resize đúng kích thước, bỏ qua tỉ lệ.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $site = Site::query()->find($this->siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $this->resizeBusy = true;
+        $actions = app(SeoMediaLibraryImageActionService::class);
+        $successCount = 0;
+        $failedLabels = [];
+
+        foreach ($this->selectedKeys as $key) {
+            $image = $this->findImageRowBySelectionKey($key);
+            if ($image === null) {
+                continue;
+            }
+
+            $result = $actions->resize($site, $image, $targetWidth, $targetHeight);
+
+            if ($result['success'] ?? false) {
+                $successCount++;
+                $this->patchImageUrlInList($key, (string) ($result['url'] ?? ''));
+            } else {
+                $failedLabels[] = (string) ($image['slug'] ?? $key);
+            }
+        }
+
+        $this->resizeBusy = false;
+        $this->selectedKeys = [];
+
+        if ($successCount > 0 && $failedLabels === []) {
+            Notification::make()
+                ->title('Đã resize')
+                ->body("{$successCount} ảnh đã được cập nhật.")
+                ->success()
+                ->send();
+        } elseif ($successCount > 0) {
+            Notification::make()
+                ->title('Resize một phần')
+                ->body("Thành công: {$successCount}. Lỗi: " . implode(', ', array_slice($failedLabels, 0, 5)))
+                ->warning()
+                ->send();
+        } else {
+            Notification::make()
+                ->title('Không resize được')
+                ->body('Không ảnh nào được cập nhật.')
+                ->danger()
+                ->send();
+        }
+    }
+
+    public function deleteLibraryImage(string $key): void
+    {
+        if ($this->siteId === null || $this->siteId <= 0) {
+            Notification::make()->title('Chọn tên miền')->warning()->send();
+
+            return;
+        }
+
+        $image = $this->findImageRowBySelectionKey($key);
+        if ($image === null) {
+            Notification::make()->title('Không tìm thấy ảnh')->warning()->send();
+
+            return;
+        }
+
+        $site = Site::query()->find($this->siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $result = app(SeoMediaLibraryDeleteService::class)->delete($site, $image);
+
+        if ($result['success'] ?? false) {
+            Notification::make()
+                ->title('Đã xóa')
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->send();
+            $this->selectedKeys = array_values(array_filter(
+                $this->selectedKeys,
+                static fn (string $selected): bool => $selected !== $key,
+            ));
+            $this->loadImages();
+        } else {
+            Notification::make()
+                ->title('Không xóa được')
+                ->body((string) ($result['message'] ?? ''))
+                ->danger()
+                ->send();
+        }
+    }
+
+    public function deleteSelectedImages(): void
+    {
+        if ($this->siteId === null || $this->siteId <= 0) {
+            Notification::make()->title('Chọn tên miền')->warning()->send();
+
+            return;
+        }
+
+        if ($this->selectedKeys === []) {
+            Notification::make()
+                ->title('Chưa chọn ảnh')
+                ->body('Click hoặc Shift+click để chọn ảnh cần xóa.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $site = Site::query()->find($this->siteId);
+        if (! $site instanceof Site) {
+            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+
+            return;
+        }
+
+        $deleter = app(SeoMediaLibraryDeleteService::class);
+        $successCount = 0;
+        $failedMessages = [];
+
+        foreach ($this->selectedKeys as $key) {
+            $image = $this->findImageRowBySelectionKey($key);
+            if ($image === null) {
+                continue;
+            }
+
+            $result = $deleter->delete($site, $image);
+            if ($result['success'] ?? false) {
+                $successCount++;
+            } else {
+                $failedMessages[] = (string) ($image['slug'] ?? $key) . ': ' . ($result['message'] ?? '');
+            }
+        }
+
+        $this->selectedKeys = [];
+        $this->selectionAnchorKey = null;
+        $this->loadImages();
+
+        if ($successCount > 0 && $failedMessages === []) {
+            Notification::make()
+                ->title('Đã xóa')
+                ->body("{$successCount} ảnh đã được xóa.")
+                ->success()
+                ->send();
+        } elseif ($successCount > 0) {
+            Notification::make()
+                ->title('Xóa một phần')
+                ->body("Thành công: {$successCount}. " . implode(' ', array_slice($failedMessages, 0, 2)))
+                ->warning()
+                ->send();
+        } else {
+            Notification::make()
+                ->title('Không xóa được')
+                ->body($failedMessages[0] ?? 'Không ảnh nào được xóa.')
+                ->danger()
+                ->send();
+        }
     }
 
     public function openImagePreview(array $image): void
@@ -711,5 +984,44 @@ class MediaLibrary extends Page
             'id' => (int) $site->id,
             'domain' => (string) $site->domain,
         ])->values()->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $image
+     */
+    private function imageSelectionKey(array $image): string
+    {
+        $kind = (string) ($image['kind'] ?? 'local');
+
+        return $kind . '-' . $image['id'];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function findImageRowBySelectionKey(string $key): ?array
+    {
+        foreach ($this->images as $image) {
+            if ($this->imageSelectionKey($image) === $key) {
+                return $image;
+            }
+        }
+
+        return null;
+    }
+
+    private function patchImageUrlInList(string $key, string $url): void
+    {
+        if ($url === '') {
+            return;
+        }
+
+        foreach ($this->images as $index => $image) {
+            if ($this->imageSelectionKey($image) !== $key) {
+                continue;
+            }
+
+            $this->images[$index]['url'] = $url;
+        }
     }
 }

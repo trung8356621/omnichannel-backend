@@ -182,6 +182,8 @@ class SyncDomainContentService
         $userId = (int) $site->user_id;
         $siteDomain = (string) $site->domain;
 
+        $syncFlags = app(ArticleWordPressSyncFlagService::class);
+
         foreach ($items as $item) {
             if (! is_array($item)) {
                 continue;
@@ -195,25 +197,57 @@ class SyncDomainContentService
             $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
             $publishedAt = $this->parsePublishedAt($item['published_at'] ?? null);
 
-            // Bảng articles = bản ghi trung gian chấm điểm. Mỗi lần đồng bộ WP phải ghi đè và xóa
-            // slug/excerpt/body/blocks (chỉ bài viết mới qua AI mới được điền các cột đó).
+            $existing = SeoArticle::query()
+                ->where('site_id', $site->id)
+                ->where('wp_post_id', $wpId)
+                ->where('type', $type)
+                ->first();
+
+            if ($existing instanceof SeoArticle && $syncFlags->shouldBlockWordPressImport($existing)) {
+                $syncFlags->markDataOutOfSync($existing);
+
+                if (array_key_exists('conflict', $synced)) {
+                    $synced['conflict']++;
+                } else {
+                    $synced['conflict'] = 1;
+                }
+
+                continue;
+            }
+
+            $title = $this->resolveSyncItemTitle($item, $syncFlags);
+            $hasLocalBody = $existing instanceof SeoArticle && $syncFlags->hasLocalEditorContent($existing);
+
+            // Bài chưa có nội dung editor trên SEO: ghi đè scoring (xóa slug/body). Bài đã có body: chỉ cập nhật tiêu đề/trạng thái.
+            $articleAttributes = [
+                'type' => $type,
+                'title' => $title !== '' ? $title : 'Untitled',
+                'status' => $this->normalizeStatus((string) ($item['status'] ?? 'draft')),
+                'published_at' => $publishedAt,
+            ];
+
+            if (! $hasLocalBody) {
+                $articleAttributes['slug'] = null;
+                $articleAttributes['excerpt'] = null;
+                $articleAttributes['body'] = null;
+                $articleAttributes['blocks'] = null;
+            }
+
             $article = SeoArticle::query()->updateOrCreate(
                 [
                     'site_id' => $site->id,
                     'wp_post_id' => $wpId,
                     'type' => $type,
                 ],
-                [
-                    'type' => $type,
-                    'title' => (string) ($item['title'] ?? 'Untitled'),
-                    'slug' => null,
-                    'excerpt' => null,
-                    'body' => null,
-                    'blocks' => null,
-                    'status' => $this->normalizeStatus((string) ($item['status'] ?? 'draft')),
-                    'published_at' => $publishedAt,
-                ]
+                $articleAttributes,
             );
+
+            if ($title !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_post_title'],
+                    ['meta_value' => $title],
+                );
+            }
 
             $wpPostType = (string) ($item['wp_post_type'] ?? '');
             if ($wpPostType !== '') {
@@ -233,9 +267,15 @@ class SyncDomainContentService
 
             $this->syncWordPressPostMeta($article, $item);
             app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
-            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
+
+            if (! $hasLocalBody) {
+                app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
+            }
+
             $this->syncSeoMetaFromWordPress($article, $item);
             $this->syncFocusKeyword($site, $userId, $article, $item);
+
+            $syncFlags->clearAll($article);
 
             if (array_key_exists($type, $synced)) {
                 $synced[$type]++;
@@ -322,6 +362,16 @@ class SyncDomainContentService
                 ['meta_value' => json_encode($virtualComments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
             );
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveSyncItemTitle(array $item, ArticleWordPressSyncFlagService $syncFlags): string
+    {
+        $raw = (string) ($item['title'] ?? $item['post_title'] ?? '');
+
+        return $syncFlags->decodeWordPressText($raw);
     }
 
     /**

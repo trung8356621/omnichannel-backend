@@ -16,9 +16,9 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_POST_REVIEW = 'post_review_task_id';
 
-    public const KEY_CREATE_IMAGE = 'create_image_task_id';
+    public const KEY_CREATE_IMAGE = 'create_image_prompt_id';
 
-    public const KEY_CREATE_VIDEO = 'create_video_task_id';
+    public const KEY_CREATE_VIDEO = 'create_video_prompt_id';
 
     public const KEY_RENEW_FAQ_PROMPT_ID = 'renew_faq_prompt_id';
 
@@ -93,14 +93,30 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_POST_REVIEW];
     }
 
-    public function getCreateImageTaskId(): ?int
+    public function getCreateImagePromptId(): ?int
     {
         return $this->getSettings()[self::KEY_CREATE_IMAGE];
     }
 
-    public function getCreateVideoTaskId(): ?int
+    public function getCreateVideoPromptId(): ?int
     {
         return $this->getSettings()[self::KEY_CREATE_VIDEO];
+    }
+
+    /**
+     * @deprecated Dùng getCreateImagePromptId()
+     */
+    public function getCreateImageTaskId(): ?int
+    {
+        return $this->getCreateImagePromptId();
+    }
+
+    /**
+     * @deprecated Dùng getCreateVideoPromptId()
+     */
+    public function getCreateVideoTaskId(): ?int
+    {
+        return $this->getCreateVideoPromptId();
     }
 
     /**

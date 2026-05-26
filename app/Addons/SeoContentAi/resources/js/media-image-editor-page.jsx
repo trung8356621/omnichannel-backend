@@ -1,7 +1,15 @@
 import React from 'react';
 import '../css/magic-eraser.css';
+import '../css/image-splitter.css';
 import { createRoot } from 'react-dom/client';
 import MagicEraserApp from './components/MagicEraserApp';
+import { MEDIA_EDITOR_TAB_ERASER, MEDIA_EDITOR_TAB_SPLITTER } from './components/MediaEditorTabBar';
+
+function parseIntOrNull(value) {
+    if (!value) return null;
+    const n = Number.parseInt(String(value), 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 function readBootstrap() {
     const el = document.getElementById('seo-media-image-editor-root');
@@ -12,15 +20,29 @@ function readBootstrap() {
             wpAttachmentId: 0,
             pendingWpSync: false,
             libraryUrl: '/seo/media-library',
+            siteId: null,
+            articleId: null,
+            seoMediaId: null,
+            slug: '',
+            initialTab: MEDIA_EDITOR_TAB_ERASER,
         };
     }
 
+    const imageId = el.dataset.imageId ? Number(el.dataset.imageId) : null;
+    const tabRaw = (el.dataset.initialTab ?? '').trim().toLowerCase();
+    const initialTab = tabRaw === 'splitter' ? MEDIA_EDITOR_TAB_SPLITTER : MEDIA_EDITOR_TAB_ERASER;
+
     return {
         imageUrl: el.dataset.imageUrl ?? '',
-        imageId: el.dataset.imageId ? Number(el.dataset.imageId) : null,
+        imageId,
         wpAttachmentId: Number(el.dataset.wpAttachmentId ?? 0),
         pendingWpSync: el.dataset.pendingWpSync === '1',
         libraryUrl: el.dataset.libraryUrl ?? '/seo/media-library',
+        siteId: parseIntOrNull(el.dataset.siteId),
+        articleId: parseIntOrNull(el.dataset.articleId),
+        seoMediaId: parseIntOrNull(el.dataset.seoMediaId) ?? imageId,
+        slug: el.dataset.slug ?? '',
+        initialTab,
     };
 }
 
@@ -55,8 +77,14 @@ function mount() {
     root.render(
         <MagicEraserApp
             standalone
+            initialTab={props.initialTab}
             imageUrl={props.imageUrl}
             imageId={props.imageId}
+            siteId={props.siteId}
+            articleId={props.articleId}
+            seoMediaId={props.seoMediaId}
+            wpAttachmentId={props.wpAttachmentId}
+            slug={props.slug}
             onSave={(url) => {
                 const isWpStaging = props.wpAttachmentId > 0;
                 notifyOpener({

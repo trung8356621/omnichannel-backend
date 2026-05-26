@@ -130,14 +130,56 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
 }
 
 /**
- * Box chọn / tạo ảnh cho block ảnh trống.
+ * Box chọn / tạo / tải nhanh ảnh cho block ảnh trống.
  *
  * @param {() => void} onOpenMediaLibrary
  * @param {(prompt: string) => void} onGenerateRequest
+ * @param {(url: string) => void|Promise<void>} [onImportFromUrl]
+ * @param {boolean} [importLoading]
  */
-export function ImageBlockPickerBox({ onOpenMediaLibrary, onGenerateRequest }) {
+export function ImageBlockPickerBox({
+    onOpenMediaLibrary,
+    onGenerateRequest,
+    onImportFromUrl,
+    importLoading = false,
+}) {
     const [mode, setMode] = useState('actions');
     const [prompt, setPrompt] = useState('');
+    const [importUrl, setImportUrl] = useState('');
+
+    if (mode === 'import') {
+        return (
+            <div className="seo-image-block-picker">
+                <button type="button" className="seo-image-block-picker__back" onClick={() => setMode('actions')}>
+                    ← Quay lại
+                </button>
+                <div className="seo-image-block-picker__url-row">
+                    <input
+                        type="url"
+                        className="seo-image-block-picker__input"
+                        value={importUrl}
+                        onChange={(e) => setImportUrl(e.target.value)}
+                        placeholder="https://example.com/anh.jpg"
+                        disabled={importLoading}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && importUrl.trim() && !importLoading) {
+                                e.preventDefault();
+                                onImportFromUrl?.(importUrl.trim());
+                            }
+                        }}
+                    />
+                    <button
+                        type="button"
+                        className="seo-image-block-picker__choice"
+                        disabled={!importUrl.trim() || importLoading || !onImportFromUrl}
+                        onClick={() => onImportFromUrl?.(importUrl.trim())}
+                    >
+                        {importLoading ? 'Đang tải…' : 'Import'}
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     if (mode === 'generate') {
         return (
@@ -183,6 +225,13 @@ export function ImageBlockPickerBox({ onOpenMediaLibrary, onGenerateRequest }) {
             </button>
             <button type="button" className="seo-image-block-picker__choice is-secondary" onClick={() => setMode('generate')}>
                 Tạo ảnh
+            </button>
+            <button
+                type="button"
+                className="seo-image-block-picker__choice is-secondary"
+                onClick={() => setMode('import')}
+            >
+                Down nhanh
             </button>
         </div>
     );

@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
@@ -23,6 +24,7 @@ class SeoMediaController extends Controller
         private readonly SeoMediaStorageService $storage,
         private readonly SeoMediaImageEditorResolverService $imageEditorResolver,
         private readonly SeoMediaLibraryImageActionService $imageActions,
+        private readonly SeoImageSplitterService $imageSplitter,
     ) {}
 
     public function upload(Request $request): JsonResponse
@@ -60,6 +62,52 @@ class SeoMediaController extends Controller
             'url' => $seoMedia->publicUrl(),
             'slug' => $seoMedia->slug,
             'alt_text' => $seoMedia->alt_text,
+        ]);
+    }
+
+    public function importFromUrl(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'max:2048', 'url'],
+            'site_id' => 'nullable|integer',
+            'article_id' => 'nullable|integer',
+        ]);
+
+        $siteId = isset($validated['site_id']) ? (int) $validated['site_id'] : null;
+        $articleId = isset($validated['article_id']) ? (int) $validated['article_id'] : null;
+
+        if ($articleId !== null) {
+            $article = SeoArticle::query()->findOrFail($articleId);
+            abort_unless($this->canAccessArticle($article), 403);
+            $siteId = (int) $article->site_id;
+        } elseif ($siteId !== null) {
+            abort_unless($this->canAccessSite($siteId), 403);
+        } else {
+            abort_unless(auth()->check(), 403);
+        }
+
+        try {
+            $seoMedia = $this->storage->storeFromRemoteUrl(
+                (string) $validated['url'],
+                $siteId,
+                $articleId,
+            );
+        } catch (\InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['url' => $e->getMessage()]);
+        } catch (\RuntimeException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'id' => $seoMedia->id,
+            'url' => $seoMedia->publicUrl(),
+            'slug' => $seoMedia->slug,
+            'alt_text' => $seoMedia->alt_text,
+            'message' => 'Đã tải và tối ưu ảnh vào thư viện.',
         ]);
     }
 
@@ -129,6 +177,90 @@ class SeoMediaController extends Controller
             'seo_media_id' => $resolved['seo_media_id'],
             'editor_url' => $resolved['editor_url'],
         ]);
+    }
+
+    /**
+     * Tải metadata + URL ảnh nguồn cho trang tách lưới (Laravel seo_media hoặc WP).
+     */
+    public function splitterSource(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'site_id' => 'nullable|integer',
+            'seo_media_id' => 'nullable|integer',
+            'wp_attachment_id' => 'nullable|integer',
+            'slug' => 'nullable|string|max:200',
+        ]);
+
+        $siteId = isset($validated['site_id']) ? (int) $validated['site_id'] : null;
+        if ($siteId !== null && $siteId > 0) {
+            abort_unless($this->canAccessSite($siteId), 403);
+        }
+
+        try {
+            $resolved = $this->imageSplitter->resolveSource(
+                ($siteId ?? 0) > 0 ? $siteId : null,
+                isset($validated['seo_media_id']) ? (int) $validated['seo_media_id'] : null,
+                isset($validated['wp_attachment_id']) ? (int) $validated['wp_attachment_id'] : null,
+                (string) ($validated['slug'] ?? ''),
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            ...$resolved,
+        ]);
+    }
+
+    /**
+     * Lưu các mảnh ảnh sau split vào thư viện và xóa ảnh gốc trên Laravel.
+     */
+    public function saveSplit(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'site_id' => 'required|integer',
+            'article_id' => 'nullable|integer',
+            'original_seo_media_id' => 'nullable|integer',
+            'pieces' => 'required|array|min:1',
+            'pieces.*' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:10240',
+        ]);
+
+        $siteId = (int) $validated['site_id'];
+        abort_unless($this->canAccessSite($siteId), 403);
+
+        $site = Site::query()->findOrFail($siteId);
+
+        $articleId = isset($validated['article_id']) ? (int) $validated['article_id'] : null;
+        if ($articleId !== null && $articleId > 0) {
+            $article = SeoArticle::query()->findOrFail($articleId);
+            abort_unless($this->canAccessArticle($article), 403);
+        }
+
+        /** @var list<\Illuminate\Http\UploadedFile> $pieceFiles */
+        $pieceFiles = $request->file('pieces', []);
+        if (! is_array($pieceFiles)) {
+            $pieceFiles = [];
+        }
+
+        try {
+            $result = $this->imageSplitter->savePiecesAndDeleteOriginal(
+                $site,
+                array_values($pieceFiles),
+                $articleId,
+                isset($validated['original_seo_media_id']) ? (int) $validated['original_seo_media_id'] : null,
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+
+        return response()->json($result);
     }
 
     /**

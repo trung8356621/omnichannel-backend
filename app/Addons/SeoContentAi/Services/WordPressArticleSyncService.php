@@ -55,6 +55,7 @@ final class WordPressArticleSyncService
 
         $postContent = trim((string) ($article->body ?? ''));
         if ($postContent !== '') {
+            $postContent = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($postContent);
             $postContent = app(WorkflowParserService::class)->removeFaqAndAppendShortcodeFromContent($postContent);
             $postContent = app(ArticlePostContentFaqPlaceholder::class)->normalizeForWordPress($postContent);
         }

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { AlignCenter, AlignLeft, AlignRight, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
-import { processClipboardImagePaste } from '../utils/seoMediaApi';
+import { importSeoMediaFromUrl, processClipboardImagePaste } from '../utils/seoMediaApi';
 import { ImageBlockPickerBox } from './BlockInsertMenu';
 
 const ALIGN_OPTIONS = [
@@ -130,6 +130,7 @@ export default function ImageBlockEditor({
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
     const [pasteUploading, setPasteUploading] = useState(false);
+    const [importLoading, setImportLoading] = useState(false);
     const toolbarRef = useRef(null);
     const emptyFrameRef = useRef(null);
 
@@ -148,6 +149,7 @@ export default function ImageBlockEditor({
         if (!isActive) {
             setEditingMeta(false);
             setPasteUploading(false);
+            setImportLoading(false);
         }
     }, [isActive]);
 
@@ -203,6 +205,40 @@ export default function ImageBlockEditor({
             return handled;
         },
         [articleId, siteId, pasteUploading, applyUploadedImageToBlock],
+    );
+
+    const handleImportFromUrl = useCallback(
+        async (remoteUrl) => {
+            if (importLoading) return;
+
+            setImportLoading(true);
+            try {
+                const data = await importSeoMediaFromUrl(remoteUrl, { articleId, siteId });
+                applyUploadedImageToBlock(data);
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Đã import ảnh',
+                            body: data.message ?? 'Ảnh đã tải, tối ưu và lưu vào thư viện.',
+                            status: 'success',
+                        },
+                    }),
+                );
+            } catch (error) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Không import được ảnh',
+                            body: error?.message ?? 'Tải URL thất bại.',
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                setImportLoading(false);
+            }
+        },
+        [articleId, siteId, importLoading, applyUploadedImageToBlock],
     );
 
     useEffect(() => {
@@ -320,6 +356,8 @@ export default function ImageBlockEditor({
                                 }),
                             );
                         }}
+                        onImportFromUrl={handleImportFromUrl}
+                        importLoading={importLoading || pasteUploading}
                     />
                 </div>
             );

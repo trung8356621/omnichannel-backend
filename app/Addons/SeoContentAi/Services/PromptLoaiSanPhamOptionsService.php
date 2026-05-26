@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Models\Site;
 
@@ -67,7 +68,7 @@ final class PromptLoaiSanPhamOptionsService
         if ($categoryArticleId > 0) {
             $article = SeoArticle::query()->find($categoryArticleId);
             if ($article instanceof SeoArticle && (int) $article->site_id === $siteId) {
-                $title = trim((string) ($article->title ?? ''));
+                $title = trim(Utf8Sanitizer::string((string) ($article->title ?? '')));
                 if ($title !== '') {
                     $parts[] = $title;
                 }
@@ -75,10 +76,10 @@ final class PromptLoaiSanPhamOptionsService
         }
 
         if ($custom !== '') {
-            $parts[] = $custom;
+            $parts[] = Utf8Sanitizer::string($custom);
         }
 
-        return implode(' — ', $parts);
+        return Utf8Sanitizer::string(implode(' — ', $parts));
     }
 
     /**

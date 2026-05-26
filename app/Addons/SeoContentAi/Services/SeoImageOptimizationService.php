@@ -71,13 +71,7 @@ class SeoImageOptimizationService
         $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
 
         $image = Image::decodePath($file->getRealPath());
-
-        if ($config->limit_dimensions) {
-            $image->scaleDown(
-                width: max(1, (int) $config->max_width),
-                height: max(1, (int) $config->max_height),
-            );
-        }
+        $this->applyConfiguredDimensionLimits($image, $config);
 
         $quality = max(10, min(100, (int) $config->quality));
         $format = $this->formatForExtension($extension);
@@ -214,5 +208,91 @@ class SeoImageOptimizationService
             'webp' => 'image/webp',
             default => 'image/jpeg',
         };
+    }
+
+    /**
+     * Chỉ giới hạn một chiều: width hoặc height (không scaleDown cả hai — tránh méo/cắt).
+     */
+    public function applyConfiguredDimensionLimits(mixed $image, SeoImageOptimizationSetting $config): void
+    {
+        if (! $config->limit_dimensions) {
+            return;
+        }
+
+        $maxWidth = max(0, (int) $config->max_width);
+        $maxHeight = max(0, (int) $config->max_height);
+
+        if ($maxWidth > 0 && $maxHeight <= 0) {
+            $image->scaleDown(width: max(1, $maxWidth));
+
+            return;
+        }
+
+        if ($maxHeight > 0 && $maxWidth <= 0) {
+            $image->scaleDown(height: max(1, $maxHeight));
+
+            return;
+        }
+
+        if ($maxWidth > 0) {
+            $image->scaleDown(width: max(1, $maxWidth));
+        }
+    }
+
+    /**
+     * @return array{slug: string, filename: string, relative_path: string, alt_text: string, binary: string}
+     */
+    public function processBinary(
+        string $binary,
+        string $originalExtension,
+        SeoImageOptimizationSetting $config,
+        ?SeoArticle $article = null,
+        ?string $slugSeed = null,
+    ): array {
+        $originalExtension = strtolower($originalExtension);
+        if ($originalExtension === 'jpeg') {
+            $originalExtension = 'jpg';
+        }
+
+        $seed = $slugSeed !== null && trim($slugSeed) !== ''
+            ? Str::slug($slugSeed)
+            : 'img-' . time();
+
+        if ($config->clean_filename) {
+            $slug = Str::slug($seed);
+        } else {
+            $slug = Str::slug($seed) !== '' ? Str::slug($seed) : 'img-' . time();
+        }
+
+        if ($slug === '') {
+            $slug = 'img-' . time();
+        }
+
+        $slug .= '-' . random_int(100, 999);
+
+        $extension = $config->auto_convert_webp
+            ? 'webp'
+            : $this->normalizeExtension($originalExtension);
+
+        $filename = $slug . '.' . $extension;
+        $randomFolder = Str::random(10);
+        $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+
+        $image = Image::decodeBinary($binary);
+        $this->applyConfiguredDimensionLimits($image, $config);
+
+        $quality = max(10, min(100, (int) $config->quality));
+        $format = $this->formatForExtension($extension);
+        $encoded = $image->encodeUsingFormat($format, quality: $quality);
+
+        $altText = $this->buildAltText($config, $article, $slug);
+
+        return [
+            'slug' => $slug,
+            'filename' => $filename,
+            'relative_path' => $relativePath,
+            'alt_text' => $altText,
+            'binary' => (string) $encoded,
+        ];
     }
 }

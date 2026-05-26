@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Models\Site;
 use Filament\Pages\Page;
@@ -27,6 +28,10 @@ class MediaImageEditor extends Page
     #[Url]
     public ?int $media = null;
 
+    /** Tab ban đầu: eraser (mặc định) hoặc splitter */
+    #[Url]
+    public ?string $tab = null;
+
     public int $imageId = 0;
 
     public string $imageUrl = '';
@@ -34,6 +39,10 @@ class MediaImageEditor extends Page
     public bool $pendingWpSync = false;
 
     public int $wpAttachmentId = 0;
+
+    public int $siteId = 0;
+
+    public int $articleId = 0;
 
     public function mount(): void
     {
@@ -44,6 +53,8 @@ class MediaImageEditor extends Page
 
         $this->imageId = (int) $seoMedia->id;
         $this->wpAttachmentId = (int) ($seoMedia->wp_attachment_id ?? 0);
+        $this->siteId = (int) ($seoMedia->site_id ?? 0);
+        $this->articleId = (int) ($seoMedia->article_id ?? 0);
 
         $pendingService = app(SeoWpMediaEditedPendingService::class);
         $siteId = (int) ($seoMedia->site_id ?? 0);
@@ -72,6 +83,11 @@ class MediaImageEditor extends Page
     public function getMaxContentWidth(): ?string
     {
         return null;
+    }
+
+    public static function urlForMedia(int $mediaId, ?string $tab = null): string
+    {
+        return SeoMediaImageEditorResolverService::editorUrl($mediaId, $tab);
     }
 
     private function canAccessMedia(SeoMedia $media): bool

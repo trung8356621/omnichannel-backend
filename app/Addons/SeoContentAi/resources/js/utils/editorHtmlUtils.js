@@ -1,3 +1,5 @@
+import { stripEditorTransientMarkup } from './articleEditorTransientMarkup';
+
 const HEADING_TAG_RE = /^h([1-6])$/i;
 
 export const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
@@ -44,7 +46,7 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
             return FAQ_SHORTCODE_HTML;
         }
 
-        return exportedHtml;
+        return stripEditorTransientMarkup(exportedHtml);
     }
 
     const originalLevel = standaloneHeadingLevel(originalHtml);
@@ -54,7 +56,7 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
 
     const exportedLevel = standaloneHeadingLevel(exportedHtml);
     if (exportedLevel !== null) {
-        return exportedHtml;
+        return stripEditorTransientMarkup(exportedHtml);
     }
 
     const trimmedExport = (exportedHtml || '').trim();
@@ -62,7 +64,7 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
         return originalHtml;
     }
 
-    return originalHtml;
+    return stripEditorTransientMarkup(originalHtml);
 }
 
 /**

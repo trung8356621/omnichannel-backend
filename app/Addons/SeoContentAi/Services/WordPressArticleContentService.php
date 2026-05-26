@@ -242,6 +242,19 @@ class WordPressArticleContentService
      */
     private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy, bool $importFaqs = true): void
     {
+        $syncFlags = app(ArticleWordPressSyncFlagService::class);
+
+        if (! $syncFlags->shouldBlockWordPressImport($article)) {
+            $title = $syncFlags->decodeWordPressText((string) ($post['post_title'] ?? ''));
+            if ($title !== '') {
+                $article->update(['title' => $title]);
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_post_title'],
+                    ['meta_value' => $title],
+                );
+            }
+        }
+
         if (array_key_exists('post_content', $post)) {
             $rawContent = (string) $post['post_content'];
             $article->articleMetas()->updateOrCreate(

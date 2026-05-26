@@ -1,4 +1,5 @@
 <x-filament-panels::page>
+    @vite('app/Addons/SeoContentAi/resources/css/media-library.css')
     <div class="seo-prompt-test-layout">
         <div class="seo-prompt-test-main">
             <x-filament::section heading="Biến đầu vào">
@@ -79,6 +80,65 @@
                         <div class="seo-prompt-test-media-wrap">
                             <img src="{{ $this->currentMediaOutputUrl() }}" alt="AI generated image" class="seo-prompt-test-image" />
                         </div>
+                        <div class="seo-media-preview-modal__actions seo-prompt-test-media-actions">
+                            @if ($this->testResultCanOpenImageEditor())
+                                <button
+                                    type="button"
+                                    class="seo-media-preview-btn is-edit"
+                                    wire:click="openResultImageEditor"
+                                    wire:loading.attr="disabled"
+                                    wire:target="openResultImageEditor"
+                                >
+                                    <span wire:loading.remove wire:target="openResultImageEditor">Chỉnh sửa hình ảnh</span>
+                                    <span wire:loading wire:target="openResultImageEditor">Đang chuẩn bị…</span>
+                                </button>
+                            @endif
+                            <button
+                                type="button"
+                                class="seo-media-preview-btn is-primary"
+                                wire:click="applyResultWatermark"
+                                wire:loading.attr="disabled"
+                                wire:target="applyResultWatermark"
+                                @if ($this->testResultNeedsSiteForMediaActions() || $this->testResultIsGeneratedMedia()) disabled @endif
+                            >
+                                <span wire:loading.remove wire:target="applyResultWatermark">Áp dụng đóng dấu</span>
+                                <span wire:loading wire:target="applyResultWatermark">Đang xử lý…</span>
+                            </button>
+                            @if ($splitterUrl = $this->testResultImageSplitterUrl())
+                                <a
+                                    href="{{ $splitterUrl }}"
+                                    class="seo-media-preview-btn"
+                                    target="_blank"
+                                    rel="noopener"
+                                >
+                                    Tách theo lưới
+                                </a>
+                            @endif
+                        </div>
+                        @if ($this->testResultIsGeneratedMedia())
+                            <div class="seo-prompt-test-media-extra">
+                                <button
+                                    type="button"
+                                    class="seo-media-preview-btn"
+                                    wire:click="assignResultToSiteLibrary"
+                                    wire:loading.attr="disabled"
+                                    wire:target="assignResultToSiteLibrary"
+                                    @if ($this->testResultNeedsSiteForMediaActions()) disabled @endif
+                                >
+                                    <span wire:loading.remove wire:target="assignResultToSiteLibrary">Gán vào thư viện</span>
+                                    <span wire:loading wire:target="assignResultToSiteLibrary">Đang gán…</span>
+                                </button>
+                            </div>
+                        @endif
+                        @if ($this->testResultNeedsSiteForMediaActions())
+                            <p class="seo-prompt-test-media-hint">
+                                Chọn <strong>tên miền</strong> (biến loại sản phẩm) hoặc <strong>bài viết đích</strong> bên dưới để chỉnh sửa / đóng dấu. «Tách theo lưới» vẫn dùng được ngay.
+                            </p>
+                        @elseif ($this->testResultIsGeneratedMedia())
+                            <p class="seo-prompt-test-media-hint">
+                                Ảnh Gen AI: bấm <strong>Gán vào thư viện</strong> trước khi đóng dấu hoặc chỉnh sửa (giống thư viện ảnh).
+                            </p>
+                        @endif
                     @elseif ($this->isVideoToolPrompt() && $this->currentMediaOutputUrl())
                         <div class="seo-prompt-test-media-wrap">
                             <video controls preload="metadata" class="seo-prompt-test-video">
@@ -682,6 +742,91 @@
             display: block;
             object-fit: contain;
             background: #fff;
+        }
+
+        .seo-prompt-test-media-actions {
+            margin-top: 0.75rem;
+        }
+
+        .seo-prompt-test-media-extra {
+            margin-top: 0.5rem;
+        }
+
+        .seo-prompt-test-media-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.5rem 1rem;
+            font-size: 0.8125rem;
+            font-weight: 600;
+            border-radius: 6px;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            color: #111827;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+
+        .seo-prompt-test-media-btn:hover:not(:disabled) {
+            background: #f3f4f6;
+            border-color: #9ca3af;
+        }
+
+        .seo-prompt-test-media-btn.is-primary {
+            background: #2271b1;
+            border-color: #2271b1;
+            color: #fff;
+        }
+
+        .seo-prompt-test-media-btn.is-primary:hover:not(:disabled) {
+            background: #135e96;
+            border-color: #135e96;
+        }
+
+        .seo-prompt-test-media-btn.is-assign {
+            background: #0d9488;
+            border-color: #0d9488;
+            color: #fff;
+        }
+
+        .seo-prompt-test-media-btn.is-assign:hover:not(:disabled) {
+            background: #0f766e;
+            border-color: #0f766e;
+        }
+
+        .seo-prompt-test-media-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .dark .seo-prompt-test-media-btn {
+            background: #1f2937;
+            border-color: #4b5563;
+            color: #f3f4f6;
+        }
+
+        .dark .seo-prompt-test-media-btn.is-primary {
+            background: #2271b1;
+            border-color: #2271b1;
+            color: #fff;
+        }
+
+        .dark .seo-prompt-test-media-btn.is-assign {
+            background: #0d9488;
+            border-color: #0d9488;
+            color: #fff;
+        }
+
+        .seo-prompt-test-media-hint {
+            margin: 0.5rem 0 0;
+            font-size: 0.75rem;
+            line-height: 1.45;
+            color: #6b7280;
+        }
+
+        .dark .seo-prompt-test-media-hint {
+            color: #9ca3af;
         }
 
         .dark .seo-prompt-test-image,

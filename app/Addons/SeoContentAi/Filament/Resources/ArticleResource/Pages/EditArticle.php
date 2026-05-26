@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
+use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
@@ -13,6 +14,8 @@ use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Services\ArticleFaqExtractDebugService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
+use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
@@ -76,8 +79,30 @@ class EditArticle extends EditRecord
     public function mount(int|string $record): void
     {
         parent::mount($record);
+        $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
         $this->importFaqsFromWordPressOnLoad();
+    }
+
+    /**
+     * Khi mở trang sửa: lấy tiêu đề mới nhất từ WP nếu bài chưa chỉnh local (webhook có thể đã cập nhật DB).
+     */
+    private function syncTitleFromWordPressWhenAllowed(): void
+    {
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            return;
+        }
+
+        if (app(ArticleWordPressSyncFlagService::class)->shouldBlockWordPressImport($this->record)) {
+            return;
+        }
+
+        $post = app(WordPressArticleContentService::class)->fetchFromWordPress($this->record, importFaqs: false);
+        if ($post === []) {
+            return;
+        }
+
+        $this->record->refresh();
     }
 
     private function importFaqsFromWordPressOnLoad(): void
@@ -171,14 +196,9 @@ class EditArticle extends EditRecord
 
         $this->editorHtml = (string) $restore['editor_html'];
         $this->record->refresh();
+        $this->hydrateArticleState();
 
-        if (filled($restore['title'] ?? null)) {
-            $this->articleTitle = (string) $restore['title'];
-        }
-
-        if (filled($restore['slug'] ?? null)) {
-            $this->articleSlug = (string) $restore['slug'];
-        }
+        app(ArticleWordPressSyncFlagService::class)->clearAll($this->record);
 
         $this->featuredImageUrl = app(WordPressArticleContentService::class)->resolveFeaturedImageUrl($this->record);
         $this->productGallery = $this->isProduct()
@@ -203,11 +223,17 @@ class EditArticle extends EditRecord
             ->send();
     }
 
+    public function hasWpDataOutOfSync(): bool
+    {
+        return app(ArticleWordPressSyncFlagService::class)->hasDataOutOfSync($this->record);
+    }
+
     protected function hydrateArticleState(): void
     {
         $service = app(WordPressArticleContentService::class);
+        $flags = app(ArticleWordPressSyncFlagService::class);
 
-        $this->articleTitle = (string) ($this->record->title ?? '');
+        $this->articleTitle = $flags->decodeWordPressText((string) ($this->record->title ?? ''));
         $this->articleSlug = $service->resolveSlug($this->record);
         $this->articleStatus = (string) ($this->record->status ?? 'draft');
         $this->featuredImageUrl = $service->resolveFeaturedImageUrl($this->record);
@@ -516,6 +542,8 @@ class EditArticle extends EditRecord
      */
     public function persistArticleLocal(string $html): void
     {
+        $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+
         $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
         $html = $faqSync['body_html'];
         if ($faqSync['extracted']) {
@@ -604,6 +632,8 @@ class EditArticle extends EditRecord
 
     private function persistArticleLocalSilent(string $html): void
     {
+        $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+
         $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
         $html = $faqSync['body_html'];
         if ($faqSync['extracted']) {
@@ -625,6 +655,8 @@ class EditArticle extends EditRecord
         $this->articleSlug = $slug;
         app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
         $this->record->refresh();
+
+        app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
     }
 
     /**
@@ -837,6 +869,82 @@ class EditArticle extends EditRecord
         Notification::make()
             ->title('Đã lưu FAQ')
             ->body('FAQ lưu trên hệ thống SEO. Đồng bộ WordPress khi bấm «Đồng bộ».')
+            ->success()
+            ->send();
+    }
+
+    public function generateArticleImageFromEditor(
+        string $selectionText,
+        string $selectionHtml,
+        string $userBrief,
+        string $activeBlockId = '',
+    ): void {
+        try {
+            $result = app(ArticleEditorMediaAiService::class)->generateImage(
+                $this->record,
+                $selectionText,
+                $selectionHtml,
+                $userBrief,
+            );
+        } catch (\InvalidArgumentException $exception) {
+            $this->dispatch('article-ai-media-failed', type: 'image', message: $exception->getMessage());
+
+            Notification::make()
+                ->title('Không tạo được ảnh')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->dispatch(
+            'article-ai-image-generated',
+            url: $result['url'],
+            activeBlockId: $activeBlockId,
+        );
+
+        Notification::make()
+            ->title('Đã tạo ảnh')
+            ->body('Ảnh đã được chèn vào bài nếu có block editor đang mở.')
+            ->success()
+            ->send();
+    }
+
+    public function generateArticleVideoFromEditor(
+        string $selectionText,
+        string $selectionHtml,
+        string $userBrief,
+        string $activeBlockId = '',
+    ): void {
+        try {
+            $result = app(ArticleEditorMediaAiService::class)->generateVideo(
+                $this->record,
+                $selectionText,
+                $selectionHtml,
+                $userBrief,
+            );
+        } catch (\InvalidArgumentException $exception) {
+            $this->dispatch('article-ai-media-failed', type: 'video', message: $exception->getMessage());
+
+            Notification::make()
+                ->title('Không tạo được video')
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->dispatch(
+            'article-ai-video-generated',
+            url: $result['url'],
+            activeBlockId: $activeBlockId,
+        );
+
+        Notification::make()
+            ->title('Đã tạo video')
+            ->body('Video đã được chèn vào bài nếu có block editor đang mở.')
             ->success()
             ->send();
     }

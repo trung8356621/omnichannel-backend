@@ -16,6 +16,7 @@ final class SeoMediaLibraryImageActionService
         private readonly WordPressMediaWatermarkService $wpMedia,
         private readonly SeoMediaStorageService $mediaStorage,
         private readonly SeoMediaProcessingHistoryService $processingHistory,
+        private readonly SeoMediaResizeService $resize,
     ) {}
 
     /**
@@ -157,6 +158,42 @@ final class SeoMediaLibraryImageActionService
         }
 
         return $this->process($site, $imageRow, applyWatermark: false, applyOptimize: true, watermarkSetting: null);
+    }
+
+    /**
+     * @param  array<string, mixed>  $imageRow
+     * @return array{success: bool, url: string, message: string}
+     */
+    public function resize(Site $site, array $imageRow, ?int $width, ?int $height): array
+    {
+        $kind = $this->resolveImageKind($imageRow);
+
+        if ($kind === 'generated') {
+            return [
+                'success' => false,
+                'url' => (string) ($imageRow['url'] ?? ''),
+                'message' => 'Ảnh Gen AI chỉ xem trước — hãy gán vào thư viện nội bộ để resize.',
+            ];
+        }
+
+        if ($kind === 'local') {
+            $media = SeoMedia::query()
+                ->where('site_id', $site->id)
+                ->whereKey((int) ($imageRow['seo_media_id'] ?? $imageRow['id'] ?? 0))
+                ->first();
+
+            if ($media === null) {
+                return [
+                    'success' => false,
+                    'url' => (string) ($imageRow['url'] ?? ''),
+                    'message' => 'Không tìm thấy ảnh nội bộ.',
+                ];
+            }
+
+            return $this->resize->resizeLocal($media, $width, $height);
+        }
+
+        return $this->resize->resizeWordPress($site, $imageRow, $width, $height);
     }
 
     /**

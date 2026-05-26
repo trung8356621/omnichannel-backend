@@ -39,13 +39,19 @@ final class SeoMediaImageEditorResolverService
         }
 
         if ($imageId > 0) {
-            $media = SeoMedia::query()
-                ->where('site_id', $site->id)
-                ->whereKey($imageId)
-                ->first();
+            $media = SeoMedia::query()->whereKey($imageId)->first();
 
             if ($media === null) {
                 throw new \InvalidArgumentException('Không tìm thấy ảnh trên Laravel.');
+            }
+
+            $mediaSiteId = (int) ($media->site_id ?? 0);
+            if ($mediaSiteId > 0 && $mediaSiteId !== (int) $site->id) {
+                throw new \InvalidArgumentException('Ảnh không thuộc domain đã chọn.');
+            }
+
+            if ($mediaSiteId <= 0) {
+                $media->update(['site_id' => (int) $site->id]);
             }
         } else {
             throw new \InvalidArgumentException('Ảnh chưa có bản lưu trên Laravel.');
@@ -53,8 +59,18 @@ final class SeoMediaImageEditorResolverService
 
         return [
             'seo_media_id' => $imageId,
-            'editor_url' => route('filament.seo.pages.media-image-editor', ['media' => $imageId]),
+            'editor_url' => self::editorUrl($imageId),
         ];
+    }
+
+    public static function editorUrl(int $mediaId, ?string $tab = null): string
+    {
+        $params = ['media' => $mediaId];
+        if (filled($tab)) {
+            $params['tab'] = $tab;
+        }
+
+        return route('filament.seo.pages.media-image-editor', $params);
     }
 
     private function resolveLocalMediaIdFromUrl(int $siteId, string $url): int

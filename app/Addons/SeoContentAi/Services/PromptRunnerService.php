@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Support\AiModelCatalog;
 use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Models\ApiConnection;
@@ -30,7 +31,6 @@ final class PromptRunnerService
         'sub_task' => 'Nhiệm vụ phụ thuộc',
         'formatting' => 'Định dạng đầu ra',
         'constraints' => 'Ràng buộc',
-        'global_constraints' => 'Ràng buộc tổng (Global)',
     ];
 
     /**
@@ -49,6 +49,8 @@ final class PromptRunnerService
         ?int $onlySubTaskIndex = null,
     ): PromptResult {
         $prompt->loadMissing(['parts', 'aiConnection']);
+
+        $variables = Utf8Sanitizer::variables($variables);
 
         $connection = $prompt->aiConnection;
         if ($connection === null) {
@@ -133,13 +135,13 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => [
+            'input_snapshot' => $this->sanitizeInputSnapshot([
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
                 'model_category' => $category,
                 'is_task_mode' => $isTaskMode,
                 'tools' => $toolType,
-            ],
+            ]),
             'started_at' => now(),
         ]);
 
@@ -159,17 +161,17 @@ final class PromptRunnerService
             $result->update([
                 'status' => 'completed',
                 'output_text' => $output,
-                'token_usage' => $usage,
+                'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
                 'finished_at' => now(),
-                'input_snapshot' => array_merge(
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
                     ['raw_model_used' => $rawModel],
-                ),
+                )),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
                 'status' => 'failed',
-                'error_message' => $exception->getMessage(),
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
                 'finished_at' => now(),
             ]);
 
@@ -202,7 +204,7 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => [
+            'input_snapshot' => $this->sanitizeInputSnapshot([
                 'variables' => $variables,
                 'compiled_prompt' => $compiled,
                 'model_category' => $category,
@@ -212,7 +214,7 @@ final class PromptRunnerService
                 'chain_step' => 'task',
                 'chain_step_index' => 0,
                 'direct_image_preview' => true,
-            ],
+            ]),
             'started_at' => now(),
         ]);
 
@@ -231,13 +233,13 @@ final class PromptRunnerService
             $result->update([
                 'status' => 'completed',
                 'output_text' => $output,
-                'token_usage' => $usage,
+                'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
                 'finished_at' => now(),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
                 'status' => 'failed',
-                'error_message' => $exception->getMessage(),
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
                 'finished_at' => now(),
             ]);
 
@@ -324,7 +326,7 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => [
+            'input_snapshot' => $this->sanitizeInputSnapshot([
                 'variables' => $variables,
                 'compiled_prompt' => $this->compileChainStep($prompt, $mainTask, $variables),
                 'model_category' => $baseCategory,
@@ -333,7 +335,7 @@ final class PromptRunnerService
                 'chain_mode' => true,
                 'chain_step' => 'task',
                 'chain_step_index' => 0,
-            ],
+            ]),
             'started_at' => now(),
         ]);
 
@@ -351,17 +353,17 @@ final class PromptRunnerService
             $result->update([
                 'status' => 'completed',
                 'output_text' => $output,
-                'token_usage' => $usage,
+                'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
                 'finished_at' => now(),
-                'input_snapshot' => array_merge(
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
                     ['raw_model_used' => $rawModel],
-                ),
+                )),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
                 'status' => 'failed',
-                'error_message' => $exception->getMessage(),
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
                 'finished_at' => now(),
             ]);
 
@@ -407,7 +409,7 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => [
+            'input_snapshot' => $this->sanitizeInputSnapshot([
                 'variables' => $variables,
                 'compiled_prompt' => $this->compileChainStep($prompt, $subTask, $variables),
                 'model_category' => $baseCategory,
@@ -417,7 +419,7 @@ final class PromptRunnerService
                 'chain_step' => 'sub_task',
                 'chain_step_index' => $subTaskIndex + 1,
                 'chain_step_name' => $stepName,
-            ],
+            ]),
             'started_at' => now(),
         ]);
 
@@ -435,17 +437,17 @@ final class PromptRunnerService
             $result->update([
                 'status' => 'completed',
                 'output_text' => $output,
-                'token_usage' => $usage,
+                'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
                 'finished_at' => now(),
-                'input_snapshot' => array_merge(
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
                     ['raw_model_used' => $rawModel],
-                ),
+                )),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
                 'status' => 'failed',
-                'error_message' => $exception->getMessage(),
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
                 'finished_at' => now(),
             ]);
 
@@ -486,14 +488,14 @@ final class PromptRunnerService
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
-            'input_snapshot' => [
+            'input_snapshot' => $this->sanitizeInputSnapshot([
                 'variables' => $variables,
                 'compiled_prompt' => $this->compilePrompt($prompt, $variables),
                 'model_category' => $baseCategory,
                 'is_task_mode' => $isTaskMode,
                 'tools' => $toolType,
                 'chain_mode' => true,
-            ],
+            ]),
             'started_at' => now(),
         ]);
 
@@ -547,20 +549,20 @@ final class PromptRunnerService
             $result->update([
                 'status' => 'completed',
                 'output_text' => $finalOutput,
-                'token_usage' => $usageAggregate,
+                'token_usage' => is_array($usageAggregate) ? $this->sanitizeTokenUsage($usageAggregate) : $usageAggregate,
                 'finished_at' => now(),
-                'input_snapshot' => array_merge(
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
                     [
                         'variables' => $chainVariables,
                         'chain_steps' => $chainSteps,
                     ],
-                ),
+                )),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
                 'status' => 'failed',
-                'error_message' => $exception->getMessage(),
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
                 'finished_at' => now(),
             ]);
 
@@ -734,10 +736,10 @@ final class PromptRunnerService
         }
 
         if ($systemBlocks === []) {
-            return $stepBlock;
+            return Utf8Sanitizer::string($stepBlock);
         }
 
-        return implode("\n\n", $systemBlocks) . "\n\n---\n\n" . $stepBlock;
+        return Utf8Sanitizer::string(implode("\n\n", $systemBlocks) . "\n\n---\n\n" . $stepBlock);
     }
 
     /**
@@ -776,7 +778,7 @@ final class PromptRunnerService
             throw new PromptRunException('Prompt không có nội dung thành phần nào.');
         }
 
-        return implode("\n\n", $blocks);
+        return Utf8Sanitizer::string(implode("\n\n", $blocks));
     }
 
     /**
@@ -784,20 +786,24 @@ final class PromptRunnerService
      */
     private function formatPartBlock(SeoPromptPart $part, array $variables): string
     {
-        $content = trim($this->substituteVariables((string) $part->content, $variables));
+        if ((string) $part->role === 'global_constraints') {
+            return '';
+        }
+
+        $content = trim($this->substituteVariables(Utf8Sanitizer::string((string) $part->content), $variables));
         if ($content === '') {
             return '';
         }
 
         $heading = self::ROLE_HEADINGS[$part->role] ?? ucfirst((string) $part->role);
         if (in_array($part->role, ['task', 'sub_task'], true) && filled($part->name)) {
-            $heading .= ': ' . $part->name;
+            $heading .= ': ' . Utf8Sanitizer::string((string) $part->name);
         }
 
         $lines = ["## {$heading}", $content];
 
         $meta = is_array($part->meta) ? $part->meta : [];
-        $rules = trim((string) ($meta['rules'] ?? ''));
+        $rules = trim(Utf8Sanitizer::string((string) ($meta['rules'] ?? '')));
         if ($rules !== '') {
             $lines[] = '';
             $lines[] = 'Quy tắc:';
@@ -805,7 +811,7 @@ final class PromptRunnerService
         }
 
         if ($part->role === 'sub_task') {
-            $specific = trim((string) ($meta['specific_constraints'] ?? ''));
+            $specific = trim(Utf8Sanitizer::string((string) ($meta['specific_constraints'] ?? '')));
             if ($specific !== '') {
                 $lines[] = '';
                 $lines[] = 'Ràng buộc riêng (sub-prompt):';
@@ -813,7 +819,7 @@ final class PromptRunnerService
             }
         }
 
-        return implode("\n", $lines);
+        return Utf8Sanitizer::string(implode("\n", $lines));
     }
 
     /**
@@ -827,11 +833,34 @@ final class PromptRunnerService
                 $key = $matches[1];
 
                 return array_key_exists($key, $variables)
-                    ? (string) $variables[$key]
+                    ? Utf8Sanitizer::string((string) $variables[$key])
                     : $matches[0];
             },
-            $text,
+            Utf8Sanitizer::string($text),
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @return array<string, mixed>
+     */
+    private function sanitizeInputSnapshot(array $snapshot): array
+    {
+        return Utf8Sanitizer::arrayDeep($snapshot);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $usage
+     * @return array<string, mixed>|null
+     */
+    private function sanitizeTokenUsage(?array $usage): ?array
+    {
+        return $usage === null ? null : $this->sanitizeInputSnapshot($usage);
+    }
+
+    private function sanitizeErrorMessage(string $message): string
+    {
+        return Utf8Sanitizer::string($message);
     }
 
     /**

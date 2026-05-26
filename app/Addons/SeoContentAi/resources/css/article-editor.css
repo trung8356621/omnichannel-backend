@@ -1118,6 +1118,40 @@
     cursor: not-allowed;
 }
 
+.seo-ai-chat-generate-image,
+.seo-ai-chat-generate-video {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    height: 32px;
+    padding: 0 0.75rem;
+    font-size: 12px;
+    font-weight: 600;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #fff;
+}
+
+.seo-ai-chat-generate-image {
+    background: #2563eb;
+}
+
+.seo-ai-chat-generate-video {
+    background: #7c3aed;
+}
+
+.seo-ai-chat-generate-image:disabled,
+.seo-ai-chat-generate-video:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.seo-ai-chat-actions {
+    flex-wrap: wrap;
+}
+
 /* Editor: không có toolbar full-width; chỉ bubble trên block đang active */
 .seo-editor-busy-overlay {
     position: absolute;
@@ -1516,7 +1550,19 @@
 
 .seo-image-block-picker__url-row {
     display: flex;
+    flex-wrap: nowrap;
+    align-items: stretch;
     gap: 0.4rem;
+}
+
+.seo-image-block-picker__url-row .seo-image-block-picker__input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.seo-image-block-picker__url-row .seo-image-block-picker__choice {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 .seo-image-block-picker__input,
@@ -2358,6 +2404,7 @@
     color: #bfdbfe;
 }
 
+.seo-editor-link-mark,
 .seo-link-scroll-highlight {
     outline: 2px solid #f59e0b !important;
     outline-offset: 2px;

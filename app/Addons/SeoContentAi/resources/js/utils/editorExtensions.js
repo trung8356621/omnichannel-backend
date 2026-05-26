@@ -14,6 +14,7 @@ import { TableRow } from '@tiptap/extension-table-row';
 import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import Paragraph from '@tiptap/extension-paragraph';
+import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
 
 /** Giữ class / data attribute trên paragraph (vd. placeholder FAQ). */
 const PreservedParagraph = Paragraph.extend({
@@ -106,7 +107,7 @@ export const articleEditorExtensions = [
         enableClickSelection: true,
         HTMLAttributes: {
             rel: 'noopener noreferrer',
-            class: 'seo-editor-link',
+            class: SEO_EDITOR_LINK_CLASS,
         },
     }),
     TextAlign.configure({ types: ['heading', 'paragraph'] }),

@@ -17,6 +17,7 @@ final class ArticleFaqWordPressRestoreService
         private readonly ArticleContentFaqService $contentFaq,
         private readonly ArticleFaqExtractDebugService $extractDebug,
         private readonly WorkflowParserService $workflowParser,
+        private readonly ArticleWordPressSyncFlagService $syncFlags,
     ) {
     }
 
@@ -130,12 +131,11 @@ final class ArticleFaqWordPressRestoreService
         $this->contentFaq->persistArticleBodyHtml($article, $html);
         $this->extractDebug->clear($article);
 
-        $title = trim((string) ($post['post_title'] ?? ''));
+        $title = $this->syncFlags->decodeWordPressText((string) ($post['post_title'] ?? ''));
         $slug = trim((string) ($post['slug'] ?? ''));
 
-        if ($title !== '') {
-            $article->update(['title' => $title]);
-        }
+        $this->applyRestoredTitleAndSlug($article, $title, $slug);
+        $this->syncFlags->clearAll($article);
 
         return [
             'restored' => true,
@@ -144,6 +144,20 @@ final class ArticleFaqWordPressRestoreService
             'slug' => $slug !== '' ? $slug : null,
             'message' => 'Đã khôi phục bài viết gốc từ WordPress.',
         ];
+    }
+
+    private function applyRestoredTitleAndSlug(SeoArticle $article, string $title, string $slug): void
+    {
+        if ($title !== '') {
+            $article->update(['title' => $title]);
+        }
+
+        if ($slug !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_slug'],
+                ['meta_value' => $slug],
+            );
+        }
     }
 
     /**

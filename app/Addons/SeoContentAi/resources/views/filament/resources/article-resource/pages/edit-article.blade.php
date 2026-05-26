@@ -22,11 +22,8 @@
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
         x-on:seo-article-editor-notify.window="
-            $wire.dispatch('seo-article-editor-notify', {
-                title: $event.detail?.title ?? '',
-                body: $event.detail?.body ?? '',
-                status: $event.detail?.status ?? 'success',
-            })
+            const payload = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            $wire.handleEditorNotify(payload);
         "
         x-on:open-article-media-modal.window="mediaModalMode = $wire.mediaPickerMode || 'featured'"
         x-on:flush-article-faqs.window="
@@ -53,6 +50,11 @@
         @article-faq-extract-debug-cleared.window="window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'))"
         x-on:extract-article-faqs-with-context.window="$wire.extractFaqsFromSelection($event.detail.html ?? '', $event.detail.articleHtml ?? '')"
         x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
+        x-on:generate-article-image.window="$wire.generateArticleImageFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
+        x-on:generate-article-video.window="$wire.generateArticleVideoFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
+        @article-ai-image-generated.window="window.dispatchEvent(new CustomEvent('article-ai-image-generated', { detail: $event.detail }))"
+        @article-ai-video-generated.window="window.dispatchEvent(new CustomEvent('article-ai-video-generated', { detail: $event.detail }))"
+        @article-ai-media-failed.window="window.dispatchEvent(new CustomEvent('article-ai-media-failed', { detail: $event.detail }))"
         x-on:check-faq-question.window="
             $wire.checkFaqQuestionDuplicate($event.detail.question, $event.detail.faqId).then((result) => {
                 window.dispatchEvent(new CustomEvent('faq-duplicate-checked', {
@@ -67,6 +69,16 @@
         class="wp-article-edit -mx-4 max-w-none"
     >
         <div wire:ignore id="seo-article-ai-launcher-root"></div>
+
+        @if ($this->hasWpDataOutOfSync())
+            <div
+                class="mb-4 rounded-lg border border-danger-300 bg-danger-50 px-4 py-3 text-sm text-danger-800 dark:border-danger-600 dark:bg-danger-950/40 dark:text-danger-200"
+                role="alert"
+            >
+                Dữ liệu không đồng bộ, vui lòng xem lại.
+            </div>
+        @endif
+
         <div class="wp-article-edit-layout">
             {{-- Cột chính (giống WP post editor) --}}
             <div class="wp-article-edit-main space-y-4">

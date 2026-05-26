@@ -1,4 +1,5 @@
 import { normalizeLinkText } from './articleLinkScroll';
+import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
 
 /**
  * @typedef {{ node: Text, start: number, endNode: Text, endOffset: number }} PlainTextRange
@@ -153,7 +154,7 @@ export function wrapTextRangeWithLink(doc, match, href) {
 
     const anchor = doc.createElement('a');
     anchor.href = url;
-    anchor.className = 'seo-editor-link';
+    anchor.className = SEO_EDITOR_LINK_CLASS;
 
     try {
         const fragment = range.extractContents();

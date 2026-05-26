@@ -13,8 +13,37 @@ final class SeoPromptSettingsOptionsService
      */
     public function activePromptOptions(): array
     {
-        return SeoPrompt::query()
-            ->where('is_active', true)
+        return $this->activePromptOptionsForTool(null);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function activeImagePromptOptions(): array
+    {
+        return $this->activePromptOptionsForTool('image');
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function activeVideoPromptOptions(): array
+    {
+        return $this->activePromptOptionsForTool('video');
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function activePromptOptionsForTool(?string $tool): array
+    {
+        $query = SeoPrompt::query()->where('is_active', true);
+
+        if ($tool !== null) {
+            $query->where('tools', $tool);
+        }
+
+        return $query
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();

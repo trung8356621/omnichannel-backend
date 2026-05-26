@@ -1,8 +1,12 @@
 const UPLOAD_URL = '/api/seo/media/upload';
+const IMPORT_URL = '/api/seo/media/import-url';
 const PREPARE_EDITOR_URL = '/api/seo/media/prepare-editor';
 const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
 const SAVE_EDITED_URL_TEMPLATE = '/api/seo/media/{id}/save-edited';
+const MEDIA_IMAGE_EDITOR_PATH = '/seo/media-image-editor';
+const SPLITTER_SOURCE_URL = '/api/seo/media/splitter-source';
+const SAVE_SPLIT_URL = '/api/seo/media/save-split';
 
 /** URL tương đối /storage/... — tránh lệch host/port khi APP_URL khác origin trình duyệt. */
 export function normalizeSeoMediaUrl(url) {
@@ -23,6 +27,113 @@ export function normalizeSeoMediaUrl(url) {
     }
 
     return trimmed;
+}
+
+export async function fetchSplitterSource({
+    siteId = null,
+    seoMediaId = null,
+    wpAttachmentId = null,
+    slug = '',
+} = {}) {
+    const params = new URLSearchParams();
+    if (siteId) params.set('site_id', String(siteId));
+    if (seoMediaId) params.set('seo_media_id', String(seoMediaId));
+    if (wpAttachmentId) params.set('wp_attachment_id', String(wpAttachmentId));
+    if (slug) params.set('slug', String(slug));
+
+    const response = await fetch(`${SPLITTER_SOURCE_URL}?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+        credentials: 'same-origin',
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.message ?? 'Không tải được ảnh nguồn.');
+    }
+
+    if (data.url) {
+        data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
+/**
+ * @param {{ siteId: number, articleId?: number|null, originalSeoMediaId?: number|null, originalUrl?: string, pieces: { blob: Blob, filename: string }[] }} params
+ */
+export async function saveSplitPiecesToLibrary({
+    siteId,
+    articleId = null,
+    originalSeoMediaId = null,
+    pieces = [],
+}) {
+    const formData = new FormData();
+    formData.append('site_id', String(siteId));
+    if (articleId != null && !Number.isNaN(Number(articleId))) {
+        formData.append('article_id', String(articleId));
+    }
+    if (originalSeoMediaId != null && Number(originalSeoMediaId) > 0) {
+        formData.append('original_seo_media_id', String(originalSeoMediaId));
+    }
+    pieces.forEach((piece, index) => {
+        formData.append(`pieces[${index}]`, piece.blob, piece.filename || `piece-${index + 1}.png`);
+    });
+
+    const response = await fetch(SAVE_SPLIT_URL, {
+        method: 'POST',
+        body: formData,
+        headers: {
+            ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message =
+            response.status === 419
+                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
+                : (data.message ?? 'Không lưu được ảnh đã tách.');
+        throw new Error(message);
+    }
+
+    if (Array.isArray(data.saved)) {
+        data.saved = data.saved.map((row) => ({
+            ...row,
+            url: row.url ? normalizeSeoMediaUrl(row.url) : row.url,
+        }));
+    }
+
+    return data;
+}
+
+/** Mở trình chỉnh sửa ảnh (Magic Eraser / Image Splitter trong cùng một app). */
+export function buildMediaImageEditorUrl({ seoMediaId = null, tab = null } = {}) {
+    const mediaId = Number(seoMediaId ?? 0);
+    if (mediaId <= 0) {
+        return null;
+    }
+
+    const target = new URL(MEDIA_IMAGE_EDITOR_PATH, window.location.origin);
+    target.searchParams.set('media', String(mediaId));
+    if (tab) {
+        target.searchParams.set('tab', String(tab));
+    }
+
+    return target.toString();
+}
+
+/**
+ * @deprecated Dùng buildMediaImageEditorUrl({ seoMediaId, tab: 'splitter' })
+ */
+export function buildImageSplitterUrl({ seoMediaId = null } = {}) {
+    return buildMediaImageEditorUrl({
+        seoMediaId,
+        tab: 'splitter',
+    });
 }
 
 function csrfToken() {
@@ -53,7 +164,12 @@ function parseUploadError(response, data) {
         return 'Bạn không có quyền upload ảnh cho bài này.';
     }
     if (response.status === 422) {
-        return data.message ?? data.errors?.image?.[0] ?? 'File ảnh không hợp lệ.';
+        return (
+            data.message ??
+            data.errors?.url?.[0] ??
+            data.errors?.image?.[0] ??
+            'File ảnh không hợp lệ.'
+        );
     }
 
     return data.message ?? 'Không thể upload ảnh.';
@@ -109,6 +225,47 @@ export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = 
     });
 
     return activeClipboardUpload;
+}
+
+/**
+ * Tải ảnh từ URL bên ngoài, tối ưu theo cấu hình site và lưu thư viện.
+ * @param {string} remoteUrl
+ * @param {{ articleId?: number|null, siteId?: number|null }} options
+ */
+export async function importSeoMediaFromUrl(remoteUrl, { articleId = null, siteId = null } = {}) {
+    const url = String(remoteUrl ?? '').trim();
+    if (!url) {
+        throw new Error('Vui lòng nhập URL ảnh.');
+    }
+
+    const response = await fetch(IMPORT_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            url,
+            ...(articleId != null && !Number.isNaN(Number(articleId))
+                ? { article_id: Number(articleId) }
+                : {}),
+            ...(siteId != null && !Number.isNaN(Number(siteId)) ? { site_id: Number(siteId) } : {}),
+        }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(parseUploadError(response, data));
+    }
+
+    if (data.url) {
+        data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
 }
 
 /**
