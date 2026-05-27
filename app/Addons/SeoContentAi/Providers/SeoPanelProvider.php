@@ -21,6 +21,7 @@ use Filament\Support\Colors\Color;
 use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Blade;
 use Illuminate\Support\HtmlString;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -28,6 +29,7 @@ use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
+use Livewire\Livewire;
 
 class SeoPanelProvider extends PanelProvider
 {
@@ -37,8 +39,15 @@ class SeoPanelProvider extends PanelProvider
     {
         $addonRoot = dirname(__DIR__);
 
+        Livewire::component('global-seo-bar', \App\Addons\SeoContentAi\Livewire\GlobalSeoBar::class);
+
         $this->loadViewsFrom($addonRoot . '/resources/views', 'seo-content-ai');
         $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot . '/database/migrations');
+
+        FilamentView::registerRenderHook(
+            'panels::global-search.after',
+            fn (): string => Blade::render('@livewire(\'global-seo-bar\')'),
+        );
 
         FilamentView::registerRenderHook(
             PanelsRenderHook::BODY_END,
@@ -76,6 +85,20 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.media.prepare-editor');
                 Route::post('/apply-watermark', [SeoMediaController::class, 'applyWatermark'])
                     ->name('seo.media.apply-watermark');
+                Route::get('/article/{article}/ai-jobs', [SeoMediaController::class, 'articleAiJobs'])
+                    ->whereNumber('article')
+                    ->name('seo.media.article-ai-jobs');
+                Route::get('/{media}/status', [SeoMediaController::class, 'status'])
+                    ->whereNumber('media')
+                    ->name('seo.media.status');
+                Route::post('/{media}/retry-generation', [SeoMediaController::class, 'retryGeneration'])
+                    ->whereNumber('media')
+                    ->name('seo.media.retry-generation');
+                Route::delete('/{media}/ai-job', [SeoMediaController::class, 'deleteAiJob'])
+                    ->whereNumber('media')
+                    ->name('seo.media.delete-ai-job');
+                Route::post('/rename-by-url', [SeoMediaController::class, 'renameByUrl'])
+                    ->name('seo.media.rename-by-url');
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
                     ->name('seo.media.rename');

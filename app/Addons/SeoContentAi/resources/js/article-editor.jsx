@@ -43,6 +43,9 @@ function registerArticleEditorLivewireBridge() {
             window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'));
         });
         Livewire.on('editor-block-image-selected', forward('editor-block-image-selected'));
+        Livewire.on('article-ai-image-generated', forward('article-ai-image-generated'));
+        Livewire.on('article-ai-video-generated', forward('article-ai-video-generated'));
+        Livewire.on('article-ai-media-failed', forward('article-ai-media-failed'));
     }
 }
 
@@ -62,6 +65,7 @@ if (rootElement) {
     let articleId = null;
     let siteId = null;
     let articleTitle = '';
+    let aiDebug = { enabled: false };
 
     try {
         const htmlEl = document.getElementById('seo-article-initial-html');
@@ -121,6 +125,7 @@ if (rootElement) {
             articleId = meta?.id ?? null;
             siteId = meta?.site_id ?? meta?.siteId ?? null;
             articleTitle = meta?.title ?? '';
+            aiDebug = meta?.ai_debug ?? { enabled: false };
         }
     } catch (e) {
         console.warn('Invalid article meta JSON', e);
@@ -165,7 +170,7 @@ if (rootElement) {
 
     const chatRoot = document.getElementById('seo-article-ai-chat-root');
     if (chatRoot) {
-        createRoot(chatRoot).render(<ArticleAiChatPanel articleId={articleId} />);
+        createRoot(chatRoot).render(<ArticleAiChatPanel articleId={articleId} aiDebug={aiDebug} />);
     }
 
     const faqRoot = document.getElementById('seo-article-faq-root');

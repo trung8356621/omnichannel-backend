@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Pages\Page;
 
 class SeoSettings extends Page
@@ -28,5 +29,10 @@ class SeoSettings extends Page
     public function mount(): void
     {
         $this->redirect(SeoSettingsOverview::getUrl(), navigate: false);
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

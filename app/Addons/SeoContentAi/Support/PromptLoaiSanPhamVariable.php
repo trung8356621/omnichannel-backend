@@ -45,14 +45,7 @@ final class PromptLoaiSanPhamVariable
             }
         }
 
-        $parts = $prompt->parts()
-            ->orderBy('position')
-            ->get()
-            ->map(static fn ($part): array => PromptResource::builderItemFromPart($part))
-            ->values()
-            ->all();
-
-        foreach (PromptResource::extractVariableNamesFromParts($parts) as $name) {
+        foreach (PromptResource::extractVariableNamesFromMarkdown((string) ($prompt->markdown_content ?? '')) as $name) {
             if (self::isLoaiSanPhamName($name)) {
                 return true;
             }

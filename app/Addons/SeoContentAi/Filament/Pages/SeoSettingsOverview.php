@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
 use App\Addons\SeoContentAi\Services\AiModelRouterService;
 use App\Addons\SeoContentAi\Services\SeoOverviewSettingsService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -140,5 +141,10 @@ class SeoSettingsOverview extends Page implements HasForms
     public function aiConnectionEditUrl(int $connectionId): string
     {
         return AiConnectionResource::getUrl('edit', ['record' => $connectionId]);
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

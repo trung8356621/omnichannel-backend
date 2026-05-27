@@ -12,12 +12,15 @@ class User extends Authenticatable
     const ROLE_ADMIN = 'admin';
     const ROLE_OWNER = 'owner';
     const ROLE_STAFF = 'staff';
+    const SEO_ROLE_MANAGER = 'manager';
+    const SEO_ROLE_PLANNER = 'planner';
+    const SEO_ROLE_CONTENT_MANAGER = 'content_manager';
 
     const STATUS_NORMAL = 'normal';
     const STATUS_BLOCK = 'block';
     const STATUS_PENDING = 'pending';
 
-    protected $fillable = ['parent_id', 'role', 'status', 'name', 'email', 'password'];
+    protected $fillable = ['parent_id', 'role', 'seo_role', 'status', 'name', 'email', 'password'];
 
     /**
      * Luôn dùng DB chính — tránh bị gán connection addon khi eager-load từ model `omi_seo_ai`.

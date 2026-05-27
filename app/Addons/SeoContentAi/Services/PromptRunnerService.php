@@ -48,9 +48,9 @@ final class PromptRunnerService
         bool $runFullDependentChain = true,
         ?int $onlySubTaskIndex = null,
     ): PromptResult {
-        $prompt->loadMissing(['parts', 'aiConnection']);
+        $prompt->loadMissing(['aiConnection']);
 
-        $variables = Utf8Sanitizer::variables($variables);
+        $variables = Utf8Sanitizer::variablesForAi($variables);
 
         $connection = $prompt->aiConnection;
         if ($connection === null) {
@@ -291,10 +291,8 @@ final class PromptRunnerService
      */
     public function getDependentSubTaskParts(SeoPrompt $prompt): \Illuminate\Support\Collection
     {
-        return $prompt->parts()
+        return $this->promptParts($prompt)
             ->where('role', 'sub_task')
-            ->orderBy('position')
-            ->get()
             ->filter(static fn (SeoPromptPart $part): bool => trim((string) $part->content) !== '')
             ->values();
     }
@@ -311,7 +309,7 @@ final class PromptRunnerService
         string $baseCategory,
         bool $isTaskMode,
     ): PromptResult {
-        $parts = $prompt->parts()->orderBy('position')->get();
+        $parts = $this->promptParts($prompt);
         $mainTask = $parts->firstWhere('role', 'task');
 
         if ($mainTask === null || trim((string) $mainTask->content) === '') {
@@ -471,7 +469,7 @@ final class PromptRunnerService
         string $baseCategory,
         bool $isTaskMode,
     ): PromptResult {
-        $parts = $prompt->parts()->orderBy('position')->get();
+        $parts = $this->promptParts($prompt);
         $mainTask = $parts->firstWhere('role', 'task');
         $subTasks = $parts->where('role', 'sub_task')->values();
 
@@ -586,7 +584,9 @@ final class PromptRunnerService
         ?string $categoryOverride = null,
         bool $isTaskMode = true,
     ): string {
-        $prompt->loadMissing(['parts', 'aiConnection']);
+        $variables = Utf8Sanitizer::variablesForAi($variables);
+
+        $prompt->loadMissing(['aiConnection']);
         $connection = $prompt->aiConnection;
         if ($connection === null) {
             throw new PromptRunException('Prompt chưa được gắn kết nối AI.');
@@ -719,7 +719,7 @@ final class PromptRunnerService
     private function compileChainStep(SeoPrompt $prompt, SeoPromptPart $stepPart, array $variables): string
     {
         $systemBlocks = [];
-        foreach ($prompt->parts()->orderBy('position')->get() as $part) {
+        foreach ($this->promptParts($prompt) as $part) {
             if (in_array((string) $part->role, ['task', 'sub_task'], true)) {
                 continue;
             }
@@ -764,7 +764,7 @@ final class PromptRunnerService
      */
     public function compilePrompt(SeoPrompt $prompt, array $variables): string
     {
-        $parts = $prompt->parts()->orderBy('position')->get();
+        $parts = $this->promptParts($prompt);
         $blocks = [];
 
         foreach ($parts as $part) {
@@ -779,6 +779,14 @@ final class PromptRunnerService
         }
 
         return Utf8Sanitizer::string(implode("\n\n", $blocks));
+    }
+
+    /**
+     * @return \Illuminate\Support\Collection<int, SeoPromptPart>
+     */
+    private function promptParts(SeoPrompt $prompt): \Illuminate\Support\Collection
+    {
+        return $prompt->resolvedParts();
     }
 
     /**

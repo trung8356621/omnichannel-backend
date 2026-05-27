@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Support\CreateArticleWorkflowNotification;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -39,6 +40,26 @@ class KeywordResource extends Resource
 
     protected static ?int $navigationSort = 12;
 
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canCreate(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -46,9 +67,11 @@ class KeywordResource extends Resource
                 Forms\Components\Select::make('site_id')
                     ->label('Domain')
                     ->options(fn (): array => static::siteSelectOptions())
+                    ->default(fn (): ?int => SeoAccessControl::globalSiteId())
+                    ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
                     ->searchable()
                     ->preload()
-                    ->required()
+                    ->required(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                     ->native(false),
 
                 Forms\Components\TextInput::make('phrase')
@@ -183,6 +206,7 @@ class KeywordResource extends Resource
                 Tables\Filters\SelectFilter::make('site_id')
                     ->label('Domain')
                     ->options(fn (): array => static::siteSelectOptions())
+                    ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                     ->searchable()
                     ->preload()
                     ->native(false),
@@ -273,6 +297,10 @@ class KeywordResource extends Resource
 
         if (auth()->user()?->role !== 'admin') {
             $query->where('user_id', auth()->id());
+        }
+
+        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
+            $query->where('site_id', $globalSiteId);
         }
 
         return InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);

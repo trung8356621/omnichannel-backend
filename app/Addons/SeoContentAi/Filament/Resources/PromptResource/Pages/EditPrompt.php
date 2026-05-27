@@ -14,9 +14,6 @@ class EditPrompt extends EditRecord
 {
     protected static string $resource = PromptResource::class;
 
-    /** @var array<int, array<string, mixed>> */
-    public array $promptDataVirtual = [];
-
     protected function getHeaderActions(): array
     {
         $readiness = app(AiModelsReadinessService::class);
@@ -39,18 +36,12 @@ class EditPrompt extends EditRecord
 
     protected function mutateFormDataBeforeFill(array $data): array
     {
-        $parts = $this->record->parts()->orderBy('position')->get();
+        $markdown = trim((string) ($data['markdown_content'] ?? ''));
 
-        $data['prompt_data'] = $parts->isEmpty()
-            ? PromptResource::defaultPromptDataTemplate()
-            : PromptResource::filterDeprecatedPromptDataItems(
-                $parts
-                    ->map(static fn ($part): array => PromptResource::builderItemFromPart($part))
-                    ->values()
-                    ->all(),
-            );
-
-        $data['variables'] = PromptResource::sanitizeDeclaredVariables($this->record->variables ?? []);
+        $data['variables'] = PromptResource::mergeVariablesFromMarkdown(
+            $markdown,
+            $this->record->variables ?? [],
+        );
 
         if (blank($data['model_category'] ?? null)) {
             $data['model_category'] = filled($data['ai_connection_id'] ?? null)
@@ -63,29 +54,17 @@ class EditPrompt extends EditRecord
 
     protected function mutateFormDataBeforeSave(array $data): array
     {
-        $this->promptDataVirtual = $data['prompt_data'] ?? [];
-        unset($data['prompt_data']);
+        $markdown = trim((string) ($data['markdown_content'] ?? ''));
 
         if (isset($data['name'])) {
             $data['title'] = $data['name'];
         }
 
-        $data['variables'] = PromptResource::sanitizeDeclaredVariables($data['variables'] ?? []);
+        $data['variables'] = PromptResource::mergeVariablesFromMarkdown(
+            $markdown,
+            $data['variables'] ?? [],
+        );
 
         return $data;
-    }
-
-    protected function afterSave(): void
-    {
-        $this->record->parts()->delete();
-
-        foreach ($this->promptDataVirtual as $index => $item) {
-            $attributes = PromptResource::partAttributesFromBuilderItem($item, $index);
-            if ($attributes === null) {
-                continue;
-            }
-
-            $this->record->parts()->create($attributes);
-        }
     }
 }

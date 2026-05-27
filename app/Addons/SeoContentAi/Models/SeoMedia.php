@@ -24,7 +24,31 @@ class SeoMedia extends Model
         return [
             'wp_attachment_id' => 'integer',
             'wp_synced_at' => 'datetime',
+            'prompt_id' => 'integer',
+            'prompt_variables' => 'array',
         ];
+    }
+
+    public function isAiGenerationJob(): bool
+    {
+        $source = strtolower(trim((string) $this->source));
+
+        return in_array($source, ['ai_prompt', 'ai_video_prompt'], true);
+    }
+
+    public function aiToolType(): string
+    {
+        return strtolower(trim((string) $this->source)) === 'ai_video_prompt' ? 'video' : 'image';
+    }
+
+    public static function placeholderLoadingUrl(): string
+    {
+        return '/storage/assets/images/placeholder-loading.svg';
+    }
+
+    public static function placeholderLoadingPath(): string
+    {
+        return 'assets/images/placeholder-loading.svg';
     }
 
     public function article(): BelongsTo

@@ -19,16 +19,22 @@ use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
+use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
+use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
+use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
+use App\Addons\SeoContentAi\Models\SeoPrompt;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Filament\Support\Enums\MaxWidth;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Livewire\Attributes\On;
 
@@ -43,6 +49,24 @@ class EditArticle extends EditRecord
     public string $articleSlug = '';
 
     public string $articleStatus = 'draft';
+
+    public string $visibility = 'public';
+
+    public bool $editingStatus = false;
+
+    public bool $editingVisibility = false;
+
+    public bool $editingPublishAt = false;
+
+    public string $publishDay = '';
+
+    public string $publishMonth = '';
+
+    public string $publishYear = '';
+
+    public string $publishHour = '';
+
+    public string $publishMinute = '';
 
     public ?string $featuredImageUrl = null;
 
@@ -68,6 +92,9 @@ class EditArticle extends EditRecord
     public ?string $mediaPickerError = null;
 
     public bool $mediaPickerLoading = false;
+
+    /** @var 'original'|'local' */
+    public string $mediaPickerTab = 'original';
 
     public bool $editingSlug = false;
 
@@ -236,11 +263,13 @@ class EditArticle extends EditRecord
         $this->articleTitle = $flags->decodeWordPressText((string) ($this->record->title ?? ''));
         $this->articleSlug = $service->resolveSlug($this->record);
         $this->articleStatus = (string) ($this->record->status ?? 'draft');
+        $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
         $this->featuredImageUrl = $service->resolveFeaturedImageUrl($this->record);
         $this->productGallery = $this->isProduct()
             ? $service->resolveProductGallery($this->record)
             : [];
         $this->editorHtml = $service->resolveEditorHtml($this->record);
+        $this->syncPublishDatePartsFromRecord();
     }
 
     public function isProduct(): bool
@@ -295,10 +324,10 @@ class EditArticle extends EditRecord
 
     public function prepareMediaPicker(string $mode = 'featured', ?string $blockId = null): void
     {
-        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+        if ($mode !== 'editor-block' && (int) ($this->record->wp_post_id ?? 0) <= 0) {
             Notification::make()
                 ->title('Chưa liên kết WordPress')
-                ->body('Đồng bộ bài từ domain trước khi chọn ảnh.')
+                ->body('Đồng bộ bài từ domain trước khi chọn ảnh WordPress.')
                 ->warning()
                 ->send();
 
@@ -329,12 +358,25 @@ class EditArticle extends EditRecord
             $this->mediaPickerMode = $mode === 'gallery' ? 'gallery' : 'featured';
         }
 
+        $this->mediaPickerTab = 'original';
         $this->mediaPickerPage = 1;
         $this->mediaPickerError = null;
         $this->mediaPickerImages = [];
         $this->mediaPickerLoading = true;
         $this->mediaPickerOpen = true;
         $this->dispatch('open-article-media-modal');
+        $this->loadMediaPickerImages();
+    }
+
+    public function setMediaPickerTab(string $tab): void
+    {
+        $tab = $tab === 'local' ? 'local' : 'original';
+        if ($this->mediaPickerTab === $tab) {
+            return;
+        }
+
+        $this->mediaPickerTab = $tab;
+        $this->mediaPickerPage = 1;
         $this->loadMediaPickerImages();
     }
 
@@ -388,29 +430,65 @@ class EditArticle extends EditRecord
         }
 
         $search = trim($this->mediaPickerSearch);
+        $articleId = (int) $this->record->id;
+        $library = app(SeoMediaLibraryService::class);
 
-        $result = app(WordPressMediaLibraryService::class)->fetch(
-            $site,
-            null,
-            $this->mediaPickerPage,
-            48,
-            $search !== '' ? $search : null,
-        );
+        if ($this->mediaPickerTab === 'local') {
+            $library->assignRecentOrphanMediaToArticle($site, $articleId);
+        }
 
-        $this->mediaPickerImages = is_array($result['images'] ?? null) ? $result['images'] : [];
+        $result = $this->mediaPickerTab === 'local'
+            ? $library->fetch(
+                $site,
+                null,
+                $this->mediaPickerPage,
+                $search !== '' ? $search : null,
+                48,
+                $articleId,
+            )
+            : app(WordPressMediaLibraryService::class)->fetch(
+                $site,
+                null,
+                $this->mediaPickerPage,
+                48,
+                $search !== '' ? $search : null,
+            );
+
+        $images = is_array($result['images'] ?? null) ? $result['images'] : [];
+        $this->mediaPickerImages = $this->mediaPickerTab === 'local'
+            ? app(MediaLibraryArticleResolver::class)->enrichImages((int) $site->id, $images)
+            : $images;
         $this->mediaPickerTotalPages = max(1, (int) ($result['total_pages'] ?? 1));
         $this->mediaPickerPage = max(1, (int) ($result['page'] ?? $this->mediaPickerPage));
         $this->mediaPickerError = filled($result['error'] ?? null) ? (string) $result['error'] : null;
         $this->mediaPickerLoading = false;
     }
 
-    public function selectMediaFromPicker(int $attachmentId, string $url, string $alt = '', string $slug = ''): void
-    {
-        if ($attachmentId <= 0 || trim($url) === '') {
+    public function selectMediaFromPicker(
+        int $wpAttachmentId,
+        string $url,
+        string $alt = '',
+        string $slug = '',
+        int $seoMediaId = 0,
+    ): void {
+        $url = trim($url);
+        if ($url === '') {
             return;
         }
 
+        $seoMediaId = max(0, $seoMediaId);
+        $wpAttachmentId = max(0, $wpAttachmentId);
+        $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+
         if ($this->mediaPickerMode === 'editor-block') {
+            if ($this->mediaPickerTab === 'local' && $seoMediaId <= 0 && $wpAttachmentId <= 0) {
+                return;
+            }
+
+            if ($this->mediaPickerTab !== 'local' && $wpAttachmentId <= 0) {
+                return;
+            }
+
             $blockId = trim((string) ($this->mediaPickerTargetBlockId ?? ''));
             if ($blockId === '') {
                 return;
@@ -419,8 +497,9 @@ class EditArticle extends EditRecord
             $this->dispatch(
                 'editor-block-image-selected',
                 blockId: $blockId,
-                attachmentId: $attachmentId,
-                url: trim($url),
+                attachmentId: $wpAttachmentId,
+                seoMediaId: $seoMediaId,
+                url: $url,
                 alt: trim($alt),
                 slug: trim($slug),
             );
@@ -437,6 +516,10 @@ class EditArticle extends EditRecord
             return;
         }
 
+        if ($localRefId <= 0) {
+            return;
+        }
+
         $localMedia = app(ArticleMediaLocalService::class);
 
         if ($this->mediaPickerMode === 'gallery') {
@@ -450,10 +533,10 @@ class EditArticle extends EditRecord
                 return;
             }
 
-            $this->productGallery = $localMedia->appendGalleryLocal($this->record, $attachmentId, $url);
+            $this->productGallery = $localMedia->appendGalleryLocal($this->record, $localRefId, $url);
             $title = 'Đã thêm vào album (lưu cục bộ)';
         } else {
-            $localMedia->applyFeaturedLocal($this->record, $attachmentId, $url);
+            $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
             $this->featuredImageUrl = trim($url);
             $title = 'Đã chọn ảnh đại diện (lưu cục bộ)';
         }
@@ -500,12 +583,132 @@ class EditArticle extends EditRecord
 
     public function getPublishedAtLabel(): ?string
     {
-        $publishedAt = $this->record->published_at;
+        $publishedAt = $this->resolvePublishAtForEditor();
         if ($publishedAt === null) {
             return null;
         }
 
         return $publishedAt->timezone(config('app.timezone'))->format('d/m/Y H:i');
+    }
+
+    public function getPublishWhenLabel(): string
+    {
+        $publishedAt = $this->resolvePublishAtForEditor();
+        if ($publishedAt === null) {
+            return 'Chưa đặt lịch';
+        }
+
+        return $this->formatWpScheduleLabel($publishedAt);
+    }
+
+    public function getVisibilityLabel(): string
+    {
+        return $this->visibility === 'private' ? 'Riêng tư' : 'Công khai';
+    }
+
+    public function getStatusLabelForPublishBox(): string
+    {
+        return match ($this->articleStatus) {
+            'published' => 'Đã xuất bản',
+            'scheduled' => 'Đã lên lịch',
+            'private' => 'Riêng tư',
+            default => 'Bản nháp',
+        };
+    }
+
+    public function startStatusEdit(): void
+    {
+        $this->editingStatus = true;
+    }
+
+    public function cancelStatusEdit(): void
+    {
+        $this->editingStatus = false;
+    }
+
+    public function applyStatusEdit(): void
+    {
+        $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
+
+        $this->editingStatus = false;
+    }
+
+    public function startVisibilityEdit(): void
+    {
+        $this->editingVisibility = true;
+    }
+
+    public function cancelVisibilityEdit(): void
+    {
+        $this->editingVisibility = false;
+        $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
+    }
+
+    public function applyVisibilityEdit(): void
+    {
+        if ($this->visibility === 'private') {
+            $this->articleStatus = 'private';
+        } elseif ($this->articleStatus === 'private') {
+            $this->articleStatus = 'draft';
+        }
+
+        $this->editingVisibility = false;
+    }
+
+    public function startPublishAtEdit(): void
+    {
+        $this->editingPublishAt = true;
+        $this->randomizePublishAtFuture();
+    }
+
+    public function cancelPublishAtEdit(): void
+    {
+        $this->editingPublishAt = false;
+        $this->syncPublishDatePartsFromRecord();
+    }
+
+    public function applyPublishAtEdit(): void
+    {
+        $dt = $this->buildPublishAtFromParts();
+        if ($dt === null) {
+            Notification::make()
+                ->title('Ngày giờ không hợp lệ')
+                ->body('Vui lòng kiểm tra lại ngày/giờ xuất bản.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->publishYear = $dt->format('Y');
+        $this->publishMonth = $dt->format('m');
+        $this->publishDay = $dt->format('d');
+        $this->publishHour = $dt->format('H');
+        $this->publishMinute = $dt->format('i');
+
+        if ($this->visibility !== 'private') {
+            $this->articleStatus = $dt->greaterThan(now(config('app.timezone'))) ? 'scheduled' : 'published';
+        }
+
+        $this->editingPublishAt = false;
+    }
+
+    public function randomizePublishAtFuture(): void
+    {
+        $base = now(config('app.timezone'))->addHours(random_int(1, 8));
+        $minutePool = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+        $minute = $minutePool[array_rand($minutePool)];
+        $dt = $base->copy()->minute($minute)->second(0);
+
+        $this->publishYear = $dt->format('Y');
+        $this->publishMonth = $dt->format('m');
+        $this->publishDay = $dt->format('d');
+        $this->publishHour = $dt->format('H');
+        $this->publishMinute = $dt->format('i');
+
+        if ($this->visibility !== 'private') {
+            $this->articleStatus = 'scheduled';
+        }
     }
 
     public function requestSaveArticle(): void
@@ -554,16 +757,20 @@ class EditArticle extends EditRecord
 
         $slug = Str::slug($this->articleSlug);
 
+        $publishAt = $this->resolvePublishAtForSave();
+
         $this->record->update([
             'title' => trim($this->articleTitle),
             'slug' => $slug !== '' ? $slug : null,
             'status' => $this->articleStatus,
+            'published_at' => $publishAt,
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
 
         $this->articleSlug = $slug;
         $this->editingSlug = false;
+        $this->syncPublishDatePartsFromRecord();
 
         app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
         $this->record->refresh();
@@ -644,15 +851,19 @@ class EditArticle extends EditRecord
 
         $slug = Str::slug($this->articleSlug);
 
+        $publishAt = $this->resolvePublishAtForSave();
+
         $this->record->update([
             'title' => trim($this->articleTitle),
             'slug' => $slug !== '' ? $slug : null,
             'status' => $this->articleStatus,
+            'published_at' => $publishAt,
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
 
         $this->articleSlug = $slug;
+        $this->syncPublishDatePartsFromRecord();
         app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
         $this->record->refresh();
 
@@ -701,6 +912,88 @@ class EditArticle extends EditRecord
     public function getEditorSettingsPayload(): array
     {
         return app(ArticleEditorHistoryService::class)->getSettings();
+    }
+
+    /**
+     * @return array{id: int, site_id: int, title: string, ai_debug: array<string, mixed>}
+     */
+    public function getEditorMetaPayload(): array
+    {
+        return [
+            'id' => (int) $this->record->id,
+            'site_id' => (int) $this->record->site_id,
+            'title' => (string) $this->articleTitle,
+            'ai_debug' => $this->getEditorAiDebugPayload(),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getEditorAiDebugPayload(): array
+    {
+        if (! config('app.debug')) {
+            return ['enabled' => false];
+        }
+
+        $settings = app(SeoCreateArticleSettingsService::class);
+
+        return [
+            'enabled' => true,
+            'article_title' => trim((string) ($this->record->title ?? '')),
+            'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '',
+            'image' => $this->buildPromptDebugPayload($settings->getCreateImagePromptId()),
+            'video' => $this->buildPromptDebugPayload($settings->getCreateVideoPromptId()),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildPromptDebugPayload(?int $promptId): array
+    {
+        if ($promptId === null) {
+            return [
+                'prompt_id' => null,
+                'name' => '',
+                'template' => '',
+                'variables' => [],
+            ];
+        }
+
+        $prompt = SeoPrompt::query()->find($promptId);
+        if (! $prompt instanceof SeoPrompt) {
+            return [
+                'prompt_id' => $promptId,
+                'name' => '',
+                'template' => '',
+                'variables' => [],
+            ];
+        }
+
+        $variableNames = collect(is_array($prompt->variables) ? $prompt->variables : [])
+            ->map(static fn (array $row): string => trim((string) ($row['name'] ?? '')))
+            ->filter(static fn (string $name): bool => $name !== '')
+            ->values()
+            ->all();
+
+        $placeholderVars = [];
+        foreach ($variableNames as $name) {
+            $placeholderVars[$name] = '{{' . $name . '}}';
+        }
+
+        try {
+            $template = app(PromptRunnerService::class)->compilePrompt($prompt, $placeholderVars);
+        } catch (\Throwable) {
+            $template = (string) ($prompt->markdown_content ?? '');
+        }
+
+        return [
+            'prompt_id' => (int) $prompt->id,
+            'name' => (string) ($prompt->name ?? ''),
+            'template' => $template,
+            'variables' => $variableNames,
+        ];
     }
 
     /**
@@ -885,6 +1178,7 @@ class EditArticle extends EditRecord
                 $selectionText,
                 $selectionHtml,
                 $userBrief,
+                $activeBlockId,
             );
         } catch (\InvalidArgumentException $exception) {
             $this->dispatch('article-ai-media-failed', type: 'image', message: $exception->getMessage());
@@ -902,11 +1196,14 @@ class EditArticle extends EditRecord
             'article-ai-image-generated',
             url: $result['url'],
             activeBlockId: $activeBlockId,
+            seoMediaId: (int) ($result['seo_media_id'] ?? 0),
+            status: (string) ($result['status'] ?? 'processing'),
+            mediaType: 'image',
         );
 
         Notification::make()
-            ->title('Đã tạo ảnh')
-            ->body('Ảnh đã được chèn vào bài nếu có block editor đang mở.')
+            ->title('Đang tạo ảnh')
+            ->body('Đã chèn placeholder. Ảnh thật sẽ tự cập nhật khi xử lý xong.')
             ->success()
             ->send();
     }
@@ -923,6 +1220,7 @@ class EditArticle extends EditRecord
                 $selectionText,
                 $selectionHtml,
                 $userBrief,
+                $activeBlockId,
             );
         } catch (\InvalidArgumentException $exception) {
             $this->dispatch('article-ai-media-failed', type: 'video', message: $exception->getMessage());
@@ -940,11 +1238,14 @@ class EditArticle extends EditRecord
             'article-ai-video-generated',
             url: $result['url'],
             activeBlockId: $activeBlockId,
+            seoMediaId: (int) ($result['seo_media_id'] ?? 0),
+            status: (string) ($result['status'] ?? 'processing'),
+            mediaType: 'video',
         );
 
         Notification::make()
-            ->title('Đã tạo video')
-            ->body('Video đã được chèn vào bài nếu có block editor đang mở.')
+            ->title('Đang tạo video')
+            ->body('Đã chèn placeholder. Video thật sẽ tự cập nhật khi xử lý xong.')
             ->success()
             ->send();
     }
@@ -1075,5 +1376,91 @@ class EditArticle extends EditRecord
         $data['user_id'] = auth()->id();
 
         return $data;
+    }
+
+    private function syncPublishDatePartsFromRecord(): void
+    {
+        $dt = $this->resolvePublishAtForEditor() ?? now(config('app.timezone'));
+
+        $this->publishDay = $dt->format('d');
+        $this->publishMonth = $dt->format('m');
+        $this->publishYear = $dt->format('Y');
+        $this->publishHour = $dt->format('H');
+        $this->publishMinute = $dt->format('i');
+    }
+
+    private function resolvePublishAtForEditor(): ?Carbon
+    {
+        if ($this->record->published_at instanceof Carbon) {
+            return $this->record->published_at->copy()->timezone(config('app.timezone'));
+        }
+
+        $fromParts = $this->buildPublishAtFromParts();
+
+        return $fromParts?->timezone(config('app.timezone'));
+    }
+
+    private function resolvePublishAtForSave(): ?Carbon
+    {
+        if ($this->articleStatus === 'draft') {
+            return null;
+        }
+
+        $candidate = $this->buildPublishAtFromParts();
+        if ($candidate !== null) {
+            return $candidate->copy()->timezone(config('app.timezone'));
+        }
+
+        if ($this->record->published_at instanceof Carbon) {
+            return $this->record->published_at->copy()->timezone(config('app.timezone'));
+        }
+
+        return now(config('app.timezone'));
+    }
+
+    private function buildPublishAtFromParts(): ?Carbon
+    {
+        $year = (int) trim($this->publishYear);
+        $month = (int) trim($this->publishMonth);
+        $day = (int) trim($this->publishDay);
+        $hour = (int) trim($this->publishHour);
+        $minute = (int) trim($this->publishMinute);
+
+        if (
+            $year < 1970 || $year > 2100
+            || $month < 1 || $month > 12
+            || $day < 1 || $day > 31
+            || $hour < 0 || $hour > 23
+            || $minute < 0 || $minute > 59
+        ) {
+            return null;
+        }
+
+        try {
+            return Carbon::createFromFormat(
+                'Y-m-d H:i',
+                sprintf('%04d-%02d-%02d %02d:%02d', $year, $month, $day, $hour, $minute),
+                config('app.timezone'),
+            );
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function formatWpScheduleLabel(Carbon $dt): string
+    {
+        $weekdayMap = [
+            0 => 'CN',
+            1 => 'Th2',
+            2 => 'Th3',
+            3 => 'Th4',
+            4 => 'Th5',
+            5 => 'Th6',
+            6 => 'Th7',
+        ];
+
+        $weekday = $weekdayMap[(int) $dt->dayOfWeek] ?? 'Th';
+
+        return sprintf('%s %d, %d lúc %02d:%02d', $weekday, (int) $dt->day, (int) $dt->year, (int) $dt->hour, (int) $dt->minute);
     }
 }

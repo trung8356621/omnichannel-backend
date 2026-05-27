@@ -22,6 +22,7 @@ use App\Addons\SeoContentAi\Services\PromptTestPublishService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\WordPressCommentReviewService;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
+use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\PromptTokenUsage;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\Site;
@@ -302,6 +303,7 @@ class TestPrompt extends Page implements HasForms
         $this->selectedResultId = $resultId;
         $this->applyResultToView($result);
         $this->applyChainStateFromResult($result);
+        $this->syncTestResultSeoMediaContext();
         unset($this->promptResults);
     }
 
@@ -472,7 +474,13 @@ class TestPrompt extends Page implements HasForms
 
         try {
             $runFullChain = ! $this->hasDependentSubTasks;
-            $result = $runner->run($this->getPrompt(), $normalized, null, false, $runFullChain);
+            $persistContext = $this->resolvePromptMediaPersistContext($normalized);
+            $result = PromptMediaPersistContext::using(
+                $persistContext['site_id'],
+                $persistContext['article_id'],
+                $persistContext['prompt_id'],
+                fn () => $runner->run($this->getPrompt(), $normalized, null, false, $runFullChain),
+            );
 
             if ($this->usesStepByStepChain()) {
                 $this->chainParentCompleted = true;
@@ -569,13 +577,19 @@ class TestPrompt extends Page implements HasForms
         $subTaskIndex = $this->chainSubTasksCompleted;
 
         try {
-            $result = $runner->run(
-                $this->getPrompt(),
-                $normalized,
-                null,
-                false,
-                true,
-                $subTaskIndex,
+            $persistContext = $this->resolvePromptMediaPersistContext($normalized);
+            $result = PromptMediaPersistContext::using(
+                $persistContext['site_id'],
+                $persistContext['article_id'],
+                $persistContext['prompt_id'],
+                fn () => $runner->run(
+                    $this->getPrompt(),
+                    $normalized,
+                    null,
+                    false,
+                    true,
+                    $subTaskIndex,
+                ),
             );
 
             $this->chainLastOutput = (string) ($result->output_text ?? '');
@@ -621,8 +635,6 @@ class TestPrompt extends Page implements HasForms
     public function refreshCompiledPreview(): void
     {
         $this->getRecord()->refresh();
-        $this->getPrompt()->unsetRelation('parts');
-        $this->getPrompt()->load(['parts' => static fn ($query) => $query->orderBy('position')]);
 
         $values = $this->form->getState();
         $normalized = [];
@@ -775,6 +787,61 @@ class TestPrompt extends Page implements HasForms
     public function isVideoToolPrompt(): bool
     {
         return trim((string) ($this->getPrompt()->tools ?? 'default')) === 'video';
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{site_id: ?int, article_id: ?int, prompt_id: ?int}
+     */
+    protected function resolvePromptMediaPersistContext(array $variables): array
+    {
+        $articleId = null;
+
+        if ($this->publishArticleId !== null && $this->publishArticleId > 0) {
+            $articleId = $this->publishArticleId;
+        } elseif (filled($variables['article_id'] ?? null)) {
+            $articleId = (int) $variables['article_id'];
+        }
+
+        $siteId = null;
+        if ($articleId !== null && $articleId > 0) {
+            $siteId = (int) (SeoArticle::query()->whereKey($articleId)->value('site_id') ?? 0);
+        }
+
+        if (($siteId === null || $siteId <= 0) && $this->promptUsesLoaiSanPham) {
+            $siteId = (int) ($variables[PromptLoaiSanPhamVariable::SITE_FIELD] ?? 0);
+        }
+
+        return [
+            'site_id' => $siteId > 0 ? $siteId : null,
+            'article_id' => $articleId > 0 ? $articleId : null,
+            'prompt_id' => (int) $this->getPrompt()->id,
+        ];
+    }
+
+    protected function syncTestResultSeoMediaContext(): void
+    {
+        if (! $this->isImageToolPrompt() && ! $this->isVideoToolPrompt()) {
+            return;
+        }
+
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            return;
+        }
+
+        $context = $this->resolvePromptMediaPersistContext($this->normalizedVariableValues());
+        PromptMediaPersistContext::using(
+            $context['site_id'],
+            $context['article_id'],
+            $context['prompt_id'],
+            static function () use ($media): void {
+                $updates = PromptMediaPersistContext::fillMissingOnMedia($media);
+                if ($updates !== []) {
+                    $media->update($updates);
+                }
+            },
+        );
     }
 
     public function testResultSiteId(): ?int

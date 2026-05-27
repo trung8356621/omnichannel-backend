@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -14,27 +15,65 @@ use Illuminate\Support\Str;
  */
 final class PromptMediaStorageService
 {
+    private ?SeoMedia $persistTarget = null;
+
     public function __construct(
         private readonly SeoMediaStorageService $mediaStorage,
+        private readonly SeoMediaPathAllocator $mediaPaths,
     ) {}
+
+    /**
+     * Ghi file kết quả AI vào đúng bản ghi seo_media placeholder (không tạo bản ghi mới).
+     *
+     * @template T
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    public function usingTargetMedia(?SeoMedia $media, callable $callback): mixed
+    {
+        $previous = $this->persistTarget;
+        $this->persistTarget = $media;
+
+        try {
+            return $callback();
+        } finally {
+            $this->persistTarget = $previous;
+        }
+    }
 
     /**
      * Nếu $rawOutput chứa URL media hợp lệ — tải, lưu disk public + seo_media, trả URL nội bộ (/storage/...).
      */
-    public function persistRemoteMediaIfPresent(string $rawOutput, string $toolType, ?string $aiGenerator = null): string
-    {
+    public function persistRemoteMediaIfPresent(
+        string $rawOutput,
+        string $toolType,
+        ?string $aiGenerator = null,
+        ?SeoMedia $targetMedia = null,
+    ): string {
+        $targetMedia ??= $this->persistTarget;
+
         if (! in_array($toolType, ['image', 'video'], true)) {
             return $rawOutput;
         }
 
         $firstLine = trim(strtok($rawOutput, "\n") ?: $rawOutput);
         if (str_starts_with($firstLine, '/storage/')) {
+            if ($targetMedia instanceof SeoMedia && ! str_contains($firstLine, 'placeholder-loading')) {
+                $this->attachStoredPathToMedia($targetMedia, ltrim(substr($firstLine, strlen('/storage/')), '/'), $aiGenerator);
+            }
+
             return $firstLine;
         }
 
         $remoteUrl = $this->extractUrl($rawOutput);
         if ($remoteUrl === '' || ! filter_var($remoteUrl, FILTER_VALIDATE_URL)) {
             return $rawOutput;
+        }
+
+        if ($targetMedia instanceof SeoMedia) {
+            $storedUrl = $this->downloadAndStore($remoteUrl, $toolType, $aiGenerator, $targetMedia);
+
+            return $storedUrl ?? $rawOutput;
         }
 
         $storedUrl = $this->downloadAndStore($remoteUrl, $toolType, $aiGenerator);
@@ -50,26 +89,37 @@ final class PromptMediaStorageService
         string $mimeType,
         string $toolType = 'image',
         ?string $aiGenerator = null,
-    ): string
-    {
+        ?SeoMedia $targetMedia = null,
+    ): string {
+        $targetMedia ??= $this->persistTarget;
+
         $ext = $this->extensionFromMime($mimeType, $toolType);
-        $randomFolder = Str::random(10);
-        $slug = 'gen-' . time() . '-' . random_int(100, 999);
-        $filename = "{$slug}.{$ext}";
-        $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+        $slug = $targetMedia instanceof SeoMedia && trim((string) $targetMedia->slug) !== ''
+            ? (string) $targetMedia->slug
+            : 'gen-' . time() . '-' . random_int(100, 999);
+        $allocated = $this->mediaPaths->allocate($slug, $ext);
+        $slug = $allocated['slug'];
+        $filename = $allocated['filename'];
+        $relativePath = $allocated['relative_path'];
 
         Storage::disk('public')->put($relativePath, $binary);
 
         $publicUrl = $this->mediaStorage->urlForPath($relativePath);
 
-        SeoMedia::query()->create([
+        if ($targetMedia instanceof SeoMedia) {
+            $this->attachStoredPathToMedia($targetMedia, $relativePath, $aiGenerator, $filename, $slug);
+
+            return $publicUrl;
+        }
+
+        SeoMedia::query()->create(array_merge([
             'filename' => $filename,
             'slug' => $slug,
             'path' => $relativePath,
             'url' => $publicUrl,
             'source' => 'ai_prompt',
             'ai_generator' => $aiGenerator !== null ? trim($aiGenerator) : null,
-        ]);
+        ], PromptMediaPersistContext::attributesForNewRecord()));
 
         return $publicUrl;
     }
@@ -79,8 +129,14 @@ final class PromptMediaStorageService
         return $this->resolveExtension('', $toolType, $mimeType);
     }
 
-    private function downloadAndStore(string $remoteUrl, string $toolType, ?string $aiGenerator = null): ?string
-    {
+    private function downloadAndStore(
+        string $remoteUrl,
+        string $toolType,
+        ?string $aiGenerator = null,
+        ?SeoMedia $targetMedia = null,
+    ): ?string {
+        $targetMedia ??= $this->persistTarget;
+
         try {
             $response = Http::timeout(120)->get($remoteUrl);
             if (! $response->successful()) {
@@ -93,28 +149,64 @@ final class PromptMediaStorageService
             }
 
             $ext = $this->resolveExtension($remoteUrl, $toolType, (string) $response->header('Content-Type'));
-            $randomFolder = Str::random(10);
-            $slug = 'gen-' . time() . '-' . random_int(100, 999);
-            $filename = "{$slug}.{$ext}";
-            $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+            $slug = $targetMedia instanceof SeoMedia && trim((string) $targetMedia->slug) !== ''
+                ? (string) $targetMedia->slug
+                : 'gen-' . time() . '-' . random_int(100, 999);
+            $allocated = $this->mediaPaths->allocate($slug, $ext);
+            $slug = $allocated['slug'];
+            $filename = $allocated['filename'];
+            $relativePath = $allocated['relative_path'];
 
             Storage::disk('public')->put($relativePath, $fileData);
 
             $publicUrl = $this->mediaStorage->urlForPath($relativePath);
 
-            SeoMedia::query()->create([
+            if ($targetMedia instanceof SeoMedia) {
+                $this->attachStoredPathToMedia($targetMedia, $relativePath, $aiGenerator, $filename, $slug);
+
+                return $publicUrl;
+            }
+
+            SeoMedia::query()->create(array_merge([
                 'filename' => $filename,
                 'slug' => $slug,
                 'path' => $relativePath,
                 'url' => $publicUrl,
                 'source' => 'ai_prompt',
                 'ai_generator' => $aiGenerator !== null ? trim($aiGenerator) : null,
-            ]);
+            ], PromptMediaPersistContext::attributesForNewRecord()));
 
             return $publicUrl;
         } catch (\Throwable) {
             return null;
         }
+    }
+
+    private function attachStoredPathToMedia(
+        SeoMedia $media,
+        string $relativePath,
+        ?string $aiGenerator = null,
+        ?string $filename = null,
+        ?string $slug = null,
+    ): void {
+        $relativePath = ltrim(str_replace('\\', '/', $relativePath), '/');
+        $filename = $filename ?? basename($relativePath);
+        $slug = $slug ?? (string) ($media->slug ?? pathinfo($filename, PATHINFO_FILENAME));
+
+        $payload = [
+            'filename' => $filename,
+            'slug' => $slug,
+            'path' => $relativePath,
+            'url' => $this->mediaStorage->urlForPath($relativePath),
+        ];
+
+        if ($aiGenerator !== null && trim($aiGenerator) !== '') {
+            $payload['ai_generator'] = trim($aiGenerator);
+        }
+
+        $payload = array_merge($payload, PromptMediaPersistContext::fillMissingOnMedia($media));
+
+        $media->update($payload);
     }
 
     private function resolveExtension(string $remoteUrl, string $toolType, string $contentType): string

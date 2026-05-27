@@ -15,6 +15,7 @@ class SeoMediaStorageService
 {
     public function __construct(
         private readonly SeoImageOptimizationService $optimization,
+        private readonly SeoMediaPathAllocator $mediaPaths,
     ) {}
 
     public function storeUpload(
@@ -146,19 +147,18 @@ class SeoMediaStorageService
             throw new \InvalidArgumentException('Slug không hợp lệ.');
         }
 
-        $oldPath = (string) $media->path;
-        $extension = pathinfo($oldPath, PATHINFO_EXTENSION) ?: pathinfo((string) $media->filename, PATHINFO_EXTENSION);
-        $directory = dirname(str_replace('\\', '/', $oldPath));
-        $newFilename = $newSlug . ($extension !== '' ? '.' . $extension : '');
-        $newPath = $directory . '/' . $newFilename;
+        $oldPath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
+        $extension = (string) (pathinfo($oldPath, PATHINFO_EXTENSION) ?: pathinfo((string) $media->filename, PATHINFO_EXTENSION));
+        $allocated = $this->mediaPaths->allocate($newSlug, $extension, $oldPath);
+        $newPath = $allocated['relative_path'];
+        $newSlug = $allocated['slug'];
+        $newFilename = $allocated['filename'];
 
         $disk = Storage::disk('public');
         if ($disk->exists($oldPath)) {
-            if ($disk->exists($newPath) && $newPath !== $oldPath) {
-                throw new \RuntimeException('Đã tồn tại file cùng tên trong thư mục.');
+            if ($newPath !== $oldPath) {
+                $disk->move($oldPath, $newPath);
             }
-
-            $disk->move($oldPath, $newPath);
         }
 
         $media->update([

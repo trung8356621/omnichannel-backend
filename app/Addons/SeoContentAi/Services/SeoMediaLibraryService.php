@@ -19,12 +19,18 @@ class SeoMediaLibraryService
      *     error: string|null,
      * }
      */
-    public function fetch(Site $site, ?string $month, int $page = 1, ?string $search = null, int $perPage = 48): array
-    {
+    public function fetch(
+        Site $site,
+        ?string $month,
+        int $page = 1,
+        ?string $search = null,
+        int $perPage = 48,
+        ?int $articleId = null,
+    ): array {
         $perPage = max(1, min(100, $perPage));
         $page = max(1, $page);
 
-        $rows = $this->queryMedia($site, $month, $search)->get();
+        $rows = $this->queryMedia($site, $month, $search, $articleId)->get();
 
         $merged = $rows
             ->map(fn (SeoMedia $media): array => $this->mapMediaItem($media))
@@ -55,11 +61,63 @@ class SeoMediaLibraryService
     /**
      * @return \Illuminate\Database\Eloquent\Builder<SeoMedia>
      */
-    private function queryMedia(Site $site, ?string $month, ?string $search)
+    /**
+     * Gắn ảnh test prompt (chưa có site) với bài viết đang mở — tối đa vài bản ghi mới nhất.
+     */
+    public function assignRecentOrphanMediaToArticle(Site $site, int $articleId): int
     {
-        $query = SeoMedia::query()
-            ->where('site_id', $site->id)
-            ->orderByDesc('id');
+        if ($articleId <= 0) {
+            return 0;
+        }
+
+        $ids = SeoMedia::query()
+            ->whereNull('site_id')
+            ->whereNull('article_id')
+            ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
+            ->where('created_at', '>=', now()->subHours(24))
+            ->where('path', 'not like', '%placeholder-loading%')
+            ->where(function ($query): void {
+                $query->whereNull('status')
+                    ->orWhere('status', 'completed');
+            })
+            ->orderByDesc('id')
+            ->limit(5)
+            ->pluck('id');
+
+        if ($ids->isEmpty()) {
+            return 0;
+        }
+
+        return SeoMedia::query()
+            ->whereIn('id', $ids)
+            ->update([
+                'site_id' => $site->id,
+                'article_id' => $articleId,
+            ]);
+    }
+
+    /**
+     * @return \Illuminate\Database\Eloquent\Builder<SeoMedia>
+     */
+    private function queryMedia(Site $site, ?string $month, ?string $search, ?int $articleId = null)
+    {
+        $query = SeoMedia::query();
+
+        if ($articleId !== null && $articleId > 0) {
+            $query->where(function ($q) use ($site, $articleId): void {
+                $q->where('site_id', $site->id)
+                    ->orWhere('article_id', $articleId);
+            });
+        } else {
+            $query->where('site_id', $site->id);
+        }
+
+        $query->orderByDesc('id');
+
+        $query->where(function ($statusQuery): void {
+            $statusQuery->whereNull('status')
+                ->orWhere('status', 'completed');
+        });
 
         $this->applyMonthFilter($query, 'created_at', $month);
 

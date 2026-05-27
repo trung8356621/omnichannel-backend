@@ -55,6 +55,54 @@ final class Utf8Sanitizer
     }
 
     /**
+     * Chuẩn hóa biến trước khi gửi AI: trim + gộp khoảng trắng dư nhưng vẫn giữ ý theo đoạn.
+     *
+     * @param  array<string, string>  $variables
+     * @return array<string, string>
+     */
+    public static function variablesForAi(array $variables): array
+    {
+        $normalized = [];
+
+        foreach ($variables as $key => $value) {
+            $normalized[(string) $key] = self::compactForAiVariable(
+                is_string($value) ? $value : (string) $value
+            );
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Nén khoảng trắng theo hướng tiết kiệm token:
+     * - trim từng dòng
+     * - gộp tab/khoảng trắng liên tiếp trong dòng
+     * - chuẩn hóa line break và rút gọn block dòng trống dài
+     */
+    public static function compactForAiVariable(string $value): string
+    {
+        $value = self::string($value);
+        if ($value === '') {
+            return '';
+        }
+
+        $value = str_replace(["\r\n", "\r"], "\n", $value);
+        $lines = explode("\n", $value);
+        $normalizedLines = [];
+
+        foreach ($lines as $line) {
+            $line = self::string($line);
+            $line = (string) preg_replace('/[^\S\n]+/u', ' ', $line);
+            $normalizedLines[] = trim($line);
+        }
+
+        $value = implode("\n", $normalizedLines);
+        $value = (string) preg_replace("/\n{3,}/", "\n\n", $value);
+
+        return trim($value);
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>
      */

@@ -16,14 +16,14 @@ trait InteractsWithTaskWorkflow
     {
         return SeoPrompt::query()
             ->where('is_active', true)
-            ->with(['parts' => fn ($q) => $q->orderBy('position'), 'aiConnection'])
+            ->with('aiConnection')
             ->orderBy('name')
             ->get()
             ->map(function (SeoPrompt $prompt): array {
-                $tasks = $prompt->parts
+                $tasks = $prompt->resolvedParts()
                     ->where('role', 'task')
-                    ->map(fn ($part) => [
-                        'id' => 'part_' . $part->id,
+                    ->map(static fn ($part, int $index): array => [
+                        'id' => 'part_' . $prompt->id . '_' . (int) ($part->position ?? $index),
                         'name' => (string) ($part->name ?: 'Nhiệm vụ'),
                     ])
                     ->values()

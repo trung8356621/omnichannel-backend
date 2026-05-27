@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
@@ -16,6 +17,7 @@ use App\Models\Site;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class SeoMediaController extends Controller
@@ -129,6 +131,57 @@ class SeoMediaController extends Controller
 
         return response()->json([
             'success' => true,
+            'url' => $media->publicUrl(),
+            'slug' => $media->slug,
+            'id' => (int) $media->id,
+        ]);
+    }
+
+    public function renameByUrl(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'url' => ['required', 'string', 'max:2048'],
+            'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
+        ]);
+
+        $url = trim((string) $validated['url']);
+        $path = $url;
+        if (Str::startsWith($url, ['http://', 'https://'])) {
+            $parsed = parse_url($url, PHP_URL_PATH);
+            $path = is_string($parsed) ? $parsed : '';
+        }
+
+        $path = trim($path);
+        if (! Str::startsWith($path, '/storage/')) {
+            throw ValidationException::withMessages(['url' => 'URL ảnh không hợp lệ (cần /storage/...).']);
+        }
+
+        $relativePath = ltrim(Str::after($path, '/storage/'), '/');
+        if ($relativePath === '') {
+            throw ValidationException::withMessages(['url' => 'Không xác định được đường dẫn ảnh.']);
+        }
+
+        $media = SeoMedia::query()->where('path', $relativePath)->first();
+        if (! $media instanceof SeoMedia) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy ảnh nội bộ theo URL.',
+            ], 404);
+        }
+
+        abort_unless($this->canAccessMedia($media), 403);
+
+        try {
+            $media = $this->storage->renameBySlug($media, (string) $validated['new_slug']);
+        } catch (\InvalidArgumentException $e) {
+            throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
+        } catch (\RuntimeException $e) {
+            throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
+        }
+
+        return response()->json([
+            'success' => true,
+            'id' => (int) $media->id,
             'url' => $media->publicUrl(),
             'slug' => $media->slug,
         ]);
@@ -335,6 +388,111 @@ class SeoMediaController extends Controller
             'message' => 'Lưu ảnh thành công',
             'url' => $media->fresh()->publicUrl() . '?t=' . time(),
         ]);
+    }
+
+    public function status(SeoMedia $media): JsonResponse
+    {
+        abort_unless($this->canAccessMedia($media), 403);
+
+        return response()->json([
+            'success' => true,
+            ...$this->formatAiMediaPayload($media),
+        ]);
+    }
+
+    public function articleAiJobs(SeoArticle $article): JsonResponse
+    {
+        abort_unless($this->canAccessArticle($article), 403);
+
+        app(ArticleEditorMediaAiService::class)->reconcileStaleAiMediaJobs((int) $article->id);
+
+        $items = SeoMedia::query()
+            ->where('article_id', (int) $article->id)
+            ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
+            ->whereIn('status', ['processing', 'failed'])
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (SeoMedia $media): array => $this->formatAiMediaPayload($media))
+            ->values()
+            ->all();
+
+        return response()->json([
+            'success' => true,
+            'items' => $items,
+        ]);
+    }
+
+    public function retryGeneration(SeoMedia $media): JsonResponse
+    {
+        abort_unless($this->canAccessMedia($media), 403);
+
+        try {
+            $media = app(ArticleEditorMediaAiService::class)->retryGeneration($media);
+        } catch (\InvalidArgumentException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã đưa job vào hàng đợi lại.',
+            ...$this->formatAiMediaPayload($media),
+        ]);
+    }
+
+    public function deleteAiJob(SeoMedia $media): JsonResponse
+    {
+        abort_unless($this->canAccessMedia($media), 403);
+
+        if (! $media->isAiGenerationJob()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Chỉ hỗ trợ xóa job ảnh/video AI.',
+            ], 422);
+        }
+
+        $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+        $isSharedPlaceholder = $path === SeoMedia::placeholderLoadingPath();
+        $isUploadedFile = str_starts_with($path, 'uploads/seo_media/');
+
+        if (! $isSharedPlaceholder && $isUploadedFile && Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
+
+        $media->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã xóa job AI.',
+        ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function formatAiMediaPayload(SeoMedia $media): array
+    {
+        $status = (string) ($media->status ?? 'completed');
+        $url = (string) ($media->url ?? '');
+
+        if ($url === '') {
+            $url = $media->publicUrl();
+        }
+
+        return [
+            'id' => (int) $media->id,
+            'status' => $status,
+            'url' => $url,
+            'error_message' => $media->error_message,
+            'source' => (string) ($media->source ?? ''),
+            'media_type' => $media->aiToolType(),
+            'editor_block_id' => (string) ($media->editor_block_id ?? ''),
+            'slug' => (string) ($media->slug ?? ''),
+            'created_at' => $media->created_at?->toIso8601String(),
+            'is_placeholder' => $status === 'processing' || str_contains($url, 'placeholder-loading'),
+        ];
     }
 
     private function canAccessMedia(SeoMedia $media): bool

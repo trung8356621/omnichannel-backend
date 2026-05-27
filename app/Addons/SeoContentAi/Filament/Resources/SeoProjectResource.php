@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use App\Models\User;
 use Carbon\Carbon;
@@ -42,6 +43,26 @@ class SeoProjectResource extends Resource
     protected static ?string $pluralModelLabel = 'Dự án Content';
 
     protected static ?int $navigationSort = 8;
+
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canCreate(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
 
     public static function form(Form $form): Form
     {
@@ -163,9 +184,11 @@ class SeoProjectResource extends Resource
                                 Forms\Components\Select::make('site_id')
                                     ->label('Tên miền')
                                     ->options(fn (): array => static::siteSelectOptions())
+                                    ->default(fn (): ?int => SeoAccessControl::globalSiteId())
+                                    ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
                                     ->searchable()
                                     ->preload()
-                                    ->required()
+                                    ->required(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                                     ->native(false)
                                     ->dehydrateStateUsing(fn (mixed $state): ?int => $state !== null && $state !== ''
                                         ? (int) $state
@@ -314,7 +337,13 @@ class SeoProjectResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with('user');
+        $query = parent::getEloquentQuery()->with('user');
+
+        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
+            $query->whereHas('tasks', fn (Builder $taskQuery): Builder => $taskQuery->where('site_id', $globalSiteId));
+        }
+
+        return $query;
     }
 
     public static function getRelations(): array

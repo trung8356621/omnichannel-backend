@@ -35,6 +35,7 @@ export function useArticleEditorHistory({
     const [future, setFuture] = useState([]);
     const lastRecordedRef = useRef(null);
     const isRestoringRef = useRef(false);
+    const suppressHistoryRef = useRef(false);
     const blocksRef = useRef(blocks);
     blocksRef.current = blocks;
 
@@ -83,8 +84,25 @@ export function useArticleEditorHistory({
             isRestoringRef.current = false;
             return;
         }
+
+        if (suppressHistoryRef.current) {
+            suppressHistoryRef.current = false;
+            if (blocks?.length) {
+                lastRecordedRef.current = JSON.stringify(cloneBlocks(blocks));
+            }
+            return;
+        }
+
         debouncedRecord(blocks);
     }, [blocks, debouncedRecord]);
+
+    const updateBlocksWithoutHistory = useCallback(
+        (updater) => {
+            suppressHistoryRef.current = true;
+            setBlocks(updater);
+        },
+        [setBlocks],
+    );
 
     const applySnapshot = useCallback(
         (snapshot) => {
@@ -133,5 +151,6 @@ export function useArticleEditorHistory({
         canUndo: past.length > 0,
         canRedo: future.length > 0,
         historySteps: { undo: past.length, redo: future.length, max: maxSteps },
+        updateBlocksWithoutHistory,
     };
 }

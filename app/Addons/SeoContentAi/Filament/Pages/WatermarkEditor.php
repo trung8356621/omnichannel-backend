@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWatermarkOverlayStorage;
 use App\Models\Site;
 use Filament\Pages\Page;
@@ -148,5 +149,10 @@ class WatermarkEditor extends Page
         }
 
         return $query;
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
     }
 }

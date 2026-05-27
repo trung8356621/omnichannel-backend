@@ -40,11 +40,6 @@ class Prompt extends Model
         return $this->belongsToOnDefaultConnection(ApiConnection::class, 'ai_connection_id');
     }
 
-    public function promptParts(): HasMany
-    {
-        return $this->hasMany(PromptPart::class);
-    }
-
     public function promptResults(): HasMany
     {
         return $this->hasMany(PromptResult::class);

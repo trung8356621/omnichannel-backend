@@ -52,9 +52,6 @@
         x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
         x-on:generate-article-image.window="$wire.generateArticleImageFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
         x-on:generate-article-video.window="$wire.generateArticleVideoFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
-        @article-ai-image-generated.window="window.dispatchEvent(new CustomEvent('article-ai-image-generated', { detail: $event.detail }))"
-        @article-ai-video-generated.window="window.dispatchEvent(new CustomEvent('article-ai-video-generated', { detail: $event.detail }))"
-        @article-ai-media-failed.window="window.dispatchEvent(new CustomEvent('article-ai-media-failed', { detail: $event.detail }))"
         x-on:check-faq-question.window="
             $wire.checkFaqQuestionDuplicate($event.detail.question, $event.detail.faqId).then((result) => {
                 window.dispatchEvent(new CustomEvent('faq-duplicate-checked', {
@@ -132,7 +129,7 @@
                 <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
                 <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
-                <script type="application/json" id="seo-article-meta">@json(['id' => $record->id, 'site_id' => $record->site_id, 'title' => $articleTitle])</script>
+                <script type="application/json" id="seo-article-meta">@json($this->getEditorMetaPayload())</script>
                 <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
 
@@ -165,41 +162,149 @@
                 <div class="wp-postbox">
                     <div class="wp-postbox-header">
                         <h2>Xuất bản</h2>
-                        <a
-                            href="{{ $this->getArticlePreviewUrl() }}"
-                            target="_blank"
-                            rel="noopener"
-                            class="text-xs text-sky-600 hover:underline"
-                        >
-                            Xem trước (Laravel)
-                        </a>
                     </div>
                     <div class="wp-postbox-inside space-y-3 text-sm">
-                        <div class="flex justify-between gap-2">
-                            <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
-                            <select
-                                wire:model.live="articleStatus"
-                                class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                        <div class="flex justify-end">
+                            <a
+                                href="{{ $this->getArticlePreviewUrl() }}"
+                                target="_blank"
+                                rel="noopener"
+                                class="inline-flex items-center rounded border border-sky-600 px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:border-sky-500 dark:text-sky-300 dark:hover:bg-sky-950/50"
                             >
-                                <option value="draft">Bản nháp</option>
-                                <option value="published">Đã xuất bản</option>
-                                <option value="scheduled">Hẹn giờ</option>
-                                <option value="private">Riêng tư</option>
-                            </select>
+                                Xem trước
+                            </a>
                         </div>
-                        @if ($this->getPublishedAtLabel())
-                            <div class="flex justify-between gap-2">
-                                <span class="text-gray-500 dark:text-gray-400">Xuất bản:</span>
-                                <span>{{ $this->getPublishedAtLabel() }}</span>
+
+                        <div class="space-y-3 border-y border-gray-200 py-3 dark:border-gray-700">
+                            <div class="text-xs">
+                                <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
+                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getStatusLabelForPublishBox() }}</strong>
+                                <button
+                                    type="button"
+                                    wire:click="startStatusEdit"
+                                    class="ml-1 text-sky-600 hover:underline"
+                                >
+                                    Chỉnh sửa
+                                </button>
+                                @if ($editingStatus)
+                                    <div class="mt-2 flex items-center gap-2">
+                                        <select
+                                            wire:model.live="articleStatus"
+                                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                                        >
+                                            <option value="draft">Bản nháp</option>
+                                            <option value="published">Đã xuất bản</option>
+                                            <option value="scheduled">Đã lên lịch</option>
+                                            <option value="private">Riêng tư</option>
+                                        </select>
+                                        <button type="button" wire:click="applyStatusEdit" class="text-sky-600 hover:underline">Đồng ý</button>
+                                        <button type="button" wire:click="cancelStatusEdit" class="text-sky-600 hover:underline">Hủy</button>
+                                    </div>
+                                @endif
                             </div>
-                        @endif
+
+                            <div class="text-xs">
+                                <span class="text-gray-500 dark:text-gray-400">Hiển thị:</span>
+                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getVisibilityLabel() }}</strong>
+                                <button
+                                    type="button"
+                                    wire:click="startVisibilityEdit"
+                                    class="ml-1 text-sky-600 hover:underline"
+                                >
+                                    Chỉnh sửa
+                                </button>
+                                @if ($editingVisibility)
+                                    <div class="mt-2 flex items-center gap-2">
+                                        <select
+                                            wire:model.live="visibility"
+                                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                                        >
+                                            <option value="public">Công khai</option>
+                                            <option value="private">Riêng tư</option>
+                                        </select>
+                                        <button type="button" wire:click="applyVisibilityEdit" class="text-sky-600 hover:underline">Đồng ý</button>
+                                        <button type="button" wire:click="cancelVisibilityEdit" class="text-sky-600 hover:underline">Hủy</button>
+                                    </div>
+                                @endif
+                            </div>
+
+                            <div class="text-xs">
+                                <span class="text-gray-500 dark:text-gray-400">Bài lên lịch:</span>
+                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getPublishWhenLabel() }}</strong>
+                                <button
+                                    type="button"
+                                    wire:click="startPublishAtEdit"
+                                    class="ml-1 text-sky-600 hover:underline"
+                                >
+                                    Chỉnh sửa
+                                </button>
+                                @if ($editingPublishAt)
+                                    <div
+                                        class="mt-2 space-y-2"
+                                        x-data="{
+                                            day: @entangle('publishDay').live,
+                                            month: @entangle('publishMonth').live,
+                                            year: @entangle('publishYear').live,
+                                            hour: @entangle('publishHour').live,
+                                            minute: @entangle('publishMinute').live,
+                                            iso: '',
+                                            init() {
+                                                this.rebuildIso();
+                                                this.$watch('day', () => this.rebuildIso());
+                                                this.$watch('month', () => this.rebuildIso());
+                                                this.$watch('year', () => this.rebuildIso());
+                                                this.$watch('hour', () => this.rebuildIso());
+                                                this.$watch('minute', () => this.rebuildIso());
+                                            },
+                                            pad(v) {
+                                                const n = Number(v || 0);
+                                                if (Number.isNaN(n)) return '00';
+                                                return String(n).padStart(2, '0');
+                                            },
+                                            rebuildIso() {
+                                                const y = String(this.year || '').padStart(4, '0');
+                                                const m = this.pad(this.month);
+                                                const d = this.pad(this.day);
+                                                const h = this.pad(this.hour);
+                                                const i = this.pad(this.minute);
+                                                this.iso = `${y}-${m}-${d}T${h}:${i}`;
+                                            },
+                                            applyIso() {
+                                                if (!this.iso || !this.iso.includes('T')) return;
+                                                const [datePart, timePart] = this.iso.split('T');
+                                                const [y, m, d] = datePart.split('-');
+                                                const [h, i] = timePart.split(':');
+                                                this.year = y || this.year;
+                                                this.month = m || this.month;
+                                                this.day = d || this.day;
+                                                this.hour = h || this.hour;
+                                                this.minute = i || this.minute;
+                                            }
+                                        }"
+                                    >
+                                        <input
+                                            x-model="iso"
+                                            x-on:change="applyIso()"
+                                            type="datetime-local"
+                                            step="60"
+                                            class="seo-publish-datetime-input rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1.5 px-2"
+                                        />
+                                    </div>
+                                    <div class="mt-1 flex items-center gap-2">
+                                        <button type="button" wire:click="applyPublishAtEdit" class="text-sky-600 hover:underline">Đồng ý</button>
+                                        <button type="button" wire:click="cancelPublishAtEdit" class="text-sky-600 hover:underline">Hủy</button>
+                                    </div>
+                                @endif
+                            </div>
+                        </div>
+
                         @if ($record->wp_post_id)
                             <div class="text-xs text-gray-500">WordPress ID: {{ $record->wp_post_id }}</div>
                         @endif
                         <p class="text-xs text-gray-500 dark:text-gray-400">
                             Nháp editor lưu cục bộ trong trình duyệt. «Lưu» ghi vào hệ thống SEO; «Đồng bộ» đẩy lên WordPress.
                         </p>
-                        <div class="seo-article-actions flex flex-col gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                        <div class="seo-article-actions flex flex-col gap-2 pt-2">
                             <button
                                 type="button"
                                 wire:click="requestSaveArticle"
@@ -207,7 +312,9 @@
                                 wire:target="requestSaveArticle,persistArticleLocal"
                                 class="seo-wp-btn-primary w-full"
                             >
-                                <span wire:loading.remove wire:target="requestSaveArticle,persistArticleLocal">Lưu</span>
+                                <span wire:loading.remove wire:target="requestSaveArticle,persistArticleLocal">
+                                    {{ $articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật' }}
+                                </span>
                                 <span wire:loading wire:target="requestSaveArticle,persistArticleLocal">Đang lưu…</span>
                             </button>
                             <button
@@ -356,12 +463,29 @@
                     </button>
                 </div>
 
+                <div class="seo-article-media-modal__tabs">
+                    <button
+                        type="button"
+                        wire:click="setMediaPickerTab('original')"
+                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'original' ? 'is-active' : '' }}"
+                    >
+                        Gốc (WP)
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="setMediaPickerTab('local')"
+                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'local' ? 'is-active' : '' }}"
+                    >
+                        Nội bộ (Laravel)
+                    </button>
+                </div>
+
                 <div class="seo-article-media-modal__toolbar">
                     <input
                         type="search"
                         wire:model.live.debounce.400ms="mediaPickerSearch"
                         class="seo-article-media-modal__search"
-                        placeholder="Tìm slug, alt, caption (WP search)…"
+                        placeholder="{{ $mediaPickerTab === 'local' ? 'Tìm slug, alt, tên file (Laravel)…' : 'Tìm slug, alt, caption (WP search)…' }}"
                         autocomplete="off"
                         x-on:keydown.escape="closeArticleMediaModal()"
                     />
@@ -393,12 +517,12 @@
                                     <button
                                         type="button"
                                         class="seo-article-media-modal__item"
-                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? $image['id']) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''))"
-                                        wire:key="picker-media-{{ $mediaPickerPage }}-{{ $image['id'] }}"
+                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? 0) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''), {{ (int) ($image['seo_media_id'] ?? ($mediaPickerTab === 'local' ? ($image['id'] ?? 0) : 0)) }})"
+                                        wire:key="picker-media-{{ $mediaPickerTab }}-{{ $mediaPickerPage }}-{{ $image['id'] }}"
                                     >
                                         <img
                                             src="{{ $image['url'] }}"
-                                            alt="{{ $image['alt'] ?: $image['slug'] }}"
+                                            alt="{{ $image['alt'] ?? $image['slug'] }}"
                                             loading="lazy"
                                             class="seo-article-media-modal__thumb"
                                         />

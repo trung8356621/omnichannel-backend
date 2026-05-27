@@ -3,10 +3,17 @@ const IMPORT_URL = '/api/seo/media/import-url';
 const PREPARE_EDITOR_URL = '/api/seo/media/prepare-editor';
 const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
+const RENAME_BY_URL = '/api/seo/media/rename-by-url';
 const SAVE_EDITED_URL_TEMPLATE = '/api/seo/media/{id}/save-edited';
 const MEDIA_IMAGE_EDITOR_PATH = '/seo/media-image-editor';
 const SPLITTER_SOURCE_URL = '/api/seo/media/splitter-source';
 const SAVE_SPLIT_URL = '/api/seo/media/save-split';
+const ARTICLE_AI_JOBS_URL_TEMPLATE = '/api/seo/media/article/{articleId}/ai-jobs';
+const MEDIA_STATUS_URL_TEMPLATE = '/api/seo/media/{id}/status';
+const MEDIA_RETRY_URL_TEMPLATE = '/api/seo/media/{id}/retry-generation';
+const MEDIA_DELETE_AI_JOB_URL_TEMPLATE = '/api/seo/media/{id}/ai-job';
+
+export const AI_PLACEHOLDER_LOADING_URL = '/storage/assets/images/placeholder-loading.svg';
 
 /** URL tương đối /storage/... — tránh lệch host/port khi APP_URL khác origin trình duyệt. */
 export function normalizeSeoMediaUrl(url) {
@@ -419,6 +426,32 @@ export async function renameSeoMedia(mediaId, newSlug) {
     return data;
 }
 
+export async function renameSeoMediaByUrl(mediaUrl, newSlug) {
+    const response = await fetch(RENAME_BY_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ url: mediaUrl, new_slug: newSlug }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message = data.message ?? data.errors?.new_slug?.[0] ?? data.errors?.url?.[0] ?? 'Không thể đổi tên ảnh.';
+        throw new Error(message);
+    }
+
+    if (data.url) {
+        data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
 /**
  * Xử lý paste ảnh từ clipboard (dùng cho Tiptap và khối ảnh trống).
  * @returns {boolean} true nếu đã xử lý (cần preventDefault ở caller nếu sync)
@@ -508,8 +541,91 @@ export function processClipboardImagePaste(event, options = {}) {
 
 /**
  * Tiptap editorProps.handlePaste — chặn base64, upload blob lên Laravel.
- * @param {{ articleId?: number|null, siteId?: number|null }} context
+ * @param {{ articleId?: number|null, siteId?: number|null, defaultAltTitle?: string }} context
  */
+export async function fetchArticleAiMediaJobs(articleId) {
+    if (!articleId) {
+        return [];
+    }
+
+    const url = ARTICLE_AI_JOBS_URL_TEMPLATE.replace('{articleId}', String(articleId));
+    const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.message ?? 'Không tải được danh sách job AI.');
+    }
+
+    return Array.isArray(data.items) ? data.items : [];
+}
+
+export async function fetchSeoMediaStatus(seoMediaId) {
+    const url = MEDIA_STATUS_URL_TEMPLATE.replace('{id}', String(seoMediaId));
+    const response = await fetch(url, {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.message ?? 'Không kiểm tra được trạng thái media.');
+    }
+
+    if (data.url) {
+        data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
+export async function retryAiMediaGeneration(seoMediaId) {
+    const url = MEDIA_RETRY_URL_TEMPLATE.replace('{id}', String(seoMediaId));
+    const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN':
+                document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
+        },
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.message ?? 'Không thử lại được job AI.');
+    }
+
+    if (data.url) {
+        data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
+export async function deleteAiMediaJob(seoMediaId) {
+    const url = MEDIA_DELETE_AI_JOB_URL_TEMPLATE.replace('{id}', String(seoMediaId));
+    const response = await fetch(url, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: {
+            Accept: 'application/json',
+            'X-CSRF-TOKEN':
+                document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
+        },
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        throw new Error(data.message ?? 'Không xóa được job AI.');
+    }
+
+    return data;
+}
+
 export function createClipboardPasteHandler(context = {}) {
     return function handlePaste(view, event) {
         return processClipboardImagePaste(event, {
@@ -522,10 +638,12 @@ export function createClipboardPasteHandler(context = {}) {
                     return;
                 }
 
+                const mainKeyword = String(context.defaultAltTitle ?? '').trim();
+                const altTitle = mainKeyword || (data.slug ?? '');
                 const node = imageType.create({
                     src: data.url,
-                    alt: data.slug ?? '',
-                    title: data.slug ?? '',
+                    alt: altTitle,
+                    title: altTitle,
                     'data-seo-media-id': data.id != null ? String(data.id) : null,
                 });
                 const transaction = view.state.tr.replaceSelectionWith(node);

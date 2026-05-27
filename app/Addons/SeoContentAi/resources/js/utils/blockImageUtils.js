@@ -35,6 +35,14 @@ function parseSeoMediaIdFromImg(img) {
     return id > 0 ? id : null;
 }
 
+export function isAiPlaceholderLoadingSrc(src) {
+    if (!src) {
+        return false;
+    }
+
+    return String(src).includes('placeholder-loading');
+}
+
 function slugFromSrc(src) {
     if (!src) return '';
     try {
@@ -68,6 +76,7 @@ function parseImageFromFigure(fig, id) {
         wpImageClass: img.getAttribute('class') ?? '',
         wpAttachmentId: parseWpAttachmentIdFromImg(img),
         seoMediaId: parseSeoMediaIdFromImg(img),
+        isProcessing: fig.hasAttribute('data-ai-processing'),
     };
 }
 
@@ -93,6 +102,9 @@ function parseImageFromImg(img, id) {
         wpImageClass: img.getAttribute('class') ?? '',
         wpAttachmentId: parseWpAttachmentIdFromImg(img),
         seoMediaId: parseSeoMediaIdFromImg(img),
+        isProcessing:
+            img.hasAttribute('data-ai-processing') ||
+            Boolean(img.closest('[data-ai-processing]')),
     };
 }
 
@@ -210,13 +222,23 @@ export function parseImageFromBlockContent(html) {
 
 export function renderImageFigure(image) {
     const alignClass = figureClassForAlign(image.align);
-    const figureClasses = ['wp-caption', alignClass].filter(Boolean).join(' ');
+    const isProcessing = Boolean(
+        image.isProcessing || isAiPlaceholderLoadingSrc(image.src),
+    );
+    const captionText = String(image.caption ?? '').trim();
+    const hasCaption = captionText !== '';
+    const figureClasses = ['wp-caption', alignClass, isProcessing ? 'seo-ai-media-loading' : '']
+        .filter(Boolean)
+        .join(' ');
     const style =
         image.width && !Number.isNaN(image.width)
             ? ` style="width: ${Math.round(image.width)}px"`
             : '';
 
     let imgClass = image.wpImageClass ?? '';
+    if (!hasCaption && alignClass && !new RegExp(`\\b${alignClass}\\b`).test(imgClass)) {
+        imgClass = imgClass ? `${imgClass} ${alignClass}` : alignClass;
+    }
     if (image.wpAttachmentId && !/\bwp-image-\d+\b/.test(imgClass)) {
         const wpClass = `wp-image-${image.wpAttachmentId}`;
         imgClass = imgClass ? `${imgClass} ${wpClass}` : wpClass;
@@ -231,16 +253,26 @@ export function renderImageFigure(image) {
         imgClass ? `class="${escapeAttr(imgClass)}"` : '',
         image.wpAttachmentId ? `data-id="${Math.round(image.wpAttachmentId)}"` : '',
         image.seoMediaId ? `data-seo-media-id="${Math.round(image.seoMediaId)}"` : '',
+        isProcessing ? 'data-ai-processing="1"' : '',
         'draggable="false"',
     ]
         .filter(Boolean)
         .join(' ');
 
-    const caption = image.caption
-        ? `<figcaption class="wp-caption-text">${escapeHtml(image.caption)}</figcaption>`
+    const caption = hasCaption
+        ? `<figcaption class="wp-caption-text">${escapeHtml(captionText)}</figcaption>`
+        : '';
+    const processingLabel = isProcessing
+        ? '<p class="seo-ai-media-loading__label">AI đang tạo ảnh…</p>'
         : '';
 
-    return `<figure class="${figureClasses}" data-node="article-image"${style}><img ${imgAttrs} />${caption}</figure>`;
+    if (!hasCaption && !isProcessing) {
+        return `<img ${imgAttrs} />`;
+    }
+
+    return `<figure class="${figureClasses}" data-node="article-image"${
+        isProcessing ? ' data-ai-processing="1"' : ''
+    }${style}><img ${imgAttrs} />${processingLabel}${caption}</figure>`;
 }
 
 function escapeAttr(value) {

@@ -133,6 +133,7 @@ export default function ImageBlockEditor({
     const [importLoading, setImportLoading] = useState(false);
     const toolbarRef = useRef(null);
     const emptyFrameRef = useRef(null);
+    const generatePromptAtRef = useRef(0);
 
     const image = useMemo(() => {
         if (block.image) return block.image;
@@ -350,6 +351,11 @@ export default function ImageBlockEditor({
                             }
                         }}
                         onGenerateRequest={(prompt) => {
+                            const now = Date.now();
+                            if (now - generatePromptAtRef.current < 3000) {
+                                return;
+                            }
+                            generatePromptAtRef.current = now;
                             window.dispatchEvent(
                                 new CustomEvent('seo-editor-image-generate-request', {
                                     detail: { blockId: block.id, prompt },

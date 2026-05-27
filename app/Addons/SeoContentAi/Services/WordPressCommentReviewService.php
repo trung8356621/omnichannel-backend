@@ -24,7 +24,7 @@ final class WordPressCommentReviewService
         if ($items === []) {
             return [
                 'success' => false,
-                'message' => 'Không parse được JSON bình luận/review từ kết quả AI.',
+                'message' => 'Không parse được bình luận/review từ kết quả AI.',
             ];
         }
 

@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use GuzzleHttp\Client;
 use Throwable;
 
@@ -36,7 +37,10 @@ final class AiExecutionService
         ?string $modelOverride = null,
         ?string $compiledPrompt = null,
     ): array {
-        $prompt->loadMissing(['parts', 'aiConnection']);
+        $prompt->loadMissing(['aiConnection']);
+        $variables = Utf8Sanitizer::variablesForAi($variables);
+        $inputData = $inputData !== null ? Utf8Sanitizer::compactForAiVariable($inputData) : null;
+        $compiledPrompt = $compiledPrompt !== null ? Utf8Sanitizer::string($compiledPrompt) : null;
 
         $promptTool = trim((string) ($prompt->tools ?? 'default'));
         if ($promptTool === 'image') {
@@ -196,7 +200,7 @@ final class AiExecutionService
         bool $isTaskMode,
         ?string $inputData,
     ): array {
-        $parts = $prompt->parts()->orderBy('position')->get();
+        $parts = $prompt->resolvedParts();
 
         $systemInstructions = [];
         $userMessages = [];

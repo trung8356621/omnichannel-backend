@@ -10,7 +10,6 @@ use App\Addons\SeoContentAi\Services\SeoImageOptimizationService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class SeoMediaStorageServiceTest extends TestCase
@@ -31,8 +30,7 @@ class SeoMediaStorageServiceTest extends TestCase
             $extension = strtolower($file->getClientOriginalExtension() ?: 'png');
             $slug = 'img-test-' . random_int(100, 999);
             $filename = $slug . '.' . $extension;
-            $randomFolder = Str::random(10);
-            $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+            $relativePath = "uploads/seo_media/{$filename}";
 
             return [
                 'slug' => $slug,

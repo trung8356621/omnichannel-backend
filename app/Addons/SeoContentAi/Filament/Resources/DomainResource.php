@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action as FormInputAction;
@@ -29,6 +30,11 @@ class DomainResource extends Resource
     protected static ?string $navigationGroup = 'SEO Workspace';
 
     protected static ?string $navigationLabel = 'Danh sách tên miền';
+
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
 
     public static function form(Form $form): Form
     {
@@ -168,7 +174,17 @@ class DomainResource extends Resource
 
     public static function canCreate(): bool
     {
-        return auth()->check();
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function getPages(): array

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Models\Site;
 use Filament\Pages\Page;
@@ -137,5 +138,10 @@ class MediaImageEditor extends Page
             ->whereKey($siteId)
             ->where('user_id', $user->id)
             ->exists();
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
     }
 }

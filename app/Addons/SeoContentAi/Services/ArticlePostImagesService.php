@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
@@ -30,7 +31,7 @@ final class ArticlePostImagesService
     {
         $cached = $this->getMetaJson($article);
         if ($cached !== []) {
-            return $this->normalizeList($cached);
+            return $this->enrichWithSeoMediaUrls($article, $this->normalizeList($cached));
         }
 
         $html = trim((string) app(WordPressArticleContentService::class)->resolveEditorHtml($article));
@@ -38,7 +39,7 @@ final class ArticlePostImagesService
             return [];
         }
 
-        return $this->extractFromHtml($html);
+        return $this->enrichWithSeoMediaUrls($article, $this->extractFromHtml($html));
     }
 
     /**
@@ -110,6 +111,15 @@ final class ArticlePostImagesService
                 $slug = $this->slugFromUrl($src);
             }
 
+            $wpUrl = trim((string) ($image['wp_url'] ?? $image['wordpress_url'] ?? $image['source_url'] ?? ''));
+            $localSrc = trim((string) ($image['local_src'] ?? ''));
+            if ($localSrc === '' && $this->isLocalSeoMediaSrc($src)) {
+                $localSrc = $src;
+            }
+            if ($wpUrl === '' && ! $this->isLocalSeoMediaSrc($src)) {
+                $wpUrl = $src;
+            }
+
             $result[] = [
                 'key' => trim((string) ($image['key'] ?? '')) !== ''
                     ? (string) $image['key']
@@ -122,6 +132,8 @@ final class ArticlePostImagesService
                 'title' => (string) ($image['title'] ?? ''),
                 'caption' => (string) ($image['caption'] ?? ''),
                 'align' => (string) ($image['align'] ?? 'none'),
+                'wp_url' => $wpUrl,
+                'local_src' => $localSrc,
             ];
         }
 
@@ -236,6 +248,12 @@ final class ArticlePostImagesService
                 if (trim((string) ($row['slug'] ?? '')) === '' && filled($base['slug'] ?? null)) {
                     $row['slug'] = $base['slug'];
                 }
+                if (trim((string) ($row['wp_url'] ?? '')) === '' && filled($base['wp_url'] ?? null)) {
+                    $row['wp_url'] = $base['wp_url'];
+                }
+                if (trim((string) ($row['local_src'] ?? '')) === '' && filled($base['local_src'] ?? null)) {
+                    $row['local_src'] = $base['local_src'];
+                }
             }
 
             $merged[] = $row;
@@ -336,6 +354,81 @@ final class ArticlePostImagesService
         $path = (string) parse_url($src, PHP_URL_PATH);
 
         return strtolower(rtrim($path, '/'));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $images
+     * @return array<int, array<string, mixed>>
+     */
+    private function enrichWithSeoMediaUrls(SeoArticle $article, array $images): array
+    {
+        if ($images === []) {
+            return [];
+        }
+
+        $wpIds = array_values(array_unique(array_filter(
+            array_map(
+                static fn (array $row): int => (int) ($row['wp_attachment_id'] ?? 0),
+                $images
+            ),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        if ($wpIds === []) {
+            return $images;
+        }
+
+        $medias = SeoMedia::query()
+            ->where('site_id', (int) $article->site_id)
+            ->whereIn('wp_attachment_id', $wpIds)
+            ->get();
+
+        $byWpId = [];
+        foreach ($medias as $media) {
+            $wpId = (int) ($media->wp_attachment_id ?? 0);
+            if ($wpId <= 0) {
+                continue;
+            }
+
+            $wpUrl = trim((string) ($media->getAttribute('wp_url') ?? ''));
+            $localSrc = trim((string) $media->publicUrl());
+
+            if (! isset($byWpId[$wpId])) {
+                $byWpId[$wpId] = [
+                    'wp_url' => $wpUrl,
+                    'local_src' => $localSrc,
+                ];
+            } else {
+                if ($byWpId[$wpId]['wp_url'] === '' && $wpUrl !== '') {
+                    $byWpId[$wpId]['wp_url'] = $wpUrl;
+                }
+                if ($byWpId[$wpId]['local_src'] === '' && $localSrc !== '') {
+                    $byWpId[$wpId]['local_src'] = $localSrc;
+                }
+            }
+        }
+
+        return array_map(function (array $row) use ($byWpId): array {
+            $wpId = (int) ($row['wp_attachment_id'] ?? 0);
+            if ($wpId <= 0 || ! isset($byWpId[$wpId])) {
+                return $row;
+            }
+
+            $fromMedia = $byWpId[$wpId];
+            if (trim((string) ($row['wp_url'] ?? '')) === '' && $fromMedia['wp_url'] !== '') {
+                $row['wp_url'] = $fromMedia['wp_url'];
+            }
+            if (trim((string) ($row['local_src'] ?? '')) === '' && $fromMedia['local_src'] !== '') {
+                $row['local_src'] = $fromMedia['local_src'];
+            }
+
+            return $row;
+        }, $images);
+    }
+
+    private function isLocalSeoMediaSrc(string $src): bool
+    {
+        return str_contains(strtolower($src), '/storage/uploads/seo_media/');
     }
 
     /**

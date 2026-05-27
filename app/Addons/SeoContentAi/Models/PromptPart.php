@@ -7,11 +7,14 @@ namespace App\Addons\SeoContentAi\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
+/**
+ * DTO in-memory cho block parse từ markdown (bảng `prompt_parts` đã bỏ).
+ */
 class PromptPart extends Model
 {
     protected $connection = 'omi_seo_ai';
 
-    /** @var string Bảng vật lý là `prompt_parts` (không phải `seo_prompt_parts`). */
+    /** @deprecated Bảng đã drop; chỉ dùng instance không lưu DB. */
     protected $table = 'prompt_parts';
 
     protected $fillable = [

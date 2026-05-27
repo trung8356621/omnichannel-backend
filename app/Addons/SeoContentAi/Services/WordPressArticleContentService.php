@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Models\Site;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -253,6 +254,26 @@ class WordPressArticleContentService
                     ['meta_value' => $title],
                 );
             }
+
+            $updates = [];
+            $remoteStatus = strtolower(trim((string) ($post['status'] ?? '')));
+            if ($remoteStatus !== '') {
+                $updates['status'] = match ($remoteStatus) {
+                    'publish', 'published' => 'published',
+                    'future', 'scheduled' => 'scheduled',
+                    'private' => 'private',
+                    default => 'draft',
+                };
+            }
+
+            $publishedAt = $this->parseRemotePublishedAt($post['published_at'] ?? null);
+            if ($publishedAt !== null) {
+                $updates['published_at'] = $publishedAt;
+            }
+
+            if ($updates !== []) {
+                $article->update($updates);
+            }
         }
 
         if (array_key_exists('post_content', $post)) {
@@ -377,6 +398,19 @@ class WordPressArticleContentService
         }
 
         return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $termId;
+    }
+
+    private function parseRemotePublishedAt(mixed $value): ?Carbon
+    {
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value)->timezone(config('app.timezone'));
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     /**

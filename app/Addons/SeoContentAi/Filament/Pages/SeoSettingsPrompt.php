@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -113,5 +114,10 @@ class SeoSettingsPrompt extends Page implements HasForms
             ->title('Đã lưu tùy chỉnh prompt')
             ->success()
             ->send();
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

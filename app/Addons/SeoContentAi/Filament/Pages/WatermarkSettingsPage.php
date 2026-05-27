@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWatermarkService;
 use App\Models\Site;
 use Filament\Actions\Action;
@@ -335,5 +336,10 @@ class WatermarkSettingsPage extends Page implements HasForms
         }
 
         return $query;
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

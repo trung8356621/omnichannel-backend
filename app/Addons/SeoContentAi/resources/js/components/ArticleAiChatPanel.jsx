@@ -1,13 +1,23 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ImageIcon, ListTree, Video, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ImageIcon, Video, X } from 'lucide-react';
 
-export default function ArticleAiChatPanel({ articleId }) {
+function hydratePromptTemplate(template, variables) {
+    return String(template ?? '').replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (match, key) => {
+        if (!Object.prototype.hasOwnProperty.call(variables, key)) {
+            return match;
+        }
+        return String(variables[key] ?? '');
+    });
+}
+
+export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: false } }) {
     const [selectedText, setSelectedText] = useState('');
     const [selectedHtml, setSelectedHtml] = useState('');
     const [activeBlockId, setActiveBlockId] = useState('');
     const [input, setInput] = useState('');
     const [generatingImage, setGeneratingImage] = useState(false);
     const [generatingVideo, setGeneratingVideo] = useState(false);
+    const generateLockRef = useRef(false);
 
     useEffect(() => {
         const onSelection = (e) => {
@@ -34,10 +44,21 @@ export default function ArticleAiChatPanel({ articleId }) {
             } else if (type === 'video') {
                 setGeneratingVideo(false);
             }
+            releaseLock();
         };
 
-        const onImageDone = () => setGeneratingImage(false);
-        const onVideoDone = () => setGeneratingVideo(false);
+        const releaseLock = () => {
+            generateLockRef.current = false;
+        };
+
+        const onImageDone = () => {
+            setGeneratingImage(false);
+            releaseLock();
+        };
+        const onVideoDone = () => {
+            setGeneratingVideo(false);
+            releaseLock();
+        };
 
         window.addEventListener('article-ai-media-failed', onMediaFailed);
         window.addEventListener('article-ai-image-generated', onImageDone);
@@ -89,6 +110,12 @@ export default function ArticleAiChatPanel({ articleId }) {
                 return;
             }
 
+            if (generateLockRef.current) {
+                return;
+            }
+
+            generateLockRef.current = true;
+
             const detail = {
                 selectionText,
                 selectionHtml,
@@ -110,6 +137,35 @@ export default function ArticleAiChatPanel({ articleId }) {
 
     const canGenerate = Boolean(input.trim() || selectedText.trim());
     const busy = generatingImage || generatingVideo;
+    const userBrief = input.trim();
+    const contextText = selectedText.trim();
+    const contextHtml = selectedHtml.trim();
+    const composedInput = useMemo(() => {
+        if (userBrief && contextText) {
+            return `${userBrief}\n\n---\nĐoạn ngữ cảnh:\n${contextText}`;
+        }
+
+        return userBrief || contextText;
+    }, [contextText, userBrief]);
+    const debugVariables = useMemo(
+        () => ({
+            input: composedInput,
+            user_brief: userBrief,
+            selected_text: contextText,
+            selected_html: contextHtml,
+            post_title: String(aiDebug?.article_title ?? ''),
+            focus_keyword: String(aiDebug?.focus_keyword ?? ''),
+        }),
+        [aiDebug?.article_title, aiDebug?.focus_keyword, composedInput, contextHtml, contextText, userBrief],
+    );
+    const imageDebugPrompt = useMemo(
+        () => hydratePromptTemplate(aiDebug?.image?.template ?? '', debugVariables),
+        [aiDebug?.image?.template, debugVariables],
+    );
+    const videoDebugPrompt = useMemo(
+        () => hydratePromptTemplate(aiDebug?.video?.template ?? '', debugVariables),
+        [aiDebug?.video?.template, debugVariables],
+    );
 
     return (
         <div className="seo-ai-chat-panel wp-postbox">
@@ -138,19 +194,9 @@ export default function ArticleAiChatPanel({ articleId }) {
                     <div className="seo-ai-chat-actions">
                         <button
                             type="button"
-                            className="seo-ai-chat-extract-faq"
-                            onClick={handleExtractFaq}
-                            disabled={!selectedText.trim() || busy}
-                            title="Bóc tách FAQ từ đoạn đang chọn"
-                        >
-                            <ListTree size={15} />
-                            Tách FAQ
-                        </button>
-                        <button
-                            type="button"
                             className="seo-ai-chat-generate-image"
                             onClick={() => dispatchGenerate('image')}
-                            disabled={!canGenerate || busy}
+                            disabled={!canGenerate || busy || generateLockRef.current}
                             title="Chạy prompt Tạo ảnh (Quy trình)"
                         >
                             <ImageIcon size={15} />
@@ -160,13 +206,32 @@ export default function ArticleAiChatPanel({ articleId }) {
                             type="button"
                             className="seo-ai-chat-generate-video"
                             onClick={() => dispatchGenerate('video')}
-                            disabled={!canGenerate || busy}
+                            disabled={!canGenerate || busy || generateLockRef.current}
                             title="Chạy prompt Tạo video (Quy trình)"
                         >
                             <Video size={15} />
                             {generatingVideo ? 'Đang tạo video…' : 'Tạo video'}
                         </button>
                     </div>
+                    {Boolean(aiDebug?.enabled) ? (
+                        <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 space-y-2">
+                            <p className="font-semibold">
+                                DEBUG Prompt (APP_DEBUG=true) · input hiện tại: <code>{composedInput || '(trống)'}</code>
+                            </p>
+                            <div>
+                                <p className="font-semibold">Tạo ảnh #{aiDebug?.image?.prompt_id ?? 'n/a'}</p>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
+                                    {imageDebugPrompt || '(Không có nội dung prompt ảnh)'}
+                                </pre>
+                            </div>
+                            <div>
+                                <p className="font-semibold">Tạo video #{aiDebug?.video?.prompt_id ?? 'n/a'}</p>
+                                <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
+                                    {videoDebugPrompt || '(Không có nội dung prompt video)'}
+                                </pre>
+                            </div>
+                        </div>
+                    ) : null}
                 </div>
             </div>
         </div>

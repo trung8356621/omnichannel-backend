@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -30,6 +31,26 @@ class TaskResource extends Resource
     protected static ?string $modelLabel = 'Quy trình';
 
     protected static ?string $pluralModelLabel = 'Quy trình nhiệm vụ';
+
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canCreate(): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessPlannerFeatures();
+    }
 
     public static function form(Form $form): Form
     {

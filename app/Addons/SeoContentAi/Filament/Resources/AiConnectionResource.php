@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
 use App\Addons\SeoContentAi\Services\AiModelRouterService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\ApiConnection;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -26,7 +27,27 @@ class AiConnectionResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return false;
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canCreate(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 
     protected static ?string $modelLabel = 'Kết nối AI';

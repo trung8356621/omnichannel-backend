@@ -39,7 +39,7 @@ final class ImageGenerationChainService
      */
     public function generateImageChain(SeoPrompt $prompt, array $variables = []): array
     {
-        $prompt->loadMissing(['parts', 'aiConnection']);
+        $prompt->loadMissing(['aiConnection']);
 
         if ($prompt->aiConnection === null) {
             throw new PromptRunException('Không tìm thấy kết nối API AI.');
@@ -57,7 +57,7 @@ final class ImageGenerationChainService
             );
         }
 
-        $parts = $prompt->parts()->orderBy('position')->get();
+        $parts = $prompt->resolvedParts();
         $mainTask = $parts->firstWhere('role', 'task');
         $subTasks = $parts->where('role', 'sub_task');
         $toolType = $this->normalizeToolType((string) ($prompt->tools ?? 'default'));

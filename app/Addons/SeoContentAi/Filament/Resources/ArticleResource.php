@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -35,6 +36,11 @@ class ArticleResource extends Resource
     protected static ?string $modelLabel = 'Bài viết';
 
     protected static ?string $pluralModelLabel = 'Bài viết';
+
+    public static function canViewAny(): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
+    }
 
     public static function panelId(): string
     {
@@ -76,6 +82,14 @@ class ArticleResource extends Resource
         return $table
             ->recordAction('edit')
             ->columns([
+                Tables\Columns\ImageColumn::make('thumbnail')
+                    ->label('Thumb')
+                    ->square()
+                    ->height(46)
+                    ->width(46)
+                    ->defaultImageUrl(url('/assets/images/placeholder-loading.svg'))
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveThumbnailUrl($record))
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('wp_data_out_of_sync')
                     ->label('')
                     ->badge()
@@ -136,6 +150,7 @@ class ArticleResource extends Resource
             ->filters([
                 SelectFilter::make('site_id')
                     ->label('Tên miền')
+                    ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                     ->options(function (): array {
                         $query = Site::query()->orderBy('domain');
 
@@ -338,6 +353,7 @@ class ArticleResource extends Resource
                     'seo_focus_keyword',
                     'seo_rank_math_score',
                     'wp_post_images',
+                    'wp_featured_image_url',
                 ]),
             ]);
 
@@ -348,12 +364,59 @@ class ArticleResource extends Resource
             );
         }
 
+        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
+            $query->where('site_id', $globalSiteId);
+        }
+
         return $query;
+    }
+
+    private static function resolveThumbnailUrl(SeoArticle $record): ?string
+    {
+        $record->loadMissing('articleMetas');
+
+        $featured = trim((string) ($record->articleMetas->firstWhere('meta_key', 'wp_featured_image_url')?->meta_value ?? ''));
+        if ($featured !== '') {
+            return $featured;
+        }
+
+        $rawImages = $record->articleMetas->firstWhere('meta_key', 'wp_post_images')?->meta_value ?? '';
+        if (! is_string($rawImages) || trim($rawImages) === '') {
+            return null;
+        }
+
+        $decoded = json_decode($rawImages, true);
+        if (! is_array($decoded)) {
+            return null;
+        }
+
+        foreach ($decoded as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $src = trim((string) ($row['src'] ?? ''));
+            if ($src !== '') {
+                return $src;
+            }
+        }
+
+        return null;
     }
 
     public static function canCreate(): bool
     {
         return false;
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
+    }
+
+    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
     }
 
     public static function getPages(): array

@@ -37,6 +37,7 @@ final class MediaGenerationService
         string $effectiveToolType = 'default',
     ): array {
         $prompt->loadMissing(['aiConnection']);
+        $variables = Utf8Sanitizer::variablesForAi($variables);
 
         if ($this->shouldUseImagePipeline($prompt, $effectiveToolType)) {
             return $this->executeImagePipeline(
@@ -119,14 +120,15 @@ final class MediaGenerationService
      */
     public function generate(SeoPrompt $prompt, array $variables = [], ?string $inputData = null): array|string
     {
-        $prompt->loadMissing(['parts', 'aiConnection']);
+        $prompt->loadMissing(['aiConnection']);
+        $variables = Utf8Sanitizer::variablesForAi($variables);
 
         if ($prompt->aiConnection === null) {
             throw new PromptRunException('Prompt chưa được gắn kết nối AI.');
         }
 
         if ($inputData !== null && trim($inputData) !== '') {
-            $variables['input'] = trim($inputData);
+            $variables['input'] = Utf8Sanitizer::compactForAiVariable($inputData);
         }
 
         if (app(PromptRunnerService::class)->hasDependentSubTasks($prompt)) {
@@ -157,6 +159,7 @@ final class MediaGenerationService
         ?string $modelOverride,
     ): array {
         $connection = $prompt->aiConnection;
+        $variables = Utf8Sanitizer::variablesForAi($variables);
         if ($connection === null) {
             throw new PromptRunException('Prompt chưa được gắn kết nối AI.');
         }
@@ -173,7 +176,7 @@ final class MediaGenerationService
         }
 
         if ($inputData !== null && trim($inputData) !== '') {
-            $variables['input'] = trim($inputData);
+            $variables['input'] = Utf8Sanitizer::compactForAiVariable($inputData);
         }
 
         return $this->executeImage($connection, $prompt, $compiled, $variables, $modelOverride);

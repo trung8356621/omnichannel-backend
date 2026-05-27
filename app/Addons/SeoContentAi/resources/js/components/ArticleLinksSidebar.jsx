@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Copy, Link2 } from 'lucide-react';
 
 /**
@@ -223,6 +224,7 @@ export default function ArticleLinksSidebar() {
     const [suggestedInternal, setSuggestedInternal] = useState([]);
     const [activeKey, setActiveKey] = useState('');
     const [cycleByKey, setCycleByKey] = useState({});
+    const [collapsed, setCollapsed] = useState(false);
 
     useEffect(() => {
         const onLinksUpdate = (event) => {
@@ -393,42 +395,53 @@ export default function ArticleLinksSidebar() {
                         ({internal.length} int, {external.length} ext{faqCountLabel})
                     </span>
                 </h2>
+                <button
+                    type="button"
+                    className="wp-postbox-toggle"
+                    aria-expanded={!collapsed}
+                    title={collapsed ? 'Mở rộng' : 'Thu gọn'}
+                    onClick={() => setCollapsed((v) => !v)}
+                >
+                    {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
+                </button>
             </div>
-            <div className="wp-postbox-inside">
-                <InternalLinksSection
-                    internal={internal}
-                    suggestedInternal={suggestedInternal}
-                    activeKey={activeKey}
-                    onKeywordClick={(item, index, itemKey) =>
-                        scrollToKeyword(item, 'internal', index, itemKey)
-                    }
-                    onCopyKeyword={copyKeyword}
-                    onSuggestionClick={(item, index, itemKey) =>
-                        scrollToKeyword(item, 'internal', index, itemKey, { searchPlainText: true })
-                    }
-                    onInsertSuggestion={insertSuggestedLink}
-                />
-                <KeywordList
-                    items={external}
-                    title={`Ngoài (${external.length})`}
-                    activeKey={activeKey}
-                    target="editor"
-                    onKeywordClick={(item, index, itemKey) =>
-                        scrollToKeyword(item, 'external', index, itemKey)
-                    }
-                    onCopyKeyword={copyKeyword}
-                />
-                <KeywordList
-                    items={faq}
-                    title={`FAQ (${faq.length})`}
-                    activeKey={activeKey}
-                    target="faq"
-                    onKeywordClick={(item, index, itemKey) =>
-                        scrollToKeyword(item, 'faq', index, itemKey)
-                    }
-                    onCopyKeyword={copyKeyword}
-                />
-            </div>
+            {!collapsed ? (
+                <div className="wp-postbox-inside">
+                    <InternalLinksSection
+                        internal={internal}
+                        suggestedInternal={suggestedInternal}
+                        activeKey={activeKey}
+                        onKeywordClick={(item, index, itemKey) =>
+                            scrollToKeyword(item, 'internal', index, itemKey)
+                        }
+                        onCopyKeyword={copyKeyword}
+                        onSuggestionClick={(item, index, itemKey) =>
+                            scrollToKeyword(item, 'internal', index, itemKey, { searchPlainText: true })
+                        }
+                        onInsertSuggestion={insertSuggestedLink}
+                    />
+                    <KeywordList
+                        items={external}
+                        title={`Ngoài (${external.length})`}
+                        activeKey={activeKey}
+                        target="editor"
+                        onKeywordClick={(item, index, itemKey) =>
+                            scrollToKeyword(item, 'external', index, itemKey)
+                        }
+                        onCopyKeyword={copyKeyword}
+                    />
+                    <KeywordList
+                        items={faq}
+                        title={`FAQ (${faq.length})`}
+                        activeKey={activeKey}
+                        target="faq"
+                        onKeywordClick={(item, index, itemKey) =>
+                            scrollToKeyword(item, 'faq', index, itemKey)
+                        }
+                        onCopyKeyword={copyKeyword}
+                    />
+                </div>
+            ) : null}
         </div>
     );
 }

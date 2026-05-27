@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryDeleteService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use App\Models\Site;
 use Filament\Notifications\Notification;
@@ -232,8 +233,13 @@ class MediaLibrary extends Page
     public function mount(): void
     {
         if ($this->siteId === null) {
-            $firstSite = $this->resolveSitesQuery()->first();
-            $this->siteId = $firstSite instanceof Site ? (int) $firstSite->id : null;
+            $globalSiteId = SeoAccessControl::globalSiteId();
+            if ($globalSiteId !== null) {
+                $this->siteId = $globalSiteId;
+            } else {
+                $firstSite = $this->resolveSitesQuery()->first();
+                $this->siteId = $firstSite instanceof Site ? (int) $firstSite->id : null;
+            }
         }
 
         $this->normalizeFilters();
@@ -1023,5 +1029,10 @@ class MediaLibrary extends Page
 
             $this->images[$index]['url'] = $url;
         }
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessContentFeatures();
     }
 }

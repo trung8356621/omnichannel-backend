@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -143,5 +144,10 @@ class ImageOptimizationSettings extends Page
         }
 
         return $query;
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

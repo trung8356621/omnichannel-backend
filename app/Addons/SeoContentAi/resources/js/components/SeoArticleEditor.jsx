@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import BlockFormatToolbar from './BlockFormatToolbar';
 import { BlockInsertBar, BlockInsertMenuBar } from './BlockInsertMenu';
@@ -21,6 +21,7 @@ import ArticleImagesTab from './ArticleImagesTab';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
     applyImagePatchToBlocks,
+    applyQuickFixMetaToBlock,
     applyQuickFixMetaToBlocks,
     finalizeBlocksAfterWpRename,
     enrichBlocksWithPostImages,
@@ -29,9 +30,13 @@ import {
     confirmSlugRename,
     dispatchWordPressSlugRename,
 } from '../utils/imageSlugRenameConfirm';
-import { renameSeoMedia } from '../utils/seoMediaApi';
+import {
+    createClipboardPasteHandler,
+    fetchSeoMediaStatus,
+    renameSeoMedia,
+    renameSeoMediaByUrl,
+} from '../utils/seoMediaApi';
 import { articleEditorExtensions } from '../utils/editorExtensions';
-import { createClipboardPasteHandler } from '../utils/seoMediaApi';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import { loadDraft, saveDraft } from '../utils/articleEditorStorage';
@@ -49,7 +54,7 @@ import {
     stripEditorTransientMarkup,
 } from '../utils/articleEditorTransientMarkup';
 import FaqAccordionPreview from './FaqAccordionPreview';
-import { Undo2, Redo2 } from 'lucide-react';
+import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2 } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
     getSelectionTextFromEditor,
@@ -85,8 +90,122 @@ const createFaqShortcodeBlock = () => ({
     suffix: '',
 });
 
+const createEmptySectionBlock = () => ({
+    id: newBlockId('classic'),
+    type: 'text',
+    isWp: false,
+    prefix: '',
+    content: '<h2>Tiêu đề section mới</h2><p></p>',
+    suffix: '',
+});
+
 const articleHasFaqShortcode = (blocks) =>
     blocks.some((block) => isFaqPlaceholderHtml(block.content || ''));
+
+const extractSectionHeading = (block) => {
+    if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
+        return null;
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(block.content, 'text/html');
+    const heading = doc.body.querySelector('h2');
+    if (!heading) {
+        return null;
+    }
+
+    const text = (heading.textContent || '').replace(/\s+/g, ' ').trim();
+
+    return text !== '' ? text : 'Section chưa đặt tiêu đề';
+};
+
+const buildEditorSections = (blocks) => {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+        return [];
+    }
+
+    const sections = [];
+    let currentSection = {
+        id: 'section-intro',
+        title: 'Mở đầu',
+        isIntro: true,
+        blockIds: [],
+    };
+
+    for (const block of blocks) {
+        const heading = extractSectionHeading(block);
+
+        if (heading !== null) {
+            if (currentSection.blockIds.length > 0) {
+                sections.push(currentSection);
+            }
+
+            currentSection = {
+                id: `section-${block.id}`,
+                title: heading,
+                isIntro: false,
+                blockIds: [block.id],
+            };
+
+            continue;
+        }
+
+        currentSection.blockIds.push(block.id);
+    }
+
+    if (currentSection.blockIds.length > 0) {
+        sections.push(currentSection);
+    }
+
+    return sections;
+};
+
+const buildSectionStats = (editorSections, blockById) => {
+    const statsMap = new Map();
+
+    for (const section of editorSections) {
+        let imageCount = 0;
+        let tableCount = 0;
+        let linkCount = 0;
+
+        for (const blockId of section.blockIds) {
+            const block = blockById.get(blockId);
+            if (!block) continue;
+
+            if (block.type === 'image') {
+                imageCount += 1;
+                continue;
+            }
+
+            const html = typeof block.content === 'string' ? block.content : '';
+            if (!html) continue;
+
+            const imgMatches = html.match(/<img\b/gi);
+            if (imgMatches) {
+                imageCount += imgMatches.length;
+            }
+
+            const tableMatches = html.match(/<table\b/gi);
+            if (tableMatches) {
+                tableCount += tableMatches.length;
+            }
+
+            const linkMatches = html.match(/<a\b/gi);
+            if (linkMatches) {
+                linkCount += linkMatches.length;
+            }
+        }
+
+        statsMap.set(section.id, {
+            imageCount,
+            tableCount,
+            hasTable: tableCount > 0,
+            linkCount,
+        });
+    }
+
+    return statsMap;
+};
 
 const parseHtmlToBlocks = (html) => {
     if (!html) return [];
@@ -301,7 +420,11 @@ function ActiveBlockEditor({
     );
 
     const clipboardPasteHandler = useCallback(
-        createClipboardPasteHandler({ articleId, siteId }),
+        createClipboardPasteHandler({
+            articleId,
+            siteId,
+            defaultAltTitle: (window.__SEO_MAIN_KEYWORD__ ?? '').trim(),
+        }),
         [articleId, siteId],
     );
 
@@ -597,6 +720,7 @@ export default function SeoArticleEditor({
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
     const [insertMenu, setInsertMenu] = useState(null);
+    const [collapsedSectionIds, setCollapsedSectionIds] = useState({});
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     const pendingQuickFixKeywordRef = useRef('');
 
@@ -611,6 +735,24 @@ export default function SeoArticleEditor({
     const [suggestedInternalLinks, setSuggestedInternalLinks] = useState(
         initialSeo?.suggested_internal_links ?? [],
     );
+
+    const mainKeyword = useMemo(() => {
+        const fromFocus = String(focusKeyword ?? '').trim();
+        if (fromFocus) {
+            return fromFocus;
+        }
+        return String(articleTitle ?? '').trim();
+    }, [focusKeyword, articleTitle]);
+
+    useEffect(() => {
+        // Dùng cho clipboard paste handler (tiptap) và các luồng insert ảnh.
+        window.__SEO_MAIN_KEYWORD__ = mainKeyword;
+        return () => {
+            if (window.__SEO_MAIN_KEYWORD__ === mainKeyword) {
+                delete window.__SEO_MAIN_KEYWORD__;
+            }
+        };
+    }, [mainKeyword]);
 
     const enrichLinksWithOccurrences = useCallback((links) => {
         const source = links && typeof links === 'object' ? links : { internal: [], external: [] };
@@ -664,12 +806,49 @@ export default function SeoArticleEditor({
 
     const blocksRef = useRef(blocks);
     blocksRef.current = blocks;
+
+    const blockById = useMemo(() => {
+        const map = new Map();
+        for (const block of blocks) {
+            map.set(block.id, block);
+        }
+
+        return map;
+    }, [blocks]);
+
+    const blockIndexMap = useMemo(() => {
+        const map = new Map();
+        blocks.forEach((block, index) => map.set(block.id, index));
+
+        return map;
+    }, [blocks]);
+
+    const editorSections = useMemo(() => buildEditorSections(blocks), [blocks]);
+
+    const sectionByBlockId = useMemo(() => {
+        const map = new Map();
+        for (const section of editorSections) {
+            for (const blockId of section.blockIds) {
+                map.set(blockId, section.id);
+            }
+        }
+
+        return map;
+    }, [editorSections]);
+
+    const sectionStats = useMemo(
+        () => buildSectionStats(editorSections, blockById),
+        [editorSections, blockById],
+    );
+
     const tempMergeRef = useRef(tempMerge);
     tempMergeRef.current = tempMerge;
     const blockFlushRef = useRef(null);
     const activeBlockIdRef = useRef(null);
     const linkScrollTokenRef = useRef(0);
     const intraSelectionRef = useRef({ text: '', html: '' });
+    const pendingAiMediaRef = useRef(new Map());
+    const mediaPollTimersRef = useRef(new Map());
 
     useEffect(() => {
         activeBlockIdRef.current = activeBlockId;
@@ -719,6 +898,7 @@ export default function SeoArticleEditor({
         canUndo,
         canRedo,
         historySteps,
+        updateBlocksWithoutHistory,
     } = useArticleEditorHistory({
         articleId,
         historyStep,
@@ -787,9 +967,17 @@ export default function SeoArticleEditor({
         blockFlushRef.current?.();
     }, []);
 
-    const patchImageInBlocks = useCallback((blockId, patch) => {
-        setBlocks((prev) => applyImagePatchToBlocks(prev, blockId, patch));
-    }, []);
+    const patchImageInBlocks = useCallback(
+        (blockId, patch, withoutHistory = false) => {
+            const updater = (prev) => applyImagePatchToBlocks(prev, blockId, patch);
+            if (withoutHistory) {
+                updateBlocksWithoutHistory(updater);
+            } else {
+                setBlocks(updater);
+            }
+        },
+        [updateBlocksWithoutHistory],
+    );
 
     const requestWordPressRenames = useCallback((items) => {
         dispatchWordPressSlugRename(items);
@@ -842,9 +1030,94 @@ export default function SeoArticleEditor({
                 return true;
             }
 
+            if (!row.wpAttachmentId && row.src && String(row.src).includes('/storage/uploads/seo_media/')) {
+                const oldSlug = (row.slug || '').trim();
+                renameSeoMediaByUrl(row.src, trimmed)
+                    .then((data) => {
+                        applyPatch({
+                            slug: data.slug,
+                            src: data.url,
+                            seoMediaId: data.id ?? row.seoMediaId,
+                            originalSlug: oldSlug,
+                        });
+                    })
+                    .catch((error) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: 'Không đổi được slug ảnh',
+                                    body: error?.message ?? 'Thử lại sau.',
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    });
+
+                return true;
+            }
+
             applyPatch({ slug: trimmed });
 
             return true;
+        },
+        [requestWordPressRenames],
+    );
+
+    const applyQuickFixPreview = useCallback(
+        (preview, keyword) => {
+            const renameCount = preview.renameQueue.length;
+            const localRenameCount = (preview.localRenameQueue ?? []).length;
+
+            setBlocks(preview.blocks);
+            pendingQuickFixKeywordRef.current = keyword;
+
+            if (renameCount > 0) {
+                requestWordPressRenames(preview.renameQueue);
+            } else if (localRenameCount === 0) {
+                setImagesReloadKey((k) => k + 1);
+            }
+
+            if (localRenameCount > 0) {
+                (async () => {
+                    for (const item of preview.localRenameQueue) {
+                        try {
+                            const newSlug = String(item.new_slug ?? '').trim();
+                            const src = String(item.src ?? '').trim();
+                            const blockId = String(item.block_id ?? '').trim();
+                            const id = Number(item.seo_media_id ?? 0);
+
+                            if (!newSlug || !src || !blockId) {
+                                continue;
+                            }
+
+                            const data = id > 0
+                                ? await renameSeoMedia(id, newSlug)
+                                : await renameSeoMediaByUrl(src, newSlug);
+
+                            setBlocks((prev) =>
+                                applyImagePatchToBlocks(prev, blockId, {
+                                    slug: data.slug,
+                                    src: data.url,
+                                    seoMediaId: data.id ?? id,
+                                    originalSlug: item.old_slug ?? '',
+                                }),
+                            );
+                        } catch (error) {
+                            window.dispatchEvent(
+                                new CustomEvent('seo-article-editor-notify', {
+                                    detail: {
+                                        title: 'Không đổi được slug ảnh nội bộ',
+                                        body: error?.message ?? 'Thử lại sau.',
+                                        status: 'danger',
+                                    },
+                                }),
+                            );
+                        }
+                    }
+
+                    setImagesReloadKey((k) => k + 1);
+                })();
+            }
         },
         [requestWordPressRenames],
     );
@@ -855,27 +1128,52 @@ export default function SeoArticleEditor({
             return;
         }
 
-        const current = blocksRef.current;
-        const preview = applyQuickFixMetaToBlocks(current, keyword);
+        const preview = applyQuickFixMetaToBlocks(blocksRef.current, keyword);
         const renameCount = preview.renameQueue.length;
+        const localRenameCount = (preview.localRenameQueue ?? []).length;
 
         if (renameCount > 0 && !confirmSlugRename({ count: renameCount, isQuickFix: true })) {
             return;
         }
 
-        if (renameCount === 0 && !window.confirm('Áp dụng alt/title từ khóa cho tất cả ảnh trong bài?')) {
+        if (renameCount === 0 && localRenameCount === 0 && !window.confirm('Áp dụng alt/title từ khóa cho tất cả ảnh trong bài?')) {
             return;
         }
 
-        setBlocks(preview.blocks);
-        pendingQuickFixKeywordRef.current = keyword;
+        applyQuickFixPreview(preview, keyword);
+    }, [focusKeyword, articleTitle, applyQuickFixPreview]);
 
-        if (renameCount > 0) {
-            requestWordPressRenames(preview.renameQueue);
-        } else {
-            setImagesReloadKey((k) => k + 1);
-        }
-    }, [focusKeyword, articleTitle, requestWordPressRenames]);
+    const quickFixSingleImage = useCallback(
+        (blockId) => {
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            if (!keyword || !blockId) {
+                return;
+            }
+
+            const preview = applyQuickFixMetaToBlock(blocksRef.current, keyword, blockId);
+            if (preview.applied === 0) {
+                return;
+            }
+
+            const renameCount = preview.renameQueue.length;
+            const localRenameCount = (preview.localRenameQueue ?? []).length;
+
+            if (renameCount > 0 && !confirmSlugRename({ count: 1, isQuickFix: true })) {
+                return;
+            }
+
+            if (
+                renameCount === 0 &&
+                localRenameCount === 0 &&
+                !window.confirm('Áp dụng alt/title từ khóa cho ảnh này?')
+            ) {
+                return;
+            }
+
+            applyQuickFixPreview(preview, keyword);
+        },
+        [focusKeyword, articleTitle, applyQuickFixPreview],
+    );
 
     useEffect(() => {
         const onLoading = (e) => {
@@ -1327,6 +1625,10 @@ export default function SeoArticleEditor({
     const activateBlock = useCallback(
         (id) => {
             setInsertMenu(null);
+            const sectionId = sectionByBlockId.get(id);
+            if (sectionId && collapsedSectionIds[sectionId]) {
+                setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: false }));
+            }
             if (tempMergeRef.current) {
                 clearTempMerge();
                 setGlobalEditor(null);
@@ -1338,7 +1640,7 @@ export default function SeoArticleEditor({
             setActiveBlockId(id);
             setGlobalEditor(null);
         },
-        [activeBlockId, commitActiveBlock, clearTempMerge],
+        [activeBlockId, collapsedSectionIds, commitActiveBlock, clearTempMerge, sectionByBlockId],
     );
 
     const insertBlockRelative = useCallback(
@@ -1386,14 +1688,128 @@ export default function SeoArticleEditor({
         [commitActiveBlock],
     );
 
-    const insertImageAfterBlock = useCallback(
-        (refBlockId, imageUrl) => {
-            const url = (imageUrl ?? '').trim();
-            if (!refBlockId || !url) {
+    const applyCompletedMediaToPlaceholder = useCallback((mediaId, mediaType, finalUrl) => {
+        const pending = pendingAiMediaRef.current.get(mediaId);
+        if (!pending?.blockId || !finalUrl) {
+            return false;
+        }
+
+        if (mediaType === 'video') {
+            const safeUrl = finalUrl
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;');
+
+            updateBlocksWithoutHistory((prev) =>
+                prev.map((block) =>
+                    block.id === pending.blockId
+                        ? {
+                              ...block,
+                              type: 'text',
+                              image: undefined,
+                              content: `<figure class="wp-block-video"><video controls src="${safeUrl}"></video></figure>`,
+                          }
+                        : block,
+                ),
+            );
+        } else {
+            patchImageInBlocks(
+                pending.blockId,
+                {
+                    src: finalUrl,
+                    title: '',
+                    alt: '',
+                    isProcessing: false,
+                },
+                true,
+            );
+        }
+
+        pendingAiMediaRef.current.delete(mediaId);
+        window.dispatchEvent(new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }));
+        setImagesReloadKey((k) => k + 1);
+        return true;
+    }, [patchImageInBlocks, updateBlocksWithoutHistory]);
+
+    const clearMediaPolling = useCallback((mediaId) => {
+        const timer = mediaPollTimersRef.current.get(mediaId);
+        if (timer) {
+            window.clearTimeout(timer);
+        }
+        mediaPollTimersRef.current.delete(mediaId);
+    }, []);
+
+    const AI_JOBS_POLL_MS = 60_000;
+
+    const startMediaStatusPolling = useCallback((mediaId, mediaType) => {
+        if (!mediaId || mediaPollTimersRef.current.has(mediaId)) {
+            return;
+        }
+
+        let attempt = 0;
+        const maxAttempts = 12;
+
+        const poll = async () => {
+            attempt += 1;
+
+            try {
+                const payload = await fetchSeoMediaStatus(mediaId);
+                const status = String(payload?.status ?? '').toLowerCase();
+                const url = String(payload?.url ?? '').trim();
+
+                if (status === 'completed' && url) {
+                    applyCompletedMediaToPlaceholder(mediaId, mediaType, url);
+                    clearMediaPolling(mediaId);
+                    return;
+                }
+
+                if (status === 'failed') {
+                    clearMediaPolling(mediaId);
+                    pendingAiMediaRef.current.delete(mediaId);
+                    window.dispatchEvent(
+                        new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
+                    );
+                    setImagesReloadKey((k) => k + 1);
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: mediaType === 'video' ? 'Tạo video thất bại' : 'Tạo ảnh thất bại',
+                                body: payload?.error_message || 'AI xử lý thất bại. Vui lòng thử lại.',
+                                status: 'danger',
+                            },
+                        }),
+                    );
+                    return;
+                }
+            } catch {
+                if (attempt >= maxAttempts) {
+                    clearMediaPolling(mediaId);
+                    return;
+                }
+            }
+
+            if (attempt >= maxAttempts) {
+                clearMediaPolling(mediaId);
                 return;
             }
+
+            const nextTimer = window.setTimeout(poll, AI_JOBS_POLL_MS);
+            mediaPollTimersRef.current.set(mediaId, nextTimer);
+        };
+
+        const initialTimer = window.setTimeout(poll, AI_JOBS_POLL_MS);
+        mediaPollTimersRef.current.set(mediaId, initialTimer);
+    }, [applyCompletedMediaToPlaceholder, clearMediaPolling]);
+
+    const insertImageAfterBlock = useCallback(
+        (refBlockId, imageUrl, imagePatch = {}) => {
+            const url = (imageUrl ?? '').trim();
+            if (!refBlockId || !url) {
+                return '';
+            }
             if (tempMergeRef.current) {
-                return;
+                return '';
             }
 
             commitActiveBlock();
@@ -1402,6 +1818,7 @@ export default function SeoArticleEditor({
                 src: url,
                 alt: '',
                 title: '',
+                ...imagePatch,
             };
             const html = renderImageFigure(image);
             const newBlock = {
@@ -1410,7 +1827,7 @@ export default function SeoArticleEditor({
                 image,
             };
 
-            setBlocks((prev) => {
+            const applyInsert = (prev) => {
                 const index = prev.findIndex((b) => b.id === refBlockId);
                 if (index < 0) {
                     return prev;
@@ -1418,12 +1835,84 @@ export default function SeoArticleEditor({
                 const next = [...prev];
                 next.splice(index + 1, 0, newBlock);
                 return normalizeBlocks(next);
-            });
+            };
+
+            if (image.isProcessing) {
+                updateBlocksWithoutHistory(applyInsert);
+            } else {
+                setBlocks(applyInsert);
+            }
 
             setActiveBlockId(newBlock.id);
             setGlobalEditor(null);
+            setImagesReloadKey((k) => k + 1);
+            return newBlock.id;
         },
-        [commitActiveBlock],
+        [commitActiveBlock, updateBlocksWithoutHistory],
+    );
+
+    const resolveAiRefBlockId = useCallback((blockId) => {
+        const id = String(blockId ?? '').trim();
+        if (id) {
+            return id;
+        }
+        const list = blocksRef.current;
+        if (!list?.length) {
+            return '';
+        }
+        return list[list.length - 1].id;
+    }, []);
+
+    const placeProcessingImagePlaceholder = useCallback(
+        (refBlockId, imageUrl, imagePatch = {}) => {
+            const url = (imageUrl ?? '').trim();
+            const refId = resolveAiRefBlockId(refBlockId);
+            if (!refId || !url) {
+                return '';
+            }
+            if (tempMergeRef.current) {
+                return '';
+            }
+
+            commitActiveBlock();
+
+            const kw = String(window.__SEO_MAIN_KEYWORD__ ?? '').trim();
+            const image = {
+                src: url,
+                alt: kw,
+                title: kw,
+                ...imagePatch,
+            };
+            const html = renderImageFigure(image);
+
+            const refBlock = blocksRef.current.find((b) => b.id === refId);
+            const refSrc = String(
+                refBlock?.image?.src ?? parseImageFromBlockContent(refBlock?.content ?? '')?.src ?? '',
+            ).trim();
+            const isEmptyImageBlock = refBlock?.type === 'image' && !refSrc;
+
+            if (isEmptyImageBlock) {
+                updateBlocksWithoutHistory((prev) =>
+                    prev.map((b) =>
+                        b.id === refId
+                            ? {
+                                  ...b,
+                                  content: html,
+                                  image,
+                                  pendingImagePrompt: undefined,
+                              }
+                            : b,
+                    ),
+                );
+                setActiveBlockId(refId);
+                setGlobalEditor(null);
+                setImagesReloadKey((k) => k + 1);
+                return refId;
+            }
+
+            return insertImageAfterBlock(refId, url, imagePatch);
+        },
+        [commitActiveBlock, insertImageAfterBlock, resolveAiRefBlockId, updateBlocksWithoutHistory],
     );
 
     const insertVideoAfterBlock = useCallback(
@@ -1659,25 +2148,18 @@ export default function SeoArticleEditor({
         const onImageGenerateRequest = (event) => {
             const blockId = event.detail?.blockId;
             const prompt = (event.detail?.prompt ?? '').trim();
-            if (!blockId || !prompt) return;
-
-            setBlocks((prev) =>
-                prev.map((b) =>
-                    b.id === blockId
-                        ? {
-                              ...b,
-                              pendingImagePrompt: prompt,
-                          }
-                        : b,
-                ),
-            );
+            if (!blockId || !prompt) {
+                return;
+            }
 
             window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
+                new CustomEvent('generate-article-image', {
                     detail: {
-                        title: 'Đã lưu mô tả ảnh',
-                        body: 'Mô tả đã lưu trên bài. Tạo ảnh AI sẽ kết nối workflow sau.',
-                        status: 'success',
+                        selectionText: '',
+                        selectionHtml: '',
+                        userBrief: prompt,
+                        activeBlockId: blockId,
+                        articleId,
                     },
                 }),
             );
@@ -1691,8 +2173,9 @@ export default function SeoArticleEditor({
             const attachmentId = Number(event.detail?.attachmentId ?? 0);
             if (!blockId || !url) return;
 
-            const alt = (event.detail?.alt ?? '').trim();
             const slug = (event.detail?.slug ?? '').trim();
+            const kw = String(window.__SEO_MAIN_KEYWORD__ ?? '').trim();
+            const alt = kw || (event.detail?.alt ?? '').trim();
             const seoMediaId = Number(event.detail?.seoMediaId ?? event.detail?.id ?? 0);
             const image = {
                 src: url,
@@ -1711,18 +2194,87 @@ export default function SeoArticleEditor({
         const onArticleAiImageGenerated = (event) => {
             const blockId = (event.detail?.activeBlockId ?? '').trim();
             const url = (event.detail?.url ?? '').trim();
-            if (!blockId || !url) {
+            const status = String(event.detail?.status ?? '').toLowerCase();
+            const mediaId = Number(event.detail?.seoMediaId ?? 0);
+
+            if (!url) {
                 return;
             }
-            insertImageAfterBlock(blockId, url);
+
+            const refBlockId = resolveAiRefBlockId(blockId);
+            if (!refBlockId) {
+                return;
+            }
+
+            if (status === 'processing' && mediaId > 0) {
+                if (pendingAiMediaRef.current.has(mediaId)) {
+                    return;
+                }
+
+                const placeholderId = placeProcessingImagePlaceholder(refBlockId, url, {
+                    seoMediaId: mediaId,
+                    isProcessing: true,
+                });
+                if (placeholderId) {
+                    pendingAiMediaRef.current.set(mediaId, {
+                        blockId: placeholderId,
+                        mediaType: 'image',
+                    });
+                    startMediaStatusPolling(mediaId, 'image');
+                }
+
+                window.dispatchEvent(
+                    new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
+                );
+
+                return;
+            }
+
+            if (status === 'completed' && mediaId > 0 && applyCompletedMediaToPlaceholder(mediaId, 'image', url)) {
+                return;
+            }
+
+            placeProcessingImagePlaceholder(refBlockId, url);
         };
 
         const onArticleAiVideoGenerated = (event) => {
             const blockId = (event.detail?.activeBlockId ?? '').trim();
             const url = (event.detail?.url ?? '').trim();
+            const status = String(event.detail?.status ?? '').toLowerCase();
+            const mediaId = Number(event.detail?.seoMediaId ?? 0);
+
             if (!blockId || !url) {
                 return;
             }
+
+            if (status === 'processing' && mediaId > 0) {
+                if (pendingAiMediaRef.current.has(mediaId)) {
+                    return;
+                }
+
+                const placeholderId = insertImageAfterBlock(blockId, url, {
+                    seoMediaId: mediaId,
+                    isProcessing: true,
+                });
+                if (placeholderId) {
+                    pendingAiMediaRef.current.set(mediaId, {
+                        blockId: placeholderId,
+                        mediaType: 'video',
+                    });
+                    startMediaStatusPolling(mediaId, 'video');
+                }
+
+                window.dispatchEvent(
+                    new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
+                );
+
+                return;
+            }
+
+            if (status === 'completed' && mediaId > 0 && applyCompletedMediaToPlaceholder(mediaId, 'video', url)) {
+                return;
+            }
+
             insertVideoAfterBlock(blockId, url);
         };
 
@@ -1741,10 +2293,18 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
             window.removeEventListener('seo-editor-analyze-result', handleAnalyzeResult);
             document.removeEventListener('mousedown', handleClickOutside);
+            for (const timer of mediaPollTimersRef.current.values()) {
+                window.clearTimeout(timer);
+            }
+            mediaPollTimersRef.current.clear();
+            pendingAiMediaRef.current.clear();
         };
     }, [
         activeBlockId,
         globalEditor,
+        applyCompletedMediaToPlaceholder,
+        placeProcessingImagePlaceholder,
+        resolveAiRefBlockId,
         updateBlockContent,
         clearTempMerge,
         articleId,
@@ -1752,6 +2312,7 @@ export default function SeoArticleEditor({
         initialPostImages,
         insertImageAfterBlock,
         insertVideoAfterBlock,
+        startMediaStatusPolling,
     ]);
 
     useEffect(() => {
@@ -1792,6 +2353,75 @@ export default function SeoArticleEditor({
         },
         [activeBlockId, commitActiveBlock],
     );
+
+    useEffect(() => {
+        if (!activeBlockId) {
+            return;
+        }
+
+        const sectionId = sectionByBlockId.get(activeBlockId);
+        if (!sectionId) {
+            return;
+        }
+
+        setCollapsedSectionIds((prev) =>
+            prev[sectionId]
+                ? {
+                      ...prev,
+                      [sectionId]: false,
+                  }
+                : prev,
+        );
+    }, [activeBlockId, sectionByBlockId]);
+
+    const toggleSectionCollapse = useCallback((sectionId) => {
+        setCollapsedSectionIds((prev) => ({
+            ...prev,
+            [sectionId]: !prev[sectionId],
+        }));
+    }, []);
+
+    useEffect(() => {
+        if (editorSections.length === 0) {
+            return;
+        }
+
+        setCollapsedSectionIds((prev) => {
+            if (Object.keys(prev).length > 0) {
+                return prev;
+            }
+
+            const next = { ...prev };
+            editorSections.forEach((section, index) => {
+                if (index > 0) {
+                    next[section.id] = true;
+                }
+            });
+
+            return next;
+        });
+    }, [editorSections]);
+
+    const addSection = useCallback(() => {
+        if (tempMergeRef.current) {
+            return;
+        }
+
+        commitActiveBlock();
+
+        const newSectionBlock = createEmptySectionBlock();
+        const sectionId = `section-${newSectionBlock.id}`;
+
+        setBlocks((prev) => normalizeBlocks([...prev, newSectionBlock]));
+        setInsertMenu(null);
+        setActiveTab('editor');
+        setActiveBlockId(newSectionBlock.id);
+        setGlobalEditor(null);
+        setCollapsedSectionIds((prev) => ({
+            ...prev,
+            [sectionId]: false,
+        }));
+    }, [commitActiveBlock]);
 
     return (
         <div className="seo-article-editor-root">
@@ -1857,117 +2487,217 @@ export default function SeoArticleEditor({
             {activeTab === 'editor' ? (
                 <div className="editor-container">
                     <div className="max-w-none space-y-3">
+                        <div className="flex items-center justify-end">
+                            <button
+                                type="button"
+                                onClick={addSection}
+                                className="inline-flex items-center gap-2 rounded border border-sky-300 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700 hover:bg-sky-100"
+                            >
+                                <Plus size={14} />
+                                Thêm section
+                            </button>
+                        </div>
+
                         {blocks.length === 0 ? (
                             <p className="text-gray-400 text-center py-10 italic text-sm">
                                 Đang tải nội dung bài viết…
                             </p>
                         ) : (
-                            blocks.map((block, blockIndex) => {
-                                const isActive = activeBlockId === block.id;
-                                const showInsert = isActive && !tempMerge;
-                                const canMoveUp = blockIndex > 0;
-                                const canMoveDown = blockIndex < blocks.length - 1;
-                                const handleMoveUp = () => moveBlock(block.id, 'up');
-                                const handleMoveDown = () => moveBlock(block.id, 'down');
+                            editorSections.map((section, sectionIndex) => {
+                                const isCollapsed = collapsedSectionIds[section.id] === true;
+                                const sectionNumber = editorSections
+                                    .slice(0, sectionIndex + 1)
+                                    .filter((item) => !item.isIntro).length;
+                                const sectionLabel = section.isIntro
+                                    ? 'Mở đầu'
+                                    : `Section ${sectionNumber}: ${section.title}`;
+                                const stats =
+                                    sectionStats.get(section.id) ?? {
+                                        imageCount: 0,
+                                        hasTable: false,
+                                        tableCount: 0,
+                                        linkCount: 0,
+                                    };
+
                                 return (
-                                    <div
-                                        key={block.id}
-                                        data-seo-block-id={block.id}
-                                        className={`seo-editor-block-slot ${isActive ? 'is-active' : ''}`}
+                                    <section
+                                        key={section.id}
+                                        className="rounded-lg border border-gray-200 bg-white/80 dark:border-gray-700 dark:bg-slate-900/40"
                                     >
-                                        {showInsert ? (
-                                            <>
-                                                <BlockInsertBar
-                                                    position="before"
-                                                    open={
-                                                        insertMenu?.blockId === block.id &&
-                                                        insertMenu?.position === 'before'
+                                        <header className="flex items-center justify-between gap-3 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                                            <div className="flex min-w-0 items-center gap-2">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => toggleSectionCollapse(section.id)}
+                                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-slate-700"
+                                                    title={isCollapsed ? 'Mở section' : 'Thu gọn section'}
+                                                >
+                                                    {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
+                                                </button>
+                                                <h3 className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
+                                                    {sectionLabel}
+                                                </h3>
+                                            </div>
+                                            <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                                                <span
+                                                    className={
+                                                        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ' +
+                                                        (stats.imageCount === 0
+                                                            ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/60 dark:bg-red-900/40 dark:text-red-200'
+                                                            : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-slate-800/60 dark:text-gray-200')
                                                     }
-                                                    onToggle={() => toggleInsertMenu(block.id, 'before')}
-                                                    canMoveUp={canMoveUp}
-                                                    canMoveDown={canMoveDown}
-                                                    onMoveUp={handleMoveUp}
-                                                    onMoveDown={handleMoveDown}
-                                                />
-                                                {insertMenu?.blockId === block.id &&
-                                                insertMenu?.position === 'before' ? (
-                                                    <BlockInsertMenuBar
-                                                        faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
-                                                        onClose={() => setInsertMenu(null)}
-                                                        onInsert={(type) =>
-                                                            insertBlockRelative(block.id, 'before', type)
-                                                        }
-                                                    />
+                                                    title="Số ảnh trong section"
+                                                >
+                                                    <ImageIcon size={11} />
+                                                    <span>{stats.imageCount}</span>
+                                                </span>
+
+                                                {stats.hasTable ? (
+                                                    <span
+                                                        className="ml-1 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800 dark:border-amber-500/60 dark:bg-amber-900/40 dark:text-amber-200"
+                                                        title="Có bảng trong section"
+                                                    >
+                                                        <Table size={11} />
+                                                        <span>{stats.tableCount}</span>
+                                                    </span>
                                                 ) : null}
-                                            </>
-                                        ) : null}
 
-                                        <BlockEditor
-                                            block={block}
-                                            articleId={articleId}
-                                            siteId={siteId}
-                                            isActive={isActive}
-                                            isHiddenInMerge={
-                                                Boolean(
-                                                    tempMerge &&
-                                                        tempMerge.rangeIds.includes(block.id) &&
-                                                        block.id !== tempMerge.anchorId,
-                                                )
-                                            }
-                                            canShiftMerge={Boolean(activeBlockId && activeBlockId !== block.id)}
-                                            onActivate={() => activateBlock(block.id)}
-                                            onShiftMerge={startTempMerge}
-                                            displayContent={
-                                                tempMerge &&
-                                                activeBlockId === block.id &&
-                                                block.id === tempMerge.anchorId
-                                                    ? mergedDisplay
-                                                    : undefined
-                                            }
-                                            suppressBlockUpdate={Boolean(
-                                                tempMerge &&
-                                                    activeBlockId === block.id &&
-                                                    block.id === tempMerge.anchorId,
-                                            )}
-                                            onUpdate={(newContent, imageData) =>
-                                                updateBlockContent(block.id, newContent, imageData)
-                                            }
-                                            onRegisterFlush={
-                                                isActive ? registerBlockFlush : undefined
-                                            }
-                                            setGlobalEditor={setGlobalEditor}
-                                            panelFaqs={panelFaqs}
-                                            onDelete={() => deleteBlock(block.id)}
-                                            canDeleteBlock={blocks.length > 1}
-                                        />
+                                                {stats.linkCount > 0 ? (
+                                                    <span
+                                                        className="ml-1 inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-800 dark:border-emerald-500/60 dark:bg-emerald-900/40 dark:text-emerald-200"
+                                                        title="Số link trong section"
+                                                    >
+                                                        <Link2 size={11} />
+                                                        <span>{stats.linkCount}</span>
+                                                    </span>
+                                                ) : null}
 
-                                        {showInsert ? (
-                                            <>
-                                                <BlockInsertBar
-                                                    position="after"
-                                                    open={
-                                                        insertMenu?.blockId === block.id &&
-                                                        insertMenu?.position === 'after'
+                                                <span className="ml-2 inline-block align-middle">
+                                                    {section.blockIds.length} block
+                                                </span>
+                                            </span>
+                                        </header>
+
+                                        {!isCollapsed ? (
+                                            <div className="space-y-3 p-3">
+                                                {section.blockIds.map((blockId) => {
+                                                    const block = blockById.get(blockId);
+                                                    if (!block) {
+                                                        return null;
                                                     }
-                                                    onToggle={() => toggleInsertMenu(block.id, 'after')}
-                                                    canMoveUp={canMoveUp}
-                                                    canMoveDown={canMoveDown}
-                                                    onMoveUp={handleMoveUp}
-                                                    onMoveDown={handleMoveDown}
-                                                />
-                                                {insertMenu?.blockId === block.id &&
-                                                insertMenu?.position === 'after' ? (
-                                                    <BlockInsertMenuBar
-                                                        faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
-                                                        onClose={() => setInsertMenu(null)}
-                                                        onInsert={(type) =>
-                                                            insertBlockRelative(block.id, 'after', type)
-                                                        }
-                                                    />
-                                                ) : null}
-                                            </>
+
+                                                    const blockIndex = blockIndexMap.get(block.id) ?? 0;
+                                                    const isActive = activeBlockId === block.id;
+                                                    const showInsert = isActive && !tempMerge;
+                                                    const canMoveUp = blockIndex > 0;
+                                                    const canMoveDown = blockIndex < blocks.length - 1;
+                                                    const handleMoveUp = () => moveBlock(block.id, 'up');
+                                                    const handleMoveDown = () => moveBlock(block.id, 'down');
+
+                                                    return (
+                                                        <div
+                                                            key={block.id}
+                                                            data-seo-block-id={block.id}
+                                                            className={`seo-editor-block-slot ${isActive ? 'is-active' : ''}`}
+                                                        >
+                                                            {showInsert ? (
+                                                                <>
+                                                                    <BlockInsertBar
+                                                                        position="before"
+                                                                        open={
+                                                                            insertMenu?.blockId === block.id &&
+                                                                            insertMenu?.position === 'before'
+                                                                        }
+                                                                        onToggle={() => toggleInsertMenu(block.id, 'before')}
+                                                                        canMoveUp={canMoveUp}
+                                                                        canMoveDown={canMoveDown}
+                                                                        onMoveUp={handleMoveUp}
+                                                                        onMoveDown={handleMoveDown}
+                                                                    />
+                                                                    {insertMenu?.blockId === block.id &&
+                                                                    insertMenu?.position === 'before' ? (
+                                                                        <BlockInsertMenuBar
+                                                                            faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
+                                                                            onClose={() => setInsertMenu(null)}
+                                                                            onInsert={(type) =>
+                                                                                insertBlockRelative(block.id, 'before', type)
+                                                                            }
+                                                                        />
+                                                                    ) : null}
+                                                                </>
+                                                            ) : null}
+
+                                                            <BlockEditor
+                                                                block={block}
+                                                                articleId={articleId}
+                                                                siteId={siteId}
+                                                                isActive={isActive}
+                                                                isHiddenInMerge={
+                                                                    Boolean(
+                                                                        tempMerge &&
+                                                                            tempMerge.rangeIds.includes(block.id) &&
+                                                                            block.id !== tempMerge.anchorId,
+                                                                    )
+                                                                }
+                                                                canShiftMerge={Boolean(activeBlockId && activeBlockId !== block.id)}
+                                                                onActivate={() => activateBlock(block.id)}
+                                                                onShiftMerge={startTempMerge}
+                                                                displayContent={
+                                                                    tempMerge &&
+                                                                    activeBlockId === block.id &&
+                                                                    block.id === tempMerge.anchorId
+                                                                        ? mergedDisplay
+                                                                        : undefined
+                                                                }
+                                                                suppressBlockUpdate={Boolean(
+                                                                    tempMerge &&
+                                                                        activeBlockId === block.id &&
+                                                                        block.id === tempMerge.anchorId,
+                                                                )}
+                                                                onUpdate={(newContent, imageData) =>
+                                                                    updateBlockContent(block.id, newContent, imageData)
+                                                                }
+                                                                onRegisterFlush={
+                                                                    isActive ? registerBlockFlush : undefined
+                                                                }
+                                                                setGlobalEditor={setGlobalEditor}
+                                                                panelFaqs={panelFaqs}
+                                                                onDelete={() => deleteBlock(block.id)}
+                                                                canDeleteBlock={blocks.length > 1}
+                                                            />
+
+                                                            {showInsert ? (
+                                                                <>
+                                                                    <BlockInsertBar
+                                                                        position="after"
+                                                                        open={
+                                                                            insertMenu?.blockId === block.id &&
+                                                                            insertMenu?.position === 'after'
+                                                                        }
+                                                                        onToggle={() => toggleInsertMenu(block.id, 'after')}
+                                                                        canMoveUp={canMoveUp}
+                                                                        canMoveDown={canMoveDown}
+                                                                        onMoveUp={handleMoveUp}
+                                                                        onMoveDown={handleMoveDown}
+                                                                    />
+                                                                    {insertMenu?.blockId === block.id &&
+                                                                    insertMenu?.position === 'after' ? (
+                                                                        <BlockInsertMenuBar
+                                                                            faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
+                                                                            onClose={() => setInsertMenu(null)}
+                                                                            onInsert={(type) =>
+                                                                                insertBlockRelative(block.id, 'after', type)
+                                                                            }
+                                                                        />
+                                                                    ) : null}
+                                                                </>
+                                                            ) : null}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
                                         ) : null}
-                                    </div>
+                                    </section>
                                 );
                             })
                         )}
@@ -1985,6 +2715,7 @@ export default function SeoArticleEditor({
                     onSlugChange={handleImageSlugChange}
                     onFocusBlock={focusImageBlock}
                     onQuickFixAll={quickFixAllImages}
+                    onQuickFixOne={quickFixSingleImage}
                     onNotify={(payload) => {
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', { detail: payload }),

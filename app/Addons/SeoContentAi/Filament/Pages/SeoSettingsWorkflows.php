@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsOptionsService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -133,5 +134,10 @@ class SeoSettingsWorkflows extends Page implements HasForms
             ->title('Đã lưu cấu hình quy trình')
             ->success()
             ->send();
+    }
+
+    public static function canAccess(): bool
+    {
+        return SeoAccessControl::canAccessManagerFeatures();
     }
 }

@@ -16,6 +16,7 @@ class SeoImageOptimizationService
 {
     public function __construct(
         private readonly SeoAnalyzerService $seoAnalyzer,
+        private readonly SeoMediaPathAllocator $mediaPaths,
     ) {}
 
     public function resolveForSite(?int $siteId): SeoImageOptimizationSetting
@@ -60,15 +61,14 @@ class SeoImageOptimizationService
             $slug = 'img-' . time();
         }
 
-        $slug .= '-' . random_int(100, 999);
-
         $extension = $config->auto_convert_webp
             ? 'webp'
             : $this->normalizeExtension($originalExtension);
 
-        $filename = $slug . '.' . $extension;
-        $randomFolder = Str::random(10);
-        $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+        $allocated = $this->mediaPaths->allocate($slug, $extension);
+        $slug = $allocated['slug'];
+        $filename = $allocated['filename'];
+        $relativePath = $allocated['relative_path'];
 
         $image = Image::decodePath($file->getRealPath());
         $this->applyConfiguredDimensionLimits($image, $config);
@@ -152,13 +152,14 @@ class SeoImageOptimizationService
             return ['applied' => false, 'absolute_path' => $absolutePath];
         }
 
-        $image = Image::decodePath($absolutePath);
+        try {
+            $encoded = $this->encodeOptimizedImage($absolutePath, $config, (bool) $config->auto_convert_webp);
+        } catch (\Throwable) {
+            return ['applied' => false, 'absolute_path' => $absolutePath];
+        }
 
-        if ($config->limit_dimensions) {
-            $image->scaleDown(
-                width: max(1, (int) $config->max_width),
-                height: max(1, (int) $config->max_height),
-            );
+        if ($encoded === null) {
+            return ['applied' => false, 'absolute_path' => $absolutePath];
         }
 
         $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
@@ -169,10 +170,6 @@ class SeoImageOptimizationService
         $targetExtension = $config->auto_convert_webp
             ? 'webp'
             : $this->normalizeExtension($currentExtension);
-
-        $quality = max(10, min(100, (int) $config->quality));
-        $format = $this->formatForExtension($targetExtension);
-        $encoded = (string) $image->encodeUsingFormat($format, quality: $quality);
 
         $directory = dirname($absolutePath);
         $basename = pathinfo($absolutePath, PATHINFO_FILENAME);
@@ -185,6 +182,117 @@ class SeoImageOptimizationService
         }
 
         return ['applied' => true, 'absolute_path' => $newAbsolutePath];
+    }
+
+    /**
+     * Tối ưu tạm để upload WordPress: giữ JPEG/PNG (không WebP), không đổi file gốc trên disk.
+     *
+     * @return array{path: string, temporary: bool, mime: string}|null
+     */
+    public function prepareWordPressUploadFile(string $absolutePath, SeoImageOptimizationSetting $config): ?array
+    {
+        if (! is_file($absolutePath) || ! $this->isValidImageFile($absolutePath)) {
+            return null;
+        }
+
+        try {
+            $encoded = $this->encodeOptimizedImage($absolutePath, $config, false);
+        } catch (\Throwable) {
+            return [
+                'path' => $absolutePath,
+                'temporary' => false,
+                'mime' => $this->mimeFromPath($absolutePath),
+            ];
+        }
+
+        if ($encoded === null) {
+            return [
+                'path' => $absolutePath,
+                'temporary' => false,
+                'mime' => $this->mimeFromPath($absolutePath),
+            ];
+        }
+
+        $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
+        if ($currentExtension === 'jpeg') {
+            $currentExtension = 'jpg';
+        }
+        if ($currentExtension === 'webp') {
+            $currentExtension = 'jpg';
+        }
+
+        $targetExtension = $this->normalizeExtension($currentExtension);
+        $tempBase = tempnam(sys_get_temp_dir(), 'seo_wp_upload_');
+        if ($tempBase === false) {
+            return [
+                'path' => $absolutePath,
+                'temporary' => false,
+                'mime' => $this->mimeFromPath($absolutePath),
+            ];
+        }
+
+        @unlink($tempBase);
+        $tempPath = $tempBase . '.' . $targetExtension;
+        file_put_contents($tempPath, $encoded);
+
+        if (! $this->isValidImageFile($tempPath)) {
+            @unlink($tempPath);
+
+            return [
+                'path' => $absolutePath,
+                'temporary' => false,
+                'mime' => $this->mimeFromPath($absolutePath),
+            ];
+        }
+
+        return [
+            'path' => $tempPath,
+            'temporary' => true,
+            'mime' => $this->mimeFromPath($tempPath),
+        ];
+    }
+
+    public function isValidImageFile(string $absolutePath): bool
+    {
+        if (! is_file($absolutePath)) {
+            return false;
+        }
+
+        $size = (int) filesize($absolutePath);
+        if ($size < 256) {
+            return false;
+        }
+
+        $info = @getimagesize($absolutePath);
+
+        return is_array($info) && (int) ($info[0] ?? 0) > 0 && (int) ($info[1] ?? 0) > 0;
+    }
+
+    /**
+     * @return string|null Binary ảnh đã encode, null nếu thất bại.
+     */
+    private function encodeOptimizedImage(
+        string $absolutePath,
+        SeoImageOptimizationSetting $config,
+        bool $convertToWebp,
+    ): ?string {
+        $image = Image::decodePath($absolutePath);
+        $this->applyConfiguredDimensionLimits($image, $config);
+
+        $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
+        if ($currentExtension === 'jpeg') {
+            $currentExtension = 'jpg';
+        }
+
+        $targetExtension = $convertToWebp
+            ? 'webp'
+            : $this->normalizeExtension($currentExtension === 'webp' ? 'jpg' : $currentExtension);
+
+        $quality = max(10, min(100, (int) $config->quality));
+        $format = $this->formatForExtension($targetExtension);
+        $encoded = (string) $image->encodeUsingFormat($format, quality: $quality);
+
+        return strlen($encoded) >= 256 ? $encoded : null;
     }
 
     public function absoluteToPublicRelative(string $absolutePath): string
@@ -268,15 +376,14 @@ class SeoImageOptimizationService
             $slug = 'img-' . time();
         }
 
-        $slug .= '-' . random_int(100, 999);
-
         $extension = $config->auto_convert_webp
             ? 'webp'
             : $this->normalizeExtension($originalExtension);
 
-        $filename = $slug . '.' . $extension;
-        $randomFolder = Str::random(10);
-        $relativePath = "uploads/seo_media/{$randomFolder}/{$filename}";
+        $allocated = $this->mediaPaths->allocate($slug, $extension);
+        $slug = $allocated['slug'];
+        $filename = $allocated['filename'];
+        $relativePath = $allocated['relative_path'];
 
         $image = Image::decodeBinary($binary);
         $this->applyConfiguredDimensionLimits($image, $config);

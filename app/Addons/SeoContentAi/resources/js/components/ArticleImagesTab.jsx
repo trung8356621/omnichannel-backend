@@ -1,10 +1,25 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Scissors, Wand2 } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ExternalLink, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Wand2 } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
-import { applyWatermarkToImage, buildMediaImageEditorUrl, prepareImageEditorUrl } from '../utils/seoMediaApi';
+import {
+    AI_PLACEHOLDER_LOADING_URL,
+    applyWatermarkToImage,
+    buildMediaImageEditorUrl,
+    fetchArticleAiMediaJobs,
+    prepareImageEditorUrl,
+    deleteAiMediaJob,
+    retryAiMediaGeneration,
+} from '../utils/seoMediaApi';
 
 const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
+/** Poll danh sách job AI tối đa 1 lần / phút khi còn job đang xử lý. */
+const AI_JOBS_POLL_MS = 60_000;
+
+const AI_STATUS_LABELS = {
+    processing: 'Đang tạo…',
+    failed: 'Thất bại',
+};
 
 function isLocalSeoMediaSrc(src) {
     return typeof src === 'string' && src.includes(LOCAL_MEDIA_PATH);
@@ -21,13 +36,183 @@ function canProcessArticleImage(row) {
     return isLocalSeoMediaSrc(row.src);
 }
 
-function ImageRow({ row, siteId, articleId, onPatch, onSlugChange, onFocusBlock, onNotify }) {
+function distinctUrls(primary, secondary) {
+    const a = String(primary || '').trim();
+    const b = String(secondary || '').trim();
+    if (!a || !b) return false;
+    return a !== b;
+}
+
+function AiMediaJobRow({ job, onRetry, onFocusBlock, onNotify }) {
+    const [retrying, setRetrying] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const status = String(job.status ?? 'processing').toLowerCase();
+    const statusLabel = AI_STATUS_LABELS[status] ?? status;
+    const previewSrc = job.url?.includes('placeholder-loading')
+        ? AI_PLACEHOLDER_LOADING_URL
+        : job.url || AI_PLACEHOLDER_LOADING_URL;
+    const mediaTypeLabel = job.media_type === 'video' ? 'Video AI' : 'Ảnh AI';
+    const editorBlockId = (job.editor_block_id ?? '').trim();
+
+    const handleRetry = async () => {
+        if (retrying || deleting || !job.id) {
+            return;
+        }
+
+        setRetrying(true);
+        try {
+            const data = await retryAiMediaGeneration(job.id);
+            onRetry?.(data);
+            onNotify?.({
+                title: 'Đã thử lại',
+                body: 'Job AI đã được đưa vào hàng đợi.',
+                status: 'success',
+            });
+
+            if (data.editor_block_id) {
+                window.dispatchEvent(
+                    new CustomEvent('article-ai-image-generated', {
+                        detail: {
+                            url: data.url,
+                            activeBlockId: data.editor_block_id,
+                            seoMediaId: data.id,
+                            status: data.status ?? 'processing',
+                            mediaType: data.media_type ?? 'image',
+                        },
+                    }),
+                );
+            }
+        } catch (error) {
+            onNotify?.({
+                title: 'Không thử lại được',
+                body: error?.message ?? 'Thử lại sau.',
+                status: 'danger',
+            });
+        } finally {
+            setRetrying(false);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (retrying || deleting || !job.id) {
+            return;
+        }
+
+        const ok = window.confirm('Xóa prompt ảnh này khỏi danh sách chờ?');
+        if (!ok) {
+            return;
+        }
+
+        setDeleting(true);
+        try {
+            await deleteAiMediaJob(job.id);
+            onRetry?.();
+            onNotify?.({
+                title: 'Đã xóa prompt ảnh',
+                body: `Đã xóa job #${job.id}.`,
+                status: 'success',
+            });
+        } catch (error) {
+            onNotify?.({
+                title: 'Không xóa được prompt ảnh',
+                body: error?.message ?? 'Thử lại sau.',
+                status: 'danger',
+            });
+        } finally {
+            setDeleting(false);
+        }
+    };
+
+    return (
+        <li className={`seo-article-images-row seo-article-images-row--ai-job is-${status}`}>
+            <div className="seo-article-images-preview">
+                <button
+                    type="button"
+                    className="seo-article-images-thumb-btn"
+                    onClick={() => editorBlockId && onFocusBlock?.(editorBlockId)}
+                    title={editorBlockId ? 'Chuyển tới vị trí trong editor' : 'Job AI'}
+                    disabled={!editorBlockId}
+                >
+                    <div className="seo-article-images-thumb seo-article-images-thumb--ai-placeholder">
+                        <img src={previewSrc} alt="" className="seo-article-images-thumb__img" />
+                        {status === 'processing' ? (
+                            <span className="seo-article-images-thumb__spinner" aria-hidden="true">
+                                <Loader2 size={22} className="animate-spin" />
+                            </span>
+                        ) : null}
+                    </div>
+                </button>
+                <p className="seo-article-images-alt">
+                    {mediaTypeLabel}
+                    <span className={`seo-article-images-ai-status is-${status}`}>{statusLabel}</span>
+                </p>
+            </div>
+
+            <div className="seo-article-images-fields">
+                <p className="seo-article-images-ai-meta">
+                    Job #{job.id}
+                    {job.slug ? ` · ${job.slug}` : ''}
+                </p>
+
+                {status === 'failed' && job.error_message ? (
+                    <p className="seo-article-images-ai-error" role="alert">
+                        {job.error_message}
+                    </p>
+                ) : null}
+
+                <div className="seo-article-images-actions">
+                    {status === 'failed' ? (
+                        <button
+                            type="button"
+                            className="seo-article-images-edit-btn"
+                            disabled={retrying || deleting}
+                            onClick={handleRetry}
+                            title="Chạy lại job AI với cùng prompt (không tạo bản ghi mới)"
+                        >
+                            <RotateCcw size={14} className={retrying ? 'animate-spin' : ''} />
+                            {retrying ? 'Đang thử lại…' : 'Thử lại'}
+                        </button>
+                    ) : (
+                        <span className="seo-article-images-ai-wait">Đang chờ AI xử lý trong hàng đợi…</span>
+                    )}
+                    <button
+                        type="button"
+                        className="seo-article-images-delete-btn"
+                        disabled={retrying || deleting}
+                        onClick={handleDelete}
+                        title="Xóa prompt ảnh khỏi danh sách"
+                    >
+                        <Trash2 size={14} />
+                        {deleting ? 'Đang xóa…' : 'Xóa'}
+                    </button>
+                </div>
+            </div>
+        </li>
+    );
+}
+
+function ImageRow({
+    row,
+    siteId,
+    articleId,
+    onPatch,
+    onSlugChange,
+    onFocusBlock,
+    onQuickFix,
+    canQuickFix = false,
+    onNotify,
+}) {
     const [slug, setSlug] = useState(row.slug ?? '');
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
     const altText = (row.alt || row.title || '').trim();
     const showActions = canProcessArticleImage(row);
     const busy = openingEditor || applyingWatermark;
+    const excluded = Boolean(row.excludeQuickFix);
+    const wpUrl = String(row.wpSrc || '').trim();
+    const localUrl = String(row.localSrc || '').trim();
+    const primaryUrl = wpUrl || String(row.src || '').trim();
+    const showLocalExtra = distinctUrls(primaryUrl, localUrl);
 
     useEffect(() => {
         setSlug(row.slug ?? '');
@@ -48,7 +233,6 @@ function ImageRow({ row, siteId, articleId, onPatch, onSlugChange, onFocusBlock,
                 slug: row.slug,
             });
             if (data.editor_url) {
-                // noopener khiến window.open trả null dù tab đã mở — không dùng location.assign.
                 window.open(data.editor_url, '_blank', 'noopener,noreferrer');
             }
         } catch (error) {
@@ -148,7 +332,9 @@ function ImageRow({ row, siteId, articleId, onPatch, onSlugChange, onFocusBlock,
                         onBlur={() => {
                             const trimmed = slug.trim();
                             if (trimmed !== row.slug) {
-                                const ok = onSlugChange?.(row, trimmed, (patch) => onPatch?.(row.blockId, patch));
+                                const ok = onSlugChange?.(row, trimmed, (patch) =>
+                                    onPatch?.(row.blockId, patch),
+                                );
                                 if (ok === false) {
                                     setSlug(row.slug ?? '');
                                 }
@@ -156,23 +342,76 @@ function ImageRow({ row, siteId, articleId, onPatch, onSlugChange, onFocusBlock,
                         }}
                         placeholder="tu-khoa-chinh-1"
                     />
-                    {row.wpAttachmentId ? (
-                        <span className="seo-article-images-wp-id">Ảnh nằm trong bài viết khác: WP #{row.wpAttachmentId}</span>
+                    {row.wpAttachmentId && primaryUrl ? (
+                        <a
+                            href={primaryUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="seo-article-images-wp-id"
+                            title={primaryUrl}
+                        >
+                            {`Ảnh nằm trong bài viết khác: ${primaryUrl}`}
+                        </a>
                     ) : null}
                 </div>
 
-                <a
-                    href={row.src}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="seo-article-images-src-link"
-                >
-                    <ExternalLink size={14} />
-                    <span className="truncate">{row.src}</span>
-                </a>
+                {primaryUrl ? (
+                    <a
+                        href={primaryUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="seo-article-images-src-link"
+                    >
+                        <ExternalLink size={14} />
+                        <span className="truncate">
+                            {wpUrl ? `WP: ${primaryUrl}` : primaryUrl}
+                        </span>
+                    </a>
+                ) : null}
+                {showLocalExtra ? (
+                    <a
+                        href={localUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="seo-article-images-src-link"
+                    >
+                        <ExternalLink size={14} />
+                        <span className="truncate">{`Local: ${localUrl}`}</span>
+                    </a>
+                ) : null}
 
                 {showActions ? (
                     <div className="seo-article-images-actions">
+                        <button
+                            type="button"
+                            className="seo-article-images-quick-fix-btn"
+                            disabled={busy || excluded || !canQuickFix}
+                            onClick={() => onQuickFix?.(row.blockId)}
+                            title={
+                                excluded
+                                    ? 'Ảnh đang Except — bỏ Except để Fix nhanh'
+                                    : canQuickFix
+                                      ? 'Alt/Title = từ khóa · Slug theo thứ tự ảnh trong bài'
+                                      : 'Cần từ khóa chính hoặc tiêu đề bài viết'
+                            }
+                        >
+                            <Wand2 size={14} />
+                            Fix nhanh
+                        </button>
+                        <button
+                            type="button"
+                            className={`seo-article-images-watermark-btn${excluded ? ' is-except' : ''}`}
+                            disabled={busy}
+                            onClick={() => onPatch?.(row.blockId, { excludeQuickFix: !excluded })}
+                            title={
+                                excluded
+                                    ? 'Đang loại khỏi Fix nhanh (bấm để cho phép Fix nhanh lại)'
+                                    : 'Except: Loại ảnh này khỏi Fix nhanh (không đổi slug/alt/title)'
+                            }
+                        >
+                            <ShieldOff size={14} />
+                            Except
+                        </button>
                         <button
                             type="button"
                             className="seo-article-images-edit-btn"
@@ -215,15 +454,64 @@ export default function ArticleImagesTab({
     onSlugChange,
     onFocusBlock,
     onQuickFixAll,
+    onQuickFixOne,
     onNotify,
 }) {
-    const images = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
-    const hasWpImages = images.some((row) => row.wpAttachmentId);
-    const hasLocalImages = images.some((row) => !row.wpAttachmentId && isLocalSeoMediaSrc(row.src));
-    const keywordSource = (focusKeyword || articleTitle || '').trim();
-    const canQuickFix = keywordSource.length > 0 && images.length > 0;
+    const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
+    const [aiJobs, setAiJobs] = useState([]);
 
-    if (!images.length) {
+    const loadAiJobs = useCallback(async () => {
+        if (!articleId) {
+            setAiJobs([]);
+            return;
+        }
+
+        try {
+            const items = await fetchArticleAiMediaJobs(articleId);
+            setAiJobs(items);
+        } catch {
+            // Giữ danh sách cũ khi poll lỗi mạng tạm thời.
+        }
+    }, [articleId]);
+
+    useEffect(() => {
+        loadAiJobs();
+    }, [loadAiJobs]);
+
+    useEffect(() => {
+        const refresh = () => loadAiJobs();
+        window.addEventListener('article-ai-image-generated', refresh);
+        window.addEventListener('article-ai-video-generated', refresh);
+        window.addEventListener('article-ai-media-job-updated', refresh);
+
+        return () => {
+            window.removeEventListener('article-ai-image-generated', refresh);
+            window.removeEventListener('article-ai-video-generated', refresh);
+            window.removeEventListener('article-ai-media-job-updated', refresh);
+        };
+    }, [loadAiJobs]);
+
+    useEffect(() => {
+        if (!articleId || aiJobs.length === 0) {
+            return undefined;
+        }
+
+        const hasProcessing = aiJobs.some((job) => String(job.status).toLowerCase() === 'processing');
+        if (!hasProcessing) {
+            return undefined;
+        }
+
+        const timer = window.setInterval(loadAiJobs, AI_JOBS_POLL_MS);
+        return () => window.clearInterval(timer);
+    }, [articleId, aiJobs, loadAiJobs]);
+
+    const totalCount = aiJobs.length + blockImages.length;
+    const hasWpImages = blockImages.some((row) => row.wpAttachmentId);
+    const hasLocalImages = blockImages.some((row) => !row.wpAttachmentId && isLocalSeoMediaSrc(row.src));
+    const keywordSource = (focusKeyword || articleTitle || '').trim();
+    const canQuickFix = keywordSource.length > 0 && blockImages.length > 0;
+
+    if (!totalCount) {
         return (
             <div className="seo-tab-panel seo-images-tab">
                 <p className="seo-images-tab-empty">Chưa có ảnh trong bài viết.</p>
@@ -236,7 +524,11 @@ export default function ArticleImagesTab({
             <div className="seo-images-tab-toolbar">
                 <div className="seo-images-tab-intro-wrap">
                     <p className="seo-images-tab-intro">
-                        {images.length} ảnh · Alt sửa trong editor hoặc Fix nhanh. Đổi slug để đổi tên file ảnh.
+                        {totalCount} mục
+                        {aiJobs.length > 0
+                            ? ` (${aiJobs.length} job AI, ${blockImages.length} ảnh trong bài)`
+                            : ` · ${blockImages.length} ảnh`}
+                        . Alt sửa trong editor hoặc Fix nhanh.
                     </p>
                     {hasLocalImages ? (
                         <p className="seo-images-tab-info">
@@ -269,7 +561,16 @@ export default function ArticleImagesTab({
                 </button>
             </div>
             <ul className="seo-article-images-list">
-                {images.map((row) => (
+                {aiJobs.map((job) => (
+                    <AiMediaJobRow
+                        key={`ai-job-${job.id}`}
+                        job={job}
+                        onRetry={loadAiJobs}
+                        onFocusBlock={onFocusBlock}
+                        onNotify={onNotify}
+                    />
+                ))}
+                {blockImages.map((row) => (
                     <ImageRow
                         key={row.blockId}
                         row={row}
@@ -278,6 +579,8 @@ export default function ArticleImagesTab({
                         onPatch={onPatchImage}
                         onSlugChange={onSlugChange}
                         onFocusBlock={onFocusBlock}
+                        onQuickFix={onQuickFixOne}
+                        canQuickFix={canQuickFix}
                         onNotify={onNotify}
                     />
                 ))}

@@ -54,10 +54,34 @@ final class WordPressArticleSyncService
         }
 
         $postContent = trim((string) ($article->body ?? ''));
+        $localMediaSyncErrors = [];
+        $syncedLocalMediaIds = [];
         if ($postContent !== '') {
             $postContent = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($postContent);
             $postContent = app(WorkflowParserService::class)->removeFaqAndAppendShortcodeFromContent($postContent);
             $postContent = app(ArticlePostContentFaqPlaceholder::class)->normalizeForWordPress($postContent);
+            try {
+                $localMediaSync = app(WordPressLocalMediaSyncService::class)->syncHtml($article, $postContent);
+            } catch (Throwable $mediaException) {
+                Log::warning('WordPress local media sync exception', [
+                    'article_id' => $article->id,
+                    'error' => $mediaException->getMessage(),
+                ]);
+                $localMediaSync = [
+                    'html' => $postContent,
+                    'errors' => ['Lỗi đồng bộ ảnh local: ' . $mediaException->getMessage()],
+                ];
+            }
+            $postContent = (string) ($localMediaSync['html'] ?? $postContent);
+            $localMediaSyncErrors = is_array($localMediaSync['errors'] ?? null)
+                ? $localMediaSync['errors']
+                : [];
+            $syncedLocalMediaIds = is_array($localMediaSync['synced_media_ids'] ?? null)
+                ? array_values(array_filter(array_map(
+                    static fn ($id): int => (int) $id,
+                    $localMediaSync['synced_media_ids'],
+                )))
+                : [];
         }
 
         $faqs = $article->resolveFaqs();
@@ -130,14 +154,39 @@ final class WordPressArticleSyncService
             }
 
             $this->storeWpPostContentMeta($article, $postContent);
+            if ($postContent !== '' && trim((string) ($article->body ?? '')) !== $postContent) {
+                // Sau khi sync, body Laravel dùng URL WordPress để tránh quay lại URL local.
+                $article->update(['body' => $postContent]);
+            }
 
             $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
             $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
+            $syncedFromPending = is_array($mediaPush['synced_local_media_ids'] ?? null)
+                ? array_values(array_filter(array_map(
+                    static fn ($id): int => (int) $id,
+                    $mediaPush['synced_local_media_ids'],
+                )))
+                : [];
+            $syncedLocalMediaIds = array_values(array_unique(array_merge(
+                $syncedLocalMediaIds,
+                $syncedFromPending,
+            )));
+
             if ($mediaPush['attempted']) {
                 if ($mediaPush['success']) {
                     $message .= ' Đã đẩy ảnh đại diện/album lên WordPress.';
                 } else {
                     $message .= ' Ảnh chưa đẩy được: ' . mb_substr((string) $mediaPush['message'], 0, 200);
+                }
+            }
+            if ($localMediaSyncErrors !== []) {
+                $message .= ' Một số ảnh trong nội dung chưa sync được: ' . mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
+            }
+
+            if ($syncedLocalMediaIds !== []) {
+                $trashed = app(WordPressLocalMediaSyncService::class)->markSyncedLocalMediaAsTrash($syncedLocalMediaIds);
+                if ($trashed > 0) {
+                    $message .= " Đã gắn cờ trash {$trashed} ảnh local đã đồng bộ.";
                 }
             }
 

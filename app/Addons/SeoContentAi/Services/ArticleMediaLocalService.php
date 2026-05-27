@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 
 final class ArticleMediaLocalService
 {
@@ -74,7 +75,7 @@ final class ArticleMediaLocalService
     }
 
     /**
-     * @return array{attempted: bool, success: bool, message: string}
+     * @return array{attempted: bool, success: bool, message: string, synced_local_media_ids: list<int>}
      */
     public function pushPendingMediaToWordPress(SeoArticle $article): array
     {
@@ -83,30 +84,78 @@ final class ArticleMediaLocalService
                 'attempted' => false,
                 'success' => true,
                 'message' => '',
+                'synced_local_media_ids' => [],
             ];
         }
 
         $article->loadMissing('articleMetas');
         $mediaService = app(WordPressArticleMediaService::class);
+        $localMediaSync = app(WordPressLocalMediaSyncService::class);
         $messages = [];
+        $syncErrors = [];
+        $syncedLocalMediaIds = [];
         $ok = true;
 
-        $featuredId = (int) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
-        if ($featuredId > 0) {
-            $result = $mediaService->setFeaturedImage($article, $featuredId);
-            $ok = $ok && ($result['success'] ?? false);
-            if (filled($result['message'] ?? null)) {
-                $messages[] = (string) $result['message'];
+        $featuredRefId = (int) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        if ($featuredRefId > 0) {
+            $resolved = $this->resolveWordPressAttachmentId($article, $featuredRefId, $localMediaSync);
+            if ($resolved['seo_media_id'] !== null) {
+                $syncedLocalMediaIds[] = (int) $resolved['seo_media_id'];
+            }
+            if (! ($resolved['success'] ?? false) || (int) ($resolved['attachment_id'] ?? 0) <= 0) {
+                $ok = false;
+                if (filled($resolved['message'] ?? null)) {
+                    $syncErrors[] = (string) $resolved['message'];
+                }
+            } else {
+                $featuredWpId = (int) $resolved['attachment_id'];
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => self::META_FEATURED_ATTACHMENT_ID],
+                    ['meta_value' => (string) $featuredWpId],
+                );
+                $result = $mediaService->setFeaturedImage($article, $featuredWpId);
+                $ok = $ok && ($result['success'] ?? false);
+                if (filled($result['message'] ?? null)) {
+                    $messages[] = (string) $result['message'];
+                }
             }
         }
 
-        $galleryIds = $this->resolveGalleryAttachmentIds($article);
-        if ($galleryIds !== []) {
-            $result = $mediaService->setProductGallery($article, $galleryIds);
-            $ok = $ok && ($result['success'] ?? false);
-            if (filled($result['message'] ?? null)) {
-                $messages[] = (string) $result['message'];
+        $galleryRefs = $this->resolveGalleryAttachmentIds($article);
+        if ($galleryRefs !== []) {
+            $galleryWpIds = [];
+            foreach ($galleryRefs as $refId) {
+                $resolved = $this->resolveWordPressAttachmentId($article, (int) $refId, $localMediaSync);
+                if ($resolved['seo_media_id'] !== null) {
+                    $syncedLocalMediaIds[] = (int) $resolved['seo_media_id'];
+                }
+                if (! ($resolved['success'] ?? false) || (int) ($resolved['attachment_id'] ?? 0) <= 0) {
+                    $ok = false;
+                    if (filled($resolved['message'] ?? null)) {
+                        $syncErrors[] = (string) $resolved['message'];
+                    }
+                    continue;
+                }
+
+                $galleryWpIds[] = (int) $resolved['attachment_id'];
             }
+
+            $galleryWpIds = array_values(array_unique(array_filter($galleryWpIds, static fn (int $id): bool => $id > 0)));
+            if ($galleryWpIds !== []) {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => self::META_PRODUCT_GALLERY_IDS],
+                    ['meta_value' => json_encode($galleryWpIds, JSON_UNESCAPED_UNICODE)],
+                );
+                $result = $mediaService->setProductGallery($article, $galleryWpIds);
+                $ok = $ok && ($result['success'] ?? false);
+                if (filled($result['message'] ?? null)) {
+                    $messages[] = (string) $result['message'];
+                }
+            }
+        }
+
+        if ($syncErrors !== []) {
+            $messages = array_merge($messages, $syncErrors);
         }
 
         if ($ok) {
@@ -117,6 +166,47 @@ final class ArticleMediaLocalService
             'attempted' => true,
             'success' => $ok,
             'message' => implode(' ', array_filter($messages)),
+            'synced_local_media_ids' => array_values(array_unique(array_filter(array_map(
+                static fn ($id): int => (int) $id,
+                $syncedLocalMediaIds,
+            )))),
+        ];
+    }
+
+    /**
+     * @return array{success: bool, attachment_id: int, seo_media_id: int|null, message: string}
+     */
+    private function resolveWordPressAttachmentId(
+        SeoArticle $article,
+        int $refId,
+        WordPressLocalMediaSyncService $localMediaSync,
+    ): array {
+        if ($refId <= 0) {
+            return [
+                'success' => false,
+                'attachment_id' => 0,
+                'seo_media_id' => null,
+                'message' => 'ID ảnh không hợp lệ.',
+            ];
+        }
+
+        $media = SeoMedia::query()->whereKey($refId)->first();
+        if (! $media instanceof SeoMedia) {
+            return [
+                'success' => true,
+                'attachment_id' => $refId,
+                'seo_media_id' => null,
+                'message' => '',
+            ];
+        }
+
+        $result = $localMediaSync->syncAttachmentRef($article, $refId);
+
+        return [
+            'success' => (bool) ($result['success'] ?? false),
+            'attachment_id' => (int) ($result['attachment_id'] ?? 0),
+            'seo_media_id' => isset($result['seo_media_id']) ? (int) $result['seo_media_id'] : null,
+            'message' => (string) ($result['message'] ?? ''),
         ];
     }
 
