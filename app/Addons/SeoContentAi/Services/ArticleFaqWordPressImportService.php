@@ -141,7 +141,11 @@ final class ArticleFaqWordPressImportService
             ];
         }
 
-        $result = $this->persistImportedFaqs($article, $this->resolveBestSourceHtml($article, $content, $item), $bestRows);
+        $result = $this->persistImportedFaqs(
+            $article,
+            $this->resolvePreferredWordPressSourceHtml($article, $content, $item),
+            $bestRows,
+        );
 
         return [
             'imported' => $result['imported'],
@@ -290,6 +294,35 @@ final class ArticleFaqWordPressImportService
         $candidates = $this->resolveHtmlCandidates($article, $html, $syncItem);
 
         return $candidates[0] ?? '';
+    }
+
+    /**
+     * Ưu tiên HTML mới nhất kéo về từ WordPress khi import/sync.
+     * Chỉ fallback sang snapshot/meta cũ nếu payload WP trả rỗng hoàn toàn.
+     *
+     * @param  array<string, mixed>|null  $syncItem
+     */
+    private function resolvePreferredWordPressSourceHtml(SeoArticle $article, ?string $html = null, ?array $syncItem = null): string
+    {
+        $remote = trim((string) ($html ?? ''));
+        if ($remote !== '') {
+            return $this->workflowParser->preprocessHtmlForFaqExtraction($remote);
+        }
+
+        if (is_array($syncItem)) {
+            $postContent = trim((string) ($syncItem['post_content'] ?? ''));
+            if ($postContent !== '') {
+                return $this->workflowParser->preprocessHtmlForFaqExtraction($postContent);
+            }
+
+            $scoring = is_array($syncItem['scoring'] ?? null) ? $syncItem['scoring'] : [];
+            $scoringBody = trim((string) ($scoring['body'] ?? ''));
+            if ($scoringBody !== '') {
+                return $this->workflowParser->preprocessHtmlForFaqExtraction($scoringBody);
+            }
+        }
+
+        return $this->resolveBestSourceHtml($article, $html, $syncItem);
     }
 
     /**

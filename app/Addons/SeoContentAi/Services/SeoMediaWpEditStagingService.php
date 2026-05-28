@@ -20,6 +20,7 @@ final class SeoMediaWpEditStagingService
         private readonly WordPressMediaWatermarkService $wpMedia,
         private readonly SeoMediaStorageService $mediaStorage,
         private readonly SeoWpMediaEditedPendingService $editedPending,
+        private readonly SeoMediaPathAllocator $mediaPathAllocator,
     ) {}
 
     /**
@@ -68,12 +69,13 @@ final class SeoMediaWpEditStagingService
                 $tempPath,
             );
 
-            $relativePath = sprintf(
-                'uploads/seo_media/wp-staging/%d/%d.%s',
-                $site->id,
-                $wpAttachmentId,
+            $allocated = $this->mediaPathAllocator->allocate(
+                'wp-staging-' . $site->id . '-' . $wpAttachmentId,
                 $extension,
+                $existing?->path,
             );
+            $relativePath = $allocated['relative_path'];
+            $slug = $allocated['slug'];
 
             Storage::disk('public')->put($relativePath, $binary);
 

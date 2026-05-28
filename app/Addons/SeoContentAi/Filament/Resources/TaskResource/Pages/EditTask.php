@@ -16,7 +16,7 @@ class EditTask extends EditRecord
     {
         return [
             Actions\Action::make('open_builder')
-                ->label('Mở Workflow Builder')
+                ->label('Open workflow builder')
                 ->icon('heroicon-o-squares-2x2')
                 ->color('info')
                 ->url(fn (): string => TaskResource::getUrl('builder', ['record' => $this->record])),

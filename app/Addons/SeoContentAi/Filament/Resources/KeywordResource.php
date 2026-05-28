@@ -60,12 +60,27 @@ class KeywordResource extends Resource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.keywords');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.keyword');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.keywords');
+    }
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
                 Forms\Components\Select::make('site_id')
-                    ->label('Domain')
+                    ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->options(fn (): array => static::siteSelectOptions())
                     ->default(fn (): ?int => SeoAccessControl::globalSiteId())
                     ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
@@ -75,7 +90,7 @@ class KeywordResource extends Resource
                     ->native(false),
 
                 Forms\Components\TextInput::make('phrase')
-                    ->label('Phrase / Anchor text')
+                    ->label(__('seo-content-ai::filament.keyword.phrase'))
                     ->required()
                     ->maxLength(255)
                     ->unique(
@@ -91,17 +106,17 @@ class KeywordResource extends Resource
                     ->rule(fn (Get $get): array => $get('type') === Keyword::TYPE_INTERNAL
                         ? [function (string $attribute, mixed $value, \Closure $fail): void {
                             if (! InternalAnchorKeywordFilter::isUsableAnchorPhrase((string) $value)) {
-                                $fail('Anchor text không được là URL hoặc đường dẫn.');
+                                $fail(__('seo-content-ai::filament.keyword.anchor_text_invalid'));
                             }
                         }]
                         : [])
                     ->columnSpanFull(),
 
                 Forms\Components\Select::make('type')
-                    ->label('Type')
+                    ->label(__('seo-content-ai::filament.keyword.type'))
                     ->options([
-                        Keyword::TYPE_FOCUS => 'Focus (từ khóa SEO)',
-                        Keyword::TYPE_INTERNAL => 'Internal (anchor link)',
+                        Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus'),
+                        Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal'),
                     ])
                     ->default(Keyword::TYPE_FOCUS)
                     ->required()
@@ -109,7 +124,7 @@ class KeywordResource extends Resource
                     ->live(),
 
                 Forms\Components\TextInput::make('target_url')
-                    ->label('URL đích (internal)')
+                    ->label(__('seo-content-ai::filament.keyword.target_url'))
                     ->maxLength(2000)
                     ->url()
                     ->visible(fn (Get $get): bool => $get('type') === Keyword::TYPE_INTERNAL)
@@ -124,7 +139,7 @@ class KeywordResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('site.domain')
-                    ->label('Domain')
+                    ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->searchable(query: function (Builder $query, string $search): Builder {
                         $like = '%' . addcslashes($search, '%_\\') . '%';
                         $siteIds = Site::query()->where('domain', 'like', $like)->pluck('id');
@@ -146,7 +161,7 @@ class KeywordResource extends Resource
                     }),
 
                 Tables\Columns\TextColumn::make('type')
-                    ->label('Type')
+                    ->label(__('seo-content-ai::filament.keyword.type'))
                     ->badge()
                     ->sortable()
                     ->color(fn (string $state): string => match ($state) {
@@ -155,20 +170,20 @@ class KeywordResource extends Resource
                         default => 'gray',
                     })
                     ->formatStateUsing(fn (string $state): string => match ($state) {
-                        Keyword::TYPE_FOCUS => 'Focus',
-                        Keyword::TYPE_INTERNAL => 'Internal',
+                        Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus_short'),
+                        Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal_short'),
                         default => $state,
                     }),
 
                 Tables\Columns\TextColumn::make('phrase')
-                    ->label('Phrase')
+                    ->label(__('seo-content-ai::filament.keyword.phrase_short'))
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
                     ->wrap(),
 
                 Tables\Columns\TextColumn::make('main_articles_count')
-                    ->label('Bài viết chính')
+                    ->label(__('seo-content-ai::filament.keyword.main_articles'))
                     ->sortable()
                     ->alignCenter()
                     ->badge()
@@ -185,7 +200,7 @@ class KeywordResource extends Resource
                     }),
 
                 Tables\Columns\TextColumn::make('linked_articles_count')
-                    ->label('Bài viết liên kết')
+                    ->label(__('seo-content-ai::filament.keyword.linked_articles'))
                     ->sortable()
                     ->alignCenter()
                     ->badge()
@@ -204,33 +219,33 @@ class KeywordResource extends Resource
             ->defaultSort('phrase')
             ->filters([
                 Tables\Filters\SelectFilter::make('site_id')
-                    ->label('Domain')
+                    ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->options(fn (): array => static::siteSelectOptions())
                     ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                     ->searchable()
                     ->preload()
                     ->native(false),
                 Tables\Filters\SelectFilter::make('type')
-                    ->label('Type')
+                    ->label(__('seo-content-ai::filament.keyword.type'))
                     ->options([
-                        Keyword::TYPE_FOCUS => 'Focus',
-                        Keyword::TYPE_INTERNAL => 'Internal',
+                        Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus_short'),
+                        Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal_short'),
                     ]),
             ])
             ->actions([
                 Tables\Actions\Action::make('write_article')
-                    ->label('Viết bài')
+                    ->label(__('seo-content-ai::filament.keyword.write_article'))
                     ->icon('heroicon-o-pencil-square')
                     ->color('success')
                     ->visible(fn (Keyword $record): bool => $record->type === Keyword::TYPE_INTERNAL
                         && (int) ($record->main_articles_count ?? 0) < 1)
                     ->requiresConfirmation()
-                    ->modalHeading('Viết bài từ keyword')
+                    ->modalHeading(__('seo-content-ai::filament.keyword.write_article_from_keyword'))
                     ->modalDescription(fn (Keyword $record): string => sprintf(
-                        'Chạy quy trình «Đăng bài viết» (SEO → Tùy chỉnh) với từ khóa «%s» — gán vào biến focus_keyword trong prompt.',
+                        __('seo-content-ai::filament.keyword.write_article_description'),
                         $record->phrase,
                     ))
-                    ->modalSubmitActionLabel('Chạy quy trình & tạo bài')
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.keyword.run_workflow_create_article'))
                     ->action(function (Keyword $record, CreateArticlesFromTaskService $service): void {
                         try {
                             $result = $service->runFromSingleKeyword(
@@ -240,18 +255,18 @@ class KeywordResource extends Resource
 
                             CreateArticleWorkflowNotification::send(
                                 $result,
-                                'Đã chạy quy trình tạo bài',
+                                __('seo-content-ai::filament.keyword.write_article'),
                             );
                         } catch (\InvalidArgumentException $exception) {
                             Notification::make()
-                                ->title('Không thể tạo bài')
+                                ->title(__('seo-content-ai::filament.keyword.cannot_create_article'))
                                 ->body($exception->getMessage())
                                 ->danger()
                                 ->send();
                         }
                     }),
                 Tables\Actions\Action::make('view_main_articles')
-                    ->label('Bài chính')
+                    ->label(__('seo-content-ai::filament.keyword.main_articles'))
                     ->icon('heroicon-o-document-text')
                     ->color('info')
                     ->visible(fn (Keyword $record): bool => (int) ($record->main_articles_count ?? 0) > 0)
@@ -260,7 +275,7 @@ class KeywordResource extends Resource
                         (int) $record->id,
                     )),
                 Tables\Actions\Action::make('view_linked_articles')
-                    ->label('Bài có link')
+                    ->label(__('seo-content-ai::filament.keyword.linked_articles'))
                     ->icon('heroicon-o-link')
                     ->color('primary')
                     ->visible(fn (Keyword $record): bool => (int) ($record->linked_articles_count ?? 0) > 0)

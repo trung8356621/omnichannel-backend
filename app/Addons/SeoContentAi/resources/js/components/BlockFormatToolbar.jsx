@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import ParagraphStyleDropdown from './ParagraphStyleDropdown';
 import EmojiPickerModal from './EmojiPickerModal';
+import { t } from '../utils/i18n';
 
 const ICON_SIZE = 16;
 
@@ -102,28 +103,28 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleBold().run()}
                         isActive={editor.isActive('bold')}
-                        title="In đậm"
+                        title={t('toolbar_bold')}
                     >
                         <Bold size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleItalic().run()}
                         isActive={editor.isActive('italic')}
-                        title="In nghiêng"
+                        title={t('toolbar_italic')}
                     >
                         <Italic size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleUnderline().run()}
                         isActive={editor.isActive('underline')}
-                        title="Gạch chân"
+                        title={t('toolbar_underline')}
                     >
                         <Underline size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleStrike().run()}
                         isActive={editor.isActive('strike')}
-                        title="Gạch ngang"
+                        title={t('toolbar_strikethrough')}
                     >
                         <Strikethrough size={ICON_SIZE} />
                     </ToolbarButton>
@@ -133,28 +134,28 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleBlockquote().run()}
                         isActive={editor.isActive('blockquote')}
-                        title="Trích dẫn"
+                        title={t('toolbar_quote')}
                     >
                         <Quote size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleCode().run()}
                         isActive={editor.isActive('code')}
-                        title="Mã inline"
+                        title={t('toolbar_inline_code')}
                     >
                         <Code size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleBulletList().run()}
                         isActive={editor.isActive('bulletList')}
-                        title="Danh sách chấm"
+                        title={t('toolbar_bullet_list')}
                     >
                         <List size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleOrderedList().run()}
                         isActive={editor.isActive('orderedList')}
-                        title="Danh sách số"
+                        title={t('toolbar_ordered_list')}
                     >
                         <ListOrdered size={ICON_SIZE} />
                     </ToolbarButton>
@@ -164,28 +165,28 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={() => editor.chain().focus().setTextAlign('left').run()}
                         isActive={editor.isActive({ textAlign: 'left' })}
-                        title="Căn trái"
+                        title={t('toolbar_align_left')}
                     >
                         <AlignLeft size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().setTextAlign('center').run()}
                         isActive={editor.isActive({ textAlign: 'center' })}
-                        title="Căn giữa"
+                        title={t('toolbar_align_center')}
                     >
                         <AlignCenter size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().setTextAlign('right').run()}
                         isActive={editor.isActive({ textAlign: 'right' })}
-                        title="Căn phải"
+                        title={t('toolbar_align_right')}
                     >
                         <AlignRight size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().setTextAlign('justify').run()}
                         isActive={editor.isActive({ textAlign: 'justify' })}
-                        title="Căn đều"
+                        title={t('toolbar_align_justify')}
                     >
                         <AlignJustify size={ICON_SIZE} />
                     </ToolbarButton>
@@ -195,14 +196,14 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={openLinkEditor}
                         isActive={editor.isActive('link')}
-                        title="Chèn / sửa link"
+                        title={t('toolbar_insert_edit_link')}
                     >
                         <Link2 size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().unsetLink().run()}
                         disabled={!editor.isActive('link')}
-                        title="Gỡ link"
+                        title={t('toolbar_unlink')}
                     >
                         <Unlink size={ICON_SIZE} />
                     </ToolbarButton>
@@ -211,7 +212,7 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                             e.preventDefault();
                             openEmojiPicker();
                         }}
-                        title="Chèn emoji"
+                        title={t('toolbar_insert_emoji')}
                     >
                         <Smile size={ICON_SIZE} />
                     </ToolbarButton>
@@ -221,20 +222,20 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={() => editor.chain().focus().undo().run()}
                         disabled={!editor.can().undo()}
-                        title="Hoàn tác"
+                        title={t('toolbar_undo')}
                     >
                         <Undo2 size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().redo().run()}
                         disabled={!editor.can().redo()}
-                        title="Làm lại"
+                        title={t('toolbar_redo')}
                     >
                         <Redo2 size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()}
-                        title="Xóa định dạng"
+                        title={t('toolbar_clear_format')}
                     >
                         <RemoveFormatting size={ICON_SIZE} />
                     </ToolbarButton>
@@ -246,27 +247,27 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleHighlight().run()}
                         isActive={editor.isActive('highlight')}
-                        title="Đánh dấu"
+                        title={t('toolbar_highlight')}
                     >
                         <Highlighter size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleSubscript().run()}
                         isActive={editor.isActive('subscript')}
-                        title="Chỉ số dưới"
+                        title={t('toolbar_subscript')}
                     >
                         <Subscript size={ICON_SIZE} />
                     </ToolbarButton>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().toggleSuperscript().run()}
                         isActive={editor.isActive('superscript')}
-                        title="Chỉ số trên"
+                        title={t('toolbar_superscript')}
                     >
                         <Superscript size={ICON_SIZE} />
                     </ToolbarButton>
                     <input
                         type="color"
-                        title="Màu chữ"
+                        title={t('toolbar_text_color')}
                         className="seo-toolbar-color"
                         onChange={(e) => editor.chain().focus().setColor(e.target.value).run()}
                     />
@@ -275,7 +276,7 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                 <ToolbarGroup>
                     <ToolbarButton
                         onClick={() => editor.chain().focus().setHorizontalRule().run()}
-                        title="Đường kẻ ngang"
+                        title={t('toolbar_horizontal_rule')}
                     >
                         <Minus size={ICON_SIZE} />
                     </ToolbarButton>
@@ -287,7 +288,7 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                                 .insertTable({ rows: 3, cols: 3, withHeaderRow: true })
                                 .run()
                         }
-                        title="Chèn bảng"
+                        title={t('toolbar_insert_table')}
                     >
                         <Table size={ICON_SIZE} />
                     </ToolbarButton>
@@ -299,7 +300,7 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     onClick={() => {
                         window.dispatchEvent(new CustomEvent('extract-article-faqs-from-toolbar'));
                     }}
-                    title="Tách FAQ từ đoạn đang bôi đen (hoặc cả block)"
+                    title={t('toolbar_extract_faq')}
                 >
                     <ListTree size={ICON_SIZE} />
                 </ToolbarButton>
@@ -309,7 +310,7 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => canDelete && onDelete?.()}
                     disabled={!canDelete}
-                    title={canDelete ? 'Xóa đoạn văn' : 'Không thể xóa đoạn cuối cùng'}
+                    title={canDelete ? t('toolbar_delete_paragraph') : t('toolbar_cannot_delete_last')}
                     className={`seo-toolbar-btn seo-toolbar-delete${!canDelete ? ' is-disabled' : ''}`}
                 >
                     <Trash2 size={ICON_SIZE} />

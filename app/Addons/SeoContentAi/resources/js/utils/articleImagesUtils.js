@@ -277,6 +277,7 @@ export function applyQuickFixMetaToBlocks(blocks, keyword) {
     let result = blocks;
     const renameQueue = [];
     const localRenameQueue = [];
+    const localRenameSeen = new Set();
 
     eligible.forEach((row) => {
         const slugIndex = quickFixSlugIndexForBlock(images, row.blockId);
@@ -300,13 +301,20 @@ export function applyQuickFixMetaToBlocks(blocks, keyword) {
         } else {
             // Laravel media: chỉ đổi slug sau khi server rename xong (không đổi src trước).
             if (slug !== oldSlug) {
-                localRenameQueue.push({
-                    seo_media_id: row.seoMediaId ?? null,
-                    src: row.src,
-                    block_id: row.blockId,
-                    new_slug: slug,
-                    old_slug: oldSlug,
-                });
+                const localKey =
+                    row.seoMediaId != null && Number(row.seoMediaId) > 0
+                        ? `id:${Number(row.seoMediaId)}`
+                        : `src:${String(row.src || '').trim()}`;
+                if (!localRenameSeen.has(localKey)) {
+                    localRenameSeen.add(localKey);
+                    localRenameQueue.push({
+                        seo_media_id: row.seoMediaId ?? null,
+                        src: row.src,
+                        block_id: row.blockId,
+                        new_slug: slug,
+                        old_slug: oldSlug,
+                    });
+                }
             }
         }
 

@@ -22,7 +22,7 @@ class EditPrompt extends EditRecord
 
         return [
             Actions\Action::make('test')
-                ->label($isReady ? 'Chạy thử' : 'Đồng bộ model')
+                ->label($isReady ? 'Run test' : 'Sync models')
                 ->icon($isReady ? 'heroicon-o-play' : 'heroicon-o-cpu-chip')
                 ->color($isReady ? 'success' : 'warning')
                 ->url(

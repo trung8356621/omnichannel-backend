@@ -32,6 +32,8 @@ class SeoArticle extends Model
     protected $casts = [
         'blocks'       => 'array',
         'seo_score'    => 'decimal:2',
+        'is_reviewed'  => 'boolean',
+        'reviewed_at'  => 'datetime',
         'published_at' => 'datetime',
     ];
 

@@ -27,9 +27,9 @@ class MediaLibrary extends Page
 {
     protected static ?string $navigationIcon = 'heroicon-o-photo';
 
-    protected static ?string $navigationLabel = 'Thư viện hình ảnh';
+    protected static ?string $navigationLabel = 'Media library';
 
-    protected static ?string $title = 'Thư viện hình ảnh';
+    protected static ?string $title = 'Media library';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
@@ -129,7 +129,7 @@ class MediaLibrary extends Page
             $this->previewPendingWpSync = true;
         }
 
-        $this->previewMessage = 'Đã lưu chỉnh sửa ảnh.';
+        $this->previewMessage = __('seo-content-ai::filament.media_runtime.image_edits_saved');
         $this->previewMessageType = 'success';
         $this->previewOpen = true;
         $this->syncPreviewWpSyncState();
@@ -144,7 +144,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -154,7 +154,7 @@ class MediaLibrary extends Page
                 ->resolve($site, $this->previewImage);
         } catch (\Throwable $e) {
             Notification::make()
-                ->title('Không mở được trình chỉnh sửa')
+                ->title(__('seo-content-ai::filament.media_runtime.unable_to_open_editor'))
                 ->body($e->getMessage())
                 ->danger()
                 ->send();
@@ -182,7 +182,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -194,7 +194,7 @@ class MediaLibrary extends Page
             ->first();
 
         if ($media === null) {
-            Notification::make()->title('Không tìm thấy bản staging')->warning()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.staging_copy_not_found'))->warning()->send();
 
             return;
         }
@@ -207,7 +207,7 @@ class MediaLibrary extends Page
         $this->previewBusy = false;
 
         if (! ($result['success'] ?? false)) {
-            $this->previewMessage = (string) ($result['message'] ?? 'Đồng bộ thất bại.');
+            $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.sync_failed'));
             $this->previewMessageType = 'error';
             Notification::make()->title($this->previewMessage)->warning()->send();
 
@@ -220,7 +220,7 @@ class MediaLibrary extends Page
         }
 
         $this->previewPendingWpSync = false;
-        $this->previewMessage = (string) ($result['message'] ?? 'Đã đồng bộ lên WordPress.');
+        $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.synced_to_wordpress'));
         $this->previewMessageType = 'success';
         $this->syncPreviewProcessingState($this->previewImage);
         $this->syncPreviewWpSyncState();
@@ -318,7 +318,7 @@ class MediaLibrary extends Page
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
             Notification::make()
-                ->title('Không tìm thấy domain')
+                ->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))
                 ->danger()
                 ->send();
 
@@ -328,7 +328,7 @@ class MediaLibrary extends Page
         $newSlug = Str::slug(trim($this->editingSlug));
         if ($newSlug === '') {
             Notification::make()
-                ->title('Slug không hợp lệ')
+                ->title(__('seo-content-ai::filament.media_runtime.invalid_slug'))
                 ->danger()
                 ->send();
 
@@ -355,14 +355,14 @@ class MediaLibrary extends Page
                 if ($media === null) {
                     $result = [
                         'success' => false,
-                        'message' => 'Không tìm thấy ảnh nội bộ.',
+                        'message' => __('seo-content-ai::filament.media_runtime.local_image_not_found'),
                     ];
                 } else {
                     try {
                         app(SeoMediaLibraryService::class)->renameLocalBySlug($media, $newSlug);
                         $result = [
                             'success' => true,
-                            'message' => 'Đã cập nhật slug file trên Laravel storage.',
+                            'message' => __('seo-content-ai::filament.media_runtime.updated_file_slug'),
                         ];
                     } catch (\InvalidArgumentException|\RuntimeException $e) {
                         $result = [
@@ -383,7 +383,7 @@ class MediaLibrary extends Page
 
         if (! ($result['success'] ?? false)) {
             Notification::make()
-                ->title('Không cập nhật được slug')
+                ->title(__('seo-content-ai::filament.media_runtime.unable_to_update_slug'))
                 ->body((string) ($result['message'] ?? ''))
                 ->danger()
                 ->send();
@@ -392,7 +392,7 @@ class MediaLibrary extends Page
         }
 
         Notification::make()
-            ->title('Đã cập nhật slug')
+            ->title(__('seo-content-ai::filament.media_runtime.slug_updated'))
             ->body((string) ($result['message'] ?? ''))
             ->success()
             ->send();
@@ -411,14 +411,14 @@ class MediaLibrary extends Page
         $this->totalPages = 1;
 
         if ($this->siteId === null || $this->siteId <= 0) {
-            $this->loadError = 'Chọn tên miền để xem thư viện ảnh.';
+            $this->loadError = __('seo-content-ai::filament.media_runtime.select_domain_to_view');
 
             return;
         }
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            $this->loadError = 'Không tìm thấy domain.';
+            $this->loadError = __('seo-content-ai::filament.media_runtime.domain_not_found_dot');
 
             return;
         }
@@ -538,8 +538,8 @@ class MediaLibrary extends Page
     {
         if ($this->siteId === null || $this->siteId <= 0) {
             Notification::make()
-                ->title('Chọn tên miền')
-                ->body('Chọn domain trước khi resize.')
+                ->title(__('seo-content-ai::filament.media_runtime.select_domain'))
+                ->body(__('seo-content-ai::filament.media_runtime.select_domain_before_resizing'))
                 ->warning()
                 ->send();
 
@@ -548,8 +548,8 @@ class MediaLibrary extends Page
 
         if ($this->selectedKeys === []) {
             Notification::make()
-                ->title('Chưa chọn ảnh')
-                ->body('Click ảnh để chọn — double-click để xem / xử lý.')
+                ->title(__('seo-content-ai::filament.media_runtime.no_images_selected'))
+                ->body(__('seo-content-ai::filament.media_runtime.select_image_hint'))
                 ->warning()
                 ->send();
 
@@ -565,8 +565,8 @@ class MediaLibrary extends Page
 
         if ($targetWidth === null && $targetHeight === null) {
             Notification::make()
-                ->title('Thiếu kích thước')
-                ->body('Nhập Width hoặc Height (px). Cả hai: resize đúng kích thước, bỏ qua tỉ lệ.')
+                ->title(__('seo-content-ai::filament.media_runtime.missing_dimensions'))
+                ->body(__('seo-content-ai::filament.media_runtime.resize_dimension_hint'))
                 ->warning()
                 ->send();
 
@@ -575,7 +575,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -606,20 +606,20 @@ class MediaLibrary extends Page
 
         if ($successCount > 0 && $failedLabels === []) {
             Notification::make()
-                ->title('Đã resize')
-                ->body("{$successCount} ảnh đã được cập nhật.")
+                ->title(__('seo-content-ai::filament.media_runtime.resize_complete'))
+                ->body("{$successCount} images were updated.")
                 ->success()
                 ->send();
         } elseif ($successCount > 0) {
             Notification::make()
-                ->title('Resize một phần')
-                ->body("Thành công: {$successCount}. Lỗi: " . implode(', ', array_slice($failedLabels, 0, 5)))
+                ->title(__('seo-content-ai::filament.media_runtime.resize_partial'))
+                ->body("Success: {$successCount}. Failed: " . implode(', ', array_slice($failedLabels, 0, 5)))
                 ->warning()
                 ->send();
         } else {
             Notification::make()
-                ->title('Không resize được')
-                ->body('Không ảnh nào được cập nhật.')
+                ->title(__('seo-content-ai::filament.media_runtime.resize_failed'))
+                ->body(__('seo-content-ai::filament.media_runtime.no_images_updated'))
                 ->danger()
                 ->send();
         }
@@ -628,21 +628,21 @@ class MediaLibrary extends Page
     public function deleteLibraryImage(string $key): void
     {
         if ($this->siteId === null || $this->siteId <= 0) {
-            Notification::make()->title('Chọn tên miền')->warning()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 
             return;
         }
 
         $image = $this->findImageRowBySelectionKey($key);
         if ($image === null) {
-            Notification::make()->title('Không tìm thấy ảnh')->warning()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.image_not_found'))->warning()->send();
 
             return;
         }
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -651,7 +651,7 @@ class MediaLibrary extends Page
 
         if ($result['success'] ?? false) {
             Notification::make()
-                ->title('Đã xóa')
+                ->title(__('seo-content-ai::filament.media_runtime.deleted'))
                 ->body((string) ($result['message'] ?? ''))
                 ->success()
                 ->send();
@@ -662,7 +662,7 @@ class MediaLibrary extends Page
             $this->loadImages();
         } else {
             Notification::make()
-                ->title('Không xóa được')
+                ->title(__('seo-content-ai::filament.media_runtime.delete_failed'))
                 ->body((string) ($result['message'] ?? ''))
                 ->danger()
                 ->send();
@@ -672,15 +672,15 @@ class MediaLibrary extends Page
     public function deleteSelectedImages(): void
     {
         if ($this->siteId === null || $this->siteId <= 0) {
-            Notification::make()->title('Chọn tên miền')->warning()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 
             return;
         }
 
         if ($this->selectedKeys === []) {
             Notification::make()
-                ->title('Chưa chọn ảnh')
-                ->body('Click hoặc Shift+click để chọn ảnh cần xóa.')
+                ->title(__('seo-content-ai::filament.media_runtime.no_images_selected'))
+                ->body(__('seo-content-ai::filament.media_runtime.select_images_delete_hint'))
                 ->warning()
                 ->send();
 
@@ -689,7 +689,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -718,20 +718,20 @@ class MediaLibrary extends Page
 
         if ($successCount > 0 && $failedMessages === []) {
             Notification::make()
-                ->title('Đã xóa')
-                ->body("{$successCount} ảnh đã được xóa.")
+                ->title(__('seo-content-ai::filament.media_runtime.deleted'))
+                ->body("{$successCount} images were deleted.")
                 ->success()
                 ->send();
         } elseif ($successCount > 0) {
             Notification::make()
-                ->title('Xóa một phần')
-                ->body("Thành công: {$successCount}. " . implode(' ', array_slice($failedMessages, 0, 2)))
+                ->title(__('seo-content-ai::filament.media_runtime.deleted_partial'))
+                ->body("Success: {$successCount}. " . implode(' ', array_slice($failedMessages, 0, 2)))
                 ->warning()
                 ->send();
         } else {
             Notification::make()
-                ->title('Không xóa được')
-                ->body($failedMessages[0] ?? 'Không ảnh nào được xóa.')
+                ->title(__('seo-content-ai::filament.media_runtime.delete_failed'))
+                ->body($failedMessages[0] ?? __('seo-content-ai::filament.media_runtime.no_images_deleted'))
                 ->danger()
                 ->send();
         }
@@ -786,7 +786,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -799,7 +799,7 @@ class MediaLibrary extends Page
         $this->previewBusy = false;
 
         if (! ($result['success'] ?? false)) {
-            $this->previewMessage = (string) ($result['message'] ?? 'Không khôi phục được.');
+            $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.unable_to_restore'));
             $this->previewMessageType = 'error';
             Notification::make()->title($this->previewMessage)->warning()->send();
 
@@ -807,7 +807,7 @@ class MediaLibrary extends Page
         }
 
         $this->previewImage['url'] = (string) ($result['url'] ?? $this->previewImage['url']);
-        $this->previewMessage = (string) ($result['message'] ?? 'Đã khôi phục.');
+        $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.restored'));
         $this->previewMessageType = 'success';
         $this->syncPreviewProcessingState($this->previewImage);
 
@@ -883,7 +883,7 @@ class MediaLibrary extends Page
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
             return;
         }
@@ -899,7 +899,7 @@ class MediaLibrary extends Page
         $this->previewBusy = false;
 
         if (! ($result['success'] ?? false)) {
-            $this->previewMessage = (string) ($result['message'] ?? 'Thao tác thất bại.');
+            $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.action_failed'));
             $this->previewMessageType = 'error';
             Notification::make()
                 ->title($this->previewMessage)
@@ -910,7 +910,7 @@ class MediaLibrary extends Page
         }
 
         $this->previewImage['url'] = (string) ($result['url'] ?? $this->previewImage['url']);
-        $this->previewMessage = (string) ($result['message'] ?? 'Đã xử lý.');
+        $this->previewMessage = (string) ($result['message'] ?? __('seo-content-ai::filament.media_runtime.processed'));
         $this->previewMessageType = 'success';
 
         $this->previewCanRestore = (bool) ($result['can_restore'] ?? false);
@@ -1034,5 +1034,15 @@ class MediaLibrary extends Page
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessContentFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.media_library');
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.nav.media_library');
     }
 }

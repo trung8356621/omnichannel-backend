@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Copy, Link2 } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 /**
  * @typedef {{ href?: string, text: string, offset?: number, is_nofollow?: boolean, is_suggestion?: boolean, target_url?: string|null, can_insert?: boolean, keyword_id?: number, occurrence_count?: number }} ExtractedLink
@@ -31,10 +32,10 @@ function fullTitle(item, hint) {
         parts.push(item.href);
     }
     if (item?.target_url && item.target_url !== item.href) {
-        parts.push(`URL gợi ý: ${item.target_url}`);
+        parts.push(t('links_target_url_hint', { url: item.target_url }));
     }
     if (item?.keyword_type) {
-        parts.push(`Nguồn: keyword ${item.keyword_type}`);
+        parts.push(t('links_source_hint', { type: item.keyword_type }));
     }
     return parts.filter(Boolean).join('\n');
 }
@@ -74,7 +75,7 @@ function KeywordList({
         return (
             <div className="wp-article-links-group">
                 {!hideTitle ? <h3 className="wp-article-links-group__title">{title}</h3> : null}
-                <p className="wp-article-links-empty">Chưa có mục.</p>
+                <p className="wp-article-links-empty">{t('links_none')}</p>
             </div>
         );
     }
@@ -94,13 +95,13 @@ function KeywordList({
                     const hint =
                         variant === 'suggestion'
                             ? insertable
-                                ? `Gợi ý — chèn link bài viết: ${label}`
-                                : `Gợi ý — chưa có URL bài đích: ${label}`
+                                ? t('links_suggestion_insert_ready', { label })
+                                : t('links_suggestion_insert_missing', { label })
                             : target === 'faq'
-                              ? `Tìm trong FAQ: ${label}`
+                              ? t('links_find_in_faq', { label })
                               : anchorTextPresent
-                                ? `Tìm từ khóa trong bài: ${label}`
-                                : `Tìm link trong bài: ${label}`;
+                                ? t('links_find_keyword', { label })
+                                : t('links_find_link', { label });
 
                     return (
                         <li key={itemKey} className="wp-article-links-keyword-row">
@@ -119,13 +120,13 @@ function KeywordList({
                                     className="wp-article-links-insert-btn"
                                     aria-label={
                                         insertable
-                                            ? `Chèn link nội bộ cho ${label}`
-                                            : 'Chưa có URL bài đích'
+                                            ? t('links_insert_internal_for', { label })
+                                            : t('links_missing_target_url')
                                     }
                                     title={
                                         insertable
-                                            ? `Chèn link nội bộ cho «${label}»`
-                                            : 'Chưa gắn bài viết đích cho từ khóa này'
+                                            ? t('links_insert_internal_for_label', { label })
+                                            : t('links_missing_target_mapping')
                                     }
                                     disabled={!insertable}
                                     onMouseDown={(e) => e.preventDefault()}
@@ -143,8 +144,8 @@ function KeywordList({
                                 <button
                                     type="button"
                                     className={`wp-article-links-copy-btn${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
-                                    aria-label={`Sao chép từ khóa ${label}`}
-                                    title={`Copy: ${label}`}
+                                    aria-label={t('links_copy_keyword', { label })}
+                                    title={t('links_copy_title', { label })}
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={(e) => {
                                         e.stopPropagation();
@@ -177,7 +178,7 @@ function InternalLinksSection({
         return (
             <KeywordList
                 items={[]}
-                title="Nội bộ (0)"
+                title={t('links_internal_title_zero')}
                 activeKey={activeKey}
                 target="editor"
                 onKeywordClick={onKeywordClick}
@@ -188,7 +189,7 @@ function InternalLinksSection({
 
     return (
         <div className="wp-article-links-group">
-            <h3 className="wp-article-links-group__title">Nội bộ ({internal.length})</h3>
+            <h3 className="wp-article-links-group__title">{t('links_internal_title', { count: internal.length })}</h3>
             {internal.length > 0 ? (
                 <KeywordList
                     items={internal}
@@ -200,12 +201,12 @@ function InternalLinksSection({
                     onCopyKeyword={onCopyKeyword}
                 />
             ) : (
-                <p className="wp-article-links-empty">Chưa có link nội bộ.</p>
+                <p className="wp-article-links-empty">{t('links_internal_empty')}</p>
             )}
             {showSuggestions ? (
                 <KeywordList
                     items={suggestedInternal}
-                    title={`Gợi ý (${suggestedInternal.length})`}
+                    title={t('links_suggestion_title', { count: suggestedInternal.length })}
                     activeKey={activeKey}
                     target="editor"
                     variant="suggestion"
@@ -305,7 +306,7 @@ export default function ArticleLinksSidebar() {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Đã copy từ khóa',
+                        title: t('links_copied_title'),
                         body: `«${text}»`,
                         status: 'success',
                     },
@@ -315,8 +316,8 @@ export default function ArticleLinksSidebar() {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Không copy được',
-                        body: 'Trình duyệt chặn quyền clipboard.',
+                        title: t('links_copy_failed_title'),
+                        body: t('links_copy_failed_body'),
                         status: 'warning',
                     },
                 }),
@@ -364,8 +365,8 @@ export default function ArticleLinksSidebar() {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Không chèn được link',
-                        body: 'Từ khóa chưa gắn bài viết đích trên hệ thống.',
+                        title: t('links_insert_failed_title'),
+                        body: t('links_insert_failed_body'),
                         status: 'warning',
                     },
                 }),
@@ -390,7 +391,7 @@ export default function ArticleLinksSidebar() {
         <div className="wp-postbox wp-article-links-box">
             <div className="wp-postbox-header">
                 <h2>
-                    Liên kết
+                    {t('links_heading')}
                     <span className="wp-article-links-counts">
                         ({internal.length} int, {external.length} ext{faqCountLabel})
                     </span>
@@ -399,7 +400,7 @@ export default function ArticleLinksSidebar() {
                     type="button"
                     className="wp-postbox-toggle"
                     aria-expanded={!collapsed}
-                    title={collapsed ? 'Mở rộng' : 'Thu gọn'}
+                    title={collapsed ? t('links_expand') : t('links_collapse')}
                     onClick={() => setCollapsed((v) => !v)}
                 >
                     {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
@@ -422,7 +423,7 @@ export default function ArticleLinksSidebar() {
                     />
                     <KeywordList
                         items={external}
-                        title={`Ngoài (${external.length})`}
+                        title={t('links_external_title', { count: external.length })}
                         activeKey={activeKey}
                         target="editor"
                         onKeywordClick={(item, index, itemKey) =>
@@ -432,7 +433,7 @@ export default function ArticleLinksSidebar() {
                     />
                     <KeywordList
                         items={faq}
-                        title={`FAQ (${faq.length})`}
+                        title={t('links_faq_title', { count: faq.length })}
                         activeKey={activeKey}
                         target="faq"
                         onKeywordClick={(item, index, itemKey) =>

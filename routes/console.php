@@ -40,11 +40,6 @@ Artisan::command('seo:media-flatten-paths {--dry-run}', function () {
                     $skipped++;
                     continue;
                 }
-                if (str_starts_with($oldPath, 'uploads/seo_media/wp-staging/')) {
-                    $skipped++;
-                    continue;
-                }
-
                 $extension = strtolower((string) pathinfo($oldPath, PATHINFO_EXTENSION));
                 if ($extension === 'jpeg') {
                     $extension = 'jpg';

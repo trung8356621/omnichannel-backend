@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { saveNewWatermarkedImage, saveWatermarkedMedia } from '../utils/watermarkApi';
+import { t } from '../utils/i18n';
 
 const POSITIONS = [
     'top-left',
@@ -55,7 +56,7 @@ export default function ImageWatermarkEditor({
     const [saveMode, setSaveMode] = useState(imageId ? 'overwrite' : 'new');
 
     const [watermarkType, setWatermarkType] = useState(initialSettings?.type === 'image' ? 'image' : 'text');
-    const [text, setText] = useState(initialSettings?.text_content || 'Bản quyền hình ảnh');
+    const [text, setText] = useState(initialSettings?.text_content || t('watermark_copyright_text'));
     const [textColor, setTextColor] = useState(initialSettings?.text_color || '#ffffff');
     const [textSize, setTextSize] = useState(initialSettings?.text_size || 24);
     const [opacity, setOpacity] = useState(initialSettings?.opacity ?? 0.7);
@@ -79,7 +80,7 @@ export default function ImageWatermarkEditor({
         img.crossOrigin = 'anonymous';
         img.src = imageUrl;
         img.onload = () => setImageObj(img);
-        img.onerror = () => setLoadError('Không tải được ảnh (CORS hoặc URL không hợp lệ).');
+        img.onerror = () => setLoadError(t('watermark_load_image_invalid'));
     }, [imageUrl]);
 
     const handleLogoUpload = (e) => {
@@ -139,7 +140,7 @@ export default function ImageWatermarkEditor({
     const exportFullResolutionBlob = () =>
         new Promise((resolve, reject) => {
             if (!imageObj) {
-                reject(new Error('Chưa có ảnh gốc'));
+                reject(new Error(t('watermark_missing_source_image')));
                 return;
             }
 
@@ -171,7 +172,7 @@ export default function ImageWatermarkEditor({
             exportCanvas.toBlob(
                 (blob) => {
                     if (blob) resolve(blob);
-                    else reject(new Error('Không xuất được ảnh'));
+                    else reject(new Error(t('watermark_export_failed')));
                 },
                 'image/png',
                 0.92,
@@ -197,7 +198,7 @@ export default function ImageWatermarkEditor({
             onSaveSuccess?.(result);
             onClose?.();
         } catch (error) {
-            window.alert(error?.message ?? 'Lưu ảnh thất bại');
+            window.alert(error?.message ?? t('watermark_save_failed'));
         } finally {
             setSaving(false);
         }
@@ -215,29 +216,29 @@ export default function ImageWatermarkEditor({
                 </div>
 
                 <aside className="seo-watermark-editor__sidebar">
-                    <h3 className="seo-watermark-editor__title">Chỉnh sửa &amp; đóng dấu</h3>
+                    <h3 className="seo-watermark-editor__title">{t('watermark_editor_title')}</h3>
 
-                    <label className="seo-watermark-editor__label">Loại đóng dấu</label>
+                    <label className="seo-watermark-editor__label">{t('watermark_type')}</label>
                     <div className="seo-watermark-editor__type-row">
                         <button
                             type="button"
                             className={watermarkType === 'text' ? 'is-active' : ''}
                             onClick={() => setWatermarkType('text')}
                         >
-                            Chữ
+                            {t('watermark_text')}
                         </button>
                         <button
                             type="button"
                             className={watermarkType === 'image' ? 'is-active' : ''}
                             onClick={() => setWatermarkType('image')}
                         >
-                            Logo
+                            {t('watermark_logo')}
                         </button>
                     </div>
 
                     {watermarkType === 'text' ? (
                         <div className="seo-watermark-editor__fields">
-                            <label className="seo-watermark-editor__label">Nội dung</label>
+                            <label className="seo-watermark-editor__label">{t('watermark_content')}</label>
                             <input
                                 type="text"
                                 value={text}
@@ -246,7 +247,7 @@ export default function ImageWatermarkEditor({
                             />
                             <div className="seo-watermark-editor__row-2">
                                 <div>
-                                    <label className="seo-watermark-editor__label">Màu</label>
+                                    <label className="seo-watermark-editor__label">{t('watermark_color')}</label>
                                     <input
                                         type="color"
                                         value={textColor}
@@ -255,7 +256,7 @@ export default function ImageWatermarkEditor({
                                     />
                                 </div>
                                 <div>
-                                    <label className="seo-watermark-editor__label">Cỡ chữ</label>
+                                    <label className="seo-watermark-editor__label">{t('watermark_font_size')}</label>
                                     <input
                                         type="number"
                                         min={8}
@@ -269,13 +270,13 @@ export default function ImageWatermarkEditor({
                         </div>
                     ) : (
                         <div className="seo-watermark-editor__fields">
-                            <label className="seo-watermark-editor__label">Logo watermark</label>
+                            <label className="seo-watermark-editor__label">{t('watermark_logo_file')}</label>
                             <input type="file" accept="image/*" onChange={handleLogoUpload} />
                             {logoUrl ? (
                                 <img src={logoUrl} alt="" className="seo-watermark-editor__logo-preview" />
                             ) : null}
                             <label className="seo-watermark-editor__label">
-                                Kích thước logo: {logoScale}%
+                                {t('watermark_logo_size')}: {logoScale}%
                             </label>
                             <input
                                 type="range"
@@ -287,7 +288,7 @@ export default function ImageWatermarkEditor({
                         </div>
                     )}
 
-                    <label className="seo-watermark-editor__label">Vị trí</label>
+                    <label className="seo-watermark-editor__label">{t('watermark_position')}</label>
                     <select
                         value={position}
                         onChange={(e) => setPosition(e.target.value)}
@@ -300,7 +301,7 @@ export default function ImageWatermarkEditor({
                         ))}
                     </select>
 
-                    <label className="seo-watermark-editor__label">Độ mờ: {opacity}</label>
+                    <label className="seo-watermark-editor__label">{t('watermark_opacity')}: {opacity}</label>
                     <input
                         type="range"
                         min={0.1}
@@ -312,25 +313,25 @@ export default function ImageWatermarkEditor({
 
                     {imageId ? (
                         <>
-                            <label className="seo-watermark-editor__label">Cách lưu</label>
+                            <label className="seo-watermark-editor__label">{t('watermark_save_mode')}</label>
                             <select
                                 value={saveMode}
                                 onChange={(e) => setSaveMode(e.target.value)}
                                 className="seo-watermark-editor__select"
                             >
-                                <option value="overwrite">Lưu đè file hiện tại</option>
-                                <option value="new">Lưu thành ảnh mới</option>
+                                <option value="overwrite">{t('watermark_save_overwrite')}</option>
+                                <option value="new">{t('watermark_save_new')}</option>
                             </select>
                         </>
                     ) : (
                         <p className="seo-watermark-editor__hint">
-                            Ảnh WP/Gen sẽ được lưu bản sao vào thư viện nội bộ (Laravel).
+                            {t('watermark_wp_copy_hint')}
                         </p>
                     )}
 
                     <div className="seo-watermark-editor__actions">
                         <button type="button" className="seo-watermark-editor__btn" onClick={onClose}>
-                            Hủy
+                            {t('cancel')}
                         </button>
                         <button
                             type="button"
@@ -338,7 +339,7 @@ export default function ImageWatermarkEditor({
                             disabled={saving || loadError}
                             onClick={handleSave}
                         >
-                            {saving ? 'Đang lưu…' : 'Lưu kết quả'}
+                            {saving ? t('watermark_saving') : t('watermark_save_result')}
                         </button>
                     </div>
                 </aside>

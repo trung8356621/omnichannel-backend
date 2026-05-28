@@ -176,6 +176,56 @@ final class WordPressLocalMediaSyncService
     }
 
     /**
+     * Đồng bộ lại các ảnh local đã chỉnh sửa (có wp_attachment_id) lên WordPress.
+     *
+     * @return array{synced: int, errors: list<string>}
+     */
+    public function syncDirtyLocalMediaForArticle(SeoArticle $article): array
+    {
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId <= 0) {
+            return ['synced' => 0, 'errors' => []];
+        }
+
+        $errors = [];
+        $synced = 0;
+
+        $rows = SeoMedia::query()
+            ->where('article_id', $articleId)
+            ->whereNotNull('wp_attachment_id')
+            ->where('wp_attachment_id', '>', 0)
+            ->where(function ($query): void {
+                $query->whereNull('status')
+                    ->orWhere('status', 'completed');
+            })
+            ->where(function ($query): void {
+                $query->whereNull('wp_synced_at')
+                    ->orWhereColumn('updated_at', '>', 'wp_synced_at');
+            })
+            ->orderBy('id')
+            ->get();
+
+        foreach ($rows as $media) {
+            try {
+                $result = $this->syncMedia($article, $media);
+                if (! ($result['success'] ?? false)) {
+                    $errors[] = (string) ($result['message'] ?? ("Ảnh #{$media->id}: đồng bộ thất bại."));
+                    continue;
+                }
+
+                $synced++;
+            } catch (Throwable $exception) {
+                $errors[] = "Ảnh #{$media->id}: {$exception->getMessage()}";
+            }
+        }
+
+        return [
+            'synced' => $synced,
+            'errors' => array_values(array_unique(array_filter($errors))),
+        ];
+    }
+
+    /**
      * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}
      */
     private function syncMedia(SeoArticle $article, SeoMedia $media): array

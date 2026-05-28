@@ -16,13 +16,13 @@ class ImageOptimizationSettings extends Page
 {
     protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
 
-    protected static ?string $navigationLabel = 'Tối ưu hình ảnh';
+    protected static ?string $navigationLabel = 'Image optimization';
 
-    protected static ?string $title = 'Cấu hình Tối ưu hóa Hình ảnh';
+    protected static ?string $title = 'Image optimization settings';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationParentItem = 'Thư viện hình ảnh';
+    protected static ?string $navigationParentItem = 'Media library';
 
     protected static ?int $navigationSort = 8;
 
@@ -111,7 +111,7 @@ class ImageOptimizationSettings extends Page
         );
 
         Notification::make()
-            ->title('Đã lưu cấu hình tối ưu hình ảnh thành công!')
+            ->title(__('seo-content-ai::filament.image_optimization.saved'))
             ->success()
             ->send();
     }
@@ -149,5 +149,20 @@ class ImageOptimizationSettings extends Page
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.image_optimization');
+    }
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return __('seo-content-ai::filament.nav.media_library');
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.nav.image_optimization_settings');
     }
 }

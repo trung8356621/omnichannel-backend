@@ -55,11 +55,11 @@ class EditDomainInfo extends Page implements HasForms
 
         return $form
             ->schema([
-                Forms\Components\Section::make('Mô tả ngắn')
-                    ->description("Tối đa {$maxWords} từ — dùng trong prompt tạo bài viết (biến {{site_short_description}}).")
+                Forms\Components\Section::make('Short description')
+                    ->description("Maximum {$maxWords} words - used in article prompts ({{site_short_description}}).")
                     ->schema([
                         Forms\Components\Textarea::make('short_description')
-                            ->label('Mô tả ngắn về website / thương hiệu')
+                            ->label('Website / brand short description')
                             ->rows(6)
                             ->maxLength(8000)
                             ->live(debounce: 400)
@@ -67,63 +67,63 @@ class EditDomainInfo extends Page implements HasForms
                                 $count = app(SiteDomainPromptContextService::class)
                                     ->countWords((string) $get('short_description'));
 
-                                return "Đã nhập: {$count} / {$maxWords} từ.";
+                                return "Entered: {$count} / {$maxWords} words.";
                             }),
                     ]),
-                Forms\Components\Section::make('CTA / Liên hệ')
-                    ->description('Danh sách thông tin liên hệ — dùng trong prompt (biến {{site_cta}}). Bấm «Thêm mục» để bổ sung.')
+                Forms\Components\Section::make('CTA / Contact')
+                    ->description('List of contact information used in prompts ({{site_cta}}). Click "Add item" to insert more.')
                     ->schema([
                         Forms\Components\Repeater::make('cta')
                             ->label('')
                             ->schema([
                                 Forms\Components\TextInput::make('type')
-                                    ->label('Loại')
-                                    ->placeholder('VD: phone, email, địa chỉ, zalo…')
+                                    ->label('Type')
+                                    ->placeholder('e.g. phone, email, address, zalo...')
                                     ->required()
                                     ->maxLength(64)
                                     ->columnSpan(4),
                                 Forms\Components\TextInput::make('value')
-                                    ->label('Giá trị')
+                                    ->label('Value')
                                     ->required()
                                     ->maxLength(500)
                                     ->columnSpan(6),
                             ])
                             ->columns(10)
                             ->defaultItems(0)
-                            ->addActionLabel('Thêm mục liên hệ')
+                            ->addActionLabel('Add contact item')
                             ->reorderable()
                             ->collapsible()
                             ->itemLabel(fn (array $state): ?string => filled($state['type'] ?? null)
                                 ? (string) $state['type']
-                                : 'Mục mới'),
+                                : 'New item'),
                     ]),
-                Forms\Components\Section::make('Danh sách link')
-                    ->description('Từ khóa gắn URL nội bộ / landing — dùng trong prompt (biến {{site_links}}).')
+                Forms\Components\Section::make('Link list')
+                    ->description('Keywords mapped to internal/landing URLs for prompts ({{site_links}}).')
                     ->schema([
                         Forms\Components\Repeater::make('links')
                             ->label('')
                             ->schema([
                                 Forms\Components\TextInput::make('keyword')
-                                    ->label('Từ khóa')
-                                    ->placeholder('VD: báo giá, liên hệ…')
+                                    ->label('Keyword')
+                                    ->placeholder('e.g. pricing, contact...')
                                     ->required()
                                     ->maxLength(255)
                                     ->columnSpan(4),
                                 Forms\Components\TextInput::make('link')
                                     ->label('Link')
-                                    ->placeholder('https://… hoặc /duong-dan')
+                                    ->placeholder('https://... or /path')
                                     ->required()
                                     ->maxLength(2000)
                                     ->columnSpan(6),
                             ])
                             ->columns(10)
                             ->defaultItems(0)
-                            ->addActionLabel('Thêm link')
+                            ->addActionLabel('Add link')
                             ->reorderable()
                             ->collapsible()
                             ->itemLabel(fn (array $state): ?string => filled($state['keyword'] ?? null)
                                 ? (string) $state['keyword']
-                                : 'Link mới'),
+                                : 'New link'),
                     ]),
             ])
             ->statePath('promptContextData');
@@ -138,7 +138,7 @@ class EditDomainInfo extends Page implements HasForms
     {
         return [
             \Filament\Actions\Action::make('back')
-                ->label('Danh sách tên miền')
+                ->label('Domain list')
                 ->icon('heroicon-o-arrow-left')
                 ->url(DomainResource::getUrl('index')),
         ];
@@ -152,12 +152,12 @@ class EditDomainInfo extends Page implements HasForms
             $service->saveForSite($this->getSite(), $data);
 
             Notification::make()
-                ->title('Đã lưu thông tin domain')
+                ->title('Domain information saved')
                 ->success()
                 ->send();
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
-                ->title('Không lưu được')
+                ->title('Unable to save')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();

@@ -16,7 +16,7 @@ import {
 
 export { OVERLAY_EXPORT_MAX, OVERLAY_RATIO_PRESETS };
 
-/** @deprecated dùng OVERLAY_EXPORT_MAX + preset */
+/** @deprecated use OVERLAY_EXPORT_MAX + preset */
 export const OVERLAY_REF_WIDTH = 2000;
 export const OVERLAY_REF_HEIGHT = 1125;
 
@@ -98,14 +98,14 @@ export function exportWatermarkOverlayBlobAtSize(
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-            reject(new Error('Canvas không khả dụng.'));
+            reject(new Error('Canvas is unavailable.'));
             return;
         }
 
         drawWatermarkLayer(ctx, width, height, activePattern, opacity, opts, position);
 
         canvas.toBlob(
-            (blob) => (blob ? resolve(blob) : reject(new Error('Xuất overlay thất bại.'))),
+            (blob) => (blob ? resolve(blob) : reject(new Error('Failed to export overlay.'))),
             'image/png',
             0.92,
         );
@@ -113,7 +113,7 @@ export function exportWatermarkOverlayBlobAtSize(
 }
 
 /**
- * Xuất overlay cho mọi tỉ lệ trong catalog (cạnh dài ~2000px).
+ * Export overlay for all preset ratios (~2000px long edge).
  *
  * @returns {Promise<Array<{ key: string, label: string, blob: Blob, width: number, height: number, ratio: number }>>}
  */

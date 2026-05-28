@@ -16,7 +16,7 @@ class ListKeywords extends ListRecords
     {
         return [
             Actions\CreateAction::make()
-                ->label('Thêm keyword')
+                ->label('Add keyword')
                 ->icon('heroicon-o-plus'),
         ];
     }

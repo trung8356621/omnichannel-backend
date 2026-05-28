@@ -11,23 +11,23 @@
                 wire:click="$set('activeTab', 'original')"
                 class="seo-media-library-tab {{ $activeTab === 'original' ? 'is-active' : '' }}"
             >
-                Gốc (WP)
+                Original (WP)
             </button>
             <button
                 type="button"
                 wire:click="$set('activeTab', 'local')"
                 class="seo-media-library-tab {{ in_array($activeTab, ['local', 'generated'], true) ? 'is-active' : '' }}"
             >
-                Nội bộ (Laravel)
+                Local (Laravel)
             </button>
         </div>
 
         <div class="seo-media-library-filters-card">
             <div class="seo-media-library-filters">
                 <div class="seo-media-library-field">
-                    <label class="seo-media-library-label" for="media-library-site">Tên miền</label>
+                    <label class="seo-media-library-label" for="media-library-site">Domain</label>
                     <select id="media-library-site" wire:model.live="siteId" class="seo-media-library-select">
-                        <option value="">-- Chọn tên miền --</option>
+                        <option value="">-- Select domain --</option>
                         @foreach ($this->sites as $site)
                             <option value="{{ $site->id }}">{{ $site->domain }}</option>
                         @endforeach
@@ -35,26 +35,26 @@
                 </div>
 
                 <div class="seo-media-library-field seo-media-library-field-search">
-                    <label class="seo-media-library-label" for="media-library-search">Tìm kiếm</label>
+                    <label class="seo-media-library-label" for="media-library-search">Search</label>
                     <div class="seo-media-library-search-row">
                         <input
                             id="media-library-search"
                             type="search"
                             wire:model.live.debounce.400ms="filterSearch"
                             class="seo-media-library-search"
-                            placeholder="{{ $activeTab === 'original' ? 'Slug, alt, caption (WP search)…' : 'Slug, alt, tiêu đề…' }}"
+                            placeholder="{{ $activeTab === 'original' ? 'Slug, alt, caption (WP search)...' : 'Slug, alt, title...' }}"
                             autocomplete="off"
                         />
                         @if (filled($filterSearch))
                             <button type="button" wire:click="clearSearchFilter" class="seo-media-library-clear-search">
-                                Xóa
+                                Clear
                             </button>
                         @endif
                     </div>
                 </div>
 
                 <div class="seo-media-library-field">
-                    <label class="seo-media-library-label" for="media-library-month">Tháng đăng (tùy chọn)</label>
+                    <label class="seo-media-library-label" for="media-library-month">Published month (optional)</label>
                     <div class="seo-media-library-month-row">
                         <input
                             id="media-library-month"
@@ -65,7 +65,7 @@
                         />
                         @if (filled($filterMonth))
                             <button type="button" wire:click="clearMonthFilter" class="seo-media-library-clear-month">
-                                Bỏ lọc tháng
+                                Clear month
                             </button>
                         @endif
                     </div>
@@ -77,7 +77,7 @@
             <div class="seo-media-library-resize-bar">
                 <div class="seo-media-library-resize-bar__left">
                     <span class="seo-media-library-resize-bar__label">
-                        Đã chọn: <strong>{{ count($selectedKeys) }}</strong>
+                        Selected: <strong>{{ count($selectedKeys) }}</strong>
                     </span>
                     @if (count($selectedKeys) > 0)
                         <button
@@ -87,7 +87,7 @@
                             wire:loading.attr="disabled"
                             wire:target="resizeSelectedImages"
                         >
-                            Bỏ chọn
+                            Clear selection
                         </button>
                     @endif
                 </div>
@@ -125,14 +125,14 @@
                         wire:target="resizeSelectedImages,deleteSelectedImages"
                         @disabled(count($selectedKeys) === 0)
                     >
-                        <span wire:loading.remove wire:target="resizeSelectedImages">Resize ảnh</span>
-                        <span wire:loading wire:target="resizeSelectedImages">Đang resize…</span>
+                        <span wire:loading.remove wire:target="resizeSelectedImages">Resize images</span>
+                        <span wire:loading wire:target="resizeSelectedImages">Resizing...</span>
                     </button>
                     <button
                         type="button"
                         class="seo-media-library-bar-icon-btn seo-media-library-bar-action-btn"
-                        title="Tải toàn bộ ảnh đã chọn"
-                        aria-label="Tải toàn bộ ảnh đã chọn"
+                        title="Download selected images"
+                        aria-label="Download selected images"
                         @click="downloadSelected()"
                         @disabled(count($selectedKeys) === 0)
                     >
@@ -140,28 +140,28 @@
                             <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 1 0-1.09-1.03l-2.955 3.129V2.75Z"/>
                             <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z"/>
                         </svg>
-                        <span>Tải</span>
+                        <span>Download</span>
                     </button>
                     <button
                         type="button"
                         class="seo-media-library-bar-icon-btn seo-media-library-bar-action-btn is-danger"
-                        title="Xóa toàn bộ ảnh đã chọn"
-                        aria-label="Xóa toàn bộ ảnh đã chọn"
+                        title="Delete selected images"
+                        aria-label="Delete selected images"
                         wire:click="deleteSelectedImages"
                         wire:loading.attr="disabled"
                         wire:target="deleteSelectedImages"
-                        wire:confirm="Xóa {{ count($selectedKeys) }} ảnh đã chọn? Hành động không hoàn tác."
+                        wire:confirm="Delete {{ count($selectedKeys) }} selected images? This action cannot be undone."
                         @disabled(count($selectedKeys) === 0)
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>
                         </svg>
-                        <span wire:loading.remove wire:target="deleteSelectedImages">Xóa</span>
+                        <span wire:loading.remove wire:target="deleteSelectedImages">Delete</span>
                         <span wire:loading wire:target="deleteSelectedImages">…</span>
                     </button>
                 </div>
                 <p class="seo-media-library-resize-hint">
-                    Click / Shift+click chọn dải. «Tải» / «Xóa» áp dụng cho toàn bộ ảnh đã chọn.
+                    Click / Shift+click to select range. "Download" / "Delete" applies to all selected images.
                 </p>
             </div>
         @endif
@@ -169,14 +169,14 @@
         @if ($activeTab !== 'watermark-config')
         <div class="seo-media-library-meta" wire:loading.remove wire:target="activeTab,siteId,filterMonth,filterSearch,page,loadImages,previousPage,nextPage,clearMonthFilter,clearSearchFilter,previewApplyWatermark,previewOptimize">
             @if ($total > 0)
-                {{ $total }} ảnh · Trang {{ $page }}/{{ $totalPages }}
+                {{ $total }} images · Page {{ $page }}/{{ $totalPages }}
                 @if (filled($filterSearch))
-                    · Tìm: “{{ $filterSearch }}”
+                    · Search: "{{ $filterSearch }}"
                 @endif
                 @if (filled($filterMonth))
-                    · Tháng {{ $this->filterMonthLabel() }}
+                    · Month {{ $this->filterMonthLabel() }}
                 @else
-                    · Tất cả tháng
+                    · All months
                 @endif
                 @if ($activeTab === 'original')
                     · WordPress Media API
@@ -184,12 +184,12 @@
                     · seo_media
                 @endif
             @elseif ($siteId)
-                Chưa có ảnh{{ filled($filterMonth) ? ' trong tháng đã chọn' : '' }}.
+                No images{{ filled($filterMonth) ? ' in selected month' : '' }}.
             @endif
         </div>
 
         <div wire:loading wire:target="activeTab,siteId,filterMonth,page,loadImages,previousPage,nextPage,clearMonthFilter,previewApplyWatermark,previewOptimize" class="seo-media-library-meta">
-            Đang tải hình ảnh…
+            Loading images...
         </div>
         @endif
 
@@ -199,27 +199,27 @@
             </div>
         @elseif (in_array($activeTab, ['local', 'generated'], true))
             <div class="seo-media-library-alert">
-                Click / Shift+click chọn — double-click xem / đóng dấu. Tải hoặc xóa ở góc ảnh hoặc thanh công cụ.
+                Click / Shift+click to select — double-click to preview/watermark. Download or delete from card actions or top toolbar.
             </div>
         @else
             <div class="seo-media-library-alert">
-                Tab Gốc (WP). Shift+click chọn dải — xóa chỉ bản staging Laravel (nếu có).
+                Original (WP) tab. Shift+click selects range — delete only removes Laravel staging copy (if exists).
             </div>
         @endif
 
         @if (empty($images) && ! $loadError && $siteId)
             <div class="seo-media-library-empty">
                 @if (filled($filterSearch))
-                    Không có hình ảnh khớp “{{ $filterSearch }}”.
+                    No images match "{{ $filterSearch }}".
                 @elseif (filled($filterMonth))
-                    Không có hình ảnh trong tháng {{ $this->filterMonthLabel() }}.
+                    No images in month {{ $this->filterMonthLabel() }}.
                 @else
-                    Không có hình ảnh cho domain này.
+                    No images for this domain.
                 @endif
             </div>
         @elseif (! $siteId)
             <div class="seo-media-library-empty">
-                Chọn tên miền để xem thư viện ảnh.
+                Select a domain to view media library.
             </div>
         @elseif (! empty($images))
             <div class="seo-media-library-grid">
@@ -249,7 +249,7 @@
                             <button
                                 type="button"
                                 class="seo-media-library-thumb-btn"
-                                title="Click chọn · Shift+click chọn dải · Double-click xem"
+                                title="Click select · Shift+click range · Double-click preview"
                                 x-on:click="
                                     clearTimeout($el._selectTimer);
                                     $el._selectTimer = setTimeout(() => $wire.handleImageSelectClick(@js($editKey), $event.shiftKey), 220);
@@ -271,8 +271,8 @@
                                 <button
                                     type="button"
                                     class="seo-media-library-card-icon-btn"
-                                    title="Tải ảnh"
-                                    aria-label="Tải ảnh"
+                                    title="Download image"
+                                    aria-label="Download image"
                                     @click.stop="downloadCard($el.closest('.seo-media-library-card'))"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
@@ -283,10 +283,10 @@
                                 <button
                                     type="button"
                                     class="seo-media-library-card-icon-btn is-danger"
-                                    title="Xóa ảnh"
-                                    aria-label="Xóa ảnh"
+                                    title="Delete image"
+                                    aria-label="Delete image"
                                     wire:click.stop="deleteLibraryImage(@js($editKey))"
-                                    wire:confirm="Xóa ảnh này? Hành động không hoàn tác."
+                                    wire:confirm="Delete this image? This action cannot be undone."
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                         <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>
@@ -315,8 +315,8 @@
                                             type="button"
                                             wire:click="saveSlugEdit"
                                             class="seo-media-library-slug-save-btn"
-                                            title="Lưu slug"
-                                            aria-label="Lưu slug"
+                                            title="Save slug"
+                                            aria-label="Save slug"
                                         >
                                             <svg
                                                 class="seo-media-library-slug-save-icon"
@@ -332,7 +332,7 @@
                                 @else
                                     <p
                                         class="seo-media-library-slug is-editable"
-                                        title="Double-click để sửa slug"
+                                        title="Double-click to edit slug"
                                         wire:dblclick="beginSlugEdit(@js($editKey), @js($image['slug'] ?? ''), {{ (int) $image['id'] }}, @js($image['url'] ?? ''), {{ $wpAttachmentId }}, @js($itemKind), {{ $seoMediaId }})"
                                     >
                                         {{ $image['slug'] ?: '—' }}
@@ -350,12 +350,12 @@
                                     <a
                                         href="{{ $articleEditUrl }}"
                                         class="seo-media-library-article-link"
-                                        title="Mở bài viết trong editor"
+                                        title="Open article in editor"
                                     >
-                                        Bài viết #{{ $articleId }}
+                                        Article #{{ $articleId }}
                                     </a>
                                 @else
-                                    <span class="seo-media-library-article-muted">Chưa gắn bài viết</span>
+                                    <span class="seo-media-library-article-muted">Not linked to article</span>
                                 @endif
                             </div>
                         </div>
@@ -371,7 +371,7 @@
                         wire:click="previousPage"
                         @disabled($page <= 1)
                     >
-                        Trang trước
+                        Previous
                     </button>
                     <span class="seo-media-library-meta">{{ $page }} / {{ $totalPages }}</span>
                     <button
@@ -380,7 +380,7 @@
                         wire:click="nextPage"
                         @disabled($page >= $totalPages)
                     >
-                        Trang sau
+                        Next
                     </button>
                 </div>
             @endif
@@ -397,12 +397,12 @@
                 class="seo-media-preview-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Xem ảnh"
+                aria-label="Preview image"
                 wire:click.stop
             >
                 <div class="seo-media-preview-modal__head">
                     <div>
-                        <h3 class="seo-media-preview-modal__title">{{ $previewImage['slug'] ?? 'Ảnh' }}</h3>
+                        <h3 class="seo-media-preview-modal__title">{{ $previewImage['slug'] ?? 'Image' }}</h3>
                         @if (! empty($previewImage['article_id']) && ! empty($previewImage['article_edit_url']))
                             <a
                                 href="{{ $previewImage['article_edit_url'] }}"
@@ -410,11 +410,11 @@
                                 target="_blank"
                                 rel="noopener"
                             >
-                                Bài viết #{{ $previewImage['article_id'] }} → Editor
+                                Article #{{ $previewImage['article_id'] }} -> Editor
                             </a>
                         @endif
                     </div>
-                    <button type="button" class="seo-media-preview-modal__close" wire:click="closeImagePreview" aria-label="Đóng">
+                    <button type="button" class="seo-media-preview-modal__close" wire:click="closeImagePreview" aria-label="Close">
                         ×
                     </button>
                 </div>
@@ -452,8 +452,8 @@
                             wire:loading.attr="disabled"
                             wire:target="openImageEditor"
                         >
-                            <span wire:loading.remove wire:target="openImageEditor">Chỉnh sửa hình ảnh</span>
-                            <span wire:loading wire:target="openImageEditor">Đang chuẩn bị…</span>
+                            <span wire:loading.remove wire:target="openImageEditor">Edit image</span>
+                            <span wire:loading wire:target="openImageEditor">Preparing...</span>
                         </button>
                     @endif
                     @if ($previewCanSyncToWp)
@@ -464,8 +464,8 @@
                             wire:loading.attr="disabled"
                             wire:target="previewSyncToWordPress"
                         >
-                            <span wire:loading.remove wire:target="previewSyncToWordPress">Đồng bộ lên WordPress</span>
-                            <span wire:loading wire:target="previewSyncToWordPress">Đang đồng bộ…</span>
+                            <span wire:loading.remove wire:target="previewSyncToWordPress">Sync to WordPress</span>
+                            <span wire:loading wire:target="previewSyncToWordPress">Syncing...</span>
                         </button>
                     @endif
                     @if ($previewCanRestore)
@@ -476,8 +476,8 @@
                             wire:loading.attr="disabled"
                             wire:target="previewRestore"
                         >
-                            <span wire:loading.remove wire:target="previewRestore">Khôi phục ảnh gốc</span>
-                            <span wire:loading wire:target="previewRestore">Đang khôi phục…</span>
+                            <span wire:loading.remove wire:target="previewRestore">Restore original</span>
+                            <span wire:loading wire:target="previewRestore">Restoring...</span>
                         </button>
                     @else
                         <button
@@ -488,8 +488,8 @@
                             wire:target="previewApplyWatermark"
                             @if (($previewImage['kind'] ?? '') === 'generated') disabled @endif
                         >
-                            <span wire:loading.remove wire:target="previewApplyWatermark">Áp dụng đóng dấu</span>
-                            <span wire:loading wire:target="previewApplyWatermark">Đang xử lý…</span>
+                            <span wire:loading.remove wire:target="previewApplyWatermark">Apply watermark</span>
+                            <span wire:loading wire:target="previewApplyWatermark">Processing...</span>
                         </button>
                     @endif
                     @php
@@ -508,7 +508,7 @@
                             target="_blank"
                             rel="noopener"
                         >
-                            Tách theo lưới
+                            Split grid
                         </a>
                     @endif
                     @if ($previewCanOptimize)
@@ -520,28 +520,28 @@
                             wire:target="previewOptimize"
                             @if (($previewImage['kind'] ?? '') === 'generated') disabled @endif
                         >
-                            <span wire:loading.remove wire:target="previewOptimize">Tối ưu ảnh</span>
-                            <span wire:loading wire:target="previewOptimize">Đang tối ưu…</span>
+                            <span wire:loading.remove wire:target="previewOptimize">Optimize image</span>
+                            <span wire:loading wire:target="previewOptimize">Optimizing...</span>
                         </button>
                     @endif
                 </div>
                 @if ($previewProcessingStatus && $previewProcessingStatus !== 'original')
                     <p class="seo-media-preview-modal__hint">
-                        Trạng thái:
-                        @if ($previewProcessingStatus === 'watermarked') đã đóng dấu
-                        @elseif ($previewProcessingStatus === 'optimized') đã tối ưu
-                        @elseif ($previewProcessingStatus === 'restored') đã khôi phục gốc
-                        @elseif ($previewProcessingStatus === 'edited_pending') đã chỉnh sửa (chưa đồng bộ WordPress)
+                        Status:
+                        @if ($previewProcessingStatus === 'watermarked') watermarked
+                        @elseif ($previewProcessingStatus === 'optimized') optimized
+                        @elseif ($previewProcessingStatus === 'restored') restored original
+                        @elseif ($previewProcessingStatus === 'edited_pending') edited (not synced to WordPress)
                         @endif
                     </p>
                 @endif
                 @if ($previewCanSyncToWp)
                     <p class="seo-media-preview-modal__hint">
-                        Ảnh đã chỉnh sửa và lưu trên server (chưa lên WordPress) — bấm «Đồng bộ lên WordPress» để cập nhật. Sau đồng bộ bản nháp sẽ được xóa khỏi hệ thống.
+                        Image has been edited and saved on server (not on WordPress yet) - click "Sync to WordPress" to update. After sync, staging copy will be removed.
                     </p>
                 @endif
                 @if (($previewImage['kind'] ?? '') === 'generated')
-                    <p class="seo-media-preview-modal__hint">Ảnh Gen AI: chỉ xem — tải vào thư viện nội bộ để xử lý.</p>
+                    <p class="seo-media-preview-modal__hint">AI-generated image: preview only - save to local library to process.</p>
                 @endif
             </div>
         </div>

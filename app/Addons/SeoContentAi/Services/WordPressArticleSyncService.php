@@ -161,6 +161,7 @@ final class WordPressArticleSyncService
 
             $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
             $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
+            $dirtySync = app(WordPressLocalMediaSyncService::class)->syncDirtyLocalMediaForArticle($article->fresh());
             $syncedFromPending = is_array($mediaPush['synced_local_media_ids'] ?? null)
                 ? array_values(array_filter(array_map(
                     static fn ($id): int => (int) $id,
@@ -178,6 +179,12 @@ final class WordPressArticleSyncService
                 } else {
                     $message .= ' Ảnh chưa đẩy được: ' . mb_substr((string) $mediaPush['message'], 0, 200);
                 }
+            }
+            if (($dirtySync['synced'] ?? 0) > 0) {
+                $message .= ' Đã ghi đè ' . (int) $dirtySync['synced'] . ' ảnh local đã chỉnh sửa lên WordPress.';
+            }
+            if (($dirtySync['errors'] ?? []) !== []) {
+                $message .= ' Một số ảnh local chỉnh sửa chưa ghi đè được: ' . mb_substr(implode(' | ', $dirtySync['errors']), 0, 300);
             }
             if ($localMediaSyncErrors !== []) {
                 $message .= ' Một số ảnh trong nội dung chưa sync được: ' . mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);

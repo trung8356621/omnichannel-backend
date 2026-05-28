@@ -93,7 +93,7 @@ class EditArticle extends EditRecord
 
     public bool $mediaPickerLoading = false;
 
-    /** @var 'original'|'local' */
+    /** @var 'original'|'local'|'article' */
     public string $mediaPickerTab = 'original';
 
     public bool $editingSlug = false;
@@ -109,6 +109,14 @@ class EditArticle extends EditRecord
         $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
         $this->importFaqsFromWordPressOnLoad();
+    }
+
+    public function updatedArticleSlug($value): void
+    {
+        $normalized = Str::slug((string) $value);
+        if ($this->articleSlug !== $normalized) {
+            $this->articleSlug = $normalized;
+        }
     }
 
     /**
@@ -189,21 +197,21 @@ class EditArticle extends EditRecord
     {
         return [
             Actions\Action::make('restoreFromWordPress')
-                ->label('Khôi phục từ WordPress')
+                ->label('Restore from WordPress')
                 ->icon('heroicon-o-arrow-path')
                 ->color('gray')
                 ->iconButton()
-                ->tooltip('Lấy lại bài viết gốc từ WordPress')
+                ->tooltip('Fetch original content from WordPress')
                 ->visible(fn (): bool => (int) ($this->record->wp_post_id ?? 0) > 0)
                 ->requiresConfirmation()
-                ->modalHeading('Khôi phục bài gốc WordPress')
-                ->modalDescription('Thay nội dung editor và xóa FAQ panel bằng bản gốc từ WordPress. Các chỉnh sửa chưa lưu hoặc chưa đồng bộ trên SEO sẽ bị ghi đè.')
-                ->modalSubmitActionLabel('Khôi phục')
+                ->modalHeading('Restore original WordPress article')
+                ->modalDescription('Replace editor content and clear FAQ panel with original WordPress content. Unsaved or unsynced SEO edits will be overwritten.')
+                ->modalSubmitActionLabel('Restore')
                 ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
             Actions\DeleteAction::make()
                 ->icon('heroicon-o-trash')
                 ->iconButton()
-                ->tooltip('Xóa bài viết'),
+                ->tooltip('Delete article'),
         ];
     }
 
@@ -213,8 +221,8 @@ class EditArticle extends EditRecord
 
         if (! ($restore['restored'] ?? false) || ! filled($restore['editor_html'] ?? null)) {
             Notification::make()
-                ->title('Không khôi phục được')
-                ->body((string) ($restore['message'] ?? 'Không lấy được nội dung từ WordPress.'))
+                ->title('Restore failed')
+                ->body((string) ($restore['message'] ?? 'Could not fetch content from WordPress.'))
                 ->warning()
                 ->send();
 
@@ -229,7 +237,7 @@ class EditArticle extends EditRecord
 
         $this->featuredImageUrl = app(WordPressArticleContentService::class)->resolveFeaturedImageUrl($this->record);
         $this->productGallery = $this->isProduct()
-            ? app(WordPressArticleContentService::class)->resolveProductGallery($this->record)
+            ? app(ArticleMediaLocalService::class)->resolveProductAlbum($this->record)
             : [];
 
         $this->dispatch(
@@ -244,8 +252,8 @@ class EditArticle extends EditRecord
         app(SeoAnalyzerService::class)->analyze($this->record->fresh());
 
         Notification::make()
-            ->title('Đã khôi phục từ WordPress')
-            ->body((string) ($restore['message'] ?? 'Nội dung editor đã thay bằng bản gốc WordPress.'))
+            ->title('Restored from WordPress')
+            ->body((string) ($restore['message'] ?? 'Editor content has been replaced with original WordPress version.'))
             ->success()
             ->send();
     }
@@ -266,8 +274,11 @@ class EditArticle extends EditRecord
         $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
         $this->featuredImageUrl = $service->resolveFeaturedImageUrl($this->record);
         $this->productGallery = $this->isProduct()
-            ? $service->resolveProductGallery($this->record)
+            ? app(ArticleMediaLocalService::class)->resolveProductAlbum($this->record)
             : [];
+        if ($this->supportsProductGallery()) {
+            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+        }
         $this->editorHtml = $service->resolveEditorHtml($this->record);
         $this->syncPublishDatePartsFromRecord();
     }
@@ -326,8 +337,8 @@ class EditArticle extends EditRecord
     {
         if ($mode !== 'editor-block' && (int) ($this->record->wp_post_id ?? 0) <= 0) {
             Notification::make()
-                ->title('Chưa liên kết WordPress')
-                ->body('Đồng bộ bài từ domain trước khi chọn ảnh WordPress.')
+                ->title('WordPress not linked')
+                ->body('Sync article from domain before selecting WordPress images.')
                 ->warning()
                 ->send();
 
@@ -341,7 +352,7 @@ class EditArticle extends EditRecord
             $blockId = trim((string) ($blockId ?? ''));
             if ($blockId === '') {
                 Notification::make()
-                    ->title('Không xác định được khối ảnh')
+                    ->title('Unable to identify image block')
                     ->warning()
                     ->send();
 
@@ -358,7 +369,7 @@ class EditArticle extends EditRecord
             $this->mediaPickerMode = $mode === 'gallery' ? 'gallery' : 'featured';
         }
 
-        $this->mediaPickerTab = 'original';
+        $this->mediaPickerTab = $this->mediaPickerMode === 'editor-block' ? 'article' : 'original';
         $this->mediaPickerPage = 1;
         $this->mediaPickerError = null;
         $this->mediaPickerImages = [];
@@ -370,7 +381,10 @@ class EditArticle extends EditRecord
 
     public function setMediaPickerTab(string $tab): void
     {
-        $tab = $tab === 'local' ? 'local' : 'original';
+        $tab = match ($tab) {
+            'local', 'article' => $tab,
+            default => 'original',
+        };
         if ($this->mediaPickerTab === $tab) {
             return;
         }
@@ -423,7 +437,7 @@ class EditArticle extends EditRecord
         $this->record->loadMissing('site');
         $site = $this->record->site;
         if ($site === null) {
-            $this->mediaPickerError = 'Không tìm thấy domain.';
+            $this->mediaPickerError = 'Domain not found.';
             $this->mediaPickerLoading = false;
 
             return;
@@ -433,35 +447,113 @@ class EditArticle extends EditRecord
         $articleId = (int) $this->record->id;
         $library = app(SeoMediaLibraryService::class);
 
-        if ($this->mediaPickerTab === 'local') {
-            $library->assignRecentOrphanMediaToArticle($site, $articleId);
-        }
-
-        $result = $this->mediaPickerTab === 'local'
-            ? $library->fetch(
-                $site,
+        if ($this->mediaPickerTab === 'article') {
+            $postImagesResult = app(ArticlePostImagesService::class)->fetchForMediaPicker(
+                $this->record,
+                1,
                 null,
-                $this->mediaPickerPage,
-                $search !== '' ? $search : null,
-                48,
-                $articleId,
-            )
-            : app(WordPressMediaLibraryService::class)->fetch(
-                $site,
-                null,
-                $this->mediaPickerPage,
-                48,
-                $search !== '' ? $search : null,
+                200,
             );
+            $postImages = is_array($postImagesResult['images'] ?? null) ? $postImagesResult['images'] : [];
+            $supplementalImages = $this->getEditorSupplementalImagesPayload();
 
-        $images = is_array($result['images'] ?? null) ? $result['images'] : [];
-        $this->mediaPickerImages = $this->mediaPickerTab === 'local'
-            ? app(MediaLibraryArticleResolver::class)->enrichImages((int) $site->id, $images)
-            : $images;
+            $seen = [];
+            $merged = [];
+            $append = static function (array $row) use (&$merged, &$seen): void {
+                $src = trim((string) ($row['url'] ?? $row['src'] ?? ''));
+                if ($src === '') {
+                    return;
+                }
+
+                $wpId = (int) ($row['wp_attachment_id'] ?? 0);
+                $seoId = (int) ($row['seo_media_id'] ?? 0);
+                $identity = $wpId > 0
+                    ? 'wp:' . $wpId
+                    : ($seoId > 0 ? 'seo:' . $seoId : 'src:' . mb_strtolower($src));
+                if (isset($seen[$identity])) {
+                    return;
+                }
+
+                $seen[$identity] = true;
+                $merged[] = [
+                    'id' => (int) ($row['id'] ?? ($wpId > 0 ? $wpId : ($seoId > 0 ? $seoId : count($merged) + 1))),
+                    'wp_attachment_id' => $wpId > 0 ? $wpId : null,
+                    'seo_media_id' => $seoId > 0 ? $seoId : null,
+                    'url' => $src,
+                    'alt' => trim((string) ($row['alt'] ?? '')),
+                    'slug' => trim((string) ($row['slug'] ?? '')),
+                ];
+            };
+
+            foreach ($postImages as $row) {
+                $append($row);
+            }
+            foreach ($supplementalImages as $row) {
+                $append($row);
+            }
+
+            if ($search !== '') {
+                $needle = mb_strtolower($search);
+                $merged = array_values(array_filter($merged, static function (array $row) use ($needle): bool {
+                    $haystack = mb_strtolower(implode(' ', array_filter([
+                        (string) ($row['slug'] ?? ''),
+                        (string) ($row['alt'] ?? ''),
+                        (string) ($row['url'] ?? ''),
+                    ])));
+
+                    return str_contains($haystack, $needle);
+                }));
+            }
+
+            $perPage = 48;
+            $total = count($merged);
+            $totalPages = max(1, (int) ceil($total / $perPage));
+            $page = min(max(1, $this->mediaPickerPage), $totalPages);
+            $offset = ($page - 1) * $perPage;
+
+            $result = [
+                'images' => array_slice($merged, $offset, $perPage),
+                'total_pages' => $totalPages,
+                'page' => $page,
+                'error' => null,
+            ];
+            $this->mediaPickerImages = $result['images'];
+        } else {
+            if ($this->mediaPickerTab === 'local') {
+                $library->assignRecentOrphanMediaToArticle($site, $articleId);
+            }
+
+            $result = $this->mediaPickerTab === 'local'
+                ? $library->fetch(
+                    $site,
+                    null,
+                    $this->mediaPickerPage,
+                    $search !== '' ? $search : null,
+                    48,
+                    $articleId,
+                )
+                : app(WordPressMediaLibraryService::class)->fetch(
+                    $site,
+                    null,
+                    $this->mediaPickerPage,
+                    48,
+                    $search !== '' ? $search : null,
+                );
+
+            $images = is_array($result['images'] ?? null) ? $result['images'] : [];
+            $this->mediaPickerImages = $this->mediaPickerTab === 'local'
+                ? app(MediaLibraryArticleResolver::class)->enrichImages((int) $site->id, $images)
+                : $images;
+        }
         $this->mediaPickerTotalPages = max(1, (int) ($result['total_pages'] ?? 1));
         $this->mediaPickerPage = max(1, (int) ($result['page'] ?? $this->mediaPickerPage));
         $this->mediaPickerError = filled($result['error'] ?? null) ? (string) $result['error'] : null;
         $this->mediaPickerLoading = false;
+    }
+
+    public function reloadMediaPickerImages(): void
+    {
+        $this->loadMediaPickerImages();
     }
 
     public function selectMediaFromPicker(
@@ -485,7 +577,7 @@ class EditArticle extends EditRecord
                 return;
             }
 
-            if ($this->mediaPickerTab !== 'local' && $wpAttachmentId <= 0) {
+            if ($this->mediaPickerTab === 'original' && $wpAttachmentId <= 0) {
                 return;
             }
 
@@ -509,7 +601,7 @@ class EditArticle extends EditRecord
             $this->dispatch('close-article-media-modal');
 
             Notification::make()
-                ->title('Đã chọn ảnh cho khối')
+                ->title('Image selected for block')
                 ->success()
                 ->send();
 
@@ -525,30 +617,82 @@ class EditArticle extends EditRecord
         if ($this->mediaPickerMode === 'gallery') {
             if (! $this->supportsProductGallery()) {
                 Notification::make()
-                    ->title('Album không áp dụng')
-                    ->body('Danh mục chỉ hỗ trợ ảnh đại diện.')
+                    ->title('Album not applicable')
+                    ->body('Category only supports featured image.')
                     ->warning()
                     ->send();
 
                 return;
             }
 
-            $this->productGallery = $localMedia->appendGalleryLocal($this->record, $localRefId, $url);
-            $title = 'Đã thêm vào album (lưu cục bộ)';
+            $this->productGallery = $localMedia->appendProductAlbumLocal($this->record, $localRefId, $url);
+            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+            $title = 'Added to album (saved locally)';
         } else {
             $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
             $this->featuredImageUrl = trim($url);
-            $title = 'Đã chọn ảnh đại diện (lưu cục bộ)';
+            $title = 'Featured image selected (saved locally)';
         }
 
         $this->record->refresh();
-        $this->dispatch('close-article-media-modal');
+        $this->dispatch(
+            'article-media-selected',
+            mode: (string) $this->mediaPickerMode,
+            url: $url,
+            wpAttachmentId: $wpAttachmentId > 0 ? $wpAttachmentId : null,
+            seoMediaId: $seoMediaId > 0 ? $seoMediaId : null,
+            slug: trim($slug),
+            alt: trim($alt),
+        );
+
+        if ($this->mediaPickerMode !== 'gallery') {
+            $this->dispatch('close-article-media-modal');
+        } else {
+            $this->loadMediaPickerImages();
+        }
 
         Notification::make()
             ->title($title)
-            ->body('Bấm «Đồng bộ» để đẩy ảnh lên WordPress.')
+            ->body(
+                $this->mediaPickerMode === 'gallery'
+                    ? 'Continue selecting images or close popup when done.'
+                    : 'Click "Sync" to upload images to WordPress.'
+            )
             ->success()
             ->send();
+    }
+
+    public function removeProductGalleryImage(string $url): void
+    {
+        if (! $this->supportsProductGallery()) {
+            return;
+        }
+
+        $this->productGallery = app(ArticleMediaLocalService::class)
+            ->removeProductAlbumItemByUrl($this->record, $url);
+        $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+        $this->record->refresh();
+        $this->dispatch('article-media-removed', mode: 'gallery', url: trim($url));
+
+        Notification::make()
+            ->title('Image removed from album')
+            ->success()
+            ->send();
+    }
+
+    /**
+     * @param  list<string>  $orderedUrls
+     */
+    public function reorderProductGallery(array $orderedUrls = []): void
+    {
+        if (! $this->supportsProductGallery()) {
+            return;
+        }
+
+        $this->productGallery = app(ArticleMediaLocalService::class)
+            ->reorderProductAlbumLocal($this->record, $orderedUrls);
+        $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+        $this->record->refresh();
     }
 
     public function getPermalinkBase(): string
@@ -566,6 +710,47 @@ class EditArticle extends EditRecord
         return $this->articleSlug !== '' ? $this->articleSlug : 'sample-post';
     }
 
+    public function getPermalinkSuffix(): string
+    {
+        $permalink = trim($this->getArticlePermalink());
+        if ($permalink === '') {
+            return '';
+        }
+
+        $slug = trim($this->articleSlug !== '' ? $this->articleSlug : (string) ($this->record->slug ?? ''));
+        if ($slug === '') {
+            return '';
+        }
+
+        $path = (string) parse_url($permalink, PHP_URL_PATH);
+        $basename = trim((string) basename($path));
+        if ($basename === '') {
+            return '';
+        }
+
+        $prefix = $slug . '.';
+        if (str_starts_with($basename, $prefix)) {
+            return substr($basename, strlen($slug));
+        }
+
+        return '';
+    }
+
+    public function getDisplayPermalink(): string
+    {
+        $permalink = trim($this->getArticlePermalink());
+        if ($permalink !== '') {
+            return $permalink;
+        }
+
+        $base = $this->getPermalinkBase();
+        if ($base === '') {
+            return '';
+        }
+
+        return rtrim($base, '/') . '/' . $this->getDisplaySlug() . $this->getPermalinkSuffix();
+    }
+
     public function getArticlePermalink(): string
     {
         return app(WordPressArticleContentService::class)->resolvePermalink($this->record);
@@ -574,10 +759,10 @@ class EditArticle extends EditRecord
     public function getStatusLabel(): string
     {
         return match ($this->articleStatus) {
-            'published' => 'Đã xuất bản',
-            'scheduled' => 'Hẹn giờ',
-            'private' => 'Riêng tư',
-            default => 'Bản nháp',
+            'published' => 'Published',
+            'scheduled' => 'Scheduled',
+            'private' => 'Private',
+            default => 'Draft',
         };
     }
 
@@ -595,7 +780,7 @@ class EditArticle extends EditRecord
     {
         $publishedAt = $this->resolvePublishAtForEditor();
         if ($publishedAt === null) {
-            return 'Chưa đặt lịch';
+            return 'Not scheduled';
         }
 
         return $this->formatWpScheduleLabel($publishedAt);
@@ -603,16 +788,16 @@ class EditArticle extends EditRecord
 
     public function getVisibilityLabel(): string
     {
-        return $this->visibility === 'private' ? 'Riêng tư' : 'Công khai';
+        return $this->visibility === 'private' ? 'Private' : 'Public';
     }
 
     public function getStatusLabelForPublishBox(): string
     {
         return match ($this->articleStatus) {
-            'published' => 'Đã xuất bản',
-            'scheduled' => 'Đã lên lịch',
-            'private' => 'Riêng tư',
-            default => 'Bản nháp',
+            'published' => 'Published',
+            'scheduled' => 'Scheduled',
+            'private' => 'Private',
+            default => 'Draft',
         };
     }
 
@@ -672,8 +857,8 @@ class EditArticle extends EditRecord
         $dt = $this->buildPublishAtFromParts();
         if ($dt === null) {
             Notification::make()
-                ->title('Ngày giờ không hợp lệ')
-                ->body('Vui lòng kiểm tra lại ngày/giờ xuất bản.')
+                ->title('Invalid date/time')
+                ->body('Please review scheduled publish date/time.')
                 ->warning()
                 ->send();
 
@@ -787,15 +972,15 @@ class EditArticle extends EditRecord
 
         $this->js('window.dispatchEvent(new CustomEvent("seo-article-saved"))');
 
-        $saveBody = 'Nội dung chỉ lưu trên hệ thống SEO. Dùng «Đồng bộ» để đẩy lên WordPress.';
+        $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
         if ($faqSync['extracted']) {
-            $saveBody = 'Đã tách ' . $faqSync['faq_count'] . ' FAQ từ nội dung vào panel FAQ. ' . $saveBody;
+            $saveBody = 'Extracted ' . $faqSync['faq_count'] . ' FAQ items from content into FAQ panel. ' . $saveBody;
         } elseif (! empty($faqSync['extract_debug'])) {
-            $saveBody = 'Có tiêu đề FAQ trong bài nhưng chưa tách được câu hỏi/trả lời — xem debug trong khối FAQ. ' . $saveBody;
+            $saveBody = 'FAQ heading exists but questions/answers were not extracted - check FAQ debug block. ' . $saveBody;
         }
 
         Notification::make()
-            ->title('Đã lưu bài viết')
+            ->title('Article saved')
             ->body($saveBody)
             ->success()
             ->send();
@@ -817,12 +1002,12 @@ class EditArticle extends EditRecord
             if (! empty($result['faq_extract_debug'])) {
                 $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
                 $syncBody = ($headingText !== ''
-                    ? 'Đồng bộ xong nhưng 0 FAQ (đã nhận tiêu đề: «' . $headingText . '»). Xem debug trong khối FAQ.'
-                    : 'Đồng bộ xong nhưng 0 FAQ — xem debug trong khối FAQ.') . ' ' . $syncBody;
+                    ? 'Sync completed but 0 FAQ extracted (detected heading: "' . $headingText . '"). Check FAQ debug block.'
+                    : 'Sync completed but 0 FAQ extracted - check FAQ debug block.') . ' ' . $syncBody;
             }
 
             Notification::make()
-                ->title('Đã đồng bộ WordPress')
+                ->title('WordPress synced')
                 ->body($syncBody)
                 ->success()
                 ->send();
@@ -831,7 +1016,7 @@ class EditArticle extends EditRecord
         }
 
         Notification::make()
-            ->title('Đồng bộ WordPress thất bại')
+            ->title('WordPress sync failed')
             ->body($result['message'])
             ->danger()
             ->send();
@@ -923,8 +1108,87 @@ class EditArticle extends EditRecord
             'id' => (int) $this->record->id,
             'site_id' => (int) $this->record->site_id,
             'title' => (string) $this->articleTitle,
+            'post_type' => (string) ($this->record->post_type ?? ''),
             'ai_debug' => $this->getEditorAiDebugPayload(),
+            'supplemental_images' => $this->getEditorSupplementalImagesPayload(),
         ];
+    }
+
+    /**
+     * Ảnh ngoài block editor (ảnh đại diện + album sản phẩm) để hiển thị trong tab Hình ảnh.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function getEditorSupplementalImagesPayload(): array
+    {
+        $rows = [];
+        $seen = [];
+
+        $append = static function (array &$rows, array &$seen, array $row): void {
+            $src = trim((string) ($row['src'] ?? ''));
+            if ($src === '') {
+                return;
+            }
+
+            $wpId = (int) ($row['wp_attachment_id'] ?? 0);
+            $seoId = (int) ($row['seo_media_id'] ?? 0);
+            $identity = $wpId > 0
+                ? 'wp:' . $wpId
+                : ($seoId > 0 ? 'seo:' . $seoId : 'src:' . mb_strtolower($src));
+            if (isset($seen[$identity])) {
+                return;
+            }
+            $seen[$identity] = true;
+            $rows[] = $row;
+        };
+
+        $featuredUrl = trim((string) ($this->featuredImageUrl ?? ''));
+        $featuredId = (int) ($this->record->articleMetas->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        if ($featuredUrl !== '') {
+            $append($rows, $seen, [
+                'key' => $featuredId > 0 ? 'featured_wp_' . $featuredId : 'featured_src_' . md5($featuredUrl),
+                'block_id' => '',
+                'wp_attachment_id' => $featuredId > 0 ? $featuredId : null,
+                'seo_media_id' => null,
+                'src' => $featuredUrl,
+                'wp_url' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? '' : $featuredUrl,
+                'local_src' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? $featuredUrl : '',
+                'slug' => trim((string) pathinfo(parse_url($featuredUrl, PHP_URL_PATH) ?? $featuredUrl, PATHINFO_FILENAME)),
+                'alt' => '',
+                'title' => '',
+                'caption' => '',
+                'align' => 'none',
+                'origin' => 'featured',
+                'origin_label' => 'Anh dai dien',
+            ]);
+        }
+
+        foreach ($this->productGallery as $idx => $item) {
+            $url = trim((string) ($item['url'] ?? ''));
+            $id = (int) ($item['id'] ?? 0);
+            if ($url === '') {
+                continue;
+            }
+
+            $append($rows, $seen, [
+                'key' => $id > 0 ? 'gallery_wp_' . $id : 'gallery_src_' . md5($url),
+                'block_id' => '',
+                'wp_attachment_id' => $id > 0 ? $id : null,
+                'seo_media_id' => null,
+                'src' => $url,
+                'wp_url' => str_contains($url, '/storage/uploads/seo_media/') ? '' : $url,
+                'local_src' => str_contains($url, '/storage/uploads/seo_media/') ? $url : '',
+                'slug' => trim((string) pathinfo(parse_url($url, PHP_URL_PATH) ?? $url, PATHINFO_FILENAME)),
+                'alt' => '',
+                'title' => '',
+                'caption' => '',
+                'align' => 'none',
+                'origin' => 'gallery',
+                'origin_label' => $idx === 0 ? 'Anh dai dien' : 'Album san pham',
+            ]);
+        }
+
+        return $rows;
     }
 
     /**
@@ -1040,7 +1304,7 @@ class EditArticle extends EditRecord
             $this->dispatch('article-faq-extract-debug', debug: $exception->debug);
 
             Notification::make()
-                ->title('Không tách được FAQ')
+                ->title('Unable to extract FAQ')
                 ->body($exception->getMessage())
                 ->warning()
                 ->send();
@@ -1048,7 +1312,7 @@ class EditArticle extends EditRecord
             return;
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
-                ->title('Không tách được FAQ')
+                ->title('Unable to extract FAQ')
                 ->body($exception->getMessage())
                 ->warning()
                 ->send();
@@ -1062,8 +1326,8 @@ class EditArticle extends EditRecord
         $this->dispatch('article-faqs-extracted', faqs: $faqs, editorHtml: $editorHtml);
 
         Notification::make()
-            ->title('Đã tách và lưu FAQ')
-            ->body('Số mục FAQ: ' . count($faqs) . '. Nội dung FAQ trong editor đã thay bằng [omi_faq].')
+            ->title('FAQ extracted and saved')
+            ->body('FAQ items: ' . count($faqs) . '. FAQ content in editor has been replaced with [omi_faq].')
             ->success()
             ->send();
     }
@@ -1095,8 +1359,8 @@ class EditArticle extends EditRecord
                 }
 
                 Notification::make()
-                    ->title('Đã xóa FAQ')
-                    ->body((string) ($restore['message'] ?? 'Nội dung bài đã khôi phục từ WordPress.'))
+                    ->title('FAQ deleted')
+                    ->body((string) ($restore['message'] ?? 'Article content has been restored from WordPress.'))
                     ->success()
                     ->send();
 
@@ -1112,8 +1376,8 @@ class EditArticle extends EditRecord
             }
 
             Notification::make()
-                ->title('Đã xóa FAQ')
-                ->body((string) ($restore['message'] ?? 'FAQ đã xóa trên hệ thống SEO.'))
+                ->title('FAQ deleted')
+                ->body((string) ($restore['message'] ?? 'FAQ has been removed from SEO system.'))
                 ->warning()
                 ->send();
 
@@ -1142,8 +1406,8 @@ class EditArticle extends EditRecord
                 }
 
                 Notification::make()
-                    ->title('Đã xóa FAQ')
-                    ->body((string) ($restore['message'] ?? 'Nội dung bài đã khôi phục từ WordPress.'))
+                    ->title('FAQ deleted')
+                    ->body((string) ($restore['message'] ?? 'Article content has been restored from WordPress.'))
                     ->success()
                     ->send();
 
@@ -1160,8 +1424,8 @@ class EditArticle extends EditRecord
         }
 
         Notification::make()
-            ->title('Đã lưu FAQ')
-            ->body('FAQ lưu trên hệ thống SEO. Đồng bộ WordPress khi bấm «Đồng bộ».')
+            ->title('FAQ saved')
+            ->body('FAQ is saved in SEO system. Sync to WordPress when clicking "Sync".')
             ->success()
             ->send();
     }
@@ -1180,11 +1444,11 @@ class EditArticle extends EditRecord
                 $userBrief,
                 $activeBlockId,
             );
-        } catch (\InvalidArgumentException $exception) {
+        } catch (\Throwable $exception) {
             $this->dispatch('article-ai-media-failed', type: 'image', message: $exception->getMessage());
 
             Notification::make()
-                ->title('Không tạo được ảnh')
+                ->title(__('seo-content-ai::common.generate_image_failed'))
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -1202,8 +1466,8 @@ class EditArticle extends EditRecord
         );
 
         Notification::make()
-            ->title('Đang tạo ảnh')
-            ->body('Đã chèn placeholder. Ảnh thật sẽ tự cập nhật khi xử lý xong.')
+            ->title(__('seo-content-ai::common.generating_image'))
+            ->body(__('seo-content-ai::common.placeholder_inserted'))
             ->success()
             ->send();
     }
@@ -1222,11 +1486,11 @@ class EditArticle extends EditRecord
                 $userBrief,
                 $activeBlockId,
             );
-        } catch (\InvalidArgumentException $exception) {
+        } catch (\Throwable $exception) {
             $this->dispatch('article-ai-media-failed', type: 'video', message: $exception->getMessage());
 
             Notification::make()
-                ->title('Không tạo được video')
+                ->title(__('seo-content-ai::common.generate_video_failed'))
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -1244,8 +1508,8 @@ class EditArticle extends EditRecord
         );
 
         Notification::make()
-            ->title('Đang tạo video')
-            ->body('Đã chèn placeholder. Video thật sẽ tự cập nhật khi xử lý xong.')
+            ->title(__('seo-content-ai::common.generating_video'))
+            ->body(__('seo-content-ai::common.placeholder_inserted'))
             ->success()
             ->send();
     }
@@ -1260,7 +1524,7 @@ class EditArticle extends EditRecord
             );
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
-                ->title('Không làm mới được FAQ')
+                ->title('Unable to refresh FAQ')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -1326,7 +1590,7 @@ class EditArticle extends EditRecord
             $this->dispatch('seo-attachment-slugs-rename-finished', success: true, renamed: $renamed, message: $result['message']);
 
             Notification::make()
-                ->title('Đã đổi tên ảnh trên WordPress')
+                ->title('Image renamed on WordPress')
                 ->body($result['message'])
                 ->success()
                 ->send();
@@ -1337,7 +1601,7 @@ class EditArticle extends EditRecord
         $this->dispatch('seo-attachment-slugs-rename-finished', success: false, renamed: $renamed, message: $result['message']);
 
         Notification::make()
-            ->title('Không đổi tên được ảnh trên WordPress')
+            ->title('Unable to rename image on WordPress')
             ->body($result['message'])
             ->danger()
             ->send();
@@ -1461,6 +1725,6 @@ class EditArticle extends EditRecord
 
         $weekday = $weekdayMap[(int) $dt->dayOfWeek] ?? 'Th';
 
-        return sprintf('%s %d, %d lúc %02d:%02d', $weekday, (int) $dt->day, (int) $dt->year, (int) $dt->hour, (int) $dt->minute);
+        return sprintf('%s %d, %d at %02d:%02d', $weekday, (int) $dt->day, (int) $dt->year, (int) $dt->hour, (int) $dt->minute);
     }
 }

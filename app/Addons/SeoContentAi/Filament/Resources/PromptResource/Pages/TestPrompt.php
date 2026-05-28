@@ -49,7 +49,7 @@ class TestPrompt extends Page implements HasForms
 
     protected static string $view = 'seo-content-ai::filament.resources.prompt-resource.pages.test-prompt';
 
-    protected static ?string $title = 'Chạy thử Prompt';
+    protected static ?string $title = 'Test prompt';
 
     /** @var array<string, string> */
     public array $variableValues = [];
@@ -159,7 +159,7 @@ class TestPrompt extends Page implements HasForms
         $steps = $this->dependentSubTaskSteps;
         $idx = $this->chainSubTasksCompleted;
 
-        return 'Chạy prompt con: ' . ($steps[$idx]['name'] ?? ('Bước ' . ($idx + 1)));
+        return 'Run sub-prompt: ' . ($steps[$idx]['name'] ?? ('Step ' . ($idx + 1)));
     }
 
     /**
@@ -205,8 +205,8 @@ class TestPrompt extends Page implements HasForms
     {
         if (! filled($this->outputText)) {
             Notification::make()
-                ->title('Chưa có kết quả AI')
-                ->body('Chạy thử prompt trước khi đăng.')
+                ->title('No AI result yet')
+                ->body('Run prompt test before publishing.')
                 ->warning()
                 ->send();
 
@@ -227,11 +227,11 @@ class TestPrompt extends Page implements HasForms
                 'skeleton' => $skeletonPublisher->publishSkeleton($article, (string) $this->outputText, $variables),
                 'article' => $skeletonPublisher->publishArticle($article, (string) $this->outputText, $variables),
                 'reviews' => $reviewPublisher->publishFromAiOutput($article, (string) $this->outputText),
-                default => ['success' => false, 'message' => 'Hành động không hợp lệ.'],
+                default => ['success' => false, 'message' => 'Invalid action.'],
             };
 
             $notification = Notification::make()
-                ->title($result['success'] ? 'Thành công' : 'Thất bại')
+                ->title($result['success'] ? 'Success' : 'Failed')
                 ->body((string) ($result['message'] ?? ''));
 
             $result['success'] ? $notification->success() : $notification->danger();
@@ -265,8 +265,8 @@ class TestPrompt extends Page implements HasForms
     {
         if ($this->publishArticleId === null || $this->publishArticleId <= 0) {
             Notification::make()
-                ->title('Chọn bài viết đích')
-                ->body('Chọn bài viết / sản phẩm đã đồng bộ từ WordPress.')
+                ->title('Choose target article')
+                ->body('Select an article/product already synced from WordPress.')
                 ->warning()
                 ->send();
 
@@ -286,7 +286,7 @@ class TestPrompt extends Page implements HasForms
 
         if ($article === null) {
             Notification::make()
-                ->title('Không tìm thấy bài viết')
+                ->title('Article not found')
                 ->danger()
                 ->send();
         }
@@ -328,7 +328,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Đã xóa lần chạy thử')
+            ->title('Test run deleted')
             ->success()
             ->send();
     }
@@ -369,22 +369,22 @@ class TestPrompt extends Page implements HasForms
     {
         $name = (string) ($this->getPrompt()->name ?: $this->getPrompt()->title);
 
-        return 'Chạy thử: ' . $name;
+        return 'Test: ' . $name;
     }
 
     protected function getHeaderActions(): array
     {
         return [
             Actions\Action::make('edit')
-                ->label('Sửa Prompt')
+                ->label('Edit prompt')
                 ->icon('heroicon-o-pencil-square')
                 ->url(fn (): string => PromptResource::getUrl('edit', ['record' => $this->getRecord()])),
             Actions\Action::make('back')
-                ->label('Danh sách')
+                ->label('List')
                 ->icon('heroicon-o-arrow-left')
                 ->url(PromptResource::getUrl('index')),
             Actions\Action::make('refresh_preview')
-                ->label('Làm mới xem trước')
+                ->label('Refresh preview')
                 ->icon('heroicon-o-arrow-path')
                 ->action(fn () => $this->refreshCompiledPreview()),
         ];
@@ -399,7 +399,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Cần đồng bộ model AI')
+            ->title('AI model sync required')
             ->body($readiness->blockMessage())
             ->warning()
             ->send();
@@ -416,7 +416,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Cần đồng bộ model AI')
+            ->title('AI model sync required')
             ->body($exception->getMessage())
             ->warning()
             ->send();
@@ -451,7 +451,7 @@ class TestPrompt extends Page implements HasForms
                 $this->isRunning = false;
 
                 Notification::make()
-                    ->title('Thiếu thông tin loại sản phẩm')
+                    ->title('Missing product category info')
                     ->body((string) ($validation['message'] ?? ''))
                     ->warning()
                     ->send();
@@ -464,8 +464,8 @@ class TestPrompt extends Page implements HasForms
             $this->isRunning = false;
 
             Notification::make()
-                ->title('Thiếu biến input')
-                ->body('Prompt dùng {{input}} — nhập kết quả mô phỏng từ edge nối vào trước khi chạy thử.')
+                ->title('Missing input variable')
+                ->body('Prompt uses {{input}} - enter simulated input from connected edge before testing.')
                 ->warning()
                 ->send();
 
@@ -490,10 +490,10 @@ class TestPrompt extends Page implements HasForms
 
             Notification::make()
                 ->title($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun()
-                    ? 'Đã chạy xong prompt cha'
-                    : 'Chạy thử thành công')
+                    ? 'Parent prompt completed'
+                    : 'Test successful')
                 ->body($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun()
-                    ? 'Bấm nút bên dưới để chạy từng prompt con lần lượt.'
+                    ? 'Click button below to run sub-prompts step by step.'
                     : null)
                 ->success()
                 ->send();
@@ -514,7 +514,7 @@ class TestPrompt extends Page implements HasForms
             }
 
             Notification::make()
-                ->title('Chạy thử thất bại')
+                ->title('Test failed')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -541,8 +541,8 @@ class TestPrompt extends Page implements HasForms
 
         if (! $this->usesStepByStepChain()) {
             Notification::make()
-                ->title('Prompt này không cần chạy prompt con')
-                ->body('Prompt ảnh đã render trực tiếp trong 1 lần chạy.')
+                ->title('This prompt does not require sub-prompts')
+                ->body('Image prompt renders directly in one run.')
                 ->warning()
                 ->send();
 
@@ -551,8 +551,8 @@ class TestPrompt extends Page implements HasForms
 
         if (! $this->chainParentCompleted || ! $this->hasMoreSubTasksToRun()) {
             Notification::make()
-                ->title('Không thể chạy bước tiếp theo')
-                ->body('Chạy prompt cha trước, hoặc đã hết prompt con.')
+                ->title('Cannot run next step')
+                ->body('Run parent prompt first, or no sub-prompts remain.')
                 ->warning()
                 ->send();
 
@@ -561,8 +561,8 @@ class TestPrompt extends Page implements HasForms
 
         if (blank($this->chainLastOutput)) {
             Notification::make()
-                ->title('Thiếu kết quả bước trước')
-                ->body('Chạy lại prompt cha.')
+                ->title('Missing previous step result')
+                ->body('Run parent prompt again.')
                 ->warning()
                 ->send();
 
@@ -598,8 +598,8 @@ class TestPrompt extends Page implements HasForms
             $hasMore = $this->hasMoreSubTasksToRun();
 
             Notification::make()
-                ->title('Đã chạy xong ' . ($this->dependentSubTaskSteps[$subTaskIndex]['name'] ?? 'prompt con'))
-                ->body($hasMore ? 'Bấm nút bên dưới để chạy prompt con tiếp theo.' : 'Đã hoàn tất toàn bộ chuỗi prompt.')
+                ->title('Completed ' . ($this->dependentSubTaskSteps[$subTaskIndex]['name'] ?? 'sub-prompt'))
+                ->body($hasMore ? 'Click button below to run next sub-prompt.' : 'Prompt chain completed.')
                 ->success()
                 ->send();
 
@@ -613,7 +613,7 @@ class TestPrompt extends Page implements HasForms
             $this->errorMessage = $exception->getMessage();
 
             Notification::make()
-                ->title('Chạy prompt con thất bại')
+                ->title('Sub-prompt failed')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -714,7 +714,7 @@ class TestPrompt extends Page implements HasForms
             $this->errorMessage = null;
         } elseif ($result->status === 'failed') {
             $this->outputText = null;
-            $this->errorMessage = (string) ($result->error_message ?? 'Chạy thử thất bại.');
+            $this->errorMessage = (string) ($result->error_message ?? 'Test failed.');
         } else {
             $this->outputText = null;
             $this->errorMessage = null;
@@ -758,7 +758,7 @@ class TestPrompt extends Page implements HasForms
             filled($this->lastRawModelUsed) ? 'Model: ' . $this->lastRawModelUsed : null,
         ]));
 
-        return $parts !== [] ? 'Kết quả AI (' . implode(' · ', $parts) . ')' : 'Kết quả AI';
+        return $parts !== [] ? 'AI result (' . implode(' · ', $parts) . ')' : 'AI result';
     }
 
     public function shouldShowCompiledPreview(): bool
@@ -941,8 +941,8 @@ class TestPrompt extends Page implements HasForms
         $siteId = $this->testResultSiteId();
         if ($siteId === null || $siteId <= 0) {
             Notification::make()
-                ->title('Chưa chọn tên miền')
-                ->body('Chọn tên miền hoặc bài viết đích trước khi chỉnh sửa ảnh.')
+                ->title('Domain not selected')
+                ->body('Select a domain or target article before editing image.')
                 ->warning()
                 ->send();
 
@@ -951,7 +951,7 @@ class TestPrompt extends Page implements HasForms
 
         $site = Site::query()->find($siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title('Domain not found')->danger()->send();
 
             return;
         }
@@ -959,8 +959,8 @@ class TestPrompt extends Page implements HasForms
         $media = $this->testResultSeoMedia();
         if ($media === null) {
             Notification::make()
-                ->title('Không tìm thấy file ảnh')
-                ->body('Ảnh chưa được lưu trên server — chạy lại prompt.')
+                ->title('Image file not found')
+                ->body('Image is not saved on server yet - run prompt again.')
                 ->warning()
                 ->send();
 
@@ -981,7 +981,7 @@ class TestPrompt extends Page implements HasForms
                 ->resolve($site, $imageRow);
         } catch (\Throwable $e) {
             Notification::make()
-                ->title('Không mở được trình chỉnh sửa')
+                ->title('Unable to open editor')
                 ->body($e->getMessage())
                 ->danger()
                 ->send();
@@ -1017,8 +1017,8 @@ class TestPrompt extends Page implements HasForms
         $siteId = $this->testResultSiteId();
         if ($siteId === null || $siteId <= 0) {
             Notification::make()
-                ->title('Chưa chọn tên miền')
-                ->body('Chọn tên miền ở biến loại sản phẩm hoặc chọn bài viết đích (đã đồng bộ WP) trước khi gán ảnh vào thư viện.')
+                ->title('Domain not selected')
+                ->body('Select domain in product-category variables or choose a synced target article before assigning image to library.')
                 ->warning()
                 ->send();
 
@@ -1028,8 +1028,8 @@ class TestPrompt extends Page implements HasForms
         $media = $this->testResultSeoMedia();
         if ($media === null) {
             Notification::make()
-                ->title('Không tìm thấy file ảnh')
-                ->body('Ảnh AI chưa được lưu trên server — chạy lại prompt hoặc kiểm tra đường dẫn /storage/.')
+                ->title('Image file not found')
+                ->body('AI image is not saved on server yet - rerun prompt or check /storage/ path.')
                 ->warning()
                 ->send();
 
@@ -1038,7 +1038,7 @@ class TestPrompt extends Page implements HasForms
 
         if ((int) ($media->site_id ?? 0) === $siteId) {
             Notification::make()
-                ->title('Ảnh đã thuộc thư viện domain này')
+                ->title('Image already belongs to this domain library')
                 ->success()
                 ->send();
 
@@ -1048,8 +1048,8 @@ class TestPrompt extends Page implements HasForms
         $media->update(['site_id' => $siteId]);
 
         Notification::make()
-            ->title('Đã gán ảnh vào thư viện')
-            ->body('Có thể áp dụng đóng dấu hoặc mở thư viện hình ảnh.')
+            ->title('Image assigned to library')
+            ->body('You can now apply watermark or open media library.')
             ->success()
             ->send();
     }
@@ -1059,8 +1059,8 @@ class TestPrompt extends Page implements HasForms
         $siteId = $this->testResultSiteId();
         if ($siteId === null || $siteId <= 0) {
             Notification::make()
-                ->title('Chưa chọn tên miền')
-                ->body('Chọn tên miền hoặc bài viết đích trước khi đóng dấu. Với ảnh Gen AI, bấm «Gán vào thư viện» trước.')
+                ->title('Domain not selected')
+                ->body('Select domain or target article before watermarking. For AI-generated images, click "Assign to library" first.')
                 ->warning()
                 ->send();
 
@@ -1069,7 +1069,7 @@ class TestPrompt extends Page implements HasForms
 
         $site = Site::query()->find($siteId);
         if (! $site instanceof Site) {
-            Notification::make()->title('Không tìm thấy domain')->danger()->send();
+            Notification::make()->title('Domain not found')->danger()->send();
 
             return;
         }
@@ -1083,8 +1083,8 @@ class TestPrompt extends Page implements HasForms
         $imageRow = $this->testResultImageRow();
         if (($imageRow['kind'] ?? '') === 'generated') {
             Notification::make()
-                ->title('Ảnh Gen AI chưa gán domain')
-                ->body('Bấm «Gán vào thư viện» rồi thử đóng dấu lại.')
+                ->title('AI-generated image has no domain yet')
+                ->body('Click "Assign to library" then try watermark again.')
                 ->warning()
                 ->send();
 
@@ -1095,7 +1095,7 @@ class TestPrompt extends Page implements HasForms
 
         if (! ($result['success'] ?? false)) {
             Notification::make()
-                ->title((string) ($result['message'] ?? 'Không áp dụng được đóng dấu.'))
+                ->title((string) ($result['message'] ?? 'Unable to apply watermark.'))
                 ->warning()
                 ->send();
 
@@ -1108,7 +1108,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         Notification::make()
-            ->title((string) ($result['message'] ?? 'Đã áp dụng đóng dấu.'))
+            ->title((string) ($result['message'] ?? 'Watermark applied.'))
             ->success()
             ->send();
     }
@@ -1202,7 +1202,7 @@ class TestPrompt extends Page implements HasForms
             return [
                 Forms\Components\Placeholder::make('no_variables')
                     ->label('')
-                    ->content('Prompt này không khai báo biến @{{tên}}. Bạn có thể chạy thử trực tiếp.'),
+                    ->content('This prompt does not declare @{{name}} variables. You can test it directly.'),
             ];
         }
 
@@ -1240,11 +1240,11 @@ class TestPrompt extends Page implements HasForms
     {
         $options = app(PromptLoaiSanPhamOptionsService::class);
 
-        return Forms\Components\Section::make('Loại sản phẩm (product_cat)')
-            ->description('Chỉ áp dụng khi post_type = product. Chọn tên miền, rồi chọn product_cat hoặc chỉ điền Custom (một trong hai là đủ).')
+        return Forms\Components\Section::make('Product category (product_cat)')
+            ->description('Applies only when post_type = product. Select a domain, then choose product_cat or fill Custom (either one is enough).')
             ->schema([
                 Forms\Components\Select::make(PromptLoaiSanPhamVariable::SITE_FIELD)
-                    ->label('Tên miền')
+                    ->label('Domain')
                     ->options(fn (): array => $options->siteOptionsForUser())
                     ->searchable()
                     ->required()
@@ -1254,25 +1254,25 @@ class TestPrompt extends Page implements HasForms
                         $set(PromptLoaiSanPhamVariable::CATEGORY_FIELD, null);
                     }),
                 Forms\Components\Select::make(PromptLoaiSanPhamVariable::CATEGORY_FIELD)
-                    ->label('Danh mục sản phẩm (product_cat)')
+                    ->label('Product category (product_cat)')
                     ->options(fn (Get $get): array => $options->productCategoryOptionsForSite(
                         (int) $get(PromptLoaiSanPhamVariable::SITE_FIELD),
                     ))
                     ->searchable()
                     ->required(fn (Get $get): bool => trim((string) $get(PromptLoaiSanPhamVariable::CUSTOM_FIELD)) === '')
                     ->native(false)
-                    ->helperText('Tùy chọn nếu đã điền Custom. Lấy từ danh mục đồng bộ (product_category); đồng bộ domain trước nếu danh sách trống.')
+                    ->helperText('Optional when Custom is provided. Loaded from synced categories (product_category); sync domain first if list is empty.')
                     ->hidden(fn (Get $get): bool => blank($get(PromptLoaiSanPhamVariable::SITE_FIELD)))
                     ->live(),
                 Forms\Components\TextInput::make(PromptLoaiSanPhamVariable::CUSTOM_FIELD)
                     ->label('Custom')
-                    ->placeholder('VD: túi vải, balo laptop, Cặp học sinh…')
-                    ->helperText('Có thể dùng thay cho product_cat khi chạy thử.')
+                    ->placeholder('e.g. tote bag, laptop backpack, school bag...')
+                    ->helperText('Can be used instead of product_cat during testing.')
                     ->maxLength(500)
                     ->live(debounce: 400),
                 Forms\Components\Placeholder::make('loai_san_pham_preview')
                     ->dehydrated(false)
-                    ->label('Giá trị gửi vào {{loai_san_pham}} / {{LOAI_SAN_PHAM}}')
+                    ->label('Value sent to {{loai_san_pham}} / {{LOAI_SAN_PHAM}}')
                     ->content(function (Get $get) use ($options): HtmlString {
                         $text = $options->buildCompositeValue(
                             (int) $get(PromptLoaiSanPhamVariable::SITE_FIELD),
@@ -1286,7 +1286,7 @@ class TestPrompt extends Page implements HasForms
                                 : '<span class="text-sm text-gray-500">—</span>',
                         );
                     })
-                    ->helperText('Tự động ghép từ danh mục + custom khi chạy thử.'),
+                    ->helperText('Automatically composed from category + custom during test.'),
             ])
             ->columnSpanFull();
     }
@@ -1298,10 +1298,10 @@ class TestPrompt extends Page implements HasForms
     {
         $helper = filled($definition['description'] ?? null)
             ? (string) $definition['description']
-            : 'Trên Workflow Builder, {{input}} nhận kết quả từ bước trước. Khi chạy thử tại đây, dán hoặc nhập nội dung mô phỏng.';
+            : 'In Workflow Builder, {{input}} receives previous-step output. When testing here, paste or enter simulated content.';
 
         return Forms\Components\Textarea::make('input')
-            ->label((string) ($definition['label'] ?? 'Kết quả edge nối vào (SEO Flow)'))
+            ->label((string) ($definition['label'] ?? 'Input from connected edge (SEO Flow)'))
             ->rows(6)
             ->columnSpanFull()
             ->helperText($helper);

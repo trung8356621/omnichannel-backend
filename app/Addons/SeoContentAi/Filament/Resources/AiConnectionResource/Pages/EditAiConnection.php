@@ -18,22 +18,22 @@ class EditAiConnection extends EditRecord
 
     public function getTitle(): string
     {
-        return __('Sửa kết nối AI');
+        return __('Edit AI connection');
     }
 
     protected function getHeaderActions(): array
     {
         return [
             Actions\Action::make('sync_models')
-                ->label('Đồng bộ model từ API')
+                ->label('Sync models from API')
                 ->icon('heroicon-o-arrow-path')
                 ->action(function (): void {
                     $ok = app(AiModelRouterService::class)->syncModelsForConnection((int) $this->record->id);
 
                     if ($ok) {
                         Notification::make()
-                            ->title('Đã đồng bộ model')
-                            ->body('Danh sách phiên bản API đã cập nhật vào seo_ai_models.')
+                            ->title('Models synced')
+                            ->body('API model list has been updated in seo_ai_models.')
                             ->success()
                             ->send();
 
@@ -41,8 +41,8 @@ class EditAiConnection extends EditRecord
                     }
 
                     Notification::make()
-                        ->title('Đồng bộ thất bại')
-                        ->body('Kiểm tra API Key và nhà cung cấp (Gemini / Claude).')
+                        ->title('Sync failed')
+                        ->body('Check API key and provider (Gemini / Claude).')
                         ->danger()
                         ->send();
                 }),

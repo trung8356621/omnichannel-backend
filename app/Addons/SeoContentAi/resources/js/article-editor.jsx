@@ -43,6 +43,8 @@ function registerArticleEditorLivewireBridge() {
             window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'));
         });
         Livewire.on('editor-block-image-selected', forward('editor-block-image-selected'));
+        Livewire.on('article-media-selected', forward('article-media-selected'));
+        Livewire.on('article-media-removed', forward('article-media-removed'));
         Livewire.on('article-ai-image-generated', forward('article-ai-image-generated'));
         Livewire.on('article-ai-video-generated', forward('article-ai-video-generated'));
         Livewire.on('article-ai-media-failed', forward('article-ai-media-failed'));
@@ -62,9 +64,11 @@ if (rootElement) {
     let initialSeo = null;
     let editorSettings = { history_step: 20 };
     let initialPostImages = [];
+    let initialSupplementalImages = [];
     let articleId = null;
     let siteId = null;
     let articleTitle = '';
+    let articlePostType = '';
     let aiDebug = { enabled: false };
 
     try {
@@ -125,7 +129,11 @@ if (rootElement) {
             articleId = meta?.id ?? null;
             siteId = meta?.site_id ?? meta?.siteId ?? null;
             articleTitle = meta?.title ?? '';
+            articlePostType = String(meta?.post_type ?? '').trim();
             aiDebug = meta?.ai_debug ?? { enabled: false };
+            initialSupplementalImages = Array.isArray(meta?.supplemental_images)
+                ? meta.supplemental_images
+                : [];
         }
     } catch (e) {
         console.warn('Invalid article meta JSON', e);
@@ -152,6 +160,8 @@ if (rootElement) {
             initialOutline={initialOutline}
             initialSeo={initialSeo}
             initialPostImages={initialPostImages}
+            initialSupplementalImages={initialSupplementalImages}
+            initialPostType={articlePostType}
             initialFaqs={initialFaqs}
             articleTitle={articleTitle}
             editorSettings={editorSettings}

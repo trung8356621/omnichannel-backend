@@ -1,19 +1,19 @@
 /**
- * Đặt watermark theo góc neo + offset pixel (tính từ cạnh, không dùng % canvas).
+ * Place watermark by anchor corner + pixel offset.
  */
 
 /** @typedef {'top-left'|'top-center'|'top-right'|'center-left'|'center'|'center-right'|'bottom-left'|'bottom-center'|'bottom-right'} WatermarkAnchor */
 
 export const WATERMARK_ANCHORS = [
-    { value: 'top-left', label: 'Góc trên — Trái' },
-    { value: 'top-center', label: 'Góc trên — Giữa' },
-    { value: 'top-right', label: 'Góc trên — Phải' },
-    { value: 'center-left', label: 'Giữa — Trái' },
-    { value: 'center', label: 'Chính giữa' },
-    { value: 'center-right', label: 'Giữa — Phải' },
-    { value: 'bottom-left', label: 'Góc dưới — Trái' },
-    { value: 'bottom-center', label: 'Góc dưới — Giữa' },
-    { value: 'bottom-right', label: 'Góc dưới — Phải' },
+    { value: 'top-left', label: 'Top - Left' },
+    { value: 'top-center', label: 'Top - Center' },
+    { value: 'top-right', label: 'Top - Right' },
+    { value: 'center-left', label: 'Center - Left' },
+    { value: 'center', label: 'Center' },
+    { value: 'center-right', label: 'Center - Right' },
+    { value: 'bottom-left', label: 'Bottom - Left' },
+    { value: 'bottom-center', label: 'Bottom - Center' },
+    { value: 'bottom-right', label: 'Bottom - Right' },
 ];
 
 export const DEFAULT_POSITION_ANCHOR = 'bottom-right';
@@ -21,9 +21,9 @@ export const DEFAULT_POSITION_ANCHOR = 'bottom-right';
 export const DEFAULT_ANCHOR_OFFSET = { x: 20, y: 20 };
 
 /**
- * Tâm phần tử (watermark) từ góc neo + offset px.
- * offsetX: khoảng cách từ cạnh phải (nếu anchor có "right") hoặc từ cạnh trái.
- * offsetY: khoảng cách từ cạnh dưới (nếu anchor có "bottom") hoặc từ cạnh trên.
+ * Element center from anchor corner + offset px.
+ * offsetX: distance from right edge (for "right") or left edge.
+ * offsetY: distance from bottom edge (for "bottom") or top edge.
  *
  * @param {number} canvasW
  * @param {number} canvasH
@@ -79,7 +79,7 @@ export function normalizeAnchorPosition(position) {
 }
 
 /**
- * Từ tâm phần tử → offset px (góc dưới-phải làm mặc định khi kéo).
+ * Convert center point -> anchor offsets.
  *
  * @param {number} canvasW
  * @param {number} canvasH

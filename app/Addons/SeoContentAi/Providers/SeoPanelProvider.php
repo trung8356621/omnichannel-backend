@@ -42,6 +42,7 @@ class SeoPanelProvider extends PanelProvider
         Livewire::component('global-seo-bar', \App\Addons\SeoContentAi\Livewire\GlobalSeoBar::class);
 
         $this->loadViewsFrom($addonRoot . '/resources/views', 'seo-content-ai');
+        $this->loadTranslationsFrom($addonRoot . '/lang', 'seo-content-ai');
         $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot . '/database/migrations');
 
         FilamentView::registerRenderHook(
@@ -53,6 +54,16 @@ class SeoPanelProvider extends PanelProvider
             PanelsRenderHook::BODY_END,
             fn (): HtmlString => new HtmlString(
                 view('seo-content-ai::filament.prompt-variable-insert')->render()
+            ),
+        );
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::HEAD_END,
+            fn (): HtmlString => new HtmlString(
+                '<script>'
+                . 'window.__SEO_I18N_LOCALE__ = ' . json_encode(app()->getLocale()) . ';'
+                . 'document.documentElement.setAttribute("lang", ' . json_encode(str_replace('_', '-', app()->getLocale())) . ');'
+                . '</script>'
             ),
         );
 

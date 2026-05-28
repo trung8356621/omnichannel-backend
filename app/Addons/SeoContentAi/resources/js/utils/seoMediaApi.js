@@ -13,7 +13,7 @@ const MEDIA_STATUS_URL_TEMPLATE = '/api/seo/media/{id}/status';
 const MEDIA_RETRY_URL_TEMPLATE = '/api/seo/media/{id}/retry-generation';
 const MEDIA_DELETE_AI_JOB_URL_TEMPLATE = '/api/seo/media/{id}/ai-job';
 
-export const AI_PLACEHOLDER_LOADING_URL = '/storage/assets/images/placeholder-loading.svg';
+export const AI_PLACEHOLDER_LOADING_URL = '/assets/images/placeholder-loading.svg';
 
 /** URL tương đối /storage/... — tránh lệch host/port khi APP_URL khác origin trình duyệt. */
 export function normalizeSeoMediaUrl(url) {
@@ -581,7 +581,7 @@ export async function fetchSeoMediaStatus(seoMediaId) {
     return data;
 }
 
-export async function retryAiMediaGeneration(seoMediaId) {
+export async function retryAiMediaGeneration(seoMediaId, retryInput = '') {
     const url = MEDIA_RETRY_URL_TEMPLATE.replace('{id}', String(seoMediaId));
     const response = await fetch(url, {
         method: 'POST',
@@ -592,6 +592,9 @@ export async function retryAiMediaGeneration(seoMediaId) {
             'X-CSRF-TOKEN':
                 document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '',
         },
+        body: JSON.stringify({
+            retry_input: String(retryInput || '').trim(),
+        }),
     });
     const data = await response.json().catch(() => ({}));
 

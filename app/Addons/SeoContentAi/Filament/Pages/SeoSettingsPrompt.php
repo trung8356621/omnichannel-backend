@@ -21,7 +21,7 @@ class SeoSettingsPrompt extends Page implements HasForms
 
     protected static bool $shouldRegisterNavigation = false;
 
-    protected static ?string $title = 'Tùy chỉnh prompt';
+    protected static ?string $title = 'Prompt settings';
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-settings-prompt';
 
@@ -49,45 +49,45 @@ class SeoSettingsPrompt extends Page implements HasForms
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('Giọng văn')
-                    ->description('Danh sách giọng văn có thể dùng khi soạn prompt. Bấm «Thêm giọng văn» để bổ sung.')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.tone_section'))
+                    ->description(__('seo-content-ai::filament.settings_prompt.tone_section_description'))
                     ->schema([
                         Forms\Components\Repeater::make(SeoPromptSettingsService::KEY_TONE_OF_VOICE)
                             ->label('')
                             ->schema([
                                 Forms\Components\TextInput::make('label')
-                                    ->label('Giọng văn')
+                                    ->label(__('seo-content-ai::filament.settings_prompt.tone_label'))
                                     ->required()
                                     ->maxLength(120)
                                     ->columnSpanFull(),
                             ])
                             ->defaultItems(0)
-                            ->addActionLabel('Thêm giọng văn')
+                            ->addActionLabel(__('seo-content-ai::filament.settings_prompt.add_tone'))
                             ->reorderable()
                             ->collapsible()
                             ->itemLabel(fn (array $state): ?string => filled($state['label'] ?? null)
                                 ? (string) $state['label']
-                                : __('Giọng văn mới')),
+                                : __('seo-content-ai::filament.settings_prompt.new_tone')),
                     ]),
-                Forms\Components\Section::make('Featured Snippet')
-                    ->description('Ngưỡng bảng Markdown khi chấm điểm SEO và kiểm tra nội dung sau đồng bộ.')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.featured_snippet'))
+                    ->description(__('seo-content-ai::filament.settings_prompt.featured_snippet_description'))
                     ->schema([
                         Forms\Components\TextInput::make(SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS)
-                            ->label('Số dòng tối thiểu (dữ liệu)')
+                            ->label(__('seo-content-ai::filament.settings_prompt.min_rows'))
                             ->numeric()
                             ->minValue(1)
                             ->maxValue(50)
                             ->required()
                             ->default(10),
                         Forms\Components\TextInput::make(SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS)
-                            ->label('Số cột tối thiểu')
+                            ->label(__('seo-content-ai::filament.settings_prompt.min_columns'))
                             ->numeric()
                             ->minValue(1)
                             ->maxValue(10)
                             ->required()
                             ->default(2),
                         Forms\Components\TextInput::make(SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS)
-                            ->label('Số cột tối đa')
+                            ->label(__('seo-content-ai::filament.settings_prompt.max_columns'))
                             ->numeric()
                             ->minValue(1)
                             ->maxValue(10)
@@ -111,7 +111,7 @@ class SeoSettingsPrompt extends Page implements HasForms
         ]);
 
         Notification::make()
-            ->title('Đã lưu tùy chỉnh prompt')
+            ->title(__('seo-content-ai::filament.settings_prompt.saved'))
             ->success()
             ->send();
     }

@@ -21,9 +21,9 @@ const Icons = {
 };
 
 const defaultMockPrompts = [
-  { id: 'p1', name: 'Lập dàn ý & JSON Thực thể', tasks: [{id: 'task_1', name: 'Dàn ý H1,H2'}, {id: 'task_2', name: 'Dữ liệu JSON'}] },
-  { id: 'p2', name: 'Viết thân bài chi tiết', tasks: [{id: 'task_1', name: 'Viết nội dung'}] },
-  { id: 'p3', name: 'Phân tích & Tối ưu bài cũ', tasks: [{id: 'task_1', name: 'Chấm điểm SEO'}, {id: 'task_2', name: 'Viết lại Title/Meta'}, {id: 'task_3', name: 'Đề xuất Internal Link'}] }
+  { id: 'p1', name: 'Outline & Entity JSON', tasks: [{id: 'task_1', name: 'Outline H1,H2'}, {id: 'task_2', name: 'JSON data'}] },
+  { id: 'p2', name: 'Write detailed body', tasks: [{id: 'task_1', name: 'Write content'}] },
+  { id: 'p3', name: 'Analyze & optimize old article', tasks: [{id: 'task_1', name: 'SEO scoring'}, {id: 'task_2', name: 'Rewrite Title/Meta'}, {id: 'task_3', name: 'Suggest internal links'}] }
 ];
 
 const mockPrompts =
@@ -34,14 +34,14 @@ const mockPrompts =
 const mockPostTypes = ['post', 'page', 'product', 'news'];
 const mockTaxonomies = ['category', 'post_tag', 'product_cat', 'brand'];
 const mockActions = [
-  { id: 'create', label: 'Tạo mới' },
-  { id: 'update', label: 'Cập nhật' },
-  { id: 'add_comment_review', label: 'Thêm bình luận/review' },
+  { id: 'create', label: 'Create' },
+  { id: 'update', label: 'Update' },
+  { id: 'add_comment_review', label: 'Add comment/review' },
 ];
 
 const commentReviewFilters = [
-  { id: 'with', label: 'Đã có bình luận/review' },
-  { id: 'without', label: 'Chưa có bình luận/review' },
+  { id: 'with', label: 'Has comment/review' },
+  { id: 'without', label: 'No comment/review yet' },
 ];
 
 const commentReviewLabels = Object.fromEntries(commentReviewFilters.map((o) => [o.id, o.label]));
@@ -85,7 +85,7 @@ function migrateLegacyFlowNode(node) {
   return {
     ...node,
     type: 'action',
-    title: node.title === 'Lưu / End' ? 'Hành động' : node.title,
+    title: node.title === 'Save / End' ? 'Action' : node.title,
     data: {
       actionType: node.data?.actionType ?? 'create_article',
       isTrigger: Boolean(node.data?.isTrigger),
@@ -146,7 +146,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
         {
           id: 'n1',
           type: 'article',
-          title: 'Bài viết (Input)',
+          title: 'Article (Input)',
           x: 50,
           y: 150,
           data: { postTypes: [], taxonomies: [], actions: [], commentReview: [] },
@@ -168,16 +168,16 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
     const id = `node_${Date.now()}`;
     let title = '', data = {};
     if (type === 'article') {
-      title = 'Bài viết';
+      title = 'Article';
       data = { postTypes: [], taxonomies: [], actions: [], commentReview: [] };
     }
     else if (type === 'prompt') {
-      title = 'Khối Prompt';
+      title = 'Prompt block';
       data = defaultPromptNodeData(mockPrompts[0]?.id ?? 'p1');
     }
-    else if (type === 'filter') { title = 'Lọc / Xử lý'; data = { filterType: 'custom', rule: '' }; }
+    else if (type === 'filter') { title = 'Filter / Process'; data = { filterType: 'custom', rule: '' }; }
     else if (type === 'action') {
-      title = 'Hành động';
+      title = 'Action';
       data = { actionType: 'create_article', isTrigger: false };
     }
     setNodes([...nodes, { id, type, title, x: 100, y: 100, data }]);
@@ -246,7 +246,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
               value={taskName} 
               onChange={(e) => setTaskName(e.target.value)} 
               className={`rounded px-3 py-1.5 text-sm w-64 transition-colors duration-200 focus:outline-none border ${t.input}`}
-              placeholder="Tên quy trình..." 
+              placeholder="Workflow name..." 
             />
         </div>
         <button
@@ -264,12 +264,12 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
         <div className={`w-60 border-r p-4 flex flex-col gap-3 transition-colors duration-200 ${t.sidebar}`}>
           <h3 className={`text-xs font-bold uppercase tracking-wider mb-2 ${t.sidebarTitle}`}>Thêm Widget</h3>
           {[
-            { type: 'article', label: 'Bài viết (Input)', icon: <Icons.Article /> },
-            { type: 'prompt', label: 'Khối Prompt AI', icon: <Icons.Prompt /> },
-            { type: 'filter', label: 'Khối Lọc', icon: <Icons.Filter /> },
+            { type: 'article', label: 'Article (Input)', icon: <Icons.Article /> },
+            { type: 'prompt', label: 'AI Prompt block', icon: <Icons.Prompt /> },
+            { type: 'filter', label: 'Filter block', icon: <Icons.Filter /> },
             {
               type: 'action',
-              label: 'Hành động',
+              label: 'Action',
               icon: <Icons.Play />,
               iconClass: 'text-rose-600 dark:text-rose-400 bg-rose-100 dark:bg-rose-500/10',
             },
@@ -340,7 +340,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
             const nodeClass = `absolute w-[220px] rounded-xl border shadow-lg cursor-grab z-10 flex flex-col transition-colors duration-200 ${t.nodeBg} ${nodeBorderClass(node.type, isSelected, isDark)}`;
             const outputPorts = node.type === 'prompt'
               ? getPromptOutputPorts(node.data.promptId, mockPrompts, isDark)
-              : [{ id: 'out_main', label: 'Kết nối', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
+              : [{ id: 'out_main', label: 'Connect', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
             const nodeHeight = getDefaultNodeHeight(node.type, outputPorts.length);
 
             return (
@@ -389,14 +389,14 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                   {node.type === 'filter' && (
                     <div className="flex flex-col gap-1">
                       <span className="font-semibold text-amber-600 dark:text-amber-400">
-                        {node.data.filterType === 'parse_outline' ? 'Bóc tách Dàn ý' :
-                         node.data.filterType === 'parse_keywords' ? 'Bóc tách Từ khóa' :
-                         node.data.filterType === 'parse_faq' ? 'Bóc tách FAQ' :
-                         node.data.filterType === 'score_seo' ? 'Chấm điểm SEO' :
-                         'Lọc tùy chỉnh'}
+                        {node.data.filterType === 'parse_outline' ? 'Extract outline' :
+                         node.data.filterType === 'parse_keywords' ? 'Extract keywords' :
+                         node.data.filterType === 'parse_faq' ? 'Extract FAQ' :
+                         node.data.filterType === 'score_seo' ? 'SEO scoring' :
+                         'Custom filter'}
                       </span>
                       {(!node.data.filterType || node.data.filterType === 'custom') && (
-                        <span className="truncate text-[10px]">Logic: {node.data.rule || 'Chưa cấu hình'}</span>
+                        <span className="truncate text-[10px]">Logic: {node.data.rule || 'Not configured'}</span>
                       )}
                     </div>
                   )}
@@ -404,12 +404,12 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                     <div className="flex flex-col">
                       <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-gray-800'}`}>
                         {node.data.actionType === 'edit_article'
-                          ? 'Sửa bài viết'
+                          ? 'Edit article'
                           : node.data.actionType === 'post_comment_review'
-                            ? 'Đăng bình luận / review'
+                            ? 'Post comment / review'
                             : node.data.actionType === 'save_vocabulary_research'
-                              ? 'Lưu nghiên cứu từ vựng'
-                              : 'Tạo bài viết mới'}
+                              ? 'Save vocabulary research'
+                              : 'Create new article'}
                       </span>
                       {node.data.isTrigger ? (
                         <span className="flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1.5 bg-amber-100 dark:bg-amber-500/10 px-2 py-0.5 rounded w-max border border-amber-200 dark:border-amber-500/20">
@@ -595,7 +595,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                         type="text"
                         value={selectedNode.data.rule || ''}
                         onChange={(e) => updateNodeData(selectedNode.id, 'rule', e.target.value)}
-                        placeholder="Nhập logic lọc (VD: score > 80)..."
+                        placeholder="Enter filter logic (e.g. score > 80)..."
                         className="w-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-700 rounded-md p-2 text-sm text-gray-800 dark:text-white focus:outline-none focus:border-amber-500 transition-colors shadow-sm"
                       />
                     </div>

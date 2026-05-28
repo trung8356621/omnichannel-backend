@@ -19,25 +19,25 @@ final class SeoSettingsMenu
         return [
             [
                 'id' => 'overview',
-                'label' => 'Tổng quan',
+                'label' => 'Overview',
                 'icon' => 'heroicon-o-home',
                 'url' => SeoSettingsOverview::getUrl(),
             ],
             [
                 'id' => 'workflows',
-                'label' => 'Quy trình',
+                'label' => 'Workflows',
                 'icon' => 'heroicon-o-arrows-right-left',
                 'url' => SeoSettingsWorkflows::getUrl(),
             ],
             [
                 'id' => 'ai',
-                'label' => 'Cấu hình AI',
+                'label' => 'AI settings',
                 'icon' => 'heroicon-o-cpu-chip',
                 'url' => AiConnectionResource::getUrl(),
             ],
             [
                 'id' => 'prompt',
-                'label' => 'Tùy chỉnh prompt',
+                'label' => 'Prompt settings',
                 'icon' => 'heroicon-o-chat-bubble-left-ellipsis',
                 'url' => SeoSettingsPrompt::getUrl(),
             ],

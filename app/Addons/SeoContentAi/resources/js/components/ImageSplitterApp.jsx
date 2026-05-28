@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchSplitterSource, saveSplitPiecesToLibrary } from '../utils/seoMediaApi';
+import { t } from '../utils/i18n';
 
 function loadImage(src) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve(img);
-        img.onerror = () => reject(new Error('Không tải được ảnh.'));
+        img.onerror = () => reject(new Error(t('splitter_load_error')));
         img.src = src;
     });
 }
@@ -27,6 +28,15 @@ function absoluteImageUrl(url) {
     return url;
 }
 
+function buildEvenGuides(count) {
+    const guides = [];
+    for (let i = 1; i < count; i += 1) {
+        guides.push(i / count);
+    }
+
+    return guides;
+}
+
 export default function ImageSplitterApp({
     siteId = null,
     articleId = null,
@@ -38,6 +48,7 @@ export default function ImageSplitterApp({
     splitPayload = null,
 }) {
     const resultPaneRef = useRef(null);
+    const previewRef = useRef(null);
     const splitPayloadRef = useRef(splitPayload);
     splitPayloadRef.current = splitPayload;
     const [imageSrc, setImageSrc] = useState('');
@@ -50,10 +61,14 @@ export default function ImageSplitterApp({
     const [imgNatural, setImgNatural] = useState({ width: 0, height: 0 });
     const [rows, setRows] = useState(3);
     const [cols, setCols] = useState(2);
+    const [verticalGuides, setVerticalGuides] = useState(() => buildEvenGuides(2));
+    const [horizontalGuides, setHorizontalGuides] = useState(() => buildEvenGuides(3));
+    const [dragGuide, setDragGuide] = useState(null);
     const [pieces, setPieces] = useState([]);
     const [isSplitting, setIsSplitting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [isLoadingSource, setIsLoadingSource] = useState(true);
+    const [dragPieceId, setDragPieceId] = useState(null);
     const [saveMessage, setSaveMessage] = useState('');
     const [error, setError] = useState('');
     const laravelId = Number(seoMediaId ?? 0);
@@ -73,7 +88,7 @@ export default function ImageSplitterApp({
             }));
             return [...prev, ...normalized];
         });
-        setSaveMessage(`Đã thêm ${addedCount} ảnh vào «Ảnh sau khi split».`);
+        setSaveMessage(t('splitter_added', { count: addedCount }));
         setError('');
 
         requestAnimationFrame(() => {
@@ -107,6 +122,14 @@ export default function ImageSplitterApp({
     }, [pieces]);
 
     useEffect(() => {
+        setVerticalGuides(buildEvenGuides(cols));
+    }, [cols]);
+
+    useEffect(() => {
+        setHorizontalGuides(buildEvenGuides(rows));
+    }, [rows]);
+
+    useEffect(() => {
         let cancelled = false;
 
         const loadSource = async () => {
@@ -115,7 +138,7 @@ export default function ImageSplitterApp({
             setSaveMessage('');
 
             if (!hasSourceId) {
-                setError('Thiếu seo_media_id hoặc wp_attachment_id — mở từ thư viện, bài viết hoặc kết quả AI.');
+                setError(t('splitter_missing_source_id'));
                 setIsLoadingSource(false);
                 return;
             }
@@ -130,7 +153,7 @@ export default function ImageSplitterApp({
                     });
                 } catch (e) {
                     if (!cancelled) {
-                        setError(e.message || 'Không tải được ảnh nguồn.');
+                        setError(e.message || t('splitter_missing_source_image'));
                     }
                 } finally {
                     if (!cancelled) {
@@ -160,7 +183,7 @@ export default function ImageSplitterApp({
                 });
             } catch (e) {
                 if (!cancelled) {
-                    setError(e.message || 'Không tải được ảnh nguồn.');
+                    setError(e.message || t('splitter_missing_source_image'));
                 }
             } finally {
                 if (!cancelled) {
@@ -190,21 +213,17 @@ export default function ImageSplitterApp({
         (sourceMeta.seoMediaId ?? 0) > 0 &&
         !isSaving;
 
-    const gridLines = useMemo(() => {
-        const vertical = [];
-        const horizontal = [];
-        for (let i = 1; i < cols; i += 1) {
-            vertical.push((i / cols) * 100);
-        }
-        for (let i = 1; i < rows; i += 1) {
-            horizontal.push((i / rows) * 100);
-        }
-        return { vertical, horizontal };
-    }, [rows, cols]);
+    const gridLines = useMemo(
+        () => ({
+            vertical: verticalGuides.map((ratio) => ratio * 100),
+            horizontal: horizontalGuides.map((ratio) => ratio * 100),
+        }),
+        [verticalGuides, horizontalGuides],
+    );
 
     const splitImage = async () => {
         if (!hasImage) {
-            setError('Chưa có ảnh nguồn.');
+            setError(t('splitter_no_source'));
             return;
         }
 
@@ -215,13 +234,19 @@ export default function ImageSplitterApp({
         try {
             const image = await loadImage(imageSrc);
             const nextPieces = [];
+            const xBoundaries = [0, ...verticalGuides, 1]
+                .map((ratio) => Math.round(ratio * image.naturalWidth))
+                .sort((a, b) => a - b);
+            const yBoundaries = [0, ...horizontalGuides, 1]
+                .map((ratio) => Math.round(ratio * image.naturalHeight))
+                .sort((a, b) => a - b);
 
-            for (let r = 0; r < rows; r += 1) {
-                for (let c = 0; c < cols; c += 1) {
-                    const x0 = Math.round((c * image.naturalWidth) / cols);
-                    const x1 = Math.round(((c + 1) * image.naturalWidth) / cols);
-                    const y0 = Math.round((r * image.naturalHeight) / rows);
-                    const y1 = Math.round(((r + 1) * image.naturalHeight) / rows);
+            for (let r = 0; r < yBoundaries.length - 1; r += 1) {
+                for (let c = 0; c < xBoundaries.length - 1; c += 1) {
+                    const x0 = xBoundaries[c];
+                    const x1 = xBoundaries[c + 1];
+                    const y0 = yBoundaries[r];
+                    const y1 = yBoundaries[r + 1];
 
                     const width = Math.max(1, x1 - x0);
                     const height = Math.max(1, y1 - y0);
@@ -234,7 +259,7 @@ export default function ImageSplitterApp({
                     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
                     if (!blob) continue;
                     const objectUrl = URL.createObjectURL(blob);
-                    const index = r * cols + c + 1;
+                    const index = r * (xBoundaries.length - 1) + c + 1;
                     nextPieces.push({
                         id: `${Date.now()}-${r}-${c}-${Math.random()}`,
                         row: r + 1,
@@ -250,9 +275,9 @@ export default function ImageSplitterApp({
 
             const addedCount = nextPieces.length;
             setPieces((prev) => [...prev, ...nextPieces]);
-            setSaveMessage(`Đã thêm ${addedCount} ảnh vào «Ảnh sau khi split».`);
+            setSaveMessage(t('splitter_added', { count: addedCount }));
         } catch (e) {
-            setError(e.message || 'Không thể tách ảnh.');
+            setError(e.message || t('splitter_split_error'));
         } finally {
             setIsSplitting(false);
         }
@@ -272,12 +297,79 @@ export default function ImageSplitterApp({
         });
     };
 
+    const movePieceById = useCallback((fromId, toId) => {
+        if (!fromId || !toId || fromId === toId) {
+            return;
+        }
+
+        setPieces((prev) => {
+            const fromIndex = prev.findIndex((piece) => piece.id === fromId);
+            const toIndex = prev.findIndex((piece) => piece.id === toId);
+            if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+                return prev;
+            }
+
+            const next = [...prev];
+            const [moved] = next.splice(fromIndex, 1);
+            next.splice(toIndex, 0, moved);
+            return next;
+        });
+    }, []);
+
+    useEffect(() => {
+        if (!dragGuide) {
+            return undefined;
+        }
+
+        const MIN_GAP = 0.03;
+        const onMouseMove = (event) => {
+            const preview = previewRef.current;
+            if (!preview) {
+                return;
+            }
+            const rect = preview.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) {
+                return;
+            }
+
+            if (dragGuide.axis === 'x') {
+                const raw = (event.clientX - rect.left) / rect.width;
+                setVerticalGuides((prev) => {
+                    const next = [...prev];
+                    const before = dragGuide.index === 0 ? 0 : next[dragGuide.index - 1];
+                    const after = dragGuide.index === next.length - 1 ? 1 : next[dragGuide.index + 1];
+                    next[dragGuide.index] = Math.max(before + MIN_GAP, Math.min(after - MIN_GAP, raw));
+                    return next;
+                });
+            } else {
+                const raw = (event.clientY - rect.top) / rect.height;
+                setHorizontalGuides((prev) => {
+                    const next = [...prev];
+                    const before = dragGuide.index === 0 ? 0 : next[dragGuide.index - 1];
+                    const after = dragGuide.index === next.length - 1 ? 1 : next[dragGuide.index + 1];
+                    next[dragGuide.index] = Math.max(before + MIN_GAP, Math.min(after - MIN_GAP, raw));
+                    return next;
+                });
+            }
+        };
+
+        const onMouseUp = () => setDragGuide(null);
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mouseup', onMouseUp);
+
+        return () => {
+            window.removeEventListener('mousemove', onMouseMove);
+            window.removeEventListener('mouseup', onMouseUp);
+        };
+    }, [dragGuide]);
+
     const saveToLibrary = async () => {
         if (!canSave) {
             if (!effectiveSiteId) {
-                setError('Thiếu site_id — mở lại từ thư viện hoặc chọn tên miền.');
+                setError(t('splitter_missing_site_id'));
             } else if (!(sourceMeta.seoMediaId > 0)) {
-                setError('Thiếu seo_media_id — không thể xóa ảnh gốc sau khi lưu.');
+                setError(t('splitter_missing_seo_media_id'));
             }
             return;
         }
@@ -307,7 +399,7 @@ export default function ImageSplitterApp({
                 resolvedSiteId: effectiveSiteId,
             });
 
-            setSaveMessage(data.message ?? `Đã lưu ${data.saved?.length ?? 0} ảnh.`);
+            setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));
 
             if (window.opener) {
                 window.opener.postMessage(
@@ -320,7 +412,7 @@ export default function ImageSplitterApp({
                 );
             }
         } catch (e) {
-            setError(e.message || 'Không lưu được ảnh.');
+            setError(e.message || t('splitter_save_error'));
         } finally {
             setIsSaving(false);
         }
@@ -337,23 +429,29 @@ export default function ImageSplitterApp({
             <div className="splitter-controls">
                 <div className="splitter-row">
                     <label>
-                        Hàng
+                        {t('splitter_rows')}
                         <input
                             type="number"
                             min={1}
                             max={12}
                             value={rows}
-                            onChange={(e) => setRows(clampInt(e.target.value, 1, 12))}
+                            onChange={(e) => {
+                                setRows(clampInt(e.target.value, 1, 12));
+                                setDragGuide(null);
+                            }}
                         />
                     </label>
                     <label>
-                        Cột
+                        {t('splitter_cols')}
                         <input
                             type="number"
                             min={1}
                             max={12}
                             value={cols}
-                            onChange={(e) => setCols(clampInt(e.target.value, 1, 12))}
+                            onChange={(e) => {
+                                setCols(clampInt(e.target.value, 1, 12));
+                                setDragGuide(null);
+                            }}
                         />
                     </label>
                     <button
@@ -362,44 +460,73 @@ export default function ImageSplitterApp({
                         disabled={!hasImage || isSplitting || isLoadingSource}
                         onClick={splitImage}
                     >
-                        {isSplitting ? 'Đang tách…' : 'Tách ảnh'}
+                        {isSplitting ? t('splitter_splitting') : t('splitter_split')}
                     </button>
                 </div>
 
-                {isLoadingSource && <div className="hint">Đang tải ảnh theo ID…</div>}
+                {isLoadingSource && <div className="hint">{t('splitter_loading_by_id')}</div>}
                 {imgNatural.width > 0 && (
                     <div className="hint">
-                        Kích thước ảnh gốc: {imgNatural.width} x {imgNatural.height}
+                        {t('splitter_source_size', { width: imgNatural.width, height: imgNatural.height })}
                         {sourceMeta.seoMediaId ? ` · Laravel #${sourceMeta.seoMediaId}` : ''}
                         {sourceMeta.wpAttachmentId ? ` · WP #${sourceMeta.wpAttachmentId}` : ''}
                     </div>
                 )}
                 {!effectiveSiteId && hasImage && (
                     <div className="hint">
-                        Chưa có site_id — mở từ thư viện hoặc test prompt (có tên miền) để lưu được.
+                        {t('splitter_missing_site_hint')}
                     </div>
                 )}
                 {saveMessage && <div className="splitter-success">{saveMessage}</div>}
                 {error && <div className="splitter-error">{error}</div>}
+                {hasImage && (
+                    <div className="hint">{t('splitter_drag_guides_hint')}</div>
+                )}
             </div>
 
             <div className="splitter-workspace">
                 <div className="splitter-preview-pane">
-                    <h3>Ảnh gốc + Grid</h3>
+                    <h3>{t('splitter_preview_title')}</h3>
                     {isLoadingSource ? (
-                        <div className="empty-card">Đang tải ảnh từ Laravel / WordPress…</div>
+                        <div className="empty-card">{t('splitter_loading_from_sources')}</div>
                     ) : !hasImage ? (
                         <div className="empty-card">
-                            Cần <code>seo_media_id</code> hoặc <code>wp_attachment_id</code> trên URL.
+                            {t('splitter_need_source_ids')}
                         </div>
                     ) : (
-                        <div className="grid-preview">
+                        <div className="grid-preview" ref={previewRef}>
                             <img src={imageSrc} alt="Source" />
-                            {gridLines.vertical.map((left) => (
-                                <span key={`v-${left}`} className="grid-line v" style={{ left: `${left}%` }} />
+                            {gridLines.vertical.map((left, index) => (
+                                <React.Fragment key={`v-${index}-${left}`}>
+                                    <span className="grid-line v" style={{ left: `${left}%` }} />
+                                    <button
+                                        type="button"
+                                        className={`grid-line-handle v${dragGuide?.axis === 'x' && dragGuide?.index === index ? ' is-active' : ''}`}
+                                        style={{ left: `${left}%` }}
+                                        onMouseDown={(event) => {
+                                            event.preventDefault();
+                                            setDragGuide({ axis: 'x', index });
+                                        }}
+                                        aria-label={t('splitter_drag_col_handle')}
+                                        title={t('splitter_drag_col_handle_title')}
+                                    />
+                                </React.Fragment>
                             ))}
-                            {gridLines.horizontal.map((top) => (
-                                <span key={`h-${top}`} className="grid-line h" style={{ top: `${top}%` }} />
+                            {gridLines.horizontal.map((top, index) => (
+                                <React.Fragment key={`h-${index}-${top}`}>
+                                    <span className="grid-line h" style={{ top: `${top}%` }} />
+                                    <button
+                                        type="button"
+                                        className={`grid-line-handle h${dragGuide?.axis === 'y' && dragGuide?.index === index ? ' is-active' : ''}`}
+                                        style={{ top: `${top}%` }}
+                                        onMouseDown={(event) => {
+                                            event.preventDefault();
+                                            setDragGuide({ axis: 'y', index });
+                                        }}
+                                        aria-label={t('splitter_drag_row_handle')}
+                                        title={t('splitter_drag_row_handle_title')}
+                                    />
+                                </React.Fragment>
                             ))}
                         </div>
                     )}
@@ -407,7 +534,7 @@ export default function ImageSplitterApp({
 
                 <div className="splitter-result-pane" ref={resultPaneRef}>
                     <div className="result-header">
-                        <h3>Ảnh sau khi split ({pieces.length})</h3>
+                        <h3>{t('splitter_result_title', { count: pieces.length })}</h3>
                         {pieces.length > 0 && (
                             <button
                                 type="button"
@@ -415,24 +542,36 @@ export default function ImageSplitterApp({
                                 disabled={!canSave}
                                 onClick={saveToLibrary}
                             >
-                                {isSaving ? 'Đang lưu…' : 'Lưu vào thư viện'}
+                                {isSaving ? t('splitter_saving') : t('splitter_save_to_library')}
                             </button>
                         )}
                     </div>
 
                     {pieces.length === 0 ? (
-                        <div className="empty-card">Bấm Split → Lưu vào thư viện (ảnh gốc Laravel sẽ bị xóa).</div>
+                        <div className="empty-card">{t('splitter_empty_hint')}</div>
                     ) : (
                         <div className="piece-grid">
                             {pieces.map((piece, idx) => (
-                                <div key={piece.id} className="piece-card">
+                                <div
+                                    key={piece.id}
+                                    className={`piece-card${dragPieceId === piece.id ? ' is-dragging' : ''}`}
+                                    draggable
+                                    onDragStart={() => setDragPieceId(piece.id)}
+                                    onDragOver={(event) => event.preventDefault()}
+                                    onDrop={(event) => {
+                                        event.preventDefault();
+                                        movePieceById(dragPieceId, piece.id);
+                                        setDragPieceId(null);
+                                    }}
+                                    onDragEnd={() => setDragPieceId(null)}
+                                >
                                     <img src={piece.url} alt={`Piece ${idx + 1}`} />
                                     <div className="piece-meta">
                                         <strong>#{idx + 1}</strong> r{piece.row} c{piece.col} · {piece.width}x{piece.height}
                                     </div>
                                     <div className="piece-actions">
                                         <button type="button" className="btn-danger" onClick={() => removePiece(piece.id)}>
-                                            Bỏ khỏi danh sách
+                                            {t('splitter_remove_piece')}
                                         </button>
                                     </div>
                                 </div>

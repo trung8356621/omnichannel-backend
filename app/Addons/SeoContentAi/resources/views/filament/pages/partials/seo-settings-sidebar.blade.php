@@ -7,7 +7,7 @@
     <style>{!! file_get_contents($cssPath) !!}</style>
 @endif
 
-<nav class="seo-settings-nav h-full" aria-label="{{ __('Cài đặt SEO') }}">
+<nav class="seo-settings-nav h-full" aria-label="{{ __('SEO settings') }}">
     @foreach(SeoSettingsMenu::items() as $item)
         <a
             href="{{ $item['url'] }}"

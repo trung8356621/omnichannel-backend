@@ -24,13 +24,13 @@ trait InteractsWithTaskWorkflow
                     ->where('role', 'task')
                     ->map(static fn ($part, int $index): array => [
                         'id' => 'part_' . $prompt->id . '_' . (int) ($part->position ?? $index),
-                        'name' => (string) ($part->name ?: 'Nhiệm vụ'),
+                        'name' => (string) ($part->name ?: 'Task'),
                     ])
                     ->values()
                     ->all();
 
                 if ($tasks === []) {
-                    $tasks = [['id' => 'task_main', 'name' => 'Toàn bộ prompt']];
+                    $tasks = [['id' => 'task_main', 'name' => 'Whole prompt']];
                 }
 
                 return [

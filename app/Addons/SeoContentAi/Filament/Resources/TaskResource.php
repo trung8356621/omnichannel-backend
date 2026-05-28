@@ -26,11 +26,11 @@ class TaskResource extends Resource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Quy trình nhiệm vụ';
+    protected static ?string $navigationLabel = 'Task workflows';
 
-    protected static ?string $modelLabel = 'Quy trình';
+    protected static ?string $modelLabel = 'Workflow';
 
-    protected static ?string $pluralModelLabel = 'Quy trình nhiệm vụ';
+    protected static ?string $pluralModelLabel = 'Task workflows';
 
     public static function canViewAny(): bool
     {
@@ -52,21 +52,36 @@ class TaskResource extends Resource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.task_workflows');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.workflow');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.task_workflows');
+    }
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
                 Forms\Components\TextInput::make('name')
-                    ->label('Tên quy trình')
+                    ->label(__('seo-content-ai::filament.task.name'))
                     ->required()
                     ->maxLength(255)
                     ->columnSpanFull(),
                 Forms\Components\Textarea::make('description')
-                    ->label('Mô tả')
+                    ->label(__('seo-content-ai::filament.task.description'))
                     ->rows(3)
                     ->columnSpanFull(),
                 Forms\Components\Toggle::make('is_active')
-                    ->label('Kích hoạt')
+                    ->label(__('seo-content-ai::filament.task.active'))
                     ->default(true),
             ]);
     }
@@ -76,14 +91,14 @@ class TaskResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label('Tên quy trình')
+                    ->label(__('seo-content-ai::filament.task.name'))
                     ->searchable()
                     ->sortable(),
                 Tables\Columns\IconColumn::make('is_active')
-                    ->label('Kích hoạt')
+                    ->label(__('seo-content-ai::filament.task.active'))
                     ->boolean(),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->label('Cập nhật')
+                    ->label(__('seo-content-ai::filament.task.updated'))
                     ->dateTime('d/m/Y H:i')
                     ->sortable(),
             ])
@@ -92,7 +107,7 @@ class TaskResource extends Resource
                 Tables\Actions\Action::make('test')
                     ->label(fn (): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
                         ? 'Test'
-                        : 'Đồng bộ model')
+                        : __('seo-content-ai::filament.prompt.sync_model'))
                     ->icon(fn (): string => app(AiModelsReadinessService::class)->userHasReadyAiConnection()
                         ? 'heroicon-o-play'
                         : 'heroicon-o-cpu-chip')
@@ -103,7 +118,7 @@ class TaskResource extends Resource
                         ? static::getUrl('test', ['record' => $record])
                         : SeoSettingsOverview::getUrl()),
                 Tables\Actions\Action::make('open_builder')
-                    ->label('Mở Builder')
+                    ->label(__('seo-content-ai::filament.task.open_builder'))
                     ->icon('heroicon-o-squares-2x2')
                     ->color('info')
                     ->url(fn (SeoTask $record): string => static::getUrl('builder', ['record' => $record])),

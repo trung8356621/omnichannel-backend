@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageIcon, Video, X } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 function hydratePromptTemplate(template, variables) {
     return String(template ?? '').replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (match, key) => {
@@ -131,6 +132,8 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                 setGeneratingVideo(true);
                 window.dispatchEvent(new CustomEvent('generate-article-video', { detail }));
             }
+
+            setInput('');
         },
         [activeBlockId, articleId, input, selectedHtml, selectedText],
     );
@@ -142,7 +145,7 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
     const contextHtml = selectedHtml.trim();
     const composedInput = useMemo(() => {
         if (userBrief && contextText) {
-            return `${userBrief}\n\n---\nĐoạn ngữ cảnh:\n${contextText}`;
+            return `${userBrief}\n\n---\n${t('debug_context_label')}:\n${contextText}`;
         }
 
         return userBrief || contextText;
@@ -170,12 +173,12 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
     return (
         <div className="seo-ai-chat-panel wp-postbox">
             <div className="wp-postbox-header seo-ai-chat-panel__header">
-                <h2>AI ảnh &amp; video</h2>
+                <h2>{t('ai_images_videos')}</h2>
                 <button
                     type="button"
                     className="seo-ai-chat-panel__close"
-                    title="Đóng panel"
-                    aria-label="Đóng panel"
+                    title={t('close_panel')}
+                    aria-label={t('close_panel')}
                     onClick={() => window.dispatchEvent(new CustomEvent('seo-article-ai-chat-close'))}
                 >
                     <X size={18} />
@@ -188,7 +191,7 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                         rows={5}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
-                        placeholder="Mô tả ảnh/video hoặc yêu cầu bổ sung cho đoạn đang chọn…"
+                        placeholder={t('compose_placeholder')}
                         disabled={busy}
                     />
                     <div className="seo-ai-chat-actions">
@@ -197,37 +200,37 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                             className="seo-ai-chat-generate-image"
                             onClick={() => dispatchGenerate('image')}
                             disabled={!canGenerate || busy || generateLockRef.current}
-                            title="Chạy prompt Tạo ảnh (Quy trình)"
+                            title={t('generate_image')}
                         >
                             <ImageIcon size={15} />
-                            {generatingImage ? 'Đang tạo ảnh…' : 'Tạo ảnh'}
+                            {generatingImage ? t('generating_image') : t('generate_image')}
                         </button>
                         <button
                             type="button"
                             className="seo-ai-chat-generate-video"
                             onClick={() => dispatchGenerate('video')}
                             disabled={!canGenerate || busy || generateLockRef.current}
-                            title="Chạy prompt Tạo video (Quy trình)"
+                            title={t('generate_video')}
                         >
                             <Video size={15} />
-                            {generatingVideo ? 'Đang tạo video…' : 'Tạo video'}
+                            {generatingVideo ? t('generating_video') : t('generate_video')}
                         </button>
                     </div>
                     {Boolean(aiDebug?.enabled) ? (
                         <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950 space-y-2">
                             <p className="font-semibold">
-                                DEBUG Prompt (APP_DEBUG=true) · input hiện tại: <code>{composedInput || '(trống)'}</code>
+                                {t('debug_prompt_title')} <code>{composedInput || t('empty')}</code>
                             </p>
                             <div>
-                                <p className="font-semibold">Tạo ảnh #{aiDebug?.image?.prompt_id ?? 'n/a'}</p>
+                                <p className="font-semibold">{t('debug_generate_image')} #{aiDebug?.image?.prompt_id ?? 'n/a'}</p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
-                                    {imageDebugPrompt || '(Không có nội dung prompt ảnh)'}
+                                    {imageDebugPrompt || t('debug_no_image_prompt')}
                                 </pre>
                             </div>
                             <div>
-                                <p className="font-semibold">Tạo video #{aiDebug?.video?.prompt_id ?? 'n/a'}</p>
+                                <p className="font-semibold">{t('debug_generate_video')} #{aiDebug?.video?.prompt_id ?? 'n/a'}</p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
-                                    {videoDebugPrompt || '(Không có nội dung prompt video)'}
+                                    {videoDebugPrompt || t('debug_no_video_prompt')}
                                 </pre>
                             </div>
                         </div>

@@ -17,9 +17,9 @@ class ListPrompts extends ListRecords
     {
         return [
             Actions\CreateAction::make()
-                ->label('Thêm Prompt mới'),
+                ->label('Add prompt'),
             Actions\Action::make('ai_settings')
-                ->label('Cấu hình AI')
+                ->label('AI settings')
                 ->icon('heroicon-o-cog-6-tooth')
                 ->color('gray')
                 ->url(fn (): string => AiConnectionResource::getUrl('index')),

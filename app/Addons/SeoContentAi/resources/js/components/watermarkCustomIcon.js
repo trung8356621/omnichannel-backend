@@ -1,5 +1,5 @@
 /**
- * Icon SVG tùy chỉnh — người dùng dán markup, vẽ lên canvas qua Image.
+ * Custom SVG icon: paste markup and render via Image.
  */
 
 const imageCache = new Map();
@@ -70,7 +70,7 @@ export function tintCustomSvg(svgMarkup, color) {
 export function loadCustomIconImage(rawSvg, color) {
     const markup = normalizeCustomSvgMarkup(rawSvg);
     if (markup === '') {
-        return Promise.reject(new Error('SVG trống'));
+        return Promise.reject(new Error('Empty SVG'));
     }
 
     const tinted = tintCustomSvg(markup, color);
@@ -91,7 +91,7 @@ export function loadCustomIconImage(rawSvg, color) {
         };
         img.onerror = () => {
             URL.revokeObjectURL(url);
-            reject(new Error('Không đọc được SVG'));
+            reject(new Error('Cannot read SVG'));
         };
         img.src = url;
     });

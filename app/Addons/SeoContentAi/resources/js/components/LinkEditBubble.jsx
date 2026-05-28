@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ExternalLink, Trash2 } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 export default function LinkEditBubble({ editor, anchorRect, onClose }) {
     const [url, setUrl] = useState('');
@@ -84,19 +85,19 @@ export default function LinkEditBubble({ editor, anchorRect, onClose }) {
                     }}
                     placeholder="https://"
                 />
-                <button type="button" className="seo-link-bubble-icon-btn" title="Mở link" onClick={openHref}>
+                <button type="button" className="seo-link-bubble-icon-btn" title="Open link" onClick={openHref}>
                     <ExternalLink size={15} />
                 </button>
-                <button type="button" className="seo-link-bubble-icon-btn is-danger" title="Gỡ link" onClick={removeLink}>
+                <button type="button" className="seo-link-bubble-icon-btn is-danger" title="Remove link" onClick={removeLink}>
                     <Trash2 size={15} />
                 </button>
             </div>
             <div className="seo-link-bubble-actions">
                 <button type="button" className="seo-link-bubble-btn" onClick={onClose}>
-                    Hủy
+                    {t('cancel')}
                 </button>
                 <button type="button" className="seo-link-bubble-btn is-primary" onClick={applyLink}>
-                    Áp dụng
+                    {t('apply')}
                 </button>
             </div>
         </div>

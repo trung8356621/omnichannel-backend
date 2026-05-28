@@ -37,7 +37,7 @@ class TestTask extends Page implements HasForms
 
     protected static string $view = 'seo-content-ai::filament.resources.task-resource.pages.test-task';
 
-    protected static ?string $title = 'Chạy thử quy trình';
+    protected static ?string $title = 'Test workflow';
 
     /** @var array{article_id: ?int, title_or_keyword: ?string} */
     public array $testInput = [
@@ -93,40 +93,40 @@ class TestTask extends Page implements HasForms
         return $form
             ->schema([
                 Forms\Components\Select::make('article_id')
-                    ->label('Bài viết')
-                    ->placeholder('Chọn bài viết từ danh sách…')
+                    ->label('Article')
+                    ->placeholder('Choose article from list...')
                     ->searchable()
-                    ->searchPrompt('Tìm theo tiêu đề hoặc ID…')
+                    ->searchPrompt('Search by title or ID...')
                     ->getSearchResultsUsing(fn (string $search): array => $this->searchArticles($search))
                     ->getOptionLabelUsing(fn ($value): ?string => $this->articleOptionLabel(
                         is_numeric($value) ? (int) $value : null,
                     ))
                     ->live()
-                    ->helperText('Mọi domain thuộc tài khoản của bạn. Khi đã chọn bài, ô tiêu đề/từ khóa sẽ bị bỏ qua.'),
+                    ->helperText('All domains under your account. When an article is selected, title/keyword is ignored.'),
                 Forms\Components\TextInput::make('title_or_keyword')
-                    ->label('Tiêu đề hoặc từ khóa')
+                    ->label('Title or keyword')
                     ->maxLength(500)
-                    ->placeholder('Nhập tiêu đề bài viết hoặc focus keyword')
+                    ->placeholder('Enter article title or focus keyword')
                     ->disabled(fn (Get $get): bool => filled($get('article_id')))
-                    ->helperText('Dùng khi chưa chọn bài: tìm bài có sẵn theo tiêu đề trước, sau đó từ khóa; không khớp thì tạo bài mới.'),
+                    ->helperText('Used when no article selected: find existing by title first, then keyword; create new article if no match.'),
             ])
             ->statePath('testInput');
     }
 
     public function getTitle(): string|Htmlable
     {
-        return 'Chạy thử: ' . (string) $this->getTask()->name;
+        return 'Test: ' . (string) $this->getTask()->name;
     }
 
     protected function getHeaderActions(): array
     {
         return [
             Actions\Action::make('builder')
-                ->label('Mở Builder')
+                ->label('Open builder')
                 ->icon('heroicon-o-squares-2x2')
                 ->url(fn (): string => TaskResource::getUrl('builder', ['record' => $this->getRecord()])),
             Actions\Action::make('back')
-                ->label('Danh sách')
+                ->label('List')
                 ->icon('heroicon-o-arrow-left')
                 ->url(TaskResource::getUrl('index')),
         ];
@@ -158,7 +158,7 @@ class TestTask extends Page implements HasForms
             unset($this->taskTestResults);
 
             $notification = Notification::make()
-                ->title($failed > 0 ? 'Chạy thử xong (có lỗi)' : 'Chạy thử thành công')
+                ->title($failed > 0 ? 'Test completed (with errors)' : 'Test successful')
                 ->body($context->summary);
 
             if ($failed > 0) {
@@ -172,13 +172,13 @@ class TestTask extends Page implements HasForms
             $this->errorMessage = $exception->getMessage();
 
             Notification::make()
-                ->title('Không thể chạy thử')
+                ->title('Unable to run test')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
         } catch (AiModelsNotReadyException $exception) {
             Notification::make()
-                ->title('Cần đồng bộ model AI')
+                ->title('AI model sync required')
                 ->body($exception->getMessage())
                 ->warning()
                 ->send();
@@ -192,7 +192,7 @@ class TestTask extends Page implements HasForms
             unset($this->taskTestResults);
 
             Notification::make()
-                ->title('Chạy thử thất bại')
+                ->title('Test failed')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -205,8 +205,8 @@ class TestTask extends Page implements HasForms
     {
         if ($this->resolvedContext === null || $this->stepResults === []) {
             Notification::make()
-                ->title('Chưa có kết quả')
-                ->body('Chạy thử quy trình trước hoặc chọn một lần chạy trong lịch sử.')
+                ->title('No result yet')
+                ->body('Run workflow test first or select a run from history.')
                 ->warning()
                 ->send();
 
@@ -240,20 +240,20 @@ class TestTask extends Page implements HasForms
             $status = (string) ($step['status'] ?? '');
 
             $notification = Notification::make()
-                ->title('Đã chạy lại bước #' . ($stepIndex + 1));
+                ->title('Re-ran step #' . ($stepIndex + 1));
 
             if ($status === 'failed') {
-                $notification->body((string) ($step['message'] ?? 'Bước thất bại.'))->warning();
+                $notification->body((string) ($step['message'] ?? 'Step failed.'))->warning();
             } elseif ($status === 'skipped') {
-                $notification->body((string) ($step['message'] ?? 'Bước được bỏ qua.'))->info();
+                $notification->body((string) ($step['message'] ?? 'Step skipped.'))->info();
             } else {
-                $notification->body((string) ($step['message'] ?? 'Bước hoàn tất.'))->success();
+                $notification->body((string) ($step['message'] ?? 'Step completed.'))->success();
             }
 
             $notification->send();
         } catch (AiModelsNotReadyException $exception) {
             Notification::make()
-                ->title('Cần đồng bộ model AI')
+                ->title('AI model sync required')
                 ->body($exception->getMessage())
                 ->warning()
                 ->send();
@@ -261,7 +261,7 @@ class TestTask extends Page implements HasForms
             $this->redirect($exception->overviewUrl(), navigate: true);
         } catch (\Throwable $exception) {
             Notification::make()
-                ->title('Chạy lại bước thất bại')
+                ->title('Step rerun failed')
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -302,7 +302,7 @@ class TestTask extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Đã xóa lần chạy thử')
+            ->title('Test run deleted')
             ->success()
             ->send();
     }
@@ -334,12 +334,12 @@ class TestTask extends Page implements HasForms
         $failed = collect($steps)->where('status', 'failed')->count();
 
         if ($total === 0) {
-            return '0 bước';
+            return '0 steps';
         }
 
         return $failed > 0
-            ? sprintf('%d bước · %d lỗi', $total, $failed)
-            : sprintf('%d bước', $total);
+            ? sprintf('%d steps · %d errors', $total, $failed)
+            : sprintf('%d steps', $total);
     }
 
     protected function clearResultView(): void
@@ -363,7 +363,7 @@ class TestTask extends Page implements HasForms
         $this->resolvedContext = is_array($result->resolved_context) ? $result->resolved_context : null;
         $this->stepResults = is_array($result->step_results) ? $result->step_results : [];
         $this->errorMessage = $result->status === 'failed' && $this->stepResults === []
-            ? (string) ($result->error_message ?? 'Chạy thử thất bại.')
+            ? (string) ($result->error_message ?? 'Test failed.')
             : null;
     }
 
@@ -376,7 +376,7 @@ class TestTask extends Page implements HasForms
         $query = trim((string) ($state['title_or_keyword'] ?? ''));
 
         if ($articleId === null && $query === '') {
-            throw new \InvalidArgumentException('Chọn bài viết hoặc nhập tiêu đề / từ khóa.');
+            throw new \InvalidArgumentException('Choose an article or enter a title/keyword.');
         }
 
         return $resolver->resolve(

@@ -163,6 +163,27 @@ class SeoMediaController extends Controller
 
         $media = SeoMedia::query()->where('path', $relativePath)->first();
         if (! $media instanceof SeoMedia) {
+            // Legacy URL cũ có thể chứa random folder: uploads/seo_media/<rand>/<file>.
+            // Ưu tiên map về path phẳng hiện tại uploads/seo_media/<file>.
+            $filename = basename($relativePath);
+            if ($filename !== '' && $filename !== '.' && $filename !== '..') {
+                $flatCandidate = 'uploads/seo_media/' . $filename;
+                $media = SeoMedia::query()->where('path', $flatCandidate)->first();
+            }
+        }
+
+        if (! $media instanceof SeoMedia) {
+            // Fallback cuối: tìm theo filename (không tuyệt đối), ưu tiên bản mới nhất.
+            $filename = basename($relativePath);
+            if ($filename !== '' && $filename !== '.' && $filename !== '..') {
+                $media = SeoMedia::query()
+                    ->where('filename', $filename)
+                    ->orderByDesc('id')
+                    ->first();
+            }
+        }
+
+        if (! $media instanceof SeoMedia) {
             return response()->json([
                 'success' => false,
                 'message' => 'Không tìm thấy ảnh nội bộ theo URL.',
@@ -426,8 +447,15 @@ class SeoMediaController extends Controller
     {
         abort_unless($this->canAccessMedia($media), 403);
 
+        $validated = request()->validate([
+            'retry_input' => 'nullable|string|max:8000',
+        ]);
+
         try {
-            $media = app(ArticleEditorMediaAiService::class)->retryGeneration($media);
+            $media = app(ArticleEditorMediaAiService::class)->retryGeneration(
+                $media,
+                isset($validated['retry_input']) ? (string) $validated['retry_input'] : null,
+            );
         } catch (\InvalidArgumentException $exception) {
             return response()->json([
                 'success' => false,
@@ -449,7 +477,7 @@ class SeoMediaController extends Controller
         if (! $media->isAiGenerationJob()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Chỉ hỗ trợ xóa job ảnh/video AI.',
+                'message' => __('seo-content-ai::common.ai_job_delete_only'),
             ], 422);
         }
 
@@ -465,7 +493,7 @@ class SeoMediaController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Đã xóa job AI.',
+            'message' => __('seo-content-ai::common.ai_job_deleted'),
         ]);
     }
 
@@ -476,6 +504,10 @@ class SeoMediaController extends Controller
     {
         $status = (string) ($media->status ?? 'completed');
         $url = (string) ($media->url ?? '');
+
+        if (str_contains($url, 'placeholder-loading')) {
+            $url = SeoMedia::placeholderLoadingUrl();
+        }
 
         if ($url === '') {
             $url = $media->publicUrl();
@@ -490,9 +522,35 @@ class SeoMediaController extends Controller
             'media_type' => $media->aiToolType(),
             'editor_block_id' => (string) ($media->editor_block_id ?? ''),
             'slug' => (string) ($media->slug ?? ''),
+            'retry_input' => $this->extractRetryInput($media),
             'created_at' => $media->created_at?->toIso8601String(),
             'is_placeholder' => $status === 'processing' || str_contains($url, 'placeholder-loading'),
         ];
+    }
+
+    private function extractRetryInput(SeoMedia $media): string
+    {
+        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        if ($variables === []) {
+            return '';
+        }
+
+        $preferredKeys = ['prompt', 'input', 'content', 'text', 'description', 'image_prompt'];
+        foreach ($preferredKeys as $key) {
+            $value = trim((string) ($variables[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        foreach ($variables as $value) {
+            $value = trim((string) $value);
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return '';
     }
 
     private function canAccessMedia(SeoMedia $media): bool

@@ -75,6 +75,218 @@ final class ArticleMediaLocalService
     }
 
     /**
+     * @return list<array{id: int, url: string}>
+     */
+    public function resolveProductAlbum(SeoArticle $article): array
+    {
+        $article->loadMissing('articleMetas');
+
+        $featuredUrl = trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_URL)?->meta_value ?? ''));
+        $featuredId = (int) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+
+        $album = [];
+        if ($featuredUrl !== '') {
+            $album[] = [
+                'id' => max(0, $featuredId),
+                'url' => $featuredUrl,
+            ];
+        }
+
+        foreach ($this->resolveGallery($article) as $item) {
+            $url = trim((string) ($item['url'] ?? ''));
+            $id = (int) ($item['id'] ?? 0);
+            if ($url === '') {
+                continue;
+            }
+
+            $exists = collect($album)->contains(
+                static fn (array $row): bool => ((int) ($row['id'] ?? 0) > 0 && (int) ($row['id'] ?? 0) === $id)
+                    || (string) ($row['url'] ?? '') === $url
+            );
+            if ($exists) {
+                continue;
+            }
+
+            $album[] = [
+                'id' => max(0, $id),
+                'url' => $url,
+            ];
+        }
+
+        return $album;
+    }
+
+    /**
+     * @return list<array{id: int, url: string}>
+     */
+    public function appendProductAlbumLocal(SeoArticle $article, int $attachmentId, string $url): array
+    {
+        $url = trim($url);
+        if ($attachmentId <= 0 || $url === '') {
+            return $this->resolveProductAlbum($article);
+        }
+
+        $album = $this->resolveProductAlbum($article);
+        foreach ($album as $item) {
+            if ((int) ($item['id'] ?? 0) === $attachmentId || (string) ($item['url'] ?? '') === $url) {
+                return $album;
+            }
+        }
+
+        $album[] = [
+            'id' => $attachmentId,
+            'url' => $url,
+        ];
+
+        return $this->saveProductAlbumLocal($article, $album);
+    }
+
+    /**
+     * @param  list<string>  $orderedUrls
+     * @return list<array{id: int, url: string}>
+     */
+    public function reorderProductAlbumLocal(SeoArticle $article, array $orderedUrls): array
+    {
+        $orderedUrls = array_values(array_filter(array_map(
+            static fn ($url): string => trim((string) $url),
+            $orderedUrls
+        )));
+        if ($orderedUrls === []) {
+            return $this->resolveProductAlbum($article);
+        }
+
+        $current = $this->resolveProductAlbum($article);
+        if ($current === []) {
+            return [];
+        }
+
+        $bucket = [];
+        foreach ($current as $item) {
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+            $bucket[$url] ??= [];
+            $bucket[$url][] = [
+                'id' => max(0, (int) ($item['id'] ?? 0)),
+                'url' => $url,
+            ];
+        }
+
+        $result = [];
+        foreach ($orderedUrls as $url) {
+            if (! isset($bucket[$url]) || $bucket[$url] === []) {
+                continue;
+            }
+            $result[] = array_shift($bucket[$url]);
+        }
+
+        foreach ($bucket as $items) {
+            foreach ($items as $item) {
+                $result[] = $item;
+            }
+        }
+
+        return $this->saveProductAlbumLocal($article, $result);
+    }
+
+    /**
+     * @param  list<array{id?: int, url?: string}>  $album
+     * @return list<array{id: int, url: string}>
+     */
+    public function saveProductAlbumLocal(SeoArticle $article, array $album): array
+    {
+        $normalized = [];
+        foreach ($album as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $id = max(0, (int) ($item['id'] ?? 0));
+            $exists = collect($normalized)->contains(
+                static fn (array $row): bool => ($id > 0 && (int) ($row['id'] ?? 0) === $id)
+                    || (string) ($row['url'] ?? '') === $url
+            );
+            if ($exists) {
+                continue;
+            }
+
+            $normalized[] = [
+                'id' => $id,
+                'url' => $url,
+            ];
+        }
+
+        if ($normalized === []) {
+            $article->articleMetas()->whereIn('meta_key', [
+                self::META_FEATURED_URL,
+                self::META_FEATURED_ATTACHMENT_ID,
+                self::META_PRODUCT_GALLERY,
+                self::META_PRODUCT_GALLERY_IDS,
+            ])->delete();
+
+            $this->markMediaPendingSync($article);
+
+            return [];
+        }
+
+        $featured = $normalized[0];
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_FEATURED_URL],
+            ['meta_value' => $featured['url']],
+        );
+        if ((int) ($featured['id'] ?? 0) > 0) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => self::META_FEATURED_ATTACHMENT_ID],
+                ['meta_value' => (string) ((int) $featured['id'])],
+            );
+        } else {
+            $article->articleMetas()->where('meta_key', self::META_FEATURED_ATTACHMENT_ID)->delete();
+        }
+
+        $gallery = array_slice($normalized, 1);
+        $galleryIds = array_values(array_filter(array_map(
+            static fn (array $item): int => max(0, (int) ($item['id'] ?? 0)),
+            $gallery
+        )));
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_PRODUCT_GALLERY],
+            ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+        );
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_PRODUCT_GALLERY_IDS],
+            ['meta_value' => json_encode($galleryIds, JSON_UNESCAPED_UNICODE)],
+        );
+
+        $this->markMediaPendingSync($article);
+
+        return $normalized;
+    }
+
+    /**
+     * @return list<array{id: int, url: string}>
+     */
+    public function removeProductAlbumItemByUrl(SeoArticle $article, string $url): array
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return $this->resolveProductAlbum($article);
+        }
+
+        $album = array_values(array_filter(
+            $this->resolveProductAlbum($article),
+            static fn (array $item): bool => trim((string) ($item['url'] ?? '')) !== $url
+        ));
+
+        return $this->saveProductAlbumLocal($article, $album);
+    }
+
+    /**
      * @return array{attempted: bool, success: bool, message: string, synced_local_media_ids: list<int>}
      */
     public function pushPendingMediaToWordPress(SeoArticle $article): array

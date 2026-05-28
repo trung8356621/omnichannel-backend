@@ -23,7 +23,7 @@ class SeoSettingsOverview extends Page implements HasForms
 
     protected static bool $shouldRegisterNavigation = false;
 
-    protected static ?string $title = 'Tổng quan';
+    protected static ?string $title = 'Overview';
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-settings-overview';
 
@@ -60,15 +60,15 @@ class SeoSettingsOverview extends Page implements HasForms
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('FAQ catch')
-                    ->description('Tiêu đề Markdown (H2–H6) chứa một trong các từ khóa bên dưới được coi là mở đầu khối FAQ. Dùng khi bóc tách FAQ và cắt nội dung trước khi chèn [omi_faq]. Mỗi từ khóa một dòng, không phân biệt hoa thường.')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_overview.faq_catch'))
+                    ->description(__('seo-content-ai::filament.settings_overview.faq_catch_description'))
                     ->schema([
                         Forms\Components\Textarea::make(SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS)
-                            ->label('Từ khóa nhận diện FAQ')
+                            ->label(__('seo-content-ai::filament.settings_overview.faq_keywords_label'))
                             ->rows(10)
                             ->required()
                             ->columnSpanFull()
-                            ->helperText('Ví dụ: faq, câu hỏi thường gặp, hỏi đáp'),
+                            ->helperText(__('seo-content-ai::filament.settings_overview.faq_keywords_hint')),
                     ]),
             ])
             ->statePath('overviewSettingsData');
@@ -90,9 +90,14 @@ class SeoSettingsOverview extends Page implements HasForms
         }
 
         $notification = Notification::make()
-            ->title($result['failed'] === 0 ? 'Đã đồng bộ model AI' : 'Đồng bộ model AI (một phần)')
+            ->title($result['failed'] === 0
+                ? __('seo-content-ai::filament.settings_overview.ai_sync_success')
+                : __('seo-content-ai::filament.settings_overview.ai_sync_partial'))
             ->body(
-                'Thành công: ' . $result['ok'] . ', thất bại: ' . $result['failed']
+                __('seo-content-ai::filament.settings_overview.ai_sync_result', [
+                    'ok' => $result['ok'],
+                    'failed' => $result['failed'],
+                ])
                 . ($result['messages'] !== [] ? "\n" . implode("\n", $result['messages']) : ''),
             );
 
@@ -108,8 +113,8 @@ class SeoSettingsOverview extends Page implements HasForms
 
         if ($ok) {
             Notification::make()
-                ->title('Đã đồng bộ model')
-                ->body('Danh sách model đã cập nhật cho kết nối này.')
+                ->title(__('seo-content-ai::filament.settings_overview.ai_sync_connection_success'))
+                ->body(__('seo-content-ai::filament.settings_overview.ai_sync_connection_body'))
                 ->success()
                 ->send();
 
@@ -117,8 +122,8 @@ class SeoSettingsOverview extends Page implements HasForms
         }
 
         Notification::make()
-            ->title('Đồng bộ thất bại')
-            ->body('Kiểm tra API Key và nhà cung cấp (Gemini / Claude).')
+            ->title(__('seo-content-ai::filament.settings_overview.ai_sync_failed'))
+            ->body(__('seo-content-ai::filament.settings_overview.ai_sync_failed_body'))
             ->danger()
             ->send();
     }
@@ -133,7 +138,7 @@ class SeoSettingsOverview extends Page implements HasForms
         ]);
 
         Notification::make()
-            ->title('Đã lưu cài đặt tổng quan')
+            ->title(__('seo-content-ai::filament.settings_overview.saved'))
             ->success()
             ->send();
     }

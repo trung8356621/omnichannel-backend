@@ -61,7 +61,7 @@ class GeneralDomain extends Page
         /** @var Site $site */
         $site = $this->getRecord();
 
-        return __('Tổng quan') . ': ' . $site->domain;
+        return __('Overview') . ': ' . $site->domain;
     }
 
     public function getSite(): Site
@@ -81,8 +81,8 @@ class GeneralDomain extends Page
     {
         $count = app(ClearDomainArticlesService::class)->countForSite($this->getRecord());
 
-        return "Sẽ xóa vĩnh viễn {$count} bản ghi trong kho SEO (bài viết, sản phẩm, danh mục đã đồng bộ). "
-            . 'Nội dung trên WordPress không bị thay đổi. Không thể hoàn tác.';
+        return "This will permanently delete {$count} records from the SEO storage (synced posts, products, categories). "
+            . 'WordPress content is not changed. This action cannot be undone.';
     }
 
     /**
@@ -132,13 +132,13 @@ class GeneralDomain extends Page
         $user = auth()->user();
         if ($user === null) {
             throw ValidationException::withMessages([
-                'tokenPassword' => 'Bạn cần đăng nhập để xem token.',
+                'tokenPassword' => 'You need to sign in to view tokens.',
             ]);
         }
 
         if (! Hash::check($this->tokenPassword, $user->password)) {
             throw ValidationException::withMessages([
-                'tokenPassword' => 'Mật khẩu không đúng.',
+                'tokenPassword' => 'Incorrect password.',
             ]);
         }
 
@@ -242,35 +242,35 @@ class GeneralDomain extends Page
     {
         return [
             Action::make('sync_data')
-                ->label('Đồng bộ dữ liệu')
+                ->label('Sync data')
                 ->color('warning')
                 ->icon('heroicon-o-arrow-path')
                 ->requiresConfirmation()
-                ->modalDescription('Chạy đồng bộ dữ liệu từ WordPress cho tên miền này.')
+                ->modalDescription('Run content sync from WordPress for this domain.')
                 ->action(function (): void {
                     $this->runDomainSync(false);
                     $this->redirectToOverview();
                 }),
             Action::make('test_sync_data')
-                ->label('Test đồng bộ (Debug)')
+                ->label('Test sync (debug)')
                 ->icon('heroicon-o-bug-ant')
                 ->color('danger')
                 ->visible(fn (): bool => auth()->user()?->role === 'admin')
                 ->requiresConfirmation()
-                ->modalDescription('Chạy test đồng bộ (giới hạn 2 bản ghi / loại).')
+                ->modalDescription('Run sync test (limit 2 records per type).')
                 ->action(function (): void {
                     $this->runDomainSync(true);
                     $this->redirectToOverview();
                 }),
             Action::make('clear_domain_content')
-                ->label('Dọn dẹp')
+                ->label('Cleanup')
                 ->icon('heroicon-o-trash')
                 ->color('danger')
                 ->visible(fn (): bool => $this->isSiteSynced())
                 ->requiresConfirmation()
-                ->modalHeading('Dọn dẹp nội dung domain')
+                ->modalHeading('Clean up domain content')
                 ->modalDescription(fn (): string => $this->getClearDomainConfirmMessage())
-                ->modalSubmitActionLabel('Xóa toàn bộ')
+                ->modalSubmitActionLabel('Delete all')
                 ->action(function (): void {
                     $this->runClearDomainContent();
                     $this->redirectToOverview();
@@ -311,7 +311,7 @@ class GeneralDomain extends Page
         $result = app(ClearDomainArticlesService::class)->clear($site);
 
         Notification::make()
-            ->title($result['deleted'] > 0 ? 'Đã dọn dẹp' : 'Không có dữ liệu')
+            ->title($result['deleted'] > 0 ? 'Cleanup completed' : 'No data')
             ->body($result['message'])
             ->success()
             ->send();
@@ -329,7 +329,7 @@ class GeneralDomain extends Page
 
         if ($result['success']) {
             Notification::make()
-                ->title($isTest ? 'Test đồng bộ thành công' : 'Đồng bộ thành công')
+                ->title($isTest ? 'Test sync successful' : 'Sync successful')
                 ->body($result['message'])
                 ->success()
                 ->send();
@@ -338,7 +338,7 @@ class GeneralDomain extends Page
         }
 
         Notification::make()
-            ->title($isTest ? 'Test đồng bộ thất bại' : 'Đồng bộ thất bại')
+            ->title($isTest ? 'Test sync failed' : 'Sync failed')
             ->body($result['message'])
             ->danger()
             ->send();

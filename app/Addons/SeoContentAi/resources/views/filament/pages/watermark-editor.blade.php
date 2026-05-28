@@ -5,33 +5,33 @@
     <div class="fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 p-4 mb-4">
         <div class="flex flex-wrap items-center gap-3">
             <label class="text-sm font-semibold text-gray-700 dark:text-gray-300" for="wm-design-site">
-                Tên miền (watermark thuộc domain):
+                Domain (watermark belongs to this domain):
             </label>
             <select
                 id="wm-design-site"
                 wire:model.live="siteId"
                 class="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white min-w-[220px]"
             >
-                <option value="">-- Chọn tên miền --</option>
+                <option value="">-- Select domain --</option>
                 @foreach ($this->sites as $site)
                     <option value="{{ $site->id }}">{{ $site->domain }}</option>
                 @endforeach
             </select>
             @if ($siteId)
                 <span class="text-xs text-gray-500">
-                    Cấu hình thiết kế lưu theo domain ·
+                    Design config is saved per domain ·
                     <a
                         href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
                         class="text-primary-600 hover:underline"
                     >
-                        Cấu hình tự động
+                        Automatic settings
                     </a>
                 </span>
             @endif
         </div>
         @unless ($siteId)
             <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                Chọn tên miền để tải mẫu thiết kế và lưu watermark đúng domain.
+                Select a domain to load design presets and save watermark to the correct domain.
             </p>
         @endunless
     </div>

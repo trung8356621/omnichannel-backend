@@ -5,8 +5,8 @@
 
             <div class="seo-settings-main">
                 <header class="seo-settings-header">
-                    <h1>{{ __('Tùy chỉnh prompt') }}</h1>
-                    <p>{{ __('Giọng văn dùng khi soạn prompt; ngưỡng bảng Featured Snippet áp dụng khi chấm điểm SEO và kiểm tra nội dung sau đồng bộ.') }}</p>
+                    <h1>{{ __('Prompt settings') }}</h1>
+                    <p>{{ __('Tone options for prompt writing; Featured Snippet table thresholds are used in SEO scoring and post-sync validation.') }}</p>
                 </header>
 
                 <form wire:submit="savePromptSettings" class="max-w-3xl mx-auto space-y-6">
@@ -14,7 +14,7 @@
 
                     <div class="flex justify-end">
                         <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('Lưu cấu hình') }}
+                            {{ __('Save settings') }}
                         </x-filament::button>
                     </div>
                 </form>

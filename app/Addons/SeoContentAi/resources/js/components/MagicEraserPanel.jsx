@@ -23,6 +23,7 @@ import {
 } from './magicEraserShortcuts';
 import { MagicEraserShortcutsPanel, MagicEraserToolbarButton } from './MagicEraserToolbar';
 import { createPieceFromSelection } from '../utils/imageSelectionUtils';
+import { t } from '../utils/i18n';
 
 const TOOL_BRUSH = 'brush';
 const TOOL_EYEDROPPER = 'eyedropper';
@@ -319,7 +320,7 @@ export default function MagicEraserPanel({
             }
         } catch (err) {
             console.error(err);
-            alert(err?.message ?? 'Không tách được vùng chọn.');
+            alert(err?.message ?? t('magic_split_selection_failed'));
         } finally {
             setIsProcessing(false);
         }
@@ -462,7 +463,7 @@ export default function MagicEraserPanel({
         img.src = resolvedUrl;
         img.onload = () => setImageObj(img);
         img.onerror = () => {
-            alert('Không tải được ảnh. Thử tải lại trang.');
+            alert(t('magic_load_image_failed'));
         };
     }, [resolvedUrl]);
 
@@ -558,7 +559,7 @@ export default function MagicEraserPanel({
                     if (b) {
                         resolve(b);
                     } else {
-                        reject(new Error('Không xuất được ảnh.'));
+                        reject(new Error(t('magic_export_image_failed')));
                     }
                 }, 'image/png');
             });
@@ -566,7 +567,7 @@ export default function MagicEraserPanel({
             onSave(data.url);
         } catch (err) {
             console.error(err);
-            alert(err?.message ?? 'Lỗi lưu ảnh!');
+            alert(err?.message ?? t('magic_save_image_failed'));
         } finally {
             setIsProcessing(false);
         }
@@ -577,10 +578,12 @@ export default function MagicEraserPanel({
         const rect = canvas.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
+        const rawX = (e.clientX - rect.left) * scaleX;
+        const rawY = (e.clientY - rect.top) * scaleY;
 
         return {
-            offsetX: (e.clientX - rect.left) * scaleX,
-            offsetY: (e.clientY - rect.top) * scaleY,
+            offsetX: Math.max(0, Math.min(Math.max(0, canvas.width - 1), rawX)),
+            offsetY: Math.max(0, Math.min(Math.max(0, canvas.height - 1), rawY)),
         };
     };
 
@@ -974,6 +977,30 @@ export default function MagicEraserPanel({
         drewThisStrokeRef.current = false;
     };
 
+    useEffect(() => {
+        const onWindowMouseMove = (event) => {
+            if (!isDrawing && !isPanningRef.current) {
+                return;
+            }
+            handleMouseMove(event);
+        };
+
+        const onWindowMouseUp = (event) => {
+            if (!isDrawing && !isPanningRef.current) {
+                return;
+            }
+            handleMouseUp(event);
+        };
+
+        window.addEventListener('mousemove', onWindowMouseMove);
+        window.addEventListener('mouseup', onWindowMouseUp);
+
+        return () => {
+            window.removeEventListener('mousemove', onWindowMouseMove);
+            window.removeEventListener('mouseup', onWindowMouseUp);
+        };
+    }, [isDrawing, handleMouseMove, handleMouseUp]);
+
     const zoomPercent = Math.round(zoom * 100);
 
     const stageStyle =
@@ -997,31 +1024,31 @@ export default function MagicEraserPanel({
         <div className="magic-eraser-panel">
             <div className="magic-eraser-topbar">
                     <div className="magic-eraser-topbar-left">
-                        <div className="magic-eraser-tool-group" role="toolbar" aria-label="Công cụ">
+                        <div className="magic-eraser-tool-group" role="toolbar" aria-label={t('magic_tools')}>
                             <MagicEraserToolbarButton
                                 icon={Brush}
-                                label="Cọ vẽ"
+                                label={t('magic_brush')}
                                 shortcut={TOOL_SHORTCUT_LABELS.brush}
                                 active={activeTool === TOOL_BRUSH}
                                 onClick={() => setActiveTool(TOOL_BRUSH)}
                             />
                             <MagicEraserToolbarButton
                                 icon={Square}
-                                label="Hình chữ nhật"
+                                label={t('magic_rectangle')}
                                 shortcut={TOOL_SHORTCUT_LABELS.rect}
                                 active={activeTool === TOOL_RECT}
                                 onClick={() => setActiveTool(TOOL_RECT)}
                             />
                             <MagicEraserToolbarButton
                                 icon={Circle}
-                                label="Hình tròn / elip"
+                                label={t('magic_ellipse')}
                                 shortcut={TOOL_SHORTCUT_LABELS.ellipse}
                                 active={activeTool === TOOL_ELLIPSE}
                                 onClick={() => setActiveTool(TOOL_ELLIPSE)}
                             />
                             <MagicEraserToolbarButton
                                 icon={Pentagon}
-                                label="Đa giác"
+                                label={t('magic_polygon')}
                                 shortcut={TOOL_SHORTCUT_LABELS.polygon}
                                 active={activeTool === TOOL_POLYGON}
                                 onClick={() => {
@@ -1031,7 +1058,7 @@ export default function MagicEraserPanel({
                             />
                             <MagicEraserToolbarButton
                                 icon={Pipette}
-                                label="Hút màu"
+                                label={t('magic_eyedropper')}
                                 shortcut={TOOL_SHORTCUT_LABELS.eyedropper}
                                 active={activeTool === TOOL_EYEDROPPER}
                                 onClick={() => setActiveTool(TOOL_EYEDROPPER)}
@@ -1040,7 +1067,7 @@ export default function MagicEraserPanel({
                         <div className="magic-eraser-zoom-group">
                             <MagicEraserToolbarButton
                                 icon={ZoomOut}
-                                label="Thu nhỏ"
+                                label={t('magic_zoom_out')}
                                 shortcut="Ctrl+-"
                                 variant="icon"
                                 onClick={() => changeZoom(-ZOOM_STEP)}
@@ -1048,14 +1075,14 @@ export default function MagicEraserPanel({
                             <span className="magic-eraser-zoom-label">{zoomPercent}%</span>
                             <MagicEraserToolbarButton
                                 icon={ZoomIn}
-                                label="Phóng to"
+                                label={t('magic_zoom_in')}
                                 shortcut="Ctrl++"
                                 variant="icon"
                                 onClick={() => changeZoom(ZOOM_STEP)}
                             />
                             <MagicEraserToolbarButton
                                 icon={Maximize2}
-                                label="Vừa khung"
+                                label={t('magic_fit_view')}
                                 shortcut="Ctrl+0"
                                 variant="icon"
                                 onClick={fitZoomToView}
@@ -1066,7 +1093,7 @@ export default function MagicEraserPanel({
                     <div className="magic-eraser-undo-group">
                         <MagicEraserToolbarButton
                             icon={Undo2}
-                            label="Hoàn tác"
+                            label={t('magic_undo')}
                             shortcut="Ctrl+Z"
                             variant="icon"
                             disabled={historyStep <= 0}
@@ -1075,7 +1102,7 @@ export default function MagicEraserPanel({
                         <div className="magic-eraser-divider" />
                         <MagicEraserToolbarButton
                             icon={Redo2}
-                            label="Làm lại"
+                            label={t('magic_redo')}
                             shortcut="Ctrl+Y"
                             variant="icon"
                             disabled={historyStep >= history.length - 1}
@@ -1086,7 +1113,7 @@ export default function MagicEraserPanel({
                     <div className="magic-eraser-topbar-actions">
                         <MagicEraserToolbarButton
                             icon={X}
-                            label="Đóng"
+                            label={t('magic_close')}
                             shortcut="Esc"
                             variant="action-secondary"
                             disabled={isProcessing}
@@ -1094,7 +1121,7 @@ export default function MagicEraserPanel({
                         />
                         <MagicEraserToolbarButton
                             icon={Save}
-                            label={isProcessing ? 'Đang lưu…' : 'Lưu ảnh'}
+                            label={isProcessing ? t('magic_saving') : t('magic_save_image')}
                             shortcut="Ctrl+S"
                             variant="action-primary"
                             disabled={isProcessing}
@@ -1108,7 +1135,7 @@ export default function MagicEraserPanel({
                         ref={canvasAreaRef}
                         className={`magic-eraser-canvas-area ${isHandMode ? 'is-hand-mode' : ''}`}
                     >
-                        {!imageObj && <div className="magic-eraser-loading">Đang tải ảnh...</div>}
+                        {!imageObj && <div className="magic-eraser-loading">{t('magic_loading_image')}</div>}
 
                         {imageObj && (
                             <div className="magic-eraser-stage-outer">
@@ -1127,7 +1154,11 @@ export default function MagicEraserPanel({
                                             onMouseDown={handleMouseDown}
                                             onMouseMove={handleMouseMove}
                                             onMouseUp={handleMouseUp}
-                                            onMouseLeave={handleMouseUp}
+                                            onMouseLeave={() => {
+                                                if (activeTool === TOOL_POLYGON && !isDrawing) {
+                                                    setPolygonHover(null);
+                                                }
+                                            }}
                                             onContextMenu={(e) => e.preventDefault()}
                                             className="magic-eraser-canvas-mask"
                                         />
@@ -1145,19 +1176,19 @@ export default function MagicEraserPanel({
 
                     <div className="magic-eraser-sidebar">
                         <div className="magic-eraser-panel">
-                            <h4 className="magic-eraser-panel-title">Màu ({TOOL_SHORTCUT_LABELS.eyedropper})</h4>
+                            <h4 className="magic-eraser-panel-title">{t('magic_color', { shortcut: TOOL_SHORTCUT_LABELS.eyedropper })}</h4>
                             <div className="magic-eraser-color-row">
                                 <input
                                     type="color"
                                     value={fillColor}
                                     onChange={(e) => setFillColor(e.target.value)}
                                     className="magic-eraser-color-input"
-                                    aria-label="Chọn màu tô"
+                                    aria-label={t('magic_pick_fill_color')}
                                 />
                                 <span className="magic-eraser-hex">{fillColor}</span>
                                 <MagicEraserToolbarButton
                                     icon={Pipette}
-                                    label="Hút màu"
+                                    label={t('magic_eyedropper')}
                                     shortcut={TOOL_SHORTCUT_LABELS.eyedropper}
                                     variant="tool"
                                     active={activeTool === TOOL_EYEDROPPER}
@@ -1169,7 +1200,7 @@ export default function MagicEraserPanel({
 
                         <div className="magic-eraser-panel">
                             <h4 className="magic-eraser-panel-title">
-                                Cọ ({TOOL_SHORTCUT_LABELS.brush}) · [ ]
+                                {t('magic_brush_size', { shortcut: TOOL_SHORTCUT_LABELS.brush })}
                             </h4>
                             <div className="magic-eraser-brush-row">
                                 <input
@@ -1184,33 +1215,32 @@ export default function MagicEraserPanel({
                             </div>
                             <MagicEraserToolbarButton
                                 icon={Eraser}
-                                label="Bỏ chọn"
+                                label={t('magic_clear_selection')}
                                 shortcut="Ctrl+D"
                                 variant="sidebar"
                                 className="magic-eraser-sidebar-action"
                                 disabled={!hasDrawn && polygonPoints.length === 0}
                                 onClick={() => handleClearMask(true)}
                             >
-                                <span className="magic-eraser-sidebar-action-label">Bỏ chọn</span>
+                                <span className="magic-eraser-sidebar-action-label">{t('magic_clear_selection')}</span>
                             </MagicEraserToolbarButton>
                         </div>
 
                         {activeTool === TOOL_POLYGON && (
                             <div className="magic-eraser-panel">
                                 <p className="magic-eraser-hint">
-                                    Click từng điểm · Enter hoặc click điểm đầu để đóng · Esc hủy ·
-                                    Backspace xóa điểm cuối
+                                    {t('magic_polygon_hint')}
                                 </p>
                                 <MagicEraserToolbarButton
                                     icon={Pentagon}
-                                    label="Đóng đa giác"
+                                    label={t('magic_close_polygon')}
                                     shortcut="Enter"
                                     variant="sidebar"
                                     className="magic-eraser-sidebar-action"
                                     disabled={polygonPoints.length < 3}
                                     onClick={commitPolygon}
                                 >
-                                    <span className="magic-eraser-sidebar-action-label">Đóng đa giác</span>
+                                    <span className="magic-eraser-sidebar-action-label">{t('magic_close_polygon')}</span>
                                 </MagicEraserToolbarButton>
                             </div>
                         )}
@@ -1220,25 +1250,25 @@ export default function MagicEraserPanel({
                         <div className="magic-eraser-panel-footer">
                             <MagicEraserToolbarButton
                                 icon={PaintBucket}
-                                label="Tô màu vùng chọn"
+                                label={t('magic_fill_selection')}
                                 shortcut="Enter"
                                 variant="fill"
                                 disabled={!hasDrawn || isProcessing}
                                 onClick={handleFillColor}
                             >
-                                <span className="magic-eraser-sidebar-action-label">Tô màu</span>
+                                <span className="magic-eraser-sidebar-action-label">{t('magic_fill')}</span>
                             </MagicEraserToolbarButton>
 
                             {hasDrawn && (
                                 <MagicEraserToolbarButton
                                     icon={Square}
-                                    label="Tách ảnh"
+                                    label={t('magic_split_image')}
                                     shortcut=""
                                     variant="fill"
                                     disabled={isProcessing}
                                     onClick={handleSplitFromSelection}
                                 >
-                                    <span className="magic-eraser-sidebar-action-label">Tách ảnh</span>
+                                    <span className="magic-eraser-sidebar-action-label">{t('magic_split_image')}</span>
                                 </MagicEraserToolbarButton>
                             )}
                         </div>

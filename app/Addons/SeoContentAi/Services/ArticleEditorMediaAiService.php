@@ -8,6 +8,8 @@ use App\Addons\SeoContentAi\Jobs\GenerateMediaJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use Illuminate\Contracts\Cache\LockTimeoutException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 final class ArticleEditorMediaAiService
@@ -29,20 +31,29 @@ final class ArticleEditorMediaAiService
         string $userBrief,
         string $editorBlockId = '',
     ): array {
-        $prompt = $this->resolvePrompt(
-            $this->workflowSettings->getCreateImagePromptId(),
-            'Tạo ảnh',
-            'image',
-        );
+        $lockKey = $this->generationLockKey($article, 'image', $editorBlockId);
 
-        $variables = $this->filterVariablesForPrompt(
-            $prompt,
-            $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
-        );
-        $this->reconcileStaleAiMediaJobs((int) $article->id);
+        return $this->runWithGenerationLock($lockKey, function () use (
+            $article,
+            $selectionText,
+            $selectionHtml,
+            $userBrief,
+            $editorBlockId
+        ): array {
+            $prompt = $this->resolvePrompt(
+                $this->workflowSettings->getCreateImagePromptId(),
+                'Tạo ảnh',
+                'image',
+            );
 
-        $placeholder = $this->findReusableProcessingJob($article, 'image', $editorBlockId)
-            ?? $this->createPlaceholderMedia(
+            $variables = $this->filterVariablesForPrompt(
+                $prompt,
+                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
+            );
+            $this->reconcileStaleAiMediaJobs((int) $article->id);
+            $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
+
+            $placeholder = $this->createPlaceholderMedia(
                 $article,
                 'image',
                 (int) $prompt->id,
@@ -50,17 +61,28 @@ final class ArticleEditorMediaAiService
                 $editorBlockId,
             );
 
-        if ($placeholder->wasRecentlyCreated) {
             GenerateMediaJob::dispatch($placeholder->id, (int) $prompt->id, $variables, 'image')
                 ->onQueue('media_generation');
-        }
 
-        return [
-            'url' => (string) $placeholder->url,
-            'media_type' => 'image',
-            'seo_media_id' => (int) $placeholder->id,
-            'status' => (string) $placeholder->status,
-        ];
+            return [
+                'url' => (string) $placeholder->url,
+                'media_type' => 'image',
+                'seo_media_id' => (int) $placeholder->id,
+                'status' => (string) $placeholder->status,
+            ];
+        }, function () use ($article, $editorBlockId): array {
+            $existing = $this->findReusableProcessingJob($article, 'image', $editorBlockId);
+            if ($existing instanceof SeoMedia) {
+                return [
+                    'url' => (string) $existing->url,
+                    'media_type' => 'image',
+                    'seo_media_id' => (int) $existing->id,
+                    'status' => (string) $existing->status,
+                ];
+            }
+
+            throw new \RuntimeException('Yêu cầu tạo ảnh đang được xử lý, vui lòng thử lại sau vài giây.');
+        });
     }
 
     /**
@@ -73,20 +95,29 @@ final class ArticleEditorMediaAiService
         string $userBrief,
         string $editorBlockId = '',
     ): array {
-        $prompt = $this->resolvePrompt(
-            $this->workflowSettings->getCreateVideoPromptId(),
-            'Tạo video',
-            'video',
-        );
+        $lockKey = $this->generationLockKey($article, 'video', $editorBlockId);
 
-        $variables = $this->filterVariablesForPrompt(
-            $prompt,
-            $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
-        );
-        $this->reconcileStaleAiMediaJobs((int) $article->id);
+        return $this->runWithGenerationLock($lockKey, function () use (
+            $article,
+            $selectionText,
+            $selectionHtml,
+            $userBrief,
+            $editorBlockId
+        ): array {
+            $prompt = $this->resolvePrompt(
+                $this->workflowSettings->getCreateVideoPromptId(),
+                'Tạo video',
+                'video',
+            );
 
-        $placeholder = $this->findReusableProcessingJob($article, 'video', $editorBlockId)
-            ?? $this->createPlaceholderMedia(
+            $variables = $this->filterVariablesForPrompt(
+                $prompt,
+                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
+            );
+            $this->reconcileStaleAiMediaJobs((int) $article->id);
+            $this->cancelProcessingJobsForBlock($article, 'video', $editorBlockId);
+
+            $placeholder = $this->createPlaceholderMedia(
                 $article,
                 'video',
                 (int) $prompt->id,
@@ -94,17 +125,28 @@ final class ArticleEditorMediaAiService
                 $editorBlockId,
             );
 
-        if ($placeholder->wasRecentlyCreated) {
             GenerateMediaJob::dispatch($placeholder->id, (int) $prompt->id, $variables, 'video')
                 ->onQueue('media_generation');
-        }
 
-        return [
-            'url' => (string) $placeholder->url,
-            'media_type' => 'video',
-            'seo_media_id' => (int) $placeholder->id,
-            'status' => (string) $placeholder->status,
-        ];
+            return [
+                'url' => (string) $placeholder->url,
+                'media_type' => 'video',
+                'seo_media_id' => (int) $placeholder->id,
+                'status' => (string) $placeholder->status,
+            ];
+        }, function () use ($article, $editorBlockId): array {
+            $existing = $this->findReusableProcessingJob($article, 'video', $editorBlockId);
+            if ($existing instanceof SeoMedia) {
+                return [
+                    'url' => (string) $existing->url,
+                    'media_type' => 'video',
+                    'seo_media_id' => (int) $existing->id,
+                    'status' => (string) $existing->status,
+                ];
+            }
+
+            throw new \RuntimeException('Yêu cầu tạo video đang được xử lý, vui lòng thử lại sau vài giây.');
+        });
     }
 
     /**
@@ -124,22 +166,18 @@ final class ArticleEditorMediaAiService
 
         $selectionText = trim($selectionText);
         $selectionHtml = trim($selectionHtml);
-        $userBrief = trim($userBrief);
+        $userBrief = $this->compactVariableValue($userBrief);
 
+        // Theo yêu cầu: không trộn "Đoạn ngữ cảnh" vào prompt input gửi AI.
         $input = $userBrief;
-        if ($selectionText !== '') {
-            $input = $input !== ''
-                ? $input . "\n\n---\nĐoạn ngữ cảnh:\n" . $selectionText
-                : $selectionText;
-        }
 
         $variables = array_merge(
             [
                 'post_title' => $postTitle,
                 'post_content' => Str::limit($bodyPlain, 3000),
                 'focus_keyword' => $focusKeyword,
-                'selected_text' => $selectionText,
-                'selected_html' => $selectionHtml,
+                'selected_text' => '',
+                'selected_html' => '',
                 'user_brief' => $userBrief,
                 'input' => $input,
             ],
@@ -169,7 +207,7 @@ final class ArticleEditorMediaAiService
             ->all();
 
         if ($allowedNames === []) {
-            $input = trim((string) ($variables['input'] ?? ''));
+            $input = $this->compactVariableValue((string) ($variables['input'] ?? ''));
 
             return $input !== '' ? ['input' => $input] : [];
         }
@@ -181,7 +219,7 @@ final class ArticleEditorMediaAiService
                 continue;
             }
 
-            $value = trim((string) ($variables[$name] ?? ''));
+            $value = $this->compactVariableValue((string) ($variables[$name] ?? ''));
             if ($value === '') {
                 continue;
             }
@@ -190,13 +228,69 @@ final class ArticleEditorMediaAiService
         }
 
         if ($filtered === []) {
-            $input = trim((string) ($variables['input'] ?? ''));
+            $input = $this->compactVariableValue((string) ($variables['input'] ?? ''));
             if ($input !== '') {
                 $filtered['input'] = $input;
             }
         }
 
         return $filtered;
+    }
+
+    private function compactVariableValue(string $value): string
+    {
+        $value = str_replace(["\r\n", "\r"], "\n", trim($value));
+        $value = (string) preg_replace("/\n{2,}/u", "\n", $value);
+
+        return trim($value);
+    }
+
+    private function generationLockKey(SeoArticle $article, string $toolType, string $editorBlockId): string
+    {
+        $articleId = (int) ($article->id ?? 0);
+        $blockKey = trim($editorBlockId);
+        if ($blockKey === '') {
+            $blockKey = 'none';
+        }
+
+        return 'seo:ai-media-generate:' . $articleId . ':' . $toolType . ':' . sha1($blockKey);
+    }
+
+    /**
+     * @template T
+     * @param  callable(): T  $callback
+     * @return T
+     */
+    private function runWithGenerationLock(
+        string $lockKey,
+        callable $callback,
+        ?callable $onLockTimeout = null,
+    ): mixed
+    {
+        $store = Cache::getStore();
+        if (! method_exists($store, 'lock')) {
+            // Cache driver không hỗ trợ atomic lock (ví dụ array/file cũ).
+            return $callback();
+        }
+
+        $lock = Cache::lock($lockKey, 8);
+
+        try {
+            return $lock->block(3, $callback);
+        } catch (LockTimeoutException) {
+            if ($onLockTimeout !== null) {
+                return $onLockTimeout();
+            }
+
+            throw new \RuntimeException('Yêu cầu đang được xử lý, vui lòng thử lại sau vài giây.');
+        } catch (\Throwable $exception) {
+            $message = strtolower((string) $exception->getMessage());
+            if (str_contains($message, 'lock') && str_contains($message, 'support')) {
+                return $callback();
+            }
+
+            throw $exception;
+        }
     }
 
     private function resolvePrompt(?int $promptId, string $label, string $expectedTool): SeoPrompt
@@ -269,12 +363,45 @@ final class ArticleEditorMediaAiService
 
         if ($editorBlockId !== '') {
             $query->where('editor_block_id', $editorBlockId);
+        } else {
+            $query->where(function ($q): void {
+                $q->whereNull('editor_block_id')
+                    ->orWhere('editor_block_id', '');
+            });
         }
 
         return $query->orderByDesc('id')->first();
     }
 
-    public function retryGeneration(SeoMedia $media): SeoMedia
+    private function cancelProcessingJobsForBlock(
+        SeoArticle $article,
+        string $toolType,
+        string $editorBlockId,
+    ): void {
+        $source = $toolType === 'video' ? 'ai_video_prompt' : 'ai_prompt';
+        $editorBlockId = trim($editorBlockId);
+
+        $query = SeoMedia::query()
+            ->where('article_id', (int) $article->id)
+            ->where('source', $source)
+            ->where('status', 'processing');
+
+        if ($editorBlockId !== '') {
+            $query->where('editor_block_id', $editorBlockId);
+        } else {
+            $query->where(function ($q): void {
+                $q->whereNull('editor_block_id')
+                    ->orWhere('editor_block_id', '');
+            });
+        }
+
+        $query->update([
+            'status' => 'failed',
+            'error_message' => 'Job cũ đã được thay thế bởi yêu cầu tạo mới.',
+        ]);
+    }
+
+    public function retryGeneration(SeoMedia $media, ?string $retryInput = null): SeoMedia
     {
         if (! $media->isAiGenerationJob()) {
             throw new \InvalidArgumentException('Chỉ có thể thử lại media được tạo bởi AI.');
@@ -287,6 +414,11 @@ final class ArticleEditorMediaAiService
             throw new \InvalidArgumentException('Thiếu cấu hình prompt để thử lại.');
         }
 
+        $retryInput = trim((string) $retryInput);
+        if ($retryInput !== '') {
+            $variables = $this->applyRetryInputToVariables($variables, $retryInput);
+        }
+
         $toolType = $media->aiToolType();
 
         $media->update([
@@ -294,12 +426,45 @@ final class ArticleEditorMediaAiService
             'path' => SeoMedia::placeholderLoadingPath(),
             'status' => 'processing',
             'error_message' => null,
+            'prompt_variables' => $variables,
         ]);
 
         GenerateMediaJob::dispatch($media->id, $promptId, $variables, $toolType)
             ->onQueue('media_generation');
 
         return $media->fresh();
+    }
+
+    /**
+     * @param  array<string, mixed>  $variables
+     * @return array<string, mixed>
+     */
+    private function applyRetryInputToVariables(array $variables, string $retryInput): array
+    {
+        $preferredKeys = ['prompt', 'input', 'content', 'text', 'description', 'image_prompt'];
+        foreach ($preferredKeys as $key) {
+            if (! array_key_exists($key, $variables) || ! is_string($variables[$key])) {
+                continue;
+            }
+
+            $variables[$key] = $retryInput;
+
+            return $variables;
+        }
+
+        foreach ($variables as $key => $value) {
+            if (! is_string($value)) {
+                continue;
+            }
+
+            $variables[$key] = $retryInput;
+
+            return $variables;
+        }
+
+        $variables['input'] = $retryInput;
+
+        return $variables;
     }
 
     /**

@@ -16,7 +16,7 @@ class ListTasks extends ListRecords
     {
         return [
             Actions\CreateAction::make()
-                ->label('Tạo quy trình mới'),
+                ->label('Create workflow'),
         ];
     }
 }

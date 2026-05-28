@@ -161,6 +161,45 @@
     pointer-events: none;
 }
 
+.grid-line-handle {
+    position: absolute;
+    z-index: 3;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    pointer-events: auto;
+}
+
+.grid-line-handle.v {
+    top: 0;
+    bottom: 0;
+    width: 16px;
+    transform: translateX(-8px);
+    cursor: col-resize;
+}
+
+.grid-line-handle.h {
+    left: 0;
+    right: 0;
+    height: 16px;
+    transform: translateY(-8px);
+    cursor: row-resize;
+}
+
+.grid-line-handle.is-active::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    background: rgba(16, 185, 129, 0.95);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+}
+
 .grid-line.v {
     top: 0;
     bottom: 0;
@@ -215,6 +254,16 @@
     border-radius: 10px;
     overflow: hidden;
     background: #fff;
+    cursor: grab;
+}
+
+.piece-card:active {
+    cursor: grabbing;
+}
+
+.piece-card.is-dragging {
+    opacity: 0.55;
+    transform: scale(0.98);
 }
 
 .dark .piece-card {

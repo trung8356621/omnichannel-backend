@@ -75,6 +75,88 @@ final class ArticlePostImagesService
     }
 
     /**
+     * Ảnh trong bài cho modal chọn ảnh (tab «Trong bài»).
+     *
+     * @return array{
+     *     images: list<array<string, mixed>>,
+     *     total: int,
+     *     total_pages: int,
+     *     page: int,
+     *     error: string|null,
+     * }
+     */
+    public function fetchForMediaPicker(
+        SeoArticle $article,
+        int $page = 1,
+        ?string $search = null,
+        int $perPage = 48,
+    ): array {
+        $perPage = max(1, min(100, $perPage));
+        $page = max(1, $page);
+
+        $rows = $this->resolveForArticle($article);
+        $seoMediaByWpId = $this->seoMediaIdMapForArticle($article, $rows);
+
+        $mapped = [];
+        foreach ($rows as $index => $row) {
+            $url = $this->resolvePickerDisplayUrl($row);
+            if ($url === '') {
+                continue;
+            }
+
+            $wpId = (int) ($row['wp_attachment_id'] ?? 0);
+            $seoMediaId = $wpId > 0 ? (int) ($seoMediaByWpId[$wpId] ?? 0) : 0;
+            if ($seoMediaId <= 0) {
+                $seoMediaId = $this->resolveSeoMediaIdFromSrc($article, $url, $seoMediaByWpId);
+            }
+
+            $slug = trim((string) ($row['slug'] ?? ''));
+            $alt = trim((string) ($row['alt'] ?? ''));
+
+            $mapped[] = [
+                'id' => $wpId > 0 ? $wpId : ($seoMediaId > 0 ? $seoMediaId : $index + 1),
+                'seo_media_id' => $seoMediaId > 0 ? $seoMediaId : null,
+                'wp_attachment_id' => $wpId > 0 ? $wpId : null,
+                'slug' => $slug,
+                'url' => $url,
+                'alt' => $alt !== '' ? $alt : $slug,
+                'sort_at' => $index,
+            ];
+        }
+
+        $search = trim((string) $search);
+        if ($search !== '') {
+            $needle = mb_strtolower($search);
+            $mapped = array_values(array_filter(
+                $mapped,
+                static function (array $image) use ($needle): bool {
+                    $haystack = mb_strtolower(implode(' ', array_filter([
+                        (string) ($image['slug'] ?? ''),
+                        (string) ($image['alt'] ?? ''),
+                        (string) ($image['url'] ?? ''),
+                    ])));
+
+                    return str_contains($haystack, $needle);
+                },
+            ));
+        }
+
+        $total = count($mapped);
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+        $images = array_slice($mapped, $offset, $perPage);
+
+        return [
+            'images' => $images,
+            'total' => $total,
+            'total_pages' => $totalPages,
+            'page' => $page,
+            'error' => null,
+        ];
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $fromSync
      */
     public function importFromSyncItem(SeoArticle $article, array $fromSync): void
@@ -429,6 +511,105 @@ final class ArticlePostImagesService
     private function isLocalSeoMediaSrc(string $src): bool
     {
         return str_contains(strtolower($src), '/storage/uploads/seo_media/');
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function resolvePickerDisplayUrl(array $row): string
+    {
+        $local = trim((string) ($row['local_src'] ?? ''));
+        if ($local !== '') {
+            return $local;
+        }
+
+        $wp = trim((string) ($row['wp_url'] ?? ''));
+        if ($wp !== '' && ! $this->isLocalSeoMediaSrc($wp)) {
+            return $wp;
+        }
+
+        $src = trim((string) ($row['src'] ?? ''));
+
+        return $src !== '' && ! $this->isLocalSeoMediaSrc($src) ? $src : ($local !== '' ? $local : $src);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, int> wp_attachment_id => seo_media.id
+     */
+    private function seoMediaIdMapForArticle(SeoArticle $article, array $rows): array
+    {
+        $article->loadMissing('site');
+        $siteId = (int) ($article->site_id ?? 0);
+
+        $wpIds = array_values(array_unique(array_filter(
+            array_map(
+                static fn (array $row): int => (int) ($row['wp_attachment_id'] ?? 0),
+                $rows,
+            ),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        $query = SeoMedia::query()->where(function ($q) use ($article, $siteId, $wpIds): void {
+            $q->where('article_id', (int) $article->id);
+
+            if ($wpIds !== []) {
+                $q->orWhere(function ($sub) use ($siteId, $wpIds): void {
+                    $sub->whereIn('wp_attachment_id', $wpIds);
+                    if ($siteId > 0) {
+                        $sub->where('site_id', $siteId);
+                    }
+                });
+            }
+        });
+
+        $map = [];
+        foreach ($query->get(['id', 'wp_attachment_id', 'slug', 'path']) as $media) {
+            $wpId = (int) ($media->wp_attachment_id ?? 0);
+            if ($wpId > 0) {
+                $map[$wpId] = (int) $media->id;
+            }
+
+            $path = strtolower(trim((string) $media->path));
+            if ($path !== '') {
+                $map['path:' . $path] = (int) $media->id;
+            }
+
+            $slug = trim((string) $media->slug);
+            if ($slug !== '') {
+                $map['slug:' . strtolower($slug)] = (int) $media->id;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * @param  array<int|string, int>  $seoMediaByWpId
+     */
+    private function resolveSeoMediaIdFromSrc(SeoArticle $article, string $url, array $seoMediaByWpId): int
+    {
+        $path = strtolower(rtrim((string) parse_url($url, PHP_URL_PATH), '/'));
+        if ($path !== '' && isset($seoMediaByWpId['path:' . $path])) {
+            return (int) $seoMediaByWpId['path:' . $path];
+        }
+
+        $slug = $this->slugFromUrl($url);
+        if ($slug !== '' && isset($seoMediaByWpId['slug:' . strtolower($slug)])) {
+            return (int) $seoMediaByWpId['slug:' . strtolower($slug)];
+        }
+
+        if (! $this->isLocalSeoMediaSrc($url)) {
+            return 0;
+        }
+
+        $media = SeoMedia::query()
+            ->where('article_id', (int) $article->id)
+            ->where('path', 'like', '%' . addcslashes(basename($path), '%_\\') . '%')
+            ->orderByDesc('id')
+            ->value('id');
+
+        return $media !== null ? (int) $media : 0;
     }
 
     /**

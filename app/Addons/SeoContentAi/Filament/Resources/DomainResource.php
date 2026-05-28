@@ -29,7 +29,7 @@ class DomainResource extends Resource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Danh sách tên miền';
+    protected static ?string $navigationLabel = 'Domain list';
 
     public static function canViewAny(): bool
     {
@@ -41,7 +41,7 @@ class DomainResource extends Resource
         return $form
             ->schema([
                 Forms\Components\TextInput::make('domain')
-                    ->label('Tên miền')
+                    ->label(__('seo-content-ai::filament.domain.domain'))
                     ->placeholder('example.com')
                     ->required()
                     ->unique(ignoreRecord: true)
@@ -61,36 +61,36 @@ class DomainResource extends Resource
                     ->columnSpanFull(),
 
                 Forms\Components\Toggle::make('ssl')
-                    ->label('SSL (HTTPS)')
+                    ->label(__('seo-content-ai::filament.domain.ssl'))
                     ->default(true),
 
                 Forms\Components\Select::make('status')
-                    ->label('Trạng thái')
+                    ->label(__('seo-content-ai::filament.domain.status'))
                     ->options([
-                        'active' => 'Hoạt động',
-                        'inactive' => 'Tắt',
-                        'maintenance' => 'Bảo trì',
+                        'active' => 'Active',
+                        'inactive' => 'Inactive',
+                        'maintenance' => 'Maintenance',
                     ])
                     ->default('active')
                     ->required()
                     ->native(false),
 
                 Forms\Components\Select::make('seo_platform')
-                    ->label('Nền tảng')
+                    ->label(__('seo-content-ai::filament.domain.platform'))
                     ->options([
                         'wordpress' => 'WordPress',
                         'shopify' => 'Shopify',
-                        'custom' => 'Tùy chỉnh',
+                        'custom' => 'Custom',
                     ])
                     ->required()
                     ->native(false)
                     ->live(),
                 Forms\Components\Select::make('seo_domain_type')
-                    ->label('Loại Website')
+                    ->label(__('seo-content-ai::filament.domain.website_type'))
                     ->options([
-                        'news'         => 'Tin tức',
-                        'production'   => 'Sản xuất',
-                        'e-commerce'   => 'Thương mại điện tử',
+                        'news'         => 'News',
+                        'production'   => 'Production',
+                        'e-commerce'   => 'E-commerce',
                     ])
                     ->required()
                     ->native(false),
@@ -99,11 +99,11 @@ class DomainResource extends Resource
                     ->key('seo_read_token')
                     ->maxLength(255)
                     ->readOnly()
-                    ->helperText('Có thể sao chép bằng Ctrl+C.')
+                    ->helperText('Can be copied with Ctrl+C.')
                     ->visible(fn (Get $get): bool => $get('seo_platform') === 'wordpress')
                     ->suffixAction(
                         FormInputAction::make('generate_read_token')
-                            ->label('Tạo mới')
+                            ->label('Generate')
                             ->icon('heroicon-o-arrow-path')
                             ->action(fn (Set $set) => $set('seo_read_token', Str::random(60)))
                     ),
@@ -112,11 +112,11 @@ class DomainResource extends Resource
                     ->key('seo_migration_token')
                     ->maxLength(255)
                     ->readOnly()
-                    ->helperText('Dùng làm API WRITE TOKEN trên plugin WordPress (đăng comment/review).')
+                    ->helperText('Used as API WRITE TOKEN in the WordPress plugin (post comment/review).')
                     ->visible(fn (Get $get): bool => $get('seo_platform') === 'wordpress')
                     ->suffixAction(
                         FormInputAction::make('generate_migration_token')
-                            ->label('Tạo mới')
+                            ->label('Generate')
                             ->icon('heroicon-o-arrow-path')
                             ->action(fn (Set $set) => $set('seo_migration_token', Str::random(60)))
                     ),
@@ -128,11 +128,11 @@ class DomainResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('domain')
-                    ->label('Tên miền')
+                    ->label(__('seo-content-ai::filament.domain.domain'))
                     ->searchable()
                     ->sortable(),
                 Tables\Columns\IconColumn::make('is_main')
-                    ->label('Miền chính')
+                    ->label(__('seo-content-ai::filament.domain.main_domain'))
                     ->boolean()
                     ->getStateUsing(function (Site $record): bool {
                         if ($record->relationLoaded('metas')) {
@@ -151,7 +151,7 @@ class DomainResource extends Resource
             ->defaultSort('domain')
             ->actions([
                 Tables\Actions\Action::make('overview')
-                    ->label('Tổng quan')
+                    ->label(__('seo-content-ai::filament.domain.overview'))
                     ->icon('heroicon-o-chart-bar')
                     ->color('info')
                     ->url(fn (Site $record): string => DomainResource::getUrl('general', ['record' => $record])),
@@ -185,6 +185,11 @@ class DomainResource extends Resource
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.domain_list');
     }
 
     public static function getPages(): array

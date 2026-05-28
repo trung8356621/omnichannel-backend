@@ -4,79 +4,79 @@
     <div class="seo-image-opt">
         <div class="seo-image-opt__toolbar">
             <div class="seo-image-opt__toolbar-row">
-                <label class="seo-image-opt__label" for="seo-image-opt-site">Áp dụng cho Website:</label>
+                <label class="seo-image-opt__label" for="seo-image-opt-site">Apply to website:</label>
                 <select id="seo-image-opt-site" wire:model.live="siteId" class="seo-image-opt__select">
-                    <option value="">-- Mặc định hệ thống (Global) --</option>
+                    <option value="">-- System default (Global) --</option>
                     @foreach ($this->sites as $site)
                         <option value="{{ $site->id }}">{{ $site->domain }}</option>
                     @endforeach
                 </select>
             </div>
-            <p class="seo-image-opt__hint">Cấu hình riêng sẽ ghi đè lên cấu hình chung của hệ thống</p>
+            <p class="seo-image-opt__hint">Site-specific configuration overrides global system defaults.</p>
         </div>
 
         <div class="seo-image-opt__grid">
             <section class="seo-image-opt__card">
-                <h3 class="seo-image-opt__card-title">Nén &amp; Chuyển đổi định dạng</h3>
+                <h3 class="seo-image-opt__card-title">Compression &amp; Format conversion</h3>
                 <hr class="seo-image-opt__divider" />
 
                 <label class="seo-image-opt__check">
                     <input type="checkbox" wire:model="data.auto_convert_webp" />
                     <span>
-                        <strong>Tự động chuyển đổi sang WebP</strong>
-                        <small>Được khuyên dùng để tăng tốc độ tải trang cho Google PageSpeed</small>
+                        <strong>Automatically convert to WebP</strong>
+                        <small>Recommended to improve page speed and Google PageSpeed score</small>
                     </span>
                 </label>
 
                 <div class="seo-image-opt__range-wrap">
                     <label class="seo-image-opt__range-label">
-                        Chất lượng nén hình ảnh (Quality: {{ $data['quality'] ?? 80 }}%)
+                        Image compression quality (Quality: {{ $data['quality'] ?? 80 }}%)
                     </label>
                     <input type="range" min="10" max="100" wire:model.live="data.quality" class="seo-image-opt__range" />
                     <div class="seo-image-opt__range-hints">
-                        <span>Tối ưu nhất (10%)</span>
-                        <span>Cân bằng (80%)</span>
-                        <span>Gốc (100%)</span>
+                        <span>Most compressed (10%)</span>
+                        <span>Balanced (80%)</span>
+                        <span>Original quality (100%)</span>
                     </div>
                 </div>
             </section>
 
             <section class="seo-image-opt__card">
-                <h3 class="seo-image-opt__card-title">Giới hạn Kích thước (Resize)</h3>
+                <h3 class="seo-image-opt__card-title">Size limits (Resize)</h3>
                 <hr class="seo-image-opt__divider" />
 
                 <label class="seo-image-opt__check">
                     <input type="checkbox" wire:model.live="data.limit_dimensions" />
                     <span>
-                        <strong>Bật giới hạn kích thước</strong>
-                        <small>Tự động thu nhỏ ảnh vượt quá độ rộng chuẩn để tránh tốn dung lượng ổ đĩa</small>
+                        <strong>Enable size limits</strong>
+                        <small>Automatically shrink oversized images to reduce storage usage</small>
                     </span>
                 </label>
 
                 @if ($data['limit_dimensions'] ?? false)
                     <p class="seo-image-opt__hint">
-                        Chỉ nhập <strong>một</strong> chiều: có width thì giới hạn theo chiều rộng, có height thì theo chiều cao.
-                        Để trống chiều còn lại để giữ tỉ lệ ảnh (không bị méo hoặc cắt).
+                        Enter only <strong>one</strong> dimension: width to limit by width, height to limit by height.
+                        Leave the other empty to keep aspect ratio (no distortion/cropping).
                     </p>
                     <div class="seo-image-opt__dims">
                         <div>
-                            <label class="seo-image-opt__field-label">Chiều rộng tối đa (px)</label>
+                            <label class="seo-image-opt__field-label">Max width (px)</label>
                             <input
                                 type="number"
                                 min="0"
                                 wire:model="data.max_width"
                                 class="seo-image-opt__input"
-                                placeholder="Ví dụ: 1024"
+                                placeholder="Example: 1024"
                             />
                         </div>
                         <div>
-                            <label class="seo-image-opt__field-label">Chiều cao tối đa (px)</label>
+                            <label class="seo-image-opt__field-label">Max height (px)</label>
                             <input
                                 type="number"
                                 min="0"
                                 wire:model="data.max_height"
                                 class="seo-image-opt__input"
-                                placeholder="Để trống nếu chỉ giới hạn width"
+                                placeholder="Leave empty if only limiting width"
                             />
                         </div>
                     </div>
@@ -84,7 +84,7 @@
             </section>
 
             <section class="seo-image-opt__card seo-image-opt__card--wide">
-                <h3 class="seo-image-opt__card-title">Chuẩn hóa SEO Tên File &amp; Thẻ ALT</h3>
+                <h3 class="seo-image-opt__card-title">SEO normalization for file name &amp; ALT tag</h3>
                 <hr class="seo-image-opt__divider" />
 
                 <div class="seo-image-opt__seo-grid">
@@ -92,23 +92,23 @@
                         <label class="seo-image-opt__check">
                             <input type="checkbox" wire:model="data.clean_filename" />
                             <span>
-                                <strong>Tự động dọn dẹp tên File</strong>
-                                <small>Xóa dấu tiếng Việt, ký tự đặc biệt, thay khoảng trắng thành dấu gạch ngang</small>
+                                <strong>Automatically sanitize file name</strong>
+                                <small>Remove accents/special characters and replace spaces with hyphens</small>
                             </span>
                         </label>
 
                         <label class="seo-image-opt__check">
                             <input type="checkbox" wire:model.live="data.auto_alt_tag" />
                             <span>
-                                <strong>Tự động tạo thẻ ALT</strong>
-                                <small>Tự sinh văn bản thay thế (alt) chuẩn SEO cho hình ảnh khi upload từ bài viết</small>
+                                <strong>Automatically generate ALT tag</strong>
+                                <small>Auto-create SEO-friendly alternative text for uploaded images</small>
                             </span>
                         </label>
                     </div>
 
                     @if ($data['auto_alt_tag'] ?? false)
                         <div>
-                            <label class="seo-image-opt__field-label">Mẫu thiết lập ALT Tag</label>
+                            <label class="seo-image-opt__field-label">ALT tag pattern</label>
                             <input
                                 type="text"
                                 wire:model="data.alt_tag_pattern"
@@ -116,8 +116,8 @@
                                 placeholder="{post_title} - {focus_keyword}"
                             />
                             <p class="seo-image-opt__pattern-hint">
-                                Biến động: <code>{post_title}</code> — tiêu đề bài viết,
-                                <code>{focus_keyword}</code> — từ khóa chính SEO.
+                                Variables: <code>{post_title}</code> = article title,
+                                <code>{focus_keyword}</code> = SEO focus keyword.
                             </p>
                         </div>
                     @endif
@@ -127,7 +127,7 @@
 
         <div class="seo-image-opt__actions">
             <x-filament::button wire:click="save" wire:loading.attr="disabled">
-                Lưu cấu hình
+                Save settings
             </x-filament::button>
         </div>
     </div>

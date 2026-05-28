@@ -7,9 +7,14 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
+use Carbon\Carbon;
+use Filament\Notifications\Notification;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -18,7 +23,9 @@ use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class ArticleResource extends Resource
@@ -31,11 +38,11 @@ class ArticleResource extends Resource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Bài viết';
+    protected static ?string $navigationLabel = 'Articles';
 
-    protected static ?string $modelLabel = 'Bài viết';
+    protected static ?string $modelLabel = 'Article';
 
-    protected static ?string $pluralModelLabel = 'Bài viết';
+    protected static ?string $pluralModelLabel = 'Articles';
 
     public static function canViewAny(): bool
     {
@@ -60,17 +67,17 @@ class ArticleResource extends Resource
         return $form
             ->schema([
                 Forms\Components\TextInput::make('title')
-                    ->label('Tiêu đề')
+                    ->label(__('seo-content-ai::filament.article_list.title'))
                     ->required()
                     ->maxLength(255)
                     ->columnSpanFull(),
                 Forms\Components\Select::make('status')
-                    ->label('Trạng thái')
+                    ->label(__('seo-content-ai::filament.article_list.status'))
                     ->options([
-                        'draft' => 'Nháp',
-                        'published' => 'Đã xuất bản',
-                        'scheduled' => 'Hẹn giờ',
-                        'private' => 'Riêng tư',
+                        'draft' => __('seo-content-ai::filament.article_list.status_draft'),
+                        'published' => __('seo-content-ai::filament.article_list.status_published'),
+                        'scheduled' => __('seo-content-ai::filament.article_list.status_scheduled'),
+                        'private' => __('seo-content-ai::filament.article_list.status_private'),
                     ])
                     ->default('draft')
                     ->native(false),
@@ -83,7 +90,7 @@ class ArticleResource extends Resource
             ->recordAction('edit')
             ->columns([
                 Tables\Columns\ImageColumn::make('thumbnail')
-                    ->label('Thumb')
+                    ->label(__('seo-content-ai::filament.article_list.thumb'))
                     ->square()
                     ->height(46)
                     ->width(46)
@@ -96,12 +103,13 @@ class ArticleResource extends Resource
                     ->color('danger')
                     ->getStateUsing(function (SeoArticle $record): ?string {
                         return app(ArticleWordPressSyncFlagService::class)->hasDataOutOfSync($record)
-                            ? 'Dữ liệu không đồng bộ, vui lòng xem lại.'
+                            ? __('seo-content-ai::filament.article_list.data_out_of_sync')
                             : null;
                     })
-                    ->placeholder(''),
+                    ->placeholder('')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('title')
-                    ->label('Tiêu đề')
+                    ->label(__('seo-content-ai::filament.article_list.title'))
                     ->searchable()
                     ->sortable()
                     ->wrap()
@@ -115,41 +123,77 @@ class ArticleResource extends Resource
                         }
 
                         return null;
-                    }),
+                    })
+                    ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('site.domain')
+                    ->label(__('seo-content-ai::filament.article_list.domain'))
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('status')
+                    ->label(__('seo-content-ai::filament.article_list.status'))
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ((string) $state) {
+                        'published' => __('seo-content-ai::filament.article_list.status_published'),
+                        'scheduled' => __('seo-content-ai::filament.article_list.status_scheduled'),
+                        'private' => __('seo-content-ai::filament.article_list.status_private'),
+                        'draft' => __('seo-content-ai::filament.article_list.status_draft'),
+                        default => $state ?: '—',
+                    })
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('type')
-                    ->label('Loại')
+                    ->label(__('seo-content-ai::filament.article_list.type'))
                     ->sortable()
                     ->badge()
                     ->color('info')
                     ->formatStateUsing(fn (?string $state): string => $state
                         ? Str::ucfirst(str_replace('_', ' ', $state))
-                        : '—'),
+                        : '—')
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('author')
-                    ->label('Tác giả')
+                    ->label(__('seo-content-ai::filament.article_list.author'))
                     ->badge()
                     ->getStateUsing(function (SeoArticle $record): string {
                         if ($record->user_id === null) {
-                            return 'System';
+                            return __('seo-content-ai::filament.article_list.system');
                         }
 
                         $record->loadMissing('user');
 
-                        return (string) ($record->user?->name ?? $record->user?->email ?? 'System');
+                        return (string) ($record->user?->name ?? $record->user?->email ?? __('seo-content-ai::filament.article_list.system'));
                     })
-                    ->color(fn (string $state): string => $state === 'System' ? 'gray' : 'primary'),
+                    ->color(fn (string $state): string => $state === __('seo-content-ai::filament.article_list.system') ? 'gray' : 'primary')
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->label('Cập nhật')
+                    ->label(__('seo-content-ai::filament.article_list.updated'))
                     ->dateTime('d/m/Y H:i')
-                    ->sortable(),
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('published_at')
+                    ->label(__('seo-content-ai::filament.article_list.published'))
+                    ->dateTime('d/m/Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('reviewed_at')
+                    ->label(__('seo-content-ai::filament.article_list.reviewed_at'))
+                    ->dateTime('d/m/Y H:i')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\IconColumn::make('is_reviewed')
+                    ->label(__('seo-content-ai::filament.article_list.reviewed'))
+                    ->boolean()
+                    ->alignCenter()
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\ViewColumn::make('seo_details')
-                    ->label('Chi tiết SEO')
+                    ->label(__('seo-content-ai::filament.article_list.seo_details'))
                     ->view('seo-content-ai::filament.tables.columns.article-seo-details')
-                    ->disabledClick(),
+                    ->disabledClick()
+                    ->toggleable(isToggledHiddenByDefault: false),
             ])
             ->defaultSort('updated_at', 'desc')
             ->filters([
                 SelectFilter::make('site_id')
-                    ->label('Tên miền')
+                    ->label(__('seo-content-ai::filament.article_list.domain'))
                     ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
                     ->options(function (): array {
                         $query = Site::query()->orderBy('domain');
@@ -163,8 +207,8 @@ class ArticleResource extends Resource
                     ->searchable()
                     ->preload()
                     ->native(false)
-                    ->placeholder('Tất cả tên miền')
-                    ->indicator('Tên miền')
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_domains'))
+                    ->indicator(__('seo-content-ai::filament.article_list.domain'))
                     ->query(function (Builder $query, array $data): void {
                         $siteId = $data['value'] ?? null;
                         if ($siteId === null || $siteId === '') {
@@ -174,16 +218,16 @@ class ArticleResource extends Resource
                         $query->where('site_id', $siteId);
                     }),
                 SelectFilter::make('type')
-                    ->label('Loại bài viết')
+                    ->label(__('seo-content-ai::filament.article_list.post_type'))
                     ->options([
-                        'article' => 'Bài viết',
-                        'product' => 'Sản phẩm',
-                        'category' => 'Danh mục',
-                        'product_category' => 'Danh mục sản phẩm',
+                        'article' => __('seo-content-ai::filament.article_list.post_type_article'),
+                        'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+                        'category' => __('seo-content-ai::filament.article_list.post_type_category'),
+                        'product_category' => __('seo-content-ai::filament.article_list.post_type_product_category'),
                     ])
                     ->native(false)
-                    ->placeholder('Tất cả loại')
-                    ->indicator('Loại')
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_types'))
+                    ->indicator(__('seo-content-ai::filament.article_list.type'))
                     ->query(function (Builder $query, array $data): void {
                         $type = $data['value'] ?? null;
                         if (! is_string($type) || $type === '') {
@@ -201,7 +245,7 @@ class ArticleResource extends Resource
                         $query->where('type', $type);
                     }),
                 SelectFilter::make('seo_score_band')
-                    ->label('Điểm SEO')
+                    ->label(__('seo-content-ai::filament.article_list.seo_score'))
                     ->options([
                         'poor' => '0–49',
                         'fair' => '50–69',
@@ -225,10 +269,33 @@ class ArticleResource extends Resource
                         };
                     })
                     ->native(false)
-                    ->placeholder('Tất cả điểm')
-                    ->indicator('Điểm SEO'),
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_scores'))
+                    ->indicator(__('seo-content-ai::filament.article_list.seo_score')),
+                SelectFilter::make('is_reviewed')
+                    ->label(__('seo-content-ai::filament.article_list.review'))
+                    ->visible(fn (): bool => SeoAccessControl::canAccessManagerFeatures())
+                    ->options([
+                        '0' => __('seo-content-ai::filament.article_list.not_reviewed'),
+                        '1' => __('seo-content-ai::filament.article_list.reviewed'),
+                    ])
+                    ->default('0')
+                    ->native(false)
+                    ->placeholder(__('seo-content-ai::filament.article_list.not_reviewed'))
+                    ->indicator(__('seo-content-ai::filament.article_list.review'))
+                    ->query(function (Builder $query, array $data): void {
+                        $value = (string) ($data['value'] ?? '0');
+                        if ($value === '1') {
+                            $query->where('is_reviewed', true);
+
+                            return;
+                        }
+
+                        $query->where(function (Builder $sub): void {
+                            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+                        });
+                    }),
                 Filter::make('seo_link')
-                    ->label('Link trong bài')
+                    ->label(__('seo-content-ai::filament.article_list.links_in_article'))
                     ->form([
                         Forms\Components\Hidden::make('url'),
                         Forms\Components\Hidden::make('type'),
@@ -256,12 +323,12 @@ class ArticleResource extends Resource
                         }
 
                         $type = $data['type'] ?? null;
-                        $typeLabel = $type === 'internal' ? 'nội bộ' : ($type === 'external' ? 'ngoài' : '');
+                        $typeLabel = $type === 'internal' ? 'internal' : ($type === 'external' ? 'external' : '');
 
-                        return 'Link' . ($typeLabel !== '' ? ' ' . $typeLabel : '') . ': ' . Str::limit($url, 48);
+                        return __('seo-content-ai::filament.article_list.link') . ($typeLabel !== '' ? ' ' . $typeLabel : '') . ': ' . Str::limit($url, 48);
                     }),
                 Filter::make('keyword')
-                    ->label('Từ khóa')
+                    ->label(__('seo-content-ai::filament.article_list.keyword'))
                     ->form([
                         Forms\Components\Hidden::make('keyword_id'),
                         Forms\Components\Hidden::make('usage'),
@@ -310,17 +377,17 @@ class ArticleResource extends Resource
                             ->value('phrase');
 
                         if (! is_string($phrase) || $phrase === '') {
-                            return __('Từ khóa') . ' #' . $keywordId;
+                            return __('seo-content-ai::filament.article_list.keyword') . ' #' . $keywordId;
                         }
 
                         $usage = (string) ($data['usage'] ?? '');
                         $suffix = match (true) {
-                            $usage === 'main' => ' (' . __('bài viết chính') . ')',
-                            $usage === 'internal_link', ($data['internal_link_only'] ?? '') === '1' => ' (' . __('có link nội bộ') . ')',
+                            $usage === 'main' => ' (' . __('seo-content-ai::filament.article_list.main_article') . ')',
+                            $usage === 'internal_link', ($data['internal_link_only'] ?? '') === '1' => ' (' . __('seo-content-ai::filament.article_list.has_internal_link') . ')',
                             default => '',
                         };
 
-                        return __('Từ khóa') . ': ' . $phrase . $suffix;
+                        return __('seo-content-ai::filament.article_list.keyword') . ': ' . $phrase . $suffix;
                     }),
             ], layout: FiltersLayout::AboveContent)
             ->filtersFormColumns([
@@ -330,6 +397,37 @@ class ArticleResource extends Resource
             ])
             ->persistFiltersInSession()
             ->actions([
+                Tables\Actions\Action::make('quick_view_wp')
+                    ->icon('heroicon-o-eye')
+                    ->iconButton()
+                    ->tooltip(__('seo-content-ai::filament.article_list.view_on_wordpress'))
+                    ->url(fn (SeoArticle $record): string => static::resolveWordPressPermalink($record) ?? '#')
+                    ->openUrlInNewTab()
+                    ->disabled(fn (SeoArticle $record): bool => blank(static::resolveWordPressPermalink($record))),
+                Tables\Actions\Action::make('approve_article')
+                    ->icon('heroicon-o-check-badge')
+                    ->iconButton()
+                    ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
+                    ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
+                        ? __('seo-content-ai::filament.article_list.already_reviewed')
+                        : __('seo-content-ai::filament.article_list.mark_reviewed'))
+                    ->requiresConfirmation()
+                    ->modalHeading(__('seo-content-ai::filament.article_list.review_article'))
+                    ->modalDescription(__('seo-content-ai::filament.article_list.review_article_description'))
+                    ->action(function (SeoArticle $record): void {
+                        $deletedCount = static::deleteLocalMediaForArticle($record);
+
+                        $record->forceFill([
+                            'is_reviewed' => true,
+                            'reviewed_at' => Carbon::now(),
+                        ])->save();
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
+                            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+                            ->success()
+                            ->send();
+                    }),
                 Tables\Actions\EditAction::make()
                     ->iconButton(),
                 Tables\Actions\DeleteAction::make()
@@ -337,6 +435,40 @@ class ArticleResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\BulkAction::make('approve_articles')
+                        ->label(__('seo-content-ai::filament.article_list.review_articles'))
+                        ->icon('heroicon-o-check-badge')
+                        ->color('success')
+                        ->requiresConfirmation()
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records): void {
+                            $approvedCount = 0;
+                            $deletedMediaCount = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof SeoArticle) {
+                                    continue;
+                                }
+
+                                $deletedMediaCount += static::deleteLocalMediaForArticle($record);
+
+                                $record->forceFill([
+                                    'is_reviewed' => true,
+                                    'reviewed_at' => Carbon::now(),
+                                ])->save();
+
+                                $approvedCount++;
+                            }
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.bulk_review_completed'))
+                                ->body(__('seo-content-ai::filament.article_list.bulk_review_body', [
+                                    'approved' => $approvedCount,
+                                    'deleted' => $deletedMediaCount,
+                                ]))
+                                ->success()
+                                ->send();
+                        }),
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
             ]);
@@ -354,6 +486,7 @@ class ArticleResource extends Resource
                     'seo_rank_math_score',
                     'wp_post_images',
                     'wp_featured_image_url',
+                    'wp_permalink',
                 ]),
             ]);
 
@@ -366,6 +499,12 @@ class ArticleResource extends Resource
 
         if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
             $query->where('site_id', $globalSiteId);
+        }
+
+        if (! SeoAccessControl::canAccessManagerFeatures()) {
+            $query->where(function (Builder $sub): void {
+                $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+            });
         }
 
         return $query;
@@ -404,6 +543,69 @@ class ArticleResource extends Resource
         return null;
     }
 
+    private static function resolveWordPressPermalink(SeoArticle $record): ?string
+    {
+        $record->loadMissing('site', 'articleMetas');
+
+        $cached = trim((string) ($record->articleMetas->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? ''));
+        if ($cached !== '') {
+            return $cached;
+        }
+
+        $site = $record->site;
+        if (! $site instanceof Site) {
+            return null;
+        }
+
+        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
+        if ($base === '') {
+            return null;
+        }
+
+        $slug = trim((string) ($record->slug ?? ''));
+        if ($slug !== '') {
+            return rtrim($base, '/') . '/' . ltrim($slug, '/');
+        }
+
+        $wpId = (int) ($record->wp_post_id ?? 0);
+        if ($wpId > 0) {
+            return rtrim($base, '/') . '/?p=' . $wpId;
+        }
+
+        return null;
+    }
+
+    private static function deleteLocalMediaForArticle(SeoArticle $article): int
+    {
+        $mediaRows = SeoMedia::query()
+            ->where('article_id', (int) $article->id)
+            ->get(['id', 'path']);
+
+        if ($mediaRows->isEmpty()) {
+            return 0;
+        }
+
+        $mediaIds = [];
+        foreach ($mediaRows as $media) {
+            $mediaIds[] = (int) $media->id;
+            $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+            if ($path !== '' && Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+            }
+        }
+
+        if ($mediaIds !== []) {
+            SeoMediaProcessingHistory::query()
+                ->whereIn('media_ref_id', $mediaIds)
+                ->where('source', SeoMediaProcessingHistory::SOURCE_LOCAL)
+                ->delete();
+
+            SeoMedia::query()->whereIn('id', $mediaIds)->delete();
+        }
+
+        return count($mediaIds);
+    }
+
     public static function canCreate(): bool
     {
         return false;
@@ -417,6 +619,21 @@ class ArticleResource extends Resource
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
         return SeoAccessControl::canAccessContentFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.articles');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.article');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.articles');
     }
 
     public static function getPages(): array

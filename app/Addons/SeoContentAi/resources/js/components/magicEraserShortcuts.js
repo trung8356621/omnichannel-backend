@@ -1,4 +1,4 @@
-/** Phím tắt công cụ — dùng Ctrl+Shift để tránh xung đột trình duyệt (B, P, …). */
+/** Tool shortcuts (Ctrl+Shift to avoid browser conflicts). */
 export const TOOL_SHORTCUT_LABELS = {
     brush: 'Ctrl+Shift+B',
     rect: 'Ctrl+Shift+M',
@@ -38,52 +38,52 @@ export function toolFromKeyboardEvent(e) {
     return null;
 }
 
-/** Danh sách phím tắt hiển thị trong panel — đồng bộ với handler trong MagicEraserApp. */
+/** Shortcut list displayed in panel. */
 export const MAGIC_ERASER_SHORTCUT_GROUPS = [
     {
         id: 'navigate',
-        label: 'Di chuyển & thu phóng',
+        label: 'Move & zoom',
         items: [
-            { keys: ['Space'], desc: 'Giữ + kéo — di chuyển ảnh' },
-            { keys: ['H'], desc: 'Giữ — di chuyển ảnh (tay)' },
-            { keys: ['Cuộn'], desc: 'Pan khi không giữ Ctrl' },
-            { keys: ['Ctrl', 'Cuộn'], desc: 'Zoom tại vị trí con trỏ' },
-            { keys: ['Ctrl', '+'], desc: 'Phóng to' },
-            { keys: ['Ctrl', '−'], desc: 'Thu nhỏ' },
-            { keys: ['Ctrl', '0'], desc: 'Vừa khung' },
+            { keys: ['Space'], desc: 'Hold + drag to pan image' },
+            { keys: ['H'], desc: 'Hold to pan image (hand)' },
+            { keys: ['Scroll'], desc: 'Pan without holding Ctrl' },
+            { keys: ['Ctrl', 'Scroll'], desc: 'Zoom at cursor position' },
+            { keys: ['Ctrl', '+'], desc: 'Zoom in' },
+            { keys: ['Ctrl', '−'], desc: 'Zoom out' },
+            { keys: ['Ctrl', '0'], desc: 'Fit view' },
         ],
     },
     {
         id: 'tools',
-        label: 'Công cụ',
+        label: 'Tools',
         items: [
-            { keys: ['Ctrl', 'Shift', 'B'], desc: 'Cọ vẽ vùng chọn' },
-            { keys: ['Ctrl', 'Shift', 'M'], desc: 'Hình chữ nhật' },
-            { keys: ['Ctrl', 'Shift', 'O'], desc: 'Hình tròn / elip' },
-            { keys: ['Ctrl', 'Shift', 'P'], desc: 'Đa giác' },
-            { keys: ['Ctrl', 'Shift', 'I'], desc: 'Hút màu' },
-            { keys: ['['], desc: 'Giảm cỡ cọ' },
-            { keys: [']'], desc: 'Tăng cỡ cọ' },
+            { keys: ['Ctrl', 'Shift', 'B'], desc: 'Brush selection' },
+            { keys: ['Ctrl', 'Shift', 'M'], desc: 'Rectangle' },
+            { keys: ['Ctrl', 'Shift', 'O'], desc: 'Circle / ellipse' },
+            { keys: ['Ctrl', 'Shift', 'P'], desc: 'Polygon' },
+            { keys: ['Ctrl', 'Shift', 'I'], desc: 'Eyedropper' },
+            { keys: ['['], desc: 'Decrease brush size' },
+            { keys: [']'], desc: 'Increase brush size' },
         ],
     },
     {
         id: 'edit',
-        label: 'Chỉnh sửa',
+        label: 'Edit',
         items: [
-            { keys: ['Enter'], desc: 'Tô màu vùng chọn / đóng đa giác' },
-            { keys: ['Ctrl', 'D'], desc: 'Bỏ chọn (xóa mask)' },
-            { keys: ['Ctrl', 'Z'], desc: 'Hoàn tác' },
-            { keys: ['Ctrl', 'Y'], desc: 'Làm lại' },
-            { keys: ['Ctrl', 'Shift', 'Z'], desc: 'Làm lại (thay Y)' },
-            { keys: ['Backspace'], desc: 'Xóa điểm cuối (đa giác)' },
-            { keys: ['Esc'], desc: 'Hủy đa giác / đóng trình chỉnh sửa' },
+            { keys: ['Enter'], desc: 'Fill selection / close polygon' },
+            { keys: ['Ctrl', 'D'], desc: 'Clear selection (mask)' },
+            { keys: ['Ctrl', 'Z'], desc: 'Undo' },
+            { keys: ['Ctrl', 'Y'], desc: 'Redo' },
+            { keys: ['Ctrl', 'Shift', 'Z'], desc: 'Redo (alternative)' },
+            { keys: ['Backspace'], desc: 'Remove last point (polygon)' },
+            { keys: ['Esc'], desc: 'Cancel polygon / close editor' },
         ],
     },
     {
         id: 'file',
-        label: 'Tệp',
+        label: 'File',
         items: [
-            { keys: ['Ctrl', 'S'], desc: 'Lưu ảnh' },
+            { keys: ['Ctrl', 'S'], desc: 'Save image' },
         ],
     },
 ];

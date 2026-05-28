@@ -5,18 +5,18 @@
 
             <div class="seo-settings-main">
                 <header class="seo-settings-header">
-                    <h1>{{ __('Tổng quan') }}</h1>
-                    <p>{{ __('Cài đặt chung và trạng thái model AI (đồng bộ, ưu tiên, quota).') }}</p>
+                    <h1>{{ __('Overview') }}</h1>
+                    <p>{{ __('General settings and AI model status (sync, priority, quota).') }}</p>
                 </header>
 
                 <section class="seo-ai-models-panel">
                     <div class="seo-ai-models-panel__head">
                         <div>
-                            <h2 class="seo-ai-models-panel__title">Trạng thái model AI</h2>
+                            <h2 class="seo-ai-models-panel__title">AI model status</h2>
                             <p class="seo-ai-models-panel__meta">
                                 {{ $aiModelsOverview['total_models'] ?? 0 }} model
                                 @if (filled($aiModelsOverview['last_synced_at'] ?? null))
-                                    · Cập nhật gần nhất: {{ $aiModelsOverview['last_synced_at'] }}
+                                    · Last updated: {{ $aiModelsOverview['last_synced_at'] }}
                                 @endif
                             </p>
                         </div>
@@ -27,8 +27,8 @@
                             wire:loading.attr="disabled"
                             wire:target="syncAllAiModels"
                         >
-                            <span wire:loading.remove wire:target="syncAllAiModels">Đồng bộ tất cả</span>
-                            <span wire:loading wire:target="syncAllAiModels">Đang đồng bộ…</span>
+                            <span wire:loading.remove wire:target="syncAllAiModels">Sync all</span>
+                            <span wire:loading wire:target="syncAllAiModels">Syncing...</span>
                         </x-filament::button>
                     </div>
 
@@ -51,7 +51,7 @@
                                         tag="a"
                                         :href="$this->aiConnectionEditUrl($connection['id'])"
                                     >
-                                        Sửa kết nối
+                                        Edit connection
                                     </x-filament::button>
                                     <x-filament::button
                                         type="button"
@@ -61,25 +61,25 @@
                                         wire:loading.attr="disabled"
                                         wire:target="syncConnectionAiModels({{ $connection['id'] }})"
                                     >
-                                        Đồng bộ
+                                        Sync
                                     </x-filament::button>
                                 </div>
                             </div>
 
                             @if (($connection['models'] ?? []) === [])
                                 <p class="seo-ai-models-empty">
-                                    Chưa có model trong <code>seo_ai_models</code>. Bấm «Đồng bộ» — Imagen / Nano Banana được seed từ catalog nội bộ (API Google thường không liệt kê Imagen).
+                                    No models in <code>seo_ai_models</code> yet. Click "Sync" - Imagen / Nano Banana are seeded from internal catalog (Google API often does not list Imagen).
                                 </p>
                             @else
                                 <div class="seo-ai-models-table-wrap">
                                     <table class="seo-ai-models-table">
                                         <thead>
                                             <tr>
-                                                <th>Nhóm đại diện</th>
-                                                <th>Model API (raw)</th>
-                                                <th>Ưu tiên</th>
-                                                <th>Trạng thái</th>
-                                                <th>Cập nhật</th>
+                                                <th>Representative group</th>
+                                                <th>API model (raw)</th>
+                                                <th>Priority</th>
+                                                <th>Status</th>
+                                                <th>Updated</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -96,7 +96,7 @@
                                                             {{ $model['status'] }}
                                                         </span>
                                                         @if (filled($model['last_error'] ?? null))
-                                                            <span class="seo-ai-models-table__err" title="{{ $model['last_error'] }}">Lỗi quota</span>
+                                                            <span class="seo-ai-models-table__err" title="{{ $model['last_error'] }}">Quota error</span>
                                                         @endif
                                                     </td>
                                                     <td class="seo-ai-models-table__time">{{ $model['updated_at'] ?? '—' }}</td>
@@ -109,7 +109,7 @@
                         </div>
                     @empty
                         <p class="seo-ai-models-empty">
-                            Chưa có kết nối AI. Thêm tại <a href="{{ \App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource::getUrl() }}" class="text-primary-600 underline">Cấu hình AI</a>.
+                            No AI connections yet. Add one in <a href="{{ \App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource::getUrl() }}" class="text-primary-600 underline">AI settings</a>.
                         </p>
                     @endforelse
                 </section>
@@ -119,7 +119,7 @@
 
                     <div class="flex justify-end">
                         <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('Lưu cấu hình FAQ') }}
+                            {{ __('Save FAQ settings') }}
                         </x-filament::button>
                     </div>
                 </form>

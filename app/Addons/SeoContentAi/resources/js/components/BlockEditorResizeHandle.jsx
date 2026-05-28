@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { t } from '../utils/i18n';
 
 const MIN_H = 96;
 const MAX_H = 720;
@@ -39,9 +40,7 @@ export function useBlockEditorHeight(blockId) {
     return { minHeight, setMinHeight, persistHeight, minH: MIN_H, maxH: MAX_H };
 }
 
-/**
- * Tay cầm resize góc dưới-phải của khối editor.
- */
+/** Resize handle for editor block. */
 export default function BlockEditorResizeHandle({ minHeight, onMinHeightChange, onResizeEnd, minH, maxH }) {
     const draggingRef = useRef(false);
 
@@ -79,8 +78,8 @@ export default function BlockEditorResizeHandle({ minHeight, onMinHeightChange, 
             className="seo-block-editor-resize"
             role="separator"
             aria-orientation="vertical"
-            aria-label="Kéo để đổi chiều cao vùng soạn thảo"
-            title="Kéo để đổi chiều cao"
+            aria-label={t('editor_resize_aria')}
+            title={t('editor_resize_title')}
             onMouseDown={(e) => e.preventDefault()}
             onPointerDown={onPointerDown}
         />

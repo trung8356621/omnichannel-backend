@@ -5,8 +5,8 @@
 
             <div class="seo-settings-main">
                 <header class="seo-settings-header">
-                    <h1>{{ __('Cấu hình AI') }}</h1>
-                    <p>{{ __('Quản lý API key và model mặc định cho Gemini, Claude.') }}</p>
+                    <h1>{{ __('AI settings') }}</h1>
+                    <p>{{ __('Manage API keys and default models for Gemini and Claude.') }}</p>
                 </header>
 
                 @if(count($this->getCachedHeaderActions()))

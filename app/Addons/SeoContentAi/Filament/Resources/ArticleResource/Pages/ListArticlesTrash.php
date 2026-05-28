@@ -16,9 +16,9 @@ class ListArticlesTrash extends ListRecords
 {
     protected static string $resource = ArticleResource::class;
 
-    protected static ?string $navigationLabel = 'Thùng rác';
+    protected static ?string $navigationLabel = 'Trash';
 
-    protected static ?string $title = 'Thùng rác bài viết';
+    protected static ?string $title = 'Article trash';
 
     protected static bool $shouldRegisterNavigation = false;
 
@@ -53,9 +53,9 @@ class ListArticlesTrash extends ListRecords
                 ->icon('heroicon-o-trash')
                 ->color('danger')
                 ->requiresConfirmation()
-                ->modalHeading('Dọn thùng rác')
-                ->modalDescription('Xóa vĩnh viễn tất cả bài viết trong thùng rác. Không thể hoàn tác.')
-                ->modalSubmitActionLabel('Xóa hết')
+                ->modalHeading('Empty trash')
+                ->modalDescription('Permanently delete all articles in trash. This cannot be undone.')
+                ->modalSubmitActionLabel('Delete all')
                 ->disabled(fn (): bool => ! $this->getTableQuery()->exists())
                 ->action(function (): void {
                     $query = $this->getTableQuery();
@@ -67,13 +67,13 @@ class ListArticlesTrash extends ListRecords
 
                     Notification::make()
                         ->title($count > 0
-                            ? "Đã xóa vĩnh viễn {$count} bài viết"
-                            : 'Thùng rác đã trống')
+                            ? "Permanently deleted {$count} articles"
+                            : 'Trash is already empty')
                         ->success()
                         ->send();
                 }),
             Actions\Action::make('backToList')
-                ->label('Danh sách bài viết')
+                ->label('Article list')
                 ->icon('heroicon-o-arrow-left')
                 ->url(ArticleResource::getUrl('index')),
         ];

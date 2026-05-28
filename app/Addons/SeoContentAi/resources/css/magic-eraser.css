@@ -548,6 +548,8 @@
 
 .magic-eraser-panel-footer {
     margin-top: auto;
+    display: flex;
+    gap: 10px;
 }
 
 .magic-eraser-btn-fill {

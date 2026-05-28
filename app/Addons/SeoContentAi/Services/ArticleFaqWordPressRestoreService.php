@@ -253,10 +253,6 @@ final class ArticleFaqWordPressRestoreService
             $article->articleMetas->firstWhere('meta_key', 'wp_post_content_source')?->meta_value ?? ''
         ));
 
-        if ($snapshot !== '' && $this->workflowParser->parseFaqsFromContent($snapshot) !== []) {
-            return $snapshot;
-        }
-
         $content = trim((string) ($post['post_content'] ?? ''));
         if ($content === '') {
             $scoring = is_array($post['scoring'] ?? null) ? $post['scoring'] : [];
@@ -275,6 +271,8 @@ final class ArticleFaqWordPressRestoreService
         $content = $this->workflowParser->stripFaqShortcodeArtifacts($content);
 
         if ($this->workflowParser->parseFaqsFromContent($content) !== []) {
+            $this->persistWordPressSourceSnapshot($article, $content);
+
             return $content;
         }
 
@@ -283,13 +281,17 @@ final class ArticleFaqWordPressRestoreService
             $foundHeading = $this->workflowParser->findFaqSectionHeadingInContent($headingSource);
             $heading = is_array($foundHeading) ? (string) ($foundHeading['text'] ?? 'FAQ') : 'FAQ';
             $faqBlock = $this->workflowParser->buildFaqSectionHtmlForEditor($wpFaqs, $heading);
+            $rebuilt = trim($content) . ($content !== '' ? "\n\n" : '') . $faqBlock;
+            $this->persistWordPressSourceSnapshot($article, $rebuilt);
 
-            return trim($content) . ($content !== '' ? "\n\n" : '') . $faqBlock;
+            return $rebuilt;
         }
 
         if ($snapshot !== '') {
             return $snapshot;
         }
+
+        $this->persistWordPressSourceSnapshot($article, $content);
 
         return $content;
     }

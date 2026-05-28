@@ -15,9 +15,9 @@ class SeoSettings extends Page
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Tùy chỉnh';
+    protected static ?string $navigationLabel = 'Settings';
 
-    protected static ?string $title = 'Tùy chỉnh';
+    protected static ?string $title = 'Settings';
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-settings-redirect';
 
@@ -34,5 +34,15 @@ class SeoSettings extends Page
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.settings');
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.nav.settings');
     }
 }

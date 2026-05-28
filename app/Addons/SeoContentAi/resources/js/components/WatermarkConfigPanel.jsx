@@ -5,6 +5,7 @@ import {
     fetchWatermarkSettings,
     saveWatermarkSettings,
 } from '../utils/watermarkApi';
+import { t } from '../utils/i18n';
 
 export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null, onBatchDone }) {
     const [selectedSiteIds, setSelectedSiteIds] = useState(
@@ -17,7 +18,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
     const [message, setMessage] = useState(null);
 
     const [type, setType] = useState('none');
-    const [textContent, setTextContent] = useState('Bản quyền hình ảnh');
+    const [textContent, setTextContent] = useState(t('watermark_copyright_text'));
     const [textColor, setTextColor] = useState('#ffffff');
     const [textSize, setTextSize] = useState(20);
     const [logoWidthPct, setLogoWidthPct] = useState(20);
@@ -34,7 +35,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
         fetchWatermarkSettings(configSiteId)
             .then((settings) => {
                 setType(settings.type ?? 'none');
-                setTextContent(settings.text_content ?? 'Bản quyền hình ảnh');
+                setTextContent(settings.text_content ?? t('watermark_copyright_text'));
                 setTextColor(settings.text_color ?? '#ffffff');
                 setTextSize(settings.text_size ?? 20);
                 setLogoWidthPct(settings.logo_width_pct ?? 20);
@@ -68,7 +69,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                 opacity,
             };
             const result = await saveWatermarkSettings(configSiteId, payload, logoFile);
-            setMessage({ type: 'success', text: result.message ?? 'Đã lưu cấu hình.' });
+            setMessage({ type: 'success', text: result.message ?? t('watermark_config_saved') });
             if (result.settings?.logo_url) {
                 setLogoPreview(result.settings.logo_url);
             }
@@ -85,7 +86,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
 
         if (
             !window.confirm(
-                'Đóng dấu hàng loạt sẽ ghi đè file ảnh nội bộ (tab Nội bộ) trên đĩa. Tiếp tục?',
+                t('watermark_batch_confirm_overwrite'),
             )
         ) {
             return;
@@ -95,7 +96,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
         setMessage(null);
         try {
             const result = await applyWatermarkBatch(selectedSiteIds);
-            setMessage({ type: 'success', text: result.message ?? 'Hoàn tất.' });
+            setMessage({ type: 'success', text: result.message ?? t('watermark_done') });
             onBatchDone?.();
         } catch (err) {
             setMessage({ type: 'error', text: err.message });
@@ -107,10 +108,10 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
     return (
         <div className="seo-watermark-config">
             <header className="seo-watermark-config__header">
-                <h2>Cấu hình đóng dấu bản quyền</h2>
+                <h2>{t('watermark_config_title')}</h2>
                 <p>
-                    Cấu hình mặc định theo từng website. Đóng dấu hàng loạt chỉ áp dụng cho ảnh{' '}
-                    <strong>Nội bộ (Laravel)</strong> trong tab thư viện.
+                    {t('watermark_config_desc_1')}{' '}
+                    <strong>{t('watermark_internal_laravel')}</strong> {t('watermark_config_desc_2')}
                 </p>
             </header>
 
@@ -120,7 +121,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
 
             <div className="seo-watermark-config__grid">
                 <section className="seo-watermark-config__panel">
-                    <h3>Website áp dụng hàng loạt</h3>
+                    <h3>{t('watermark_batch_sites')}</h3>
                     <ul className="seo-watermark-config__site-list">
                         {sites.map((site) => (
                             <li key={site.id}>
@@ -141,19 +142,19 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                         disabled={batching || !selectedSiteIds.length || type === 'none'}
                         onClick={handleBatch}
                     >
-                        {batching ? 'Đang đóng dấu…' : 'Áp dụng cho toàn bộ ảnh nội bộ'}
+                        {batching ? t('watermark_batching') : t('watermark_apply_all_internal')}
                     </button>
                 </section>
 
                 <section className="seo-watermark-config__panel">
-                    <h3>Cấu hình mặc định</h3>
-                    <label className="seo-watermark-config__label">Website cấu hình</label>
+                    <h3>{t('watermark_default_config')}</h3>
+                    <label className="seo-watermark-config__label">{t('watermark_config_site')}</label>
                     <select
                         value={configSiteId ?? ''}
                         onChange={(e) => setConfigSiteId(e.target.value ? Number(e.target.value) : null)}
                         className="seo-watermark-config__select"
                     >
-                        <option value="">— Chọn website —</option>
+                        <option value="">{t('watermark_choose_site')}</option>
                         {sites.map((site) => (
                             <option key={site.id} value={site.id}>
                                 {site.domain}
@@ -161,20 +162,20 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                         ))}
                     </select>
 
-                    {loading ? <p>Đang tải cấu hình…</p> : null}
+                    {loading ? <p>{t('watermark_loading_config')}</p> : null}
 
                     {configSiteId ? (
                         <div className="seo-watermark-config__form">
-                            <label className="seo-watermark-config__label">Loại</label>
+                            <label className="seo-watermark-config__label">{t('watermark_type')}</label>
                             <select value={type} onChange={(e) => setType(e.target.value)} className="seo-watermark-config__select">
-                                <option value="none">Không đóng dấu</option>
-                                <option value="text">Chữ (text)</option>
-                                <option value="image">Logo (ảnh)</option>
+                                <option value="none">{t('watermark_none')}</option>
+                                <option value="text">{t('watermark_text_type')}</option>
+                                <option value="image">{t('watermark_logo_type')}</option>
                             </select>
 
                             {type === 'text' ? (
                                 <>
-                                    <label className="seo-watermark-config__label">Nội dung chữ</label>
+                                    <label className="seo-watermark-config__label">{t('watermark_text_content')}</label>
                                     <input
                                         type="text"
                                         value={textContent}
@@ -201,7 +202,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
 
                             {type === 'image' ? (
                                 <>
-                                    <label className="seo-watermark-config__label">Logo watermark</label>
+                                    <label className="seo-watermark-config__label">{t('watermark_logo_file')}</label>
                                     <input
                                         type="file"
                                         accept="image/*"
@@ -211,7 +212,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                                         <img src={logoPreview} alt="" className="seo-watermark-config__logo" />
                                     ) : null}
                                     <label className="seo-watermark-config__label">
-                                        Chiều rộng logo (% ảnh): {logoWidthPct}%
+                                        {t('watermark_logo_width_pct')}: {logoWidthPct}%
                                     </label>
                                     <input
                                         type="range"
@@ -225,7 +226,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
 
                             {type !== 'none' ? (
                                 <>
-                                    <label className="seo-watermark-config__label">Vị trí</label>
+                                    <label className="seo-watermark-config__label">{t('watermark_position')}</label>
                                     <select
                                         value={position}
                                         onChange={(e) => setPosition(e.target.value)}
@@ -237,7 +238,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                                             </option>
                                         ))}
                                     </select>
-                                    <label className="seo-watermark-config__label">Độ mờ: {opacity}</label>
+                                    <label className="seo-watermark-config__label">{t('watermark_opacity')}: {opacity}</label>
                                     <input
                                         type="range"
                                         min={0.1}
@@ -255,7 +256,7 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                                 disabled={saving}
                                 onClick={handleSaveSettings}
                             >
-                                {saving ? 'Đang lưu…' : 'Lưu cấu hình'}
+                                {saving ? t('watermark_saving') : t('watermark_save_config')}
                             </button>
                         </div>
                     ) : null}

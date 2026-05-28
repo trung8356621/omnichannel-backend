@@ -43,7 +43,7 @@ class SeoMedia extends Model
 
     public static function placeholderLoadingUrl(): string
     {
-        return '/storage/assets/images/placeholder-loading.svg';
+        return '/assets/images/placeholder-loading.svg';
     }
 
     public static function placeholderLoadingPath(): string

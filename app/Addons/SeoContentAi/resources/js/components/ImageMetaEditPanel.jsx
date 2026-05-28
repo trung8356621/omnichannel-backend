@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getArticleImageSelection } from '../utils/articleImageExtension';
+import { t } from '../utils/i18n';
 
 export default function ImageMetaEditPanel({ editor, anchorRect, onClose }) {
     const panelRef = useRef(null);
@@ -62,10 +63,10 @@ export default function ImageMetaEditPanel({ editor, anchorRect, onClose }) {
             style={{ top: `${position.top}px`, left: `${position.left}px` }}
             onMouseDown={(e) => e.stopPropagation()}
         >
-            <p className="seo-image-meta-panel-title">Chỉnh sửa ảnh</p>
+            <p className="seo-image-meta-panel-title">{t('edit_image')}</p>
 
             <label className="seo-image-meta-label" htmlFor="seo-img-alt">
-                Văn bản thay thế (alt)
+                {t('alt_text')}
             </label>
             <input
                 id="seo-img-alt"
@@ -73,7 +74,7 @@ export default function ImageMetaEditPanel({ editor, anchorRect, onClose }) {
                 className="seo-image-meta-input"
                 value={alt}
                 onChange={(e) => setAlt(e.target.value)}
-                placeholder="Mô tả ảnh cho SEO và trợ năng"
+                placeholder={t('image_alt_placeholder')}
             />
 
             <label className="seo-image-meta-label" htmlFor="seo-img-title">
@@ -85,11 +86,11 @@ export default function ImageMetaEditPanel({ editor, anchorRect, onClose }) {
                 className="seo-image-meta-input"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Thuộc tính title của thẻ img"
+                placeholder={t('image_title_placeholder')}
             />
 
             <label className="seo-image-meta-label" htmlFor="seo-img-caption">
-                Chú thích (caption)
+                {t('caption')}
             </label>
             <textarea
                 id="seo-img-caption"
@@ -97,15 +98,15 @@ export default function ImageMetaEditPanel({ editor, anchorRect, onClose }) {
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
                 rows={2}
-                placeholder="Hiển thị dưới ảnh (figcaption)"
+                placeholder={t('image_caption_placeholder')}
             />
 
             <div className="seo-image-meta-actions">
                 <button type="button" className="seo-image-meta-btn" onClick={onClose}>
-                    Hủy
+                    {t('cancel')}
                 </button>
                 <button type="button" className="seo-image-meta-btn is-primary" onClick={applyMeta}>
-                    Áp dụng
+                    {t('apply')}
                 </button>
             </div>
         </div>

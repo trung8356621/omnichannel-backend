@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 /**
  * @param {'before'|'after'} position
@@ -30,8 +31,8 @@ export function BlockInsertBar({
                     e.stopPropagation();
                     onMoveUp?.();
                 }}
-                title="Đưa đoạn lên trên"
-                aria-label="Đưa đoạn lên trên"
+                title="Move block up"
+                aria-label="Move block up"
             >
                 <ChevronUp size={16} strokeWidth={2.5} />
             </button>
@@ -43,9 +44,9 @@ export function BlockInsertBar({
                     e.stopPropagation();
                     onToggle();
                 }}
-                title={position === 'before' ? 'Thêm nội dung phía trên' : 'Thêm nội dung phía dưới'}
+                title={position === 'before' ? 'Insert content above' : 'Insert content below'}
                 aria-expanded={open}
-                aria-label={position === 'before' ? 'Thêm phía trên' : 'Thêm phía dưới'}
+                aria-label={position === 'before' ? 'Insert above' : 'Insert below'}
             >
                 <Plus size={16} strokeWidth={2.5} />
             </button>
@@ -58,8 +59,8 @@ export function BlockInsertBar({
                     e.stopPropagation();
                     onMoveDown?.();
                 }}
-                title="Đưa đoạn xuống dưới"
-                aria-label="Đưa đoạn xuống dưới"
+                title="Move block down"
+                aria-label="Move block down"
             >
                 <ChevronDown size={16} strokeWidth={2.5} />
             </button>
@@ -97,7 +98,7 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
                 onClick={() => onInsert('text')}
             >
                 <FileText size={18} strokeWidth={1.75} />
-                <span>Đoạn văn</span>
+                <span>Paragraph</span>
             </button>
             <button
                 type="button"
@@ -105,7 +106,7 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
                 onClick={() => onInsert('image')}
             >
                 <ImageIcon size={18} strokeWidth={1.75} />
-                <span>Ảnh</span>
+                <span>{t('image_block_label')}</span>
             </button>
             <button
                 type="button"
@@ -113,8 +114,8 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
                 disabled={faqShortcodeDisabled}
                 title={
                     faqShortcodeDisabled
-                        ? 'Bài đã có shortcode [omi_faq] — chỉ dùng một khối FAQ'
-                        : 'Chèn shortcode [omi_faq]'
+                        ? 'FAQ shortcode already exists [omi_faq]'
+                        : 'Insert FAQ shortcode [omi_faq]'
                 }
                 onClick={() => {
                     if (!faqShortcodeDisabled) {
@@ -151,7 +152,7 @@ export function ImageBlockPickerBox({
         return (
             <div className="seo-image-block-picker">
                 <button type="button" className="seo-image-block-picker__back" onClick={() => setMode('actions')}>
-                    ← Quay lại
+                    ← Back
                 </button>
                 <div className="seo-image-block-picker__url-row">
                     <input
@@ -159,7 +160,7 @@ export function ImageBlockPickerBox({
                         className="seo-image-block-picker__input"
                         value={importUrl}
                         onChange={(e) => setImportUrl(e.target.value)}
-                        placeholder="https://example.com/anh.jpg"
+                        placeholder="https://example.com/image.jpg"
                         disabled={importLoading}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && importUrl.trim() && !importLoading) {
@@ -174,7 +175,7 @@ export function ImageBlockPickerBox({
                         disabled={!importUrl.trim() || importLoading || !onImportFromUrl}
                         onClick={() => onImportFromUrl?.(importUrl.trim())}
                     >
-                        {importLoading ? 'Đang tải…' : 'Import'}
+                        {importLoading ? t('processing') : 'Import'}
                     </button>
                 </div>
             </div>
@@ -184,17 +185,17 @@ export function ImageBlockPickerBox({
     if (mode === 'generate') {
         return (
             <div className="seo-image-block-picker seo-image-block-picker--generate">
-                <p className="seo-image-block-picker__title">Mô tả ảnh cần tạo</p>
+                <p className="seo-image-block-picker__title">{t('compose_placeholder')}</p>
                 <textarea
                     className="seo-image-block-picker__textarea"
                     rows={4}
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="Ví dụ: Túi vải không dệt màu trắng, in logo, nền studio…"
+                    placeholder="e.g. White nonwoven tote bag, logo print, studio background..."
                 />
                 <div className="seo-image-block-picker__actions">
                     <button type="button" className="seo-image-block-picker__btn" onClick={() => setMode('actions')}>
-                        Quay lại
+                        {t('cancel')}
                     </button>
                     <button
                         type="button"
@@ -202,7 +203,7 @@ export function ImageBlockPickerBox({
                         disabled={!prompt.trim()}
                         onClick={() => onGenerateRequest(prompt.trim())}
                     >
-                        Gửi mô tả
+                        {t('submit_retry')}
                     </button>
                 </div>
             </div>
@@ -221,17 +222,17 @@ export function ImageBlockPickerBox({
                     onOpenMediaLibrary(e);
                 }}
             >
-                Chọn ảnh
+                {t('image_block_label')}
             </button>
             <button type="button" className="seo-image-block-picker__choice is-secondary" onClick={() => setMode('generate')}>
-                Tạo ảnh
+                {t('generate_image')}
             </button>
             <button
                 type="button"
                 className="seo-image-block-picker__choice is-secondary"
                 onClick={() => setMode('import')}
             >
-                Down nhanh
+                Quick download
             </button>
         </div>
     );

@@ -19,7 +19,7 @@ class TaskWorkflowBuilder extends Page
 
     protected static string $view = 'seo-content-ai::filament.resources.task-resource.pages.task-workflow-builder';
 
-    protected static ?string $title = 'Tạo quy trình (Workflow)';
+    protected static ?string $title = 'Create workflow';
 
     public ?int $taskId = null;
 
@@ -47,7 +47,7 @@ class TaskWorkflowBuilder extends Page
     {
         if ($taskName === '') {
             Notification::make()
-                ->title('Vui lòng nhập tên quy trình')
+                ->title('Please enter workflow name')
                 ->danger()
                 ->send();
 
@@ -65,7 +65,7 @@ class TaskWorkflowBuilder extends Page
         $this->taskId = (int) $task->id;
 
         Notification::make()
-            ->title('Đã lưu quy trình thành công!')
+            ->title('Workflow saved successfully')
             ->success()
             ->send();
 
@@ -82,6 +82,6 @@ class TaskWorkflowBuilder extends Page
 
     public function getTaskName(): string
     {
-        return 'Quy trình SEO mới';
+        return 'New SEO workflow';
     }
 }

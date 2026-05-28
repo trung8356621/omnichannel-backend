@@ -36,11 +36,11 @@ class SeoProjectResource extends Resource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Dự án Content';
+    protected static ?string $navigationLabel = 'Content projects';
 
-    protected static ?string $modelLabel = 'Dự án Content';
+    protected static ?string $modelLabel = 'Content project';
 
-    protected static ?string $pluralModelLabel = 'Dự án Content';
+    protected static ?string $pluralModelLabel = 'Content projects';
 
     protected static ?int $navigationSort = 8;
 
@@ -64,23 +64,38 @@ class SeoProjectResource extends Resource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.content_projects');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.content_project');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.content_projects');
+    }
+
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
-                Forms\Components\Section::make('Thông tin dự án')
+                Forms\Components\Section::make(__('seo-content-ai::filament.projects.project_info'))
                     ->schema([
                         Forms\Components\Placeholder::make('project_name_preview')
-                            ->label('Tên dự án')
+                            ->label(__('seo-content-ai::filament.projects.project_name'))
                             ->content(
                                 fn (Get $get): string => $get('month')
                                     ? SeoProject::defaultNameFromMonth($get('month'))
-                                    : 'project —/—',
+                                    : __('seo-content-ai::filament.projects.project_name_placeholder'),
                             )
                             ->columnSpanFull(),
 
                         Forms\Components\Select::make('user_id')
-                            ->label('Chỉ định Writer')
+                            ->label(__('seo-content-ai::filament.projects.assign_writer'))
                             ->options(fn (): array => static::userSelectOptions())
                             ->searchable()
                             ->preload()
@@ -88,7 +103,7 @@ class SeoProjectResource extends Resource
                             ->native(false),
 
                         Forms\Components\DatePicker::make('month')
-                            ->label('Tháng thực hiện')
+                            ->label(__('seo-content-ai::filament.projects.execution_month'))
                             ->native(false)
                             ->displayFormat('m/Y')
                             ->format('Y-m-d')
@@ -97,52 +112,56 @@ class SeoProjectResource extends Resource
                             ->live(),
 
                         Forms\Components\Select::make('status')
-                            ->label('Trạng thái')
+                            ->label(__('seo-content-ai::filament.projects.status'))
                             ->options(SeoProject::statusOptions())
                             ->default(SeoProject::STATUS_RUNNING)
                             ->required()
                             ->native(false),
 
                         Forms\Components\Textarea::make('description')
-                            ->label('Mô tả')
+                            ->label(__('seo-content-ai::filament.projects.description'))
                             ->rows(3)
                             ->columnSpanFull(),
                     ])
                     ->columns(2),
 
-                Forms\Components\Section::make('Danh sách bài viết / Từ khóa')
-                    ->description('Tổng số bài không được vượt quá số ngày thực tế trong tháng đã chọn. Hệ thống tự gán KPI theo ngày 1, 2, 3… trong tháng.')
+                Forms\Components\Section::make(__('seo-content-ai::filament.projects.article_keyword_list'))
+                    ->description(__('seo-content-ai::filament.projects.article_keyword_list_description'))
                     ->schema([
                         Forms\Components\Placeholder::make('month_limit_hint')
-                            ->label('Giới hạn tháng')
+                            ->label(__('seo-content-ai::filament.projects.month_limit'))
                             ->content(function (Get $get): string {
                                 $month = $get('month');
                                 if (! $month) {
-                                    return 'Chọn tháng để xem giới hạn số bài.';
+                                    return __('seo-content-ai::filament.projects.choose_month_to_view_limit');
                                 }
 
                                 $carbon = Carbon::parse($month)->startOfMonth();
                                 $max = $carbon->daysInMonth;
                                 $count = count($get('tasks_data') ?? []);
 
-                                return "Tháng {$carbon->format('m/Y')}: tối đa {$max} bài · đang có {$count} mục.";
+                                return __('seo-content-ai::filament.projects.month_limit_hint', [
+                                    'month' => $carbon->format('m/Y'),
+                                    'max' => $max,
+                                    'count' => $count,
+                                ]);
                             })
                             ->columnSpanFull(),
 
                         Forms\Components\Actions::make([
                             Action::make('import_keywords')
-                                ->label('Danh sách từ khóa')
+                                ->label(__('seo-content-ai::filament.projects.keyword_list'))
                                 ->icon('heroicon-o-queue-list')
                                 ->iconButton()
-                                ->tooltip('Danh sách từ khóa — dán mỗi dòng một từ khóa')
+                                ->tooltip(__('seo-content-ai::filament.projects.keyword_list_tooltip'))
                                 ->color('gray')
-                                ->modalHeading('Nhập danh sách từ khóa')
-                                ->modalDescription('Mỗi dòng một từ khóa (hoặc dòng bắt đầu bằng -). Các mục sẽ được thêm vào danh sách bên dưới.')
-                                ->modalSubmitActionLabel('Thêm vào dự án')
+                                ->modalHeading(__('seo-content-ai::filament.projects.import_keyword_list'))
+                                ->modalDescription(__('seo-content-ai::filament.projects.import_keyword_list_description'))
+                                ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.add_to_project'))
                                 ->form([
                                     Forms\Components\Textarea::make('keywords_text')
-                                        ->label('Từ khóa')
-                                        ->placeholder("túi vải không dệt\ncách may túi vải\n- túi canvas")
+                                        ->label(__('seo-content-ai::filament.projects.keywords'))
+                                        ->placeholder("non-woven bags\nhow to sew fabric bags\n- canvas bags")
                                         ->rows(12)
                                         ->required(),
                                 ])
@@ -151,25 +170,25 @@ class SeoProjectResource extends Resource
                                 }),
 
                             Action::make('ai_generate_keywords')
-                                ->label('AI Generator')
+                                ->label(__('seo-content-ai::filament.projects.ai_generator'))
                                 ->icon('heroicon-o-sparkles')
                                 ->iconButton()
-                                ->tooltip('AI Generator — sinh từ khóa theo prompt quy trình')
+                                ->tooltip(__('seo-content-ai::filament.projects.ai_generator_tooltip'))
                                 ->color('primary')
-                                ->modalHeading('AI Generator — từ khóa dự án')
-                                ->modalDescription('Sinh từ khóa theo prompt đã cấu hình tại SEO → Tùy chỉnh → Quy trình.')
-                                ->modalSubmitActionLabel('Sinh từ khóa')
+                                ->modalHeading(__('seo-content-ai::filament.projects.ai_generator_heading'))
+                                ->modalDescription(__('seo-content-ai::filament.projects.ai_generator_description'))
+                                ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.generate_keywords'))
                                 ->form([
                                     Forms\Components\TextInput::make('count')
-                                        ->label('Số từ khóa cần sinh')
+                                        ->label(__('seo-content-ai::filament.projects.number_of_keywords'))
                                         ->numeric()
                                         ->minValue(1)
                                         ->maxValue(31)
                                         ->default(10)
                                         ->required(),
                                     Forms\Components\Textarea::make('brief')
-                                        ->label('Gợi ý thêm cho AI')
-                                        ->placeholder('Ngành hàng, đối tượng, chủ đề ưu tiên…')
+                                        ->label(__('seo-content-ai::filament.projects.additional_ai_brief'))
+                                        ->placeholder(__('seo-content-ai::filament.projects.additional_ai_brief_placeholder'))
                                         ->rows(4),
                                 ])
                                 ->action(function (array $data, Get $get, Set $set): void {
@@ -179,10 +198,10 @@ class SeoProjectResource extends Resource
                             ->columnSpanFull(),
 
                         Forms\Components\Repeater::make('tasks_data')
-                            ->label('Các hạng mục bài viết')
+                            ->label(__('seo-content-ai::filament.projects.article_items'))
                             ->schema([
                                 Forms\Components\Select::make('site_id')
-                                    ->label('Tên miền')
+                                    ->label(__('seo-content-ai::filament.projects.domain'))
                                     ->options(fn (): array => static::siteSelectOptions())
                                     ->default(fn (): ?int => SeoAccessControl::globalSiteId())
                                     ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
@@ -195,7 +214,7 @@ class SeoProjectResource extends Resource
                                         : null),
 
                                 Forms\Components\Select::make('type')
-                                    ->label('Loại bài')
+                                    ->label(__('seo-content-ai::filament.projects.article_type'))
                                     ->options(SeoProjectTask::typeOptions())
                                     ->default(SeoProjectTask::TYPE_NEW_KEYWORD)
                                     ->required()
@@ -204,24 +223,24 @@ class SeoProjectResource extends Resource
 
                                 Forms\Components\TextInput::make('source_content')
                                     ->label(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_REWRITE
-                                        ? 'Tiêu đề bài cần sửa'
-                                        : 'Từ khóa')
+                                        ? __('seo-content-ai::filament.projects.title_of_article_to_rewrite')
+                                        : __('seo-content-ai::filament.projects.keyword'))
                                     ->placeholder(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_REWRITE
-                                        ? 'VD: Hướng dẫn may túi vải cũ…'
-                                        : 'VD: cách may túi vải')
+                                        ? __('seo-content-ai::filament.projects.title_to_rewrite_placeholder')
+                                        : __('seo-content-ai::filament.projects.keyword_placeholder'))
                                     ->required()
                                     ->maxLength(500),
 
                                 Forms\Components\Textarea::make('description')
-                                    ->label('Mô tả')
-                                    ->placeholder('Gợi ý nội dung, góc bài, đối tượng đọc, CTA…')
+                                    ->label(__('seo-content-ai::filament.projects.description'))
+                                    ->placeholder(__('seo-content-ai::filament.projects.description_placeholder'))
                                     ->rows(3)
                                     ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD)
                                     ->columnSpanFull(),
                             ])
                             ->columns(2)
                             ->defaultItems(1)
-                            ->addActionLabel('Thêm bài viết')
+                            ->addActionLabel(__('seo-content-ai::filament.projects.add_article'))
                             ->reorderable()
                             ->live()
                             ->columnSpanFull()
@@ -236,7 +255,7 @@ class SeoProjectResource extends Resource
                                         app(SeoProjectTaskSyncService::class)
                                             ->assertWithinMonthlyLimit($month, is_array($value) ? $value : []);
                                     } catch (\Illuminate\Validation\ValidationException $e) {
-                                        $fail($e->validator->errors()->first('tasks_data') ?? 'Vượt giới hạn số bài trong tháng.');
+                                        $fail($e->validator->errors()->first('tasks_data') ?? __('seo-content-ai::filament.projects.exceeded_monthly_limit'));
                                     }
                                 },
                             ]),
@@ -249,29 +268,29 @@ class SeoProjectResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label('Tên dự án')
+                    ->label(__('seo-content-ai::filament.projects.project_name'))
                     ->searchable()
                     ->sortable()
                     ->weight('bold'),
 
                 Tables\Columns\TextColumn::make('user.name')
-                    ->label('Người phụ trách')
+                    ->label(__('seo-content-ai::filament.projects.owner'))
                     ->sortable()
                     ->searchable(),
 
                 Tables\Columns\TextColumn::make('month')
-                    ->label('Tháng')
+                    ->label(__('seo-content-ai::filament.projects.month'))
                     ->date('m/Y')
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('total_tasks')
-                    ->label('Số bài')
+                    ->label(__('seo-content-ai::filament.projects.total_items'))
                     ->numeric()
                     ->alignCenter()
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('tasks_completed')
-                    ->label('Hoàn thành')
+                    ->label(__('seo-content-ai::filament.projects.completed'))
                     ->getStateUsing(
                         fn (SeoProject $record): string => (string) $record->tasks()
                             ->where('status', SeoProjectTask::STATUS_COMPLETED)
@@ -280,7 +299,7 @@ class SeoProjectResource extends Resource
                     ->alignCenter(),
 
                 Tables\Columns\TextColumn::make('status')
-                    ->label('Trạng thái')
+                    ->label(__('seo-content-ai::filament.projects.status'))
                     ->badge()
                     ->formatStateUsing(fn (string $state): string => SeoProject::statusOptions()[$state] ?? $state)
                     ->color(fn (string $state): string => match ($state) {
@@ -292,7 +311,7 @@ class SeoProjectResource extends Resource
                     }),
 
                 Tables\Columns\TextColumn::make('updated_at')
-                    ->label('Cập nhật')
+                    ->label(__('seo-content-ai::filament.projects.updated'))
                     ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
@@ -300,17 +319,17 @@ class SeoProjectResource extends Resource
             ->defaultSort('month', 'desc')
             ->filters([
                 Tables\Filters\SelectFilter::make('status')
-                    ->label('Trạng thái')
+                    ->label(__('seo-content-ai::filament.projects.status'))
                     ->options(SeoProject::statusOptions()),
 
                 Tables\Filters\SelectFilter::make('user_id')
-                    ->label('Writer')
+                    ->label(__('seo-content-ai::filament.projects.writer'))
                     ->options(fn (): array => static::userSelectOptions()),
 
                 Tables\Filters\Filter::make('month')
                     ->form([
                         Forms\Components\DatePicker::make('month')
-                            ->label('Tháng')
+                            ->label(__('seo-content-ai::filament.projects.month'))
                             ->native(false)
                             ->displayFormat('m/Y')
                             ->format('Y-m-d'),
@@ -390,7 +409,7 @@ class SeoProjectResource extends Resource
         $month = $get('month');
         if (! $month) {
             Notification::make()
-                ->title('Chọn tháng thực hiện trước')
+                ->title(__('seo-content-ai::filament.projects.select_month_first'))
                 ->warning()
                 ->send();
 
@@ -400,7 +419,7 @@ class SeoProjectResource extends Resource
         $keywords = app(SeoProjectKeywordListParser::class)->parse($rawText);
         if ($keywords === []) {
             Notification::make()
-                ->title('Không có từ khóa hợp lệ')
+                ->title(__('seo-content-ai::filament.projects.no_valid_keywords'))
                 ->warning()
                 ->send();
 
@@ -416,7 +435,7 @@ class SeoProjectResource extends Resource
             app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($month, $merged);
         } catch (ValidationException $exception) {
             Notification::make()
-                ->title('Vượt giới hạn tháng')
+                ->title(__('seo-content-ai::filament.projects.monthly_limit_exceeded'))
                 ->body($exception->validator->errors()->first('tasks_data') ?? '')
                 ->danger()
                 ->send();
@@ -427,7 +446,7 @@ class SeoProjectResource extends Resource
         $set('tasks_data', $merged);
 
         Notification::make()
-            ->title('Đã thêm ' . count($keywords) . ' từ khóa')
+            ->title(__('seo-content-ai::filament.projects.added_keywords', ['count' => count($keywords)]))
             ->success()
             ->send();
     }
@@ -440,7 +459,7 @@ class SeoProjectResource extends Resource
         $month = $get('month');
         if (! $month) {
             Notification::make()
-                ->title('Chọn tháng thực hiện trước')
+                ->title(__('seo-content-ai::filament.projects.select_month_first'))
                 ->warning()
                 ->send();
 
@@ -453,8 +472,8 @@ class SeoProjectResource extends Resource
 
         if ($remaining === 0) {
             Notification::make()
-                ->title('Đã đủ số bài trong tháng')
-                ->body("Tối đa {$maxMonth} mục.")
+                ->title(__('seo-content-ai::filament.projects.monthly_capacity_reached'))
+                ->body(__('seo-content-ai::filament.projects.maximum_items', ['max' => $maxMonth]))
                 ->warning()
                 ->send();
 
@@ -472,7 +491,7 @@ class SeoProjectResource extends Resource
             );
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
-                ->title('Không sinh được từ khóa')
+                ->title(__('seo-content-ai::filament.projects.unable_to_generate_keywords'))
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
@@ -486,7 +505,7 @@ class SeoProjectResource extends Resource
             app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($month, $merged);
         } catch (ValidationException $exception) {
             Notification::make()
-                ->title('Vượt giới hạn tháng')
+                ->title(__('seo-content-ai::filament.projects.monthly_limit_exceeded'))
                 ->body($exception->validator->errors()->first('tasks_data') ?? '')
                 ->danger()
                 ->send();
@@ -497,7 +516,7 @@ class SeoProjectResource extends Resource
         $set('tasks_data', $merged);
 
         Notification::make()
-            ->title('AI đã thêm ' . count($keywords) . ' từ khóa')
+            ->title(__('seo-content-ai::filament.projects.ai_added_keywords', ['count' => count($keywords)]))
             ->success()
             ->send();
     }

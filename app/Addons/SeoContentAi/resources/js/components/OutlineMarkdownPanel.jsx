@@ -46,19 +46,19 @@ export default function OutlineMarkdownPanel({ articleId, initialOutline = '' })
         <div className="seo-outline-panel">
             <p className="seo-outline-panel-hint">
                 {hasOutline
-                    ? 'Dàn ý markdown (lưu cục bộ trên trình duyệt).'
-                    : 'Chưa có dàn ý — bạn có thể nhập markdown bên dưới.'}
+                    ? 'Markdown outline (stored locally in browser).'
+                    : 'No outline yet — you can type markdown below.'}
             </p>
             <textarea
                 className="seo-outline-editor"
                 value={markdown}
                 onChange={handleChange}
-                placeholder={'# Tiêu đề\n\n## Mục 1\n- Ý chính…'}
+                placeholder={'# Title\n\n## Section 1\n- Main point...'}
                 spellCheck={false}
             />
             {hasOutline ? (
                 <details className="seo-outline-preview-wrap">
-                    <summary className="seo-outline-preview-summary">Xem trước</summary>
+                    <summary className="seo-outline-preview-summary">Preview</summary>
                     <pre className="seo-outline-preview">{markdown}</pre>
                 </details>
             ) : null}

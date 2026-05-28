@@ -33,7 +33,7 @@ class PromptResource extends Resource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationLabel = 'Quản lý Prompts';
+    protected static ?string $navigationLabel = 'Prompt management';
 
     protected static ?string $modelLabel = 'Prompt';
 
@@ -59,6 +59,21 @@ class PromptResource extends Resource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.prompt_management');
+    }
+
+    public static function getModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.prompt');
+    }
+
+    public static function getPluralModelLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.prompts');
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -67,67 +82,67 @@ class PromptResource extends Resource
                     ->schema([
                         Forms\Components\Group::make()
                             ->schema([
-                                Forms\Components\Section::make('Thông tin chung')
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.general_info'))
                                     ->schema([
                                         Forms\Components\TextInput::make('name')
-                                            ->label('Tên Prompt')
+                                            ->label(__('seo-content-ai::filament.prompt.name'))
                                             ->required()
                                             ->maxLength(255),
                                         Forms\Components\Textarea::make('description')
-                                            ->label('Miêu tả')
+                                            ->label(__('seo-content-ai::filament.prompt.description'))
                                             ->rows(3)
                                             ->columnSpanFull(),
                                         Forms\Components\Select::make('ai_connection_id')
-                                            ->label('Kết nối AI')
+                                            ->label(__('seo-content-ai::filament.prompt.ai_connection'))
                                             ->options(fn (): array => self::aiConnectionOptions())
                                             ->searchable()
                                             ->required()
                                             ->live()
                                             ->native(false)
-                                            ->placeholder('Chọn AI để thực thi Prompt này'),
+                                            ->placeholder('Choose AI connection for this prompt'),
                                         Forms\Components\Select::make('model_category')
-                                            ->label('Lựa chọn Model đại diện')
+                                            ->label(__('seo-content-ai::filament.prompt.model_category'))
                                             ->options(fn (Get $get): array => self::modelCategoryOptionsForConnection($get('ai_connection_id')))
                                             ->default(fn (Get $get): ?string => self::defaultModelCategoryForConnection($get('ai_connection_id')))
                                             ->required()
                                             ->native(false),
                                         Forms\Components\Radio::make('tools')
-                                            ->label('Công cụ')
+                                            ->label(__('seo-content-ai::filament.prompt.tool'))
                                             ->options([
-                                                'default' => 'Mặc định (văn bản)',
-                                                'image' => 'Hình ảnh (Gemini sinh ảnh)',
-                                                'video' => 'Video (URL thủ công)',
+                                                'default' => 'Default (text)',
+                                                'image' => 'Image (Gemini image generation)',
+                                                'video' => 'Video (manual URL)',
                                             ])
                                             ->default('default')
                                             ->inline(),
                                         Forms\Components\Toggle::make('is_active')
-                                            ->label('Kích hoạt')
+                                            ->label(__('seo-content-ai::filament.prompt.active'))
                                             ->default(true),
                                     ]),
-                                Forms\Components\Section::make('Khai báo Biến (Variables)')
-                                    ->description('Tự động đồng bộ từ {{tên_biến}} trong Markdown khi lưu. Biến mặc định ({{input}}, {{loai_san_pham}}, {{PARENT_RESULT}}, …) không cần khai báo.')
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.variables'))
+                                    ->description('Auto-sync from {{variable_name}} in Markdown on save. Default runtime variables ({{input}}, {{loai_san_pham}}, {{PARENT_RESULT}}, ...) do not need declaration.')
                                     ->schema([
                                         Forms\Components\Repeater::make('variables')
                                             ->label('')
                                             ->schema([
                                                 Forms\Components\TextInput::make('name')
-                                                    ->label('Tên biến (VD: focus_keyword)')
+                                                    ->label('Variable name (e.g. focus_keyword)')
                                                     ->required()
                                                     ->maxLength(128),
                                                 Forms\Components\TextInput::make('description')
-                                                    ->label('Ghi chú')
+                                                    ->label('Note')
                                                     ->maxLength(255),
                                             ])
                                             ->defaultItems(0)
-                                            ->addActionLabel('Thêm biến')
+                                            ->addActionLabel(__('seo-content-ai::filament.prompt.add_variable'))
                                             ->reorderable()
                                             ->collapsible(),
                                     ]),
                             ])
                             ->columnSpan(4),
 
-                        Forms\Components\Section::make('Nội dung Prompt (Markdown)')
-                            ->description('Dùng H1 (#) để tách block: # Vai trò, # Bối cảnh, # Nhiệm vụ: ..., # Nhiệm vụ phụ thuộc: ...')
+                        Forms\Components\Section::make(__('seo-content-ai::filament.prompt.content_markdown'))
+                            ->description('Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
                             ->schema([
                                 Forms\Components\MarkdownEditor::make('markdown_content')
                                     ->label('')
@@ -145,10 +160,10 @@ class PromptResource extends Resource
                                         'redo',
                                     ])
                                     ->placeholder(
-                                        "# Vai trò\nBạn là chuyên gia...\n\n"
-                                        . "# Bối cảnh\nHệ thống...\n\n"
-                                        . "# Nhiệm vụ: Ảnh chính\nChụp ảnh sản phẩm...\n\n"
-                                        . "# Nhiệm vụ phụ thuộc: Ảnh chụp bên hông\n..."
+                                        "# Role\nYou are an expert...\n\n"
+                                        . "# Context\nSystem...\n\n"
+                                        . "# Task: Main image\nCapture product image...\n\n"
+                                        . "# Sub-task: Side shot\n..."
                                     ),
                             ])
                             ->columnSpan(8),
@@ -226,13 +241,13 @@ class PromptResource extends Resource
         foreach ($parts as $part) {
             $role = strtolower(trim((string) ($part->role ?? '')));
             $heading = match ($role) {
-                'role' => 'Vai trò',
-                'context' => 'Bối cảnh',
-                'task' => 'Nhiệm vụ',
-                'sub_task' => 'Nhiệm vụ phụ thuộc',
-                'constraints' => 'Ràng buộc',
-                'formatting' => 'Định dạng đầu ra',
-                'global_constraints' => 'Ràng buộc tổng (Global)',
+                'role' => 'Role',
+                'context' => 'Context',
+                'task' => 'Task',
+                'sub_task' => 'Sub-task',
+                'constraints' => 'Constraints',
+                'formatting' => 'Output format',
+                'global_constraints' => 'Global constraints',
                 default => ucfirst($role !== '' ? $role : 'context'),
             };
 
@@ -251,13 +266,13 @@ class PromptResource extends Resource
 
             $rules = trim((string) ($meta['rules'] ?? ''));
             if ($rules !== '') {
-                $block .= "\n\nQuy tắc:\n" . $rules;
+                $block .= "\n\nRules:\n" . $rules;
             }
 
             if ($role === 'sub_task') {
                 $specific = trim((string) ($meta['specific_constraints'] ?? ''));
                 if ($specific !== '') {
-                    $block .= "\n\nRàng buộc riêng (sub-prompt):\n" . $specific;
+                    $block .= "\n\nSpecific constraints (sub-prompt):\n" . $specific;
                 }
             }
 
@@ -332,16 +347,16 @@ class PromptResource extends Resource
     public static function defaultVariableLabels(): array
     {
         return [
-            'input' => 'Kết quả edge nối vào (SEO Flow)',
-            'post_title' => 'Tiêu đề bài viết',
-            'post_content' => 'Nội dung bài viết',
-            'focus_keyword' => 'Từ khóa chính',
-            'post_excerpt' => 'Mô tả ngắn (Đoạn trích)',
-            'site_domain' => 'Tên miền website',
-            'site_short_description' => 'Mô tả ngắn website (domain)',
-            'site_cta' => 'CTA / liên hệ website (domain)',
-            'site_links' => 'Danh sách link (từ khóa → URL, domain)',
-            'loai_san_pham' => 'Loại sản phẩm (product_cat) — biến mặc định, chạy thử: tên miền → product_cat',
+            'input' => 'Input from connected edge (SEO Flow)',
+            'post_title' => 'Article title',
+            'post_content' => 'Article content',
+            'focus_keyword' => 'Focus keyword',
+            'post_excerpt' => 'Excerpt',
+            'site_domain' => 'Website domain',
+            'site_short_description' => 'Website short description (domain)',
+            'site_cta' => 'Website CTA / contact (domain)',
+            'site_links' => 'Link list (keyword -> URL, domain)',
+            'loai_san_pham' => 'Product category (product_cat) - default runtime variable from domain -> product_cat',
         ];
     }
 
@@ -379,21 +394,21 @@ class PromptResource extends Resource
         return $table
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label('Tên Prompt')
+                    ->label(__('seo-content-ai::filament.prompt.name'))
                     ->searchable()
                     ->sortable(),
                 Tables\Columns\TextColumn::make('aiConnection.name')
-                    ->label('Kết nối AI')
+                    ->label(__('seo-content-ai::filament.prompt.ai_connection'))
                     ->placeholder('—'),
                 Tables\Columns\ToggleColumn::make('is_active')
-                    ->label('Trạng thái'),
+                    ->label(__('seo-content-ai::filament.prompt.status')),
             ])
             ->defaultSort('updated_at', 'desc')
             ->actions([
                 Tables\Actions\Action::make('test')
                     ->label(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
                         ? 'Test'
-                        : 'Đồng bộ model')
+                        : __('seo-content-ai::filament.prompt.sync_model'))
                     ->icon(fn (SeoPrompt $record): string => app(AiModelsReadinessService::class)->isPromptReady($record)
                         ? 'heroicon-o-play'
                         : 'heroicon-o-cpu-chip')

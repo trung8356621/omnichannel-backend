@@ -22,16 +22,16 @@ class ListArticles extends ListRecords
     {
         return [
             Actions\Action::make('create_from_keywords')
-                ->label('Tạo bài viết mới')
+                ->label('Create new articles')
                 ->icon('heroicon-o-plus')
                 ->color('success')
                 ->form([
                     Forms\Components\Placeholder::make('main_domain')
-                        ->label('Miền chính')
+                        ->label('Main domain')
                         ->content(fn (SeoMainDomainService $mainDomain): string => $mainDomain->resolveMainSiteLabel()),
                     Forms\Components\Textarea::make('keywords')
-                        ->label('Từ khóa')
-                        ->placeholder("Mỗi dòng một từ khóa\nVD:\nbalo da nam\ntúi vải không dệt")
+                        ->label('Keywords')
+                        ->placeholder("One keyword per line\nExample:\nmen leather backpack\nnon-woven bags")
                         ->rows(8)
                         ->required()
                         ->columnSpanFull(),
@@ -43,7 +43,7 @@ class ListArticles extends ListRecords
                         );
 
                         $body = sprintf(
-                            'Thành công: %d · Lỗi: %d',
+                            'Success: %d · Failed: %d',
                             $result['created'],
                             $result['failed'],
                         );
@@ -56,7 +56,7 @@ class ListArticles extends ListRecords
                         }
 
                         $notification = Notification::make()
-                            ->title('Đã xử lý từ khóa')
+                            ->title('Keywords processed')
                             ->body($body);
 
                         if ($result['failed'] > 0 && $result['created'] === 0) {
@@ -70,17 +70,17 @@ class ListArticles extends ListRecords
                         $notification->send();
                     } catch (\InvalidArgumentException $exception) {
                         Notification::make()
-                            ->title('Không thể tạo bài')
+                            ->title('Unable to create articles')
                             ->body($exception->getMessage())
                             ->danger()
                             ->send();
                     }
                 })
-                ->modalHeading('Tạo bài viết tự động')
-                ->modalDescription('Nhập danh sách từ khóa. Hệ thống chạy quy trình «Đăng bài viết» đã cấu hình tại SEO → Tùy chỉnh.')
-                ->modalSubmitActionLabel('Chạy quy trình & tạo bài'),
+                ->modalHeading('Auto create articles')
+                ->modalDescription('Enter keyword list. System will run configured "Publish article" workflow in SEO -> Settings.')
+                ->modalSubmitActionLabel('Run workflow & create'),
             Actions\Action::make('trash')
-                ->label('Thùng rác')
+                ->label('Trash')
                 ->icon('heroicon-o-trash')
                 ->color('gray')
                 ->url(fn (): string => ArticleResource::getUrl('trash')),

@@ -64,11 +64,11 @@ class EditTaskWorkflow extends Page
     {
         return [
             Actions\Action::make('edit_task')
-                ->label('Cài đặt quy trình')
+                ->label('Workflow settings')
                 ->icon('heroicon-o-cog-6-tooth')
                 ->url(fn (): string => TaskResource::getUrl('edit', ['record' => $this->record])),
             Actions\Action::make('back')
-                ->label('Danh sách')
+                ->label('List')
                 ->icon('heroicon-o-arrow-left')
                 ->url(TaskResource::getUrl('index')),
         ];
@@ -81,7 +81,7 @@ class EditTaskWorkflow extends Page
 
         if ($taskName === '') {
             Notification::make()
-                ->title('Vui lòng nhập tên quy trình')
+                ->title('Please enter workflow name')
                 ->danger()
                 ->send();
 
@@ -94,7 +94,7 @@ class EditTaskWorkflow extends Page
         ]);
 
         Notification::make()
-            ->title('Đã lưu quy trình thành công!')
+            ->title('Workflow saved successfully')
             ->success()
             ->send();
     }

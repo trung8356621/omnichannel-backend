@@ -18,13 +18,16 @@ import { wrapFirstPlainTextWithLink } from '../utils/articleLinkInsert';
 import SeoScorePanel from './SeoScorePanel';
 import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
+import AutoImageGenerateTab from './AutoImageGenerateTab';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
     applyImagePatchToBlocks,
     applyQuickFixMetaToBlock,
     applyQuickFixMetaToBlocks,
+    collectImagesFromBlocks,
     finalizeBlocksAfterWpRename,
     enrichBlocksWithPostImages,
+    imageSlugFromKeyword,
 } from '../utils/articleImagesUtils';
 import {
     confirmSlugRename,
@@ -36,6 +39,7 @@ import {
     renameSeoMedia,
     renameSeoMediaByUrl,
 } from '../utils/seoMediaApi';
+import { t } from '../utils/i18n';
 import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
@@ -54,7 +58,7 @@ import {
     stripEditorTransientMarkup,
 } from '../utils/articleEditorTransientMarkup';
 import FaqAccordionPreview from './FaqAccordionPreview';
-import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2 } from 'lucide-react';
+import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
     getSelectionTextFromEditor,
@@ -95,7 +99,7 @@ const createEmptySectionBlock = () => ({
     type: 'text',
     isWp: false,
     prefix: '',
-    content: '<h2>Tiêu đề section mới</h2><p></p>',
+    content: `<h2>${t('editor_new_section_heading')}</h2><p></p>`,
     suffix: '',
 });
 
@@ -116,7 +120,7 @@ const extractSectionHeading = (block) => {
 
     const text = (heading.textContent || '').replace(/\s+/g, ' ').trim();
 
-    return text !== '' ? text : 'Section chưa đặt tiêu đề';
+    return text !== '' ? text : t('editor_section_untitled');
 };
 
 const buildEditorSections = (blocks) => {
@@ -127,7 +131,7 @@ const buildEditorSections = (blocks) => {
     const sections = [];
     let currentSection = {
         id: 'section-intro',
-        title: 'Mở đầu',
+        title: t('editor_intro'),
         isIntro: true,
         blockIds: [],
     };
@@ -165,25 +169,33 @@ const buildSectionStats = (editorSections, blockById) => {
 
     for (const section of editorSections) {
         let imageCount = 0;
+        let emptyImageSrcCount = 0;
         let tableCount = 0;
         let linkCount = 0;
+        let wordCount = 0;
 
         for (const blockId of section.blockIds) {
             const block = blockById.get(blockId);
             if (!block) continue;
 
             if (block.type === 'image') {
-                imageCount += 1;
+                const src = String(block?.image?.src ?? '').trim();
+                if (src !== '') {
+                    imageCount += 1;
+                } else {
+                    emptyImageSrcCount += 1;
+                }
                 continue;
             }
 
             const html = typeof block.content === 'string' ? block.content : '';
             if (!html) continue;
 
-            const imgMatches = html.match(/<img\b/gi);
-            if (imgMatches) {
-                imageCount += imgMatches.length;
-            }
+            wordCount += countWordsFromHtml(html);
+
+            const imageStats = countImagesFromHtml(html);
+            imageCount += imageStats.withSrc;
+            emptyImageSrcCount += imageStats.emptySrc;
 
             const tableMatches = html.match(/<table\b/gi);
             if (tableMatches) {
@@ -198,13 +210,269 @@ const buildSectionStats = (editorSections, blockById) => {
 
         statsMap.set(section.id, {
             imageCount,
+            emptyImageSrcCount,
+            hasEmptyImageSrc: emptyImageSrcCount > 0,
             tableCount,
             hasTable: tableCount > 0,
             linkCount,
+            wordCount,
         });
     }
 
     return statsMap;
+};
+
+const countWordsFromText = (text) => {
+    const normalized = String(text || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!normalized) {
+        return 0;
+    }
+
+    return normalized.split(' ').filter(Boolean).length;
+};
+
+const countWordsFromHtml = (html) => {
+    if (!html?.trim()) {
+        return 0;
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const text = (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
+
+    return countWordsFromText(text);
+};
+
+const countImagesFromHtml = (html) => {
+    if (!html?.trim()) {
+        return { withSrc: 0, emptySrc: 0 };
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const images = Array.from(doc.body.querySelectorAll('img'));
+
+    let withSrc = 0;
+    let emptySrc = 0;
+
+    for (const img of images) {
+        const src = (img.getAttribute('src') || '').trim();
+        if (src !== '') {
+            withSrc += 1;
+        } else {
+            emptySrc += 1;
+        }
+    }
+
+    return { withSrc, emptySrc };
+};
+
+const normalizeImageSrcKey = (src) => {
+    const raw = String(src || '').trim();
+    if (!raw) return '';
+    try {
+        const url = new URL(raw, window.location.origin);
+        return `${url.pathname}`.toLowerCase();
+    } catch {
+        return raw.split('?')[0].toLowerCase();
+    }
+};
+
+const hasBlockH2 = (block) => {
+    if (!block || String(block.type || '') !== 'text') {
+        return false;
+    }
+
+    const html = String(block.content || '').trim();
+    if (!html) {
+        return false;
+    }
+
+    try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        return Boolean(doc.body.querySelector('h2'));
+    } catch {
+        return /<h2[\s>]/i.test(html);
+    }
+};
+
+const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+        return blocks;
+    }
+
+    const usedSrc = new Set();
+    blocks.forEach((block) => {
+        if (block.type !== 'image') {
+            return;
+        }
+        const image = block.image ?? parseImageFromBlockContent(block.content);
+        const key = normalizeImageSrcKey(image?.src);
+        if (key) {
+            usedSrc.add(key);
+        }
+    });
+
+    const pool = [];
+    const poolSeen = new Set();
+    (Array.isArray(supplementalImages) ? supplementalImages : []).forEach((row) => {
+        if (String(row?.origin || '').trim() !== 'gallery') {
+            return;
+        }
+        const src = String(row?.src || '').trim();
+        const srcKey = normalizeImageSrcKey(src);
+        if (!srcKey || usedSrc.has(srcKey) || poolSeen.has(srcKey)) {
+            return;
+        }
+        poolSeen.add(srcKey);
+        pool.push({
+            src,
+            slug: String(row?.slug || '').trim(),
+            alt: String(row?.alt || '').trim(),
+            title: String(row?.title || '').trim(),
+            caption: String(row?.caption || '').trim(),
+            align: String(row?.align || 'none').trim(),
+            wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
+            seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
+            wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
+            localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+        });
+    });
+
+    if (pool.length === 0) {
+        return blocks;
+    }
+
+    const sections = buildEditorSections(blocks).filter((section) => {
+        if (section.isIntro) {
+            return false;
+        }
+
+        const hasFaqShortcode = section.blockIds.some((blockId) => {
+            const block = blocks.find((item) => item.id === blockId);
+            if (!block || block.type !== 'text') {
+                return false;
+            }
+
+            return isFaqPlaceholderHtml(String(block.content || ''));
+        });
+
+        return !hasFaqShortcode;
+    });
+    if (sections.length === 0) {
+        return blocks;
+    }
+
+    const next = [...blocks];
+    let cursor = 0;
+    let inserted = 0;
+
+    for (const section of sections) {
+        const hasImage = section.blockIds.some((blockId) => {
+            const block = next.find((item) => item.id === blockId);
+            if (!block) return false;
+
+            if (block.type === 'image') {
+                const image = block.image ?? parseImageFromBlockContent(block.content);
+                return normalizeImageSrcKey(image?.src) !== '';
+            }
+
+            const html = String(block.content || '').trim();
+            if (!html) return false;
+            return countImagesFromHtml(html).withSrc > 0;
+        });
+        if (hasImage) {
+            continue;
+        }
+
+        if (cursor >= pool.length) {
+            break;
+        }
+
+        let anchorId = '';
+        for (const blockId of section.blockIds ?? []) {
+            const block = next.find((item) => item.id === blockId);
+            if (hasBlockH2(block)) {
+                anchorId = String(blockId || '').trim();
+                break;
+            }
+        }
+        if (!anchorId) {
+            anchorId = String(section.blockIds?.[0] || '').trim();
+        }
+        if (!anchorId) {
+            continue;
+        }
+        const anchorIndex = next.findIndex((block) => block.id === anchorId);
+        if (anchorIndex < 0) {
+            continue;
+        }
+
+        const media = pool[cursor++];
+        const image = {
+            src: media.src,
+            alt: media.alt || '',
+            title: media.title || media.alt || '',
+            caption: media.caption || '',
+            align: media.align || 'none',
+            wpAttachmentId: media.wpAttachmentId,
+            seoMediaId: media.seoMediaId,
+            slug: media.slug || '',
+            wpSrc: media.wpSrc || '',
+            localSrc: media.localSrc || '',
+        };
+        const imageBlock = {
+            ...createEmptyImageBlock(),
+            image,
+            content: renderImageFigure(image),
+        };
+
+        next.splice(anchorIndex + 1, 0, imageBlock);
+        inserted += 1;
+    }
+
+    return inserted > 0 ? normalizeBlocks(next) : blocks;
+};
+
+const escapeRegExp = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const replaceTextInHtmlContent = (html, findText, replaceText) => {
+    const source = String(html ?? '');
+    const needle = String(findText ?? '');
+    if (!source || !needle) {
+        return { html: source, replacements: 0 };
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const pattern = new RegExp(escapeRegExp(needle), 'g');
+    const textNodes = [];
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+    let current = walker.nextNode();
+    while (current) {
+        textNodes.push(current);
+        current = walker.nextNode();
+    }
+
+    let replacements = 0;
+    for (const node of textNodes) {
+        const original = String(node.nodeValue ?? '');
+        if (!original) continue;
+
+        const matches = original.match(pattern);
+        if (!matches?.length) continue;
+
+        replacements += matches.length;
+        node.nodeValue = original.replace(pattern, () => String(replaceText ?? ''));
+    }
+
+    return {
+        html: doc.body.innerHTML,
+        replacements,
+    };
 };
 
 const parseHtmlToBlocks = (html) => {
@@ -440,7 +708,7 @@ function ActiveBlockEditor({
         editorProps: {
             attributes: {
                 class: 'prose prose-slate max-w-none dark:prose-invert min-h-[48px] focus:outline-none tiptap-editor-content',
-                'data-placeholder': 'Nhập nội dung…',
+                'data-placeholder': t('editor_enter_content'),
             },
             handlePaste: clipboardPasteHandler,
         },
@@ -542,7 +810,7 @@ function ActiveBlockEditor({
     return (
         <div className="block-editor-active">
             <span className="block-editor-badge">
-                {suppressBlockUpdate ? 'Gộp tạm (Shift+Click)' : block.isWp ? 'WP Block' : 'Đoạn văn'}
+                {suppressBlockUpdate ? t('editor_temp_merge') : block.isWp ? 'WP Block' : t('editor_paragraph')}
             </span>
             <BlockFormatToolbar
                 editor={editor}
@@ -638,7 +906,7 @@ function BlockEditor({
                 }}
                 role="button"
                 tabIndex={0}
-                title="Khối shortcode FAQ — chỉnh nội dung tại panel FAQ bên dưới"
+                title={t('editor_faq_shortcode_hint')}
             >
                 <FaqAccordionPreview faqs={panelFaqs} />
             </div>
@@ -650,7 +918,7 @@ function BlockEditor({
             <div
                 className="seo-block-preview seo-wp-content p-3 -mx-1 rounded border border-transparent hover:border-gray-200 dark:hover:border-slate-600 hover:bg-gray-50/80 dark:hover:bg-slate-800/40 transition-all cursor-text prose prose-slate max-w-none dark:prose-invert"
                 dangerouslySetInnerHTML={{
-                    __html: block.content || '<p class="text-gray-400 italic">Click để chỉnh sửa…</p>',
+                    __html: block.content || `<p class="text-gray-400 italic">${t('editor_click_to_edit')}</p>`,
                 }}
                 onClick={handlePreviewClick}
                 onKeyDown={(e) => {
@@ -667,8 +935,8 @@ function BlockEditor({
                 tabIndex={0}
                 title={
                     canShiftMerge
-                        ? 'Click để sửa · Shift+Click để gộp tạm các đoạn trong khoảng'
-                        : 'Click để chỉnh sửa đoạn văn này'
+                        ? t('editor_click_to_edit_shift_merge')
+                        : t('editor_click_to_edit_paragraph')
                 }
             />
         );
@@ -691,8 +959,9 @@ function BlockEditor({
 
 const TABS = [
     { id: 'editor', label: 'Editor' },
-    { id: 'images', label: 'Hình ảnh' },
-    { id: 'outline', label: 'Dàn ý' },
+    { id: 'images', label: t('image_block_label') },
+    { id: 'auto-image', label: t('generate_image') },
+    { id: 'outline', label: 'Outline' },
     { id: 'seo', label: 'SEO point' },
 ];
 
@@ -703,6 +972,8 @@ export default function SeoArticleEditor({
     initialOutline = '',
     initialSeo,
     initialPostImages = [],
+    initialSupplementalImages = [],
+    initialPostType = '',
     initialFaqs = [],
     articleTitle = '',
     editorSettings = {},
@@ -721,6 +992,11 @@ export default function SeoArticleEditor({
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
     const [insertMenu, setInsertMenu] = useState(null);
     const [collapsedSectionIds, setCollapsedSectionIds] = useState({});
+    const [supplementalImages, setSupplementalImages] = useState(() =>
+        Array.isArray(initialSupplementalImages) ? initialSupplementalImages : [],
+    );
+    const [quickReplaceFind, setQuickReplaceFind] = useState('');
+    const [quickReplaceValue, setQuickReplaceValue] = useState('');
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     const pendingQuickFixKeywordRef = useRef('');
 
@@ -840,6 +1116,65 @@ export default function SeoArticleEditor({
         () => buildSectionStats(editorSections, blockById),
         [editorSections, blockById],
     );
+    const totalWordCount = useMemo(
+        () => editorSections.reduce((sum, section) => sum + (sectionStats.get(section.id)?.wordCount ?? 0), 0),
+        [editorSections, sectionStats],
+    );
+    const imageTabCount = useMemo(() => {
+        const normalizedRows = [
+            ...collectImagesFromBlocks(blocks),
+            ...(Array.isArray(supplementalImages) ? supplementalImages : []).map((row) => ({
+                wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
+                seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
+                src: String(row?.src || '').trim(),
+                wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
+                localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+            })),
+        ];
+
+        const merged = [];
+        normalizedRows.forEach((row) => {
+            const primarySrc = String(row?.src || row?.wpSrc || row?.localSrc || '').trim();
+            const srcKey = normalizeImageSrcKey(primarySrc);
+            const wpId = Number(row?.wpAttachmentId ?? 0);
+            const seoId = Number(row?.seoMediaId ?? 0);
+
+            const existingIndex = merged.findIndex((existing) => {
+                const existingWpId = Number(existing?.wpAttachmentId ?? 0);
+                if (wpId > 0 && existingWpId > 0 && existingWpId === wpId) {
+                    return true;
+                }
+
+                const existingSeoId = Number(existing?.seoMediaId ?? 0);
+                if (seoId > 0 && existingSeoId > 0 && existingSeoId === seoId) {
+                    return true;
+                }
+
+                if (srcKey) {
+                    const existingSrcKey = normalizeImageSrcKey(
+                        String(existing?.src || existing?.wpSrc || existing?.localSrc || ''),
+                    );
+                    if (existingSrcKey && existingSrcKey === srcKey) {
+                        return true;
+                    }
+                }
+
+                return false;
+            });
+
+            if (existingIndex === -1) {
+                merged.push({
+                    wpAttachmentId: wpId || null,
+                    seoMediaId: seoId || null,
+                    src: String(row?.src || '').trim(),
+                    wpSrc: String(row?.wpSrc || '').trim(),
+                    localSrc: String(row?.localSrc || '').trim(),
+                });
+            }
+        });
+
+        return merged.length;
+    }, [blocks, supplementalImages]);
 
     const tempMergeRef = useRef(tempMerge);
     tempMergeRef.current = tempMerge;
@@ -912,6 +1247,48 @@ export default function SeoArticleEditor({
     });
 
     useEffect(() => {
+        const isTypingTarget = (target) =>
+            Boolean(
+                target?.closest?.(
+                    'input, textarea, [contenteditable="true"], [contenteditable=""], .ProseMirror',
+                ),
+            );
+
+        const onWindowKeyDown = (event) => {
+            const mod = event.ctrlKey || event.metaKey;
+            if (!mod || event.altKey || isTypingTarget(event.target)) {
+                return;
+            }
+
+            const key = String(event.key || '').toLowerCase();
+            if (key === 'z') {
+                event.preventDefault();
+                if (event.shiftKey) {
+                    if (canRedo) {
+                        redo();
+                    }
+                } else if (canUndo) {
+                    undo();
+                }
+                return;
+            }
+
+            if (key === 'y') {
+                event.preventDefault();
+                if (canRedo) {
+                    redo();
+                }
+            }
+        };
+
+        window.addEventListener('keydown', onWindowKeyDown, true);
+
+        return () => {
+            window.removeEventListener('keydown', onWindowKeyDown, true);
+        };
+    }, [undo, redo, canUndo, canRedo]);
+
+    useEffect(() => {
         if (!articleId) return;
         if (loadedArticleIdRef.current === articleId) return;
 
@@ -928,11 +1305,23 @@ export default function SeoArticleEditor({
         } else {
             parsed = parseHtmlToBlocks(initialHtml);
         }
-        setBlocks(enrichBlocksWithPostImages(parsed, initialPostImages));
+        let nextBlocks = enrichBlocksWithPostImages(parsed, initialPostImages);
+        if (String(initialPostType || '').toLowerCase() === 'product') {
+            nextBlocks = distributeProductImagesToEmptySections(nextBlocks, initialSupplementalImages);
+        }
+        setBlocks(nextBlocks);
 
         setActiveBlockId(null);
         setGlobalEditor(null);
-    }, [articleId, initialHtml, initialPostImages, clearTempMerge]);
+    }, [articleId, initialHtml, initialPostImages, initialPostType, initialSupplementalImages, clearTempMerge]);
+
+    useEffect(() => {
+        if (String(initialPostType || '').toLowerCase() !== 'product') {
+            return;
+        }
+
+        setBlocks((prev) => distributeProductImagesToEmptySections(prev, supplementalImages));
+    }, [initialPostType, supplementalImages]);
 
     useEffect(() => {
         if (initialSeo) {
@@ -951,7 +1340,11 @@ export default function SeoArticleEditor({
                     ? {
                           ...b,
                           content: newContent,
-                          ...(imageData ? { image: imageData } : {}),
+                          ...(imageData === null
+                              ? { image: undefined }
+                              : imageData
+                                ? { image: imageData }
+                                : {}),
                       }
                     : b,
             ),
@@ -1019,8 +1412,8 @@ export default function SeoArticleEditor({
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', {
                                 detail: {
-                                    title: 'Không đổi được slug ảnh',
-                                    body: error?.message ?? 'Thử lại sau.',
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
                                     status: 'danger',
                                 },
                             }),
@@ -1045,8 +1438,8 @@ export default function SeoArticleEditor({
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', {
                                 detail: {
-                                    title: 'Không đổi được slug ảnh',
-                                    body: error?.message ?? 'Thử lại sau.',
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
                                     status: 'danger',
                                 },
                             }),
@@ -1061,6 +1454,98 @@ export default function SeoArticleEditor({
             return true;
         },
         [requestWordPressRenames],
+    );
+
+    const patchSupplementalImageRow = useCallback((targetRow, patch = {}) => {
+        const targetWpId = Number(targetRow?.wpAttachmentId ?? targetRow?.wp_attachment_id ?? 0);
+        const targetSeoId = Number(targetRow?.seoMediaId ?? targetRow?.seo_media_id ?? 0);
+        const targetSrc = normalizeImageSrcKey(targetRow?.src);
+
+        setSupplementalImages((prev) =>
+            (Array.isArray(prev) ? prev : []).map((row) => {
+                const rowWpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+                const rowSeoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+                const rowSrc = normalizeImageSrcKey(row?.src);
+                const matched =
+                    (targetWpId > 0 && rowWpId > 0 && targetWpId === rowWpId) ||
+                    (targetSeoId > 0 && rowSeoId > 0 && targetSeoId === rowSeoId) ||
+                    (targetSrc !== '' && rowSrc !== '' && targetSrc === rowSrc);
+
+                if (!matched) {
+                    return row;
+                }
+
+                const nextSrc = String(patch.src ?? row.src ?? '').trim();
+                const isLocal = nextSrc.includes('/storage/uploads/seo_media/');
+                return {
+                    ...row,
+                    ...patch,
+                    src: nextSrc || row.src,
+                    wp_url:
+                        patch.wp_url ??
+                        (isLocal ? String(row.wp_url ?? '') : nextSrc || String(row.wp_url ?? '')),
+                    local_src:
+                        patch.local_src ??
+                        (isLocal ? nextSrc || String(row.local_src ?? '') : String(row.local_src ?? '')),
+                };
+            }),
+        );
+    }, []);
+
+    const quickFixSupplementalRow = useCallback(
+        (row, keyword) => {
+            const slugIndex = Number(row?.quickFixIndex ?? 0);
+            const suggestedSlug = slugIndex > 0 ? imageSlugFromKeyword(keyword, slugIndex) : '';
+            patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+
+            const wpAttachmentId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+            if (wpAttachmentId > 0 && suggestedSlug) {
+                return {
+                    wpRename: {
+                        attachment_id: wpAttachmentId,
+                        new_slug: suggestedSlug,
+                        old_url: row.src,
+                        old_slug: row.slug ?? '',
+                    },
+                    localRename: null,
+                };
+            }
+
+            const seoMediaId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+            if (seoMediaId > 0 && suggestedSlug) {
+                return {
+                    wpRename: null,
+                    localRename: {
+                        seo_media_id: seoMediaId,
+                        src: row.src,
+                        new_slug: suggestedSlug,
+                        old_slug: row.slug ?? '',
+                    },
+                };
+            }
+
+            if (row?.src && String(row.src).includes('/storage/uploads/seo_media/') && suggestedSlug) {
+                return {
+                    wpRename: null,
+                    localRename: {
+                        seo_media_id: null,
+                        src: row.src,
+                        new_slug: suggestedSlug,
+                        old_slug: row.slug ?? '',
+                    },
+                };
+            }
+
+            if (suggestedSlug) {
+                patchSupplementalImageRow(row, { slug: suggestedSlug });
+            }
+
+            return {
+                wpRename: null,
+                localRename: null,
+            };
+        },
+        [patchSupplementalImageRow],
     );
 
     const applyQuickFixPreview = useCallback(
@@ -1094,20 +1579,49 @@ export default function SeoArticleEditor({
                                 ? await renameSeoMedia(id, newSlug)
                                 : await renameSeoMediaByUrl(src, newSlug);
 
+                            const oldSrc = normalizeImageSrcKey(src);
+                            const resolvedSeoId = Number(data.id ?? id ?? 0);
                             setBlocks((prev) =>
-                                applyImagePatchToBlocks(prev, blockId, {
-                                    slug: data.slug,
-                                    src: data.url,
-                                    seoMediaId: data.id ?? id,
-                                    originalSlug: item.old_slug ?? '',
+                                prev.map((block) => {
+                                    if (block.type !== 'image') {
+                                        return block;
+                                    }
+
+                                    const image = block.image ?? parseImageFromBlockContent(block.content);
+                                    if (!image?.src) {
+                                        return block;
+                                    }
+
+                                    const imageSeoId = Number(image.seoMediaId ?? image.seo_media_id ?? 0);
+                                    const imageSrc = normalizeImageSrcKey(image.src);
+                                    const matched =
+                                        (resolvedSeoId > 0 && imageSeoId > 0 && imageSeoId === resolvedSeoId) ||
+                                        (resolvedSeoId <= 0 && oldSrc !== '' && imageSrc === oldSrc);
+                                    if (!matched) {
+                                        return block;
+                                    }
+
+                                    const nextImage = {
+                                        ...image,
+                                        slug: data.slug,
+                                        src: data.url,
+                                        seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
+                                        originalSlug: item.old_slug ?? '',
+                                    };
+
+                                    return {
+                                        ...block,
+                                        image: nextImage,
+                                        content: renderImageFigure(nextImage),
+                                    };
                                 }),
                             );
                         } catch (error) {
                             window.dispatchEvent(
                                 new CustomEvent('seo-article-editor-notify', {
                                     detail: {
-                                        title: 'Không đổi được slug ảnh nội bộ',
-                                        body: error?.message ?? 'Thử lại sau.',
+                                        title: t('editor_cannot_rename_local_image_slug'),
+                                        body: error?.message ?? t('editor_try_again_later'),
                                         status: 'danger',
                                     },
                                 }),
@@ -1122,7 +1636,7 @@ export default function SeoArticleEditor({
         [requestWordPressRenames],
     );
 
-    const quickFixAllImages = useCallback(() => {
+    const quickFixAllImages = useCallback((imageRows = null) => {
         const keyword = (focusKeyword || articleTitle || '').trim();
         if (!keyword) {
             return;
@@ -1136,43 +1650,203 @@ export default function SeoArticleEditor({
             return;
         }
 
-        if (renameCount === 0 && localRenameCount === 0 && !window.confirm('Áp dụng alt/title từ khóa cho tất cả ảnh trong bài?')) {
+        if (renameCount === 0 && localRenameCount === 0 && !window.confirm(t('editor_quick_fix_all_confirm'))) {
             return;
         }
 
         applyQuickFixPreview(preview, keyword);
-    }, [focusKeyword, articleTitle, applyQuickFixPreview]);
+        const supplementalRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
+            (row) => !row?.excludeQuickFix,
+        );
+        if (supplementalRows.length === 0) {
+            return;
+        }
+
+        const supplementalWpRenames = [];
+        const supplementalLocalRenames = [];
+        const supplementalLocalRenameKeys = new Set();
+        supplementalRows.forEach((row) => {
+            const outcome = quickFixSupplementalRow(row, keyword);
+            if (outcome?.wpRename) {
+                supplementalWpRenames.push(outcome.wpRename);
+            }
+            if (outcome?.localRename) {
+                const localKey = Number(outcome.localRename.seo_media_id ?? 0) > 0
+                    ? `id:${Number(outcome.localRename.seo_media_id)}`
+                    : `src:${normalizeImageSrcKey(outcome.localRename.src)}`;
+                if (!supplementalLocalRenameKeys.has(localKey)) {
+                    supplementalLocalRenameKeys.add(localKey);
+                    supplementalLocalRenames.push(outcome.localRename);
+                }
+            }
+        });
+
+        if (supplementalWpRenames.length > 0) {
+            if (!confirmSlugRename({ count: supplementalWpRenames.length, isQuickFix: true })) {
+                return;
+            }
+            requestWordPressRenames(supplementalWpRenames);
+        }
+
+        if (supplementalLocalRenames.length > 0) {
+            (async () => {
+                for (const item of supplementalLocalRenames) {
+                    try {
+                        const newSlug = String(item.new_slug ?? '').trim();
+                        const src = String(item.src ?? '').trim();
+                        const id = Number(item.seo_media_id ?? 0);
+                        if (!newSlug || !src) {
+                            continue;
+                        }
+
+                        const data = id > 0
+                            ? await renameSeoMedia(id, newSlug)
+                            : await renameSeoMediaByUrl(src, newSlug);
+
+                        patchSupplementalImageRow(item, {
+                            slug: data.slug,
+                            src: data.url,
+                            seoMediaId: data.id ?? id,
+                        });
+                    } catch (error) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    }
+                }
+                setImagesReloadKey((k) => k + 1);
+            })();
+        }
+    }, [focusKeyword, articleTitle, applyQuickFixPreview, supplementalImages, quickFixSupplementalRow, requestWordPressRenames, patchSupplementalImageRow]);
 
     const quickFixSingleImage = useCallback(
-        (blockId) => {
+        (target) => {
             const keyword = (focusKeyword || articleTitle || '').trim();
-            if (!keyword || !blockId) {
+            if (!keyword || !target) {
                 return;
             }
 
-            const preview = applyQuickFixMetaToBlock(blocksRef.current, keyword, blockId);
-            if (preview.applied === 0) {
+            const blockId =
+                typeof target === 'string'
+                    ? target
+                    : String(target?.blockId ?? target?.block_id ?? '').trim();
+
+            if (blockId) {
+                const preview = applyQuickFixMetaToBlock(blocksRef.current, keyword, blockId);
+                if (preview.applied === 0) {
+                    return;
+                }
+
+                const renameCount = preview.renameQueue.length;
+                const localRenameCount = (preview.localRenameQueue ?? []).length;
+
+                if (renameCount > 0 && !confirmSlugRename({ count: 1, isQuickFix: true })) {
+                    return;
+                }
+
+                if (
+                    renameCount === 0 &&
+                    localRenameCount === 0 &&
+                    !window.confirm(t('editor_quick_fix_one_confirm'))
+                ) {
+                    return;
+                }
+
+                applyQuickFixPreview(preview, keyword);
+
                 return;
             }
 
-            const renameCount = preview.renameQueue.length;
-            const localRenameCount = (preview.localRenameQueue ?? []).length;
-
-            if (renameCount > 0 && !confirmSlugRename({ count: 1, isQuickFix: true })) {
+            const row = typeof target === 'object' ? target : null;
+            if (!row) {
                 return;
             }
 
-            if (
-                renameCount === 0 &&
-                localRenameCount === 0 &&
-                !window.confirm('Áp dụng alt/title từ khóa cho ảnh này?')
-            ) {
+            const slugIndex = Number(row.quickFixIndex ?? 1);
+            const suggestedSlug = imageSlugFromKeyword(keyword, slugIndex) || String(row.slug || '').trim();
+            patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+
+            const wpAttachmentId = Number(row.wpAttachmentId ?? row.wp_attachment_id ?? 0);
+            if (wpAttachmentId > 0) {
+                if (suggestedSlug && !confirmSlugRename({ count: 1, isQuickFix: true })) {
+                    return;
+                }
+
+                pendingQuickFixKeywordRef.current = keyword;
+                requestWordPressRenames([
+                    {
+                        attachment_id: wpAttachmentId,
+                        new_slug: suggestedSlug,
+                        old_url: row.src,
+                        old_slug: row.slug ?? '',
+                    },
+                ]);
+                patchSupplementalImageRow(row, { slug: suggestedSlug });
+
                 return;
             }
 
-            applyQuickFixPreview(preview, keyword);
+            const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
+            if (seoMediaId > 0 && suggestedSlug) {
+                renameSeoMedia(seoMediaId, suggestedSlug)
+                    .then((data) => {
+                        patchSupplementalImageRow(row, {
+                            slug: data.slug,
+                            src: data.url,
+                            seoMediaId: data.id ?? seoMediaId,
+                        });
+                        setImagesReloadKey((k) => k + 1);
+                    })
+                    .catch((error) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    });
+
+                return;
+            }
+
+            if (row.src && String(row.src).includes('/storage/uploads/seo_media/') && suggestedSlug) {
+                renameSeoMediaByUrl(row.src, suggestedSlug)
+                    .then((data) => {
+                        patchSupplementalImageRow(row, {
+                            slug: data.slug,
+                            src: data.url,
+                            seoMediaId: data.id ?? seoMediaId,
+                        });
+                        setImagesReloadKey((k) => k + 1);
+                    })
+                    .catch((error) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    });
+                return;
+            }
+
+            if (suggestedSlug) {
+                patchSupplementalImageRow(row, { slug: suggestedSlug });
+            }
         },
-        [focusKeyword, articleTitle, applyQuickFixPreview],
+        [focusKeyword, articleTitle, applyQuickFixPreview, patchSupplementalImageRow, requestWordPressRenames],
     );
 
     useEffect(() => {
@@ -1189,6 +1863,29 @@ export default function SeoArticleEditor({
             const keyword = pendingQuickFixKeywordRef.current;
 
             setBlocks((prev) => finalizeBlocksAfterWpRename(prev, renamed, keyword));
+            setSupplementalImages((prev) =>
+                (Array.isArray(prev) ? prev : []).map((row) => {
+                    const wpId = Number(row?.wp_attachment_id ?? row?.wpAttachmentId ?? 0);
+                    if (wpId <= 0) {
+                        return row;
+                    }
+
+                    const item = renamed.find((entry) => Number(entry?.attachment_id ?? entry?.attachmentId ?? 0) === wpId);
+                    if (!item) {
+                        return row;
+                    }
+
+                    const newUrl = String(item?.new_url ?? item?.newUrl ?? row?.src ?? '').trim();
+                    const newSlug = String(item?.new_slug ?? item?.newSlug ?? row?.slug ?? '').trim();
+
+                    return {
+                        ...row,
+                        src: newUrl || row.src,
+                        wp_url: newUrl || row.wp_url,
+                        slug: newSlug || row.slug,
+                    };
+                }),
+            );
             pendingQuickFixKeywordRef.current = '';
             setImagesReloadKey((k) => k + 1);
         };
@@ -1244,6 +1941,43 @@ export default function SeoArticleEditor({
         [clearTempMerge, commitActiveBlock],
     );
 
+    const quickGenerateImageForSection = useCallback(
+        (section) => {
+            const sectionBlocks = section.blockIds
+                .map((blockId) => blockById.get(blockId))
+                .filter(Boolean);
+            const sectionText = getPlainTextFromBlocks(sectionBlocks).trim();
+            if (!sectionText) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('generate_image'),
+                            body: 'Section has no plain text to build prompt.',
+                            status: 'warning',
+                        },
+                    }),
+                );
+                return;
+            }
+
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            const promptInput = keyword ? `${keyword}\n\n${sectionText}` : sectionText;
+            const targetBlockId = String(section.blockIds?.[0] ?? activeBlockId ?? '').trim();
+
+            window.dispatchEvent(
+                new CustomEvent('generate-article-image', {
+                    detail: {
+                        selectionText: sectionText,
+                        selectionHtml: '',
+                        userBrief: promptInput,
+                        activeBlockId: targetBlockId,
+                    },
+                }),
+            );
+        },
+        [activeBlockId, articleTitle, blockById, focusKeyword],
+    );
+
     const scrollToFeaturedSnippetTable = useCallback(() => {
         const currentBlocks = blocksRef.current;
         let targetBlockId = null;
@@ -1263,8 +1997,8 @@ export default function SeoArticleEditor({
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Không tìm thấy bảng',
-                        body: 'Nội dung hiện tại chưa có bảng để nhảy tới.',
+                        title: 'Table not found',
+                        body: 'No table found in current content.',
                         status: 'warning',
                     },
                 }),
@@ -1496,7 +2230,7 @@ export default function SeoArticleEditor({
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
                         detail: {
-                            title: 'Đã chèn link nội bộ',
+                            title: t('editor_internal_link_inserted'),
                             body: `«${text}»`,
                             status: 'success',
                         },
@@ -1509,8 +2243,8 @@ export default function SeoArticleEditor({
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Không tìm thấy từ khóa',
-                        body: `Không tìm thấy «${text}» (chưa có link) trong nội dung.`,
+                        title: t('editor_keyword_not_found'),
+                        body: t('editor_keyword_not_found_body', { text }),
                         status: 'warning',
                     },
                 }),
@@ -1554,7 +2288,7 @@ export default function SeoArticleEditor({
             const block = blocksRef.current.find((b) => b.id === id);
             if (!block) return;
 
-            if (block.isWp && !window.confirm('Xóa khối WordPress này khỏi bài viết?')) {
+            if (block.isWp && !window.confirm(t('editor_delete_wp_block_confirm'))) {
                 return;
             }
 
@@ -1652,8 +2386,8 @@ export default function SeoArticleEditor({
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
                         detail: {
-                            title: 'Đã có shortcode FAQ',
-                            body: 'Bài viết chỉ nên có một [omi_faq].',
+                            title: t('editor_faq_shortcode_exists'),
+                            body: t('editor_faq_shortcode_exists_body'),
                             status: 'warning',
                         },
                     }),
@@ -1690,7 +2424,18 @@ export default function SeoArticleEditor({
 
     const applyCompletedMediaToPlaceholder = useCallback((mediaId, mediaType, finalUrl) => {
         const pending = pendingAiMediaRef.current.get(mediaId);
-        if (!pending?.blockId || !finalUrl) {
+        let targetBlockId = pending?.blockId ?? '';
+
+        if (!targetBlockId && mediaId > 0) {
+            const fallback = blocksRef.current.find((block) => {
+                const image = block?.image ?? null;
+                const seoId = Number(image?.seoMediaId ?? image?.seo_media_id ?? 0);
+                return seoId === mediaId && Boolean(image?.isProcessing);
+            });
+            targetBlockId = fallback?.id ?? '';
+        }
+
+        if (!targetBlockId || !finalUrl) {
             return false;
         }
 
@@ -1703,7 +2448,7 @@ export default function SeoArticleEditor({
 
             updateBlocksWithoutHistory((prev) =>
                 prev.map((block) =>
-                    block.id === pending.blockId
+                    block.id === targetBlockId
                         ? {
                               ...block,
                               type: 'text',
@@ -1715,7 +2460,7 @@ export default function SeoArticleEditor({
             );
         } else {
             patchImageInBlocks(
-                pending.blockId,
+                targetBlockId,
                 {
                     src: finalUrl,
                     title: '',
@@ -1741,6 +2486,7 @@ export default function SeoArticleEditor({
     }, []);
 
     const AI_JOBS_POLL_MS = 60_000;
+    const AI_JOBS_INITIAL_POLL_MS = 4_000;
 
     const startMediaStatusPolling = useCallback((mediaId, mediaType) => {
         if (!mediaId || mediaPollTimersRef.current.has(mediaId)) {
@@ -1774,8 +2520,8 @@ export default function SeoArticleEditor({
                     window.dispatchEvent(
                         new CustomEvent('seo-article-editor-notify', {
                             detail: {
-                                title: mediaType === 'video' ? 'Tạo video thất bại' : 'Tạo ảnh thất bại',
-                                body: payload?.error_message || 'AI xử lý thất bại. Vui lòng thử lại.',
+                                title: mediaType === 'video' ? t('editor_generate_video_failed') : t('editor_generate_image_failed'),
+                                body: payload?.error_message || t('editor_ai_failed'),
                                 status: 'danger',
                             },
                         }),
@@ -1798,9 +2544,32 @@ export default function SeoArticleEditor({
             mediaPollTimersRef.current.set(mediaId, nextTimer);
         };
 
-        const initialTimer = window.setTimeout(poll, AI_JOBS_POLL_MS);
+        const initialTimer = window.setTimeout(poll, AI_JOBS_INITIAL_POLL_MS);
         mediaPollTimersRef.current.set(mediaId, initialTimer);
     }, [applyCompletedMediaToPlaceholder, clearMediaPolling]);
+
+    useEffect(() => {
+        for (const block of blocks) {
+            const image = block?.image ?? null;
+            if (!image?.isProcessing) {
+                continue;
+            }
+
+            const mediaId = Number(image?.seoMediaId ?? image?.seo_media_id ?? 0);
+            if (mediaId <= 0) {
+                continue;
+            }
+
+            if (!pendingAiMediaRef.current.has(mediaId)) {
+                pendingAiMediaRef.current.set(mediaId, {
+                    blockId: block.id,
+                    mediaType: 'image',
+                });
+            }
+
+            startMediaStatusPolling(mediaId, 'image');
+        }
+    }, [blocks, startMediaStatusPolling]);
 
     const insertImageAfterBlock = useCallback(
         (refBlockId, imageUrl, imagePatch = {}) => {
@@ -2192,7 +2961,7 @@ export default function SeoArticleEditor({
         window.addEventListener('editor-block-image-selected', onEditorBlockImageSelected);
 
         const onArticleAiImageGenerated = (event) => {
-            const blockId = (event.detail?.activeBlockId ?? '').trim();
+            const requestedBlockId = (event.detail?.activeBlockId ?? '').trim();
             const url = (event.detail?.url ?? '').trim();
             const status = String(event.detail?.status ?? '').toLowerCase();
             const mediaId = Number(event.detail?.seoMediaId ?? 0);
@@ -2201,13 +2970,35 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const refBlockId = resolveAiRefBlockId(blockId);
+            const fallbackActiveBlockId = String(activeBlockIdRef.current ?? '').trim();
+            const refBlockId = resolveAiRefBlockId(requestedBlockId || fallbackActiveBlockId);
             if (!refBlockId) {
                 return;
             }
 
             if (status === 'processing' && mediaId > 0) {
                 if (pendingAiMediaRef.current.has(mediaId)) {
+                    // Đảm bảo luôn có polling kể cả khi event "processing" đến lặp/khôi phục.
+                    const pending = pendingAiMediaRef.current.get(mediaId);
+                    const pendingBlockId = String(pending?.blockId ?? '').trim();
+                    const hasPendingBlock = pendingBlockId
+                        ? blocksRef.current.some((block) => block.id === pendingBlockId)
+                        : false;
+
+                    if (!hasPendingBlock) {
+                        const recreatedId = placeProcessingImagePlaceholder(refBlockId, url, {
+                            seoMediaId: mediaId,
+                            isProcessing: true,
+                        });
+                        if (recreatedId) {
+                            pendingAiMediaRef.current.set(mediaId, {
+                                blockId: recreatedId,
+                                mediaType: 'image',
+                            });
+                        }
+                    }
+
+                    startMediaStatusPolling(mediaId, 'image');
                     return;
                 }
 
@@ -2238,21 +3029,48 @@ export default function SeoArticleEditor({
         };
 
         const onArticleAiVideoGenerated = (event) => {
-            const blockId = (event.detail?.activeBlockId ?? '').trim();
+            const requestedBlockId = (event.detail?.activeBlockId ?? '').trim();
             const url = (event.detail?.url ?? '').trim();
             const status = String(event.detail?.status ?? '').toLowerCase();
             const mediaId = Number(event.detail?.seoMediaId ?? 0);
 
-            if (!blockId || !url) {
+            if (!url) {
+                return;
+            }
+
+            const fallbackActiveBlockId = String(activeBlockIdRef.current ?? '').trim();
+            const refBlockId = resolveAiRefBlockId(requestedBlockId || fallbackActiveBlockId);
+            if (!refBlockId) {
                 return;
             }
 
             if (status === 'processing' && mediaId > 0) {
                 if (pendingAiMediaRef.current.has(mediaId)) {
+                    // Đảm bảo luôn có polling kể cả khi event "processing" đến lặp/khôi phục.
+                    const pending = pendingAiMediaRef.current.get(mediaId);
+                    const pendingBlockId = String(pending?.blockId ?? '').trim();
+                    const hasPendingBlock = pendingBlockId
+                        ? blocksRef.current.some((block) => block.id === pendingBlockId)
+                        : false;
+
+                    if (!hasPendingBlock) {
+                        const recreatedId = insertImageAfterBlock(refBlockId, url, {
+                            seoMediaId: mediaId,
+                            isProcessing: true,
+                        });
+                        if (recreatedId) {
+                            pendingAiMediaRef.current.set(mediaId, {
+                                blockId: recreatedId,
+                                mediaType: 'video',
+                            });
+                        }
+                    }
+
+                    startMediaStatusPolling(mediaId, 'video');
                     return;
                 }
 
-                const placeholderId = insertImageAfterBlock(blockId, url, {
+                const placeholderId = insertImageAfterBlock(refBlockId, url, {
                     seoMediaId: mediaId,
                     isProcessing: true,
                 });
@@ -2275,7 +3093,7 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            insertVideoAfterBlock(blockId, url);
+            insertVideoAfterBlock(refBlockId, url);
         };
 
         window.addEventListener('article-ai-image-generated', onArticleAiImageGenerated);
@@ -2333,10 +3151,10 @@ export default function SeoArticleEditor({
 
     const saveLabel =
         saveStatus === 'saving'
-            ? 'Đang lưu nháp…'
+            ? t('editor_saving_draft')
             : saveStatus === 'pending'
-              ? 'Sẽ lưu nháp…'
-              : 'Đã lưu nháp (cục bộ)';
+              ? t('editor_draft_pending')
+              : t('editor_draft_saved_local');
 
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
@@ -2423,15 +3241,169 @@ export default function SeoArticleEditor({
         }));
     }, [commitActiveBlock]);
 
+    useEffect(() => {
+        const normalizeSelectedImage = (payload = {}) => {
+            const src = String(payload.url || payload.src || '').trim();
+            if (!src) {
+                return null;
+            }
+
+            const mode = String(payload.mode || '').trim();
+            const wpAttachmentId = Number(payload.wpAttachmentId ?? payload.wp_attachment_id ?? 0);
+            const seoMediaId = Number(payload.seoMediaId ?? payload.seo_media_id ?? 0);
+            const slug = String(payload.slug || '').trim();
+            const alt = String(payload.alt || '').trim();
+            const isLocal = src.includes('/storage/uploads/seo_media/');
+
+            return {
+                key:
+                    wpAttachmentId > 0
+                        ? `wp_${wpAttachmentId}`
+                        : seoMediaId > 0
+                          ? `seo_${seoMediaId}`
+                          : `src_${src}`,
+                block_id: '',
+                wp_attachment_id: wpAttachmentId > 0 ? wpAttachmentId : null,
+                seo_media_id: seoMediaId > 0 ? seoMediaId : null,
+                src,
+                wp_url: !isLocal ? src : '',
+                local_src: isLocal ? src : '',
+                slug,
+                alt,
+                title: alt,
+                caption: '',
+                align: 'none',
+                origin: mode === 'gallery' ? 'gallery' : 'featured',
+                origin_label: mode === 'gallery' ? t('editor_product_album') : t('editor_featured_image'),
+            };
+        };
+
+        const imageIdentity = (row) => {
+            const wpId = Number(row?.wp_attachment_id ?? row?.wpAttachmentId ?? 0);
+            if (wpId > 0) {
+                return `wp:${wpId}`;
+            }
+
+            const seoId = Number(row?.seo_media_id ?? row?.seoMediaId ?? 0);
+            if (seoId > 0) {
+                return `seo:${seoId}`;
+            }
+
+            return `src:${String(row?.src || '').trim()}`;
+        };
+
+        const onSelected = (event) => {
+            const normalized = normalizeSelectedImage(event.detail ?? {});
+            if (!normalized) {
+                return;
+            }
+
+            setSupplementalImages((prev) => {
+                const identity = imageIdentity(normalized);
+                const mode = String(normalized.origin || '');
+                let next = Array.isArray(prev) ? [...prev] : [];
+
+                if (mode === 'featured') {
+                    next = next.filter((row) => String(row?.origin || '') !== 'featured');
+                }
+
+                next = next.filter((row) => imageIdentity(row) !== identity);
+                next.unshift(normalized);
+
+                return next;
+            });
+        };
+
+        const onRemoved = (event) => {
+            const detail = event.detail ?? {};
+            const url = String(detail.url || '').trim();
+            if (!url) {
+                return;
+            }
+
+            setSupplementalImages((prev) =>
+                (Array.isArray(prev) ? prev : []).filter(
+                    (row) => String(row?.src || '').trim() !== url,
+                ),
+            );
+        };
+
+        window.addEventListener('article-media-selected', onSelected);
+        window.addEventListener('article-media-removed', onRemoved);
+
+        return () => {
+            window.removeEventListener('article-media-selected', onSelected);
+            window.removeEventListener('article-media-removed', onRemoved);
+        };
+    }, []);
+
+    const applyQuickReplaceAllSections = useCallback(() => {
+        const needle = String(quickReplaceFind ?? '').trim();
+        if (!needle) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: 'Missing search text',
+                        body: 'Enter text in "Find" before replace.',
+                        status: 'warning',
+                    },
+                }),
+            );
+            return;
+        }
+
+        if (tempMergeRef.current) {
+            clearTempMerge();
+        }
+        commitActiveBlock();
+
+        let affectedBlocks = 0;
+        let totalReplacements = 0;
+
+        setBlocks((prev) =>
+            prev.map((block) => {
+                if (typeof block.content !== 'string' || block.content === '') {
+                    return block;
+                }
+
+                const replaced = replaceTextInHtmlContent(block.content, needle, quickReplaceValue);
+                if (replaced.replacements <= 0) {
+                    return block;
+                }
+
+                affectedBlocks += 1;
+                totalReplacements += replaced.replacements;
+
+                return {
+                    ...block,
+                    content: replaced.html,
+                };
+            }),
+        );
+
+        window.dispatchEvent(
+            new CustomEvent('seo-article-editor-notify', {
+                detail: {
+                    title: affectedBlocks > 0 ? t('editor_replace_success') : t('editor_replace_not_found'),
+                    body:
+                        affectedBlocks > 0
+                            ? t('editor_replace_success_body', { totalReplacements, affectedBlocks })
+                            : t('editor_replace_not_found_body'),
+                    status: affectedBlocks > 0 ? 'success' : 'warning',
+                },
+            }),
+        );
+    }, [quickReplaceFind, quickReplaceValue, clearTempMerge, commitActiveBlock]);
+
     return (
         <div className="seo-article-editor-root">
             <EditorBusyOverlay
                 visible={imageRenameBusy}
-                title="Đang đổi tên ảnh trên WordPress"
+                title={t('editor_renaming_wp_images')}
                 message={
                     imageRenameBusyCount > 0
-                        ? `Đang xử lý ${imageRenameBusyCount} ảnh và cập nhật URL trong các bài viết…`
-                        : 'Vui lòng đợi, không đóng trang.'
+                        ? t('editor_renaming_wp_images_body', { count: imageRenameBusyCount })
+                        : t('editor_please_wait')
                 }
             />
             <div className="seo-editor-tabs">
@@ -2445,7 +3417,7 @@ export default function SeoArticleEditor({
                         {tab.label}
                         {tab.id === 'images' ? (
                             <span className="seo-editor-tab-badge">
-                                {blocks.filter((b) => b.type === 'image').length}
+                                {imageTabCount}
                             </span>
                         ) : null}
                         {tab.id === 'seo' && analysis?.score != null ? (
@@ -2463,7 +3435,7 @@ export default function SeoArticleEditor({
                             undo();
                         }}
                         disabled={!canUndo}
-                        title={`Hoàn tác (${historySteps.undo}/${historySteps.max})`}
+                        title={t('editor_undo_with_count', { undo: historySteps.undo, max: historySteps.max })}
                     >
                         <Undo2 size={15} />
                     </button>
@@ -2476,7 +3448,7 @@ export default function SeoArticleEditor({
                             redo();
                         }}
                         disabled={!canRedo}
-                        title={`Làm lại (${historySteps.redo})`}
+                        title={t('editor_redo_with_count', { redo: historySteps.redo })}
                     >
                         <Redo2 size={15} />
                     </button>
@@ -2487,20 +3459,46 @@ export default function SeoArticleEditor({
             {activeTab === 'editor' ? (
                 <div className="editor-container">
                     <div className="max-w-none space-y-3">
-                        <div className="flex items-center justify-end">
-                            <button
-                                type="button"
-                                onClick={addSection}
-                                className="inline-flex items-center gap-2 rounded border border-sky-300 bg-sky-50 px-3 py-1.5 text-sm font-medium text-sky-700 hover:bg-sky-100"
-                            >
-                                <Plus size={14} />
-                                Thêm section
-                            </button>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="text-xs font-medium text-gray-500 dark:text-gray-300">
+                                {t('editor_total_words')}: {totalWordCount}
+                            </div>
+                            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                                <input
+                                    type="text"
+                                    value={quickReplaceFind}
+                                    onChange={(event) => setQuickReplaceFind(event.target.value)}
+                                    placeholder={t('editor_find')}
+                                    className="h-8 w-40 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                                />
+                                <input
+                                    type="text"
+                                    value={quickReplaceValue}
+                                    onChange={(event) => setQuickReplaceValue(event.target.value)}
+                                    placeholder={t('editor_replace')}
+                                    className="h-8 w-40 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={applyQuickReplaceAllSections}
+                                    className="inline-flex h-8 items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                                >
+                                    Quick Replace
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={addSection}
+                                    className="inline-flex h-8 items-center gap-2 rounded border border-sky-300 bg-sky-50 px-3 text-sm font-medium text-sky-700 hover:bg-sky-100"
+                                >
+                                    <Plus size={14} />
+                                    {t('editor_add_section')}
+                                </button>
+                            </div>
                         </div>
 
                         {blocks.length === 0 ? (
                             <p className="text-gray-400 text-center py-10 italic text-sm">
-                                Đang tải nội dung bài viết…
+                                {t('editor_loading_content')}
                             </p>
                         ) : (
                             editorSections.map((section, sectionIndex) => {
@@ -2509,14 +3507,17 @@ export default function SeoArticleEditor({
                                     .slice(0, sectionIndex + 1)
                                     .filter((item) => !item.isIntro).length;
                                 const sectionLabel = section.isIntro
-                                    ? 'Mở đầu'
+                                    ? t('editor_intro')
                                     : `Section ${sectionNumber}: ${section.title}`;
                                 const stats =
                                     sectionStats.get(section.id) ?? {
                                         imageCount: 0,
+                                        emptyImageSrcCount: 0,
+                                        hasEmptyImageSrc: false,
                                         hasTable: false,
                                         tableCount: 0,
                                         linkCount: 0,
+                                        wordCount: 0,
                                     };
 
                                 return (
@@ -2530,7 +3531,7 @@ export default function SeoArticleEditor({
                                                     type="button"
                                                     onClick={() => toggleSectionCollapse(section.id)}
                                                     className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-slate-700"
-                                                    title={isCollapsed ? 'Mở section' : 'Thu gọn section'}
+                                                    title={isCollapsed ? t('editor_expand_section') : t('editor_collapse_section')}
                                                 >
                                                     {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
                                                 </button>
@@ -2546,7 +3547,7 @@ export default function SeoArticleEditor({
                                                             ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/60 dark:bg-red-900/40 dark:text-red-200'
                                                             : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-slate-800/60 dark:text-gray-200')
                                                     }
-                                                    title="Số ảnh trong section"
+                                                    title={t('editor_section_image_count')}
                                                 >
                                                     <ImageIcon size={11} />
                                                     <span>{stats.imageCount}</span>
@@ -2555,7 +3556,7 @@ export default function SeoArticleEditor({
                                                 {stats.hasTable ? (
                                                     <span
                                                         className="ml-1 inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-800 dark:border-amber-500/60 dark:bg-amber-900/40 dark:text-amber-200"
-                                                        title="Có bảng trong section"
+                                                        title={t('editor_section_has_table')}
                                                     >
                                                         <Table size={11} />
                                                         <span>{stats.tableCount}</span>
@@ -2565,10 +3566,40 @@ export default function SeoArticleEditor({
                                                 {stats.linkCount > 0 ? (
                                                     <span
                                                         className="ml-1 inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[11px] text-emerald-800 dark:border-emerald-500/60 dark:bg-emerald-900/40 dark:text-emerald-200"
-                                                        title="Số link trong section"
+                                                        title={t('editor_section_link_count')}
                                                     >
                                                         <Link2 size={11} />
                                                         <span>{stats.linkCount}</span>
+                                                    </span>
+                                                ) : null}
+
+                                                <span
+                                                    className="ml-1 inline-flex items-center gap-1 rounded border border-indigo-300 bg-indigo-50 px-1.5 py-0.5 text-[11px] text-indigo-800 dark:border-indigo-500/60 dark:bg-indigo-900/40 dark:text-indigo-200"
+                                                    title={t('editor_section_word_count')}
+                                                >
+                                                    <span>W</span>
+                                                    <span>{stats.wordCount}</span>
+                                                </span>
+
+                                                {stats.imageCount === 0 ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => quickGenerateImageForSection(section)}
+                                                        className="ml-2 inline-flex items-center gap-1 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/70 dark:bg-sky-900/30 dark:text-sky-200"
+                                                        title={t('editor_quick_generate_image_section')}
+                                                    >
+                                                        <Wand2 size={11} />
+                                                        <span>{t('editor_quick_generate_image')}</span>
+                                                    </button>
+                                                ) : null}
+
+                                                {stats.hasEmptyImageSrc ? (
+                                                    <span
+                                                        className="ml-2 inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700 dark:border-rose-500/70 dark:bg-rose-900/30 dark:text-rose-200"
+                                                        title={t('editor_section_has_empty_src')}
+                                                    >
+                                                        <AlertTriangle size={11} />
+                                                        <span>{t('editor_empty_src_count', { count: stats.emptyImageSrcCount })}</span>
                                                     </span>
                                                 ) : null}
 
@@ -2707,6 +3738,7 @@ export default function SeoArticleEditor({
                 <ArticleImagesTab
                     key={imagesReloadKey}
                     blocks={blocks}
+                    extraImages={supplementalImages}
                     siteId={siteId}
                     articleId={articleId}
                     focusKeyword={focusKeyword}
@@ -2716,6 +3748,14 @@ export default function SeoArticleEditor({
                     onFocusBlock={focusImageBlock}
                     onQuickFixAll={quickFixAllImages}
                     onQuickFixOne={quickFixSingleImage}
+                    onNotify={(payload) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                        );
+                    }}
+                />
+            ) : activeTab === 'auto-image' ? (
+                <AutoImageGenerateTab
                     onNotify={(payload) => {
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', { detail: payload }),

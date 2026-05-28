@@ -93,9 +93,12 @@
                             <span class="text-gray-500">{{ $this->getPermalinkBase() }}/</span>
                             <input
                                 type="text"
-                                wire:model.blur="articleSlug"
+                                wire:model.live.debounce.250ms="articleSlug"
                                 class="inline-block w-auto max-w-[200px] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
                             />
+                            @if ($this->getPermalinkSuffix() !== '')
+                                <span class="text-gray-500">{{ $this->getPermalinkSuffix() }}</span>
+                            @endif
                             <button
                                 type="button"
                                 wire:click="$set('editingSlug', false)"
@@ -104,14 +107,14 @@
                                 OK
                             </button>
                         @else
-                            @php($articlePermalink = $this->getArticlePermalink())
+                            @php($previewPermalink = $this->getDisplayPermalink())
                             <a
-                                href="{{ $articlePermalink !== '' ? $articlePermalink : '#' }}"
+                                href="{{ $previewPermalink !== '' ? $previewPermalink : '#' }}"
                                 target="_blank"
                                 rel="noopener"
                                 class="text-sky-600 dark:text-sky-400 hover:underline break-all"
                             >
-                                {{ $articlePermalink !== '' ? $articlePermalink : $this->getPermalinkBase() . '/' . $this->getDisplaySlug() }}
+                                {{ $previewPermalink !== '' ? $previewPermalink : ($this->getPermalinkBase() !== '' ? $this->getPermalinkBase() . '/sample-post' : '#') }}
                             </a>
                             <button
                                 type="button"
@@ -132,6 +135,9 @@
                 <script type="application/json" id="seo-article-meta">@json($this->getEditorMetaPayload())</script>
                 <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
+                <script>
+                    window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
+                </script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
 
@@ -176,6 +182,12 @@
                         </div>
 
                         <div class="space-y-3 border-y border-gray-200 py-3 dark:border-gray-700">
+                            @if ($record->wp_post_id)
+                                <div class="text-xs">
+                                    <span class="text-gray-500 dark:text-gray-400">WP ID:</span>
+                                    <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
+                                </div>
+                            @endif
                             <div class="text-xs">
                                 <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
                                 <strong class="text-gray-800 dark:text-gray-100">{{ $this->getStatusLabelForPublishBox() }}</strong>
@@ -298,9 +310,6 @@
                             </div>
                         </div>
 
-                        @if ($record->wp_post_id)
-                            <div class="text-xs text-gray-500">WordPress ID: {{ $record->wp_post_id }}</div>
-                        @endif
                         <p class="text-xs text-gray-500 dark:text-gray-400">
                             Nháp editor lưu cục bộ trong trình duyệt. «Lưu» ghi vào hệ thống SEO; «Đồng bộ» đẩy lên WordPress.
                         </p>
@@ -345,42 +354,44 @@
                     </div>
                 </div>
 
-                {{-- Ảnh đại diện --}}
-                <div class="wp-postbox">
-                    <div class="wp-postbox-header">
-                        <h2>Ảnh đại diện</h2>
+                @if (! $this->supportsProductGallery())
+                    {{-- Ảnh đại diện --}}
+                    <div class="wp-postbox">
+                        <div class="wp-postbox-header">
+                            <h2>Ảnh đại diện</h2>
+                        </div>
+                        <div class="wp-postbox-inside text-center">
+                            <button
+                                type="button"
+                                x-on:click="openArticleMediaModal('featured')"
+                                class="wp-featured-image-picker"
+                                title="Chọn ảnh từ thư viện WordPress"
+                            >
+                                @if ($featuredImageUrl)
+                                    <img
+                                        src="{{ $featuredImageUrl }}"
+                                        alt="Ảnh đại diện"
+                                        class="wp-featured-image-picker__img"
+                                    />
+                                @else
+                                    <span class="wp-featured-image-picker__empty">
+                                        <svg class="mx-auto h-12 w-12 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                        </svg>
+                                        <span class="wp-featured-image-picker__label">Đặt ảnh đại diện</span>
+                                    </span>
+                                @endif
+                            </button>
+                            <p class="mt-2 text-xs text-gray-500">
+                                @if ($featuredImageUrl)
+                                    Đã lưu cục bộ · «Đồng bộ» để đẩy lên WordPress
+                                @else
+                                    Bấm để chọn từ thư viện Media
+                                @endif
+                            </p>
+                        </div>
                     </div>
-                    <div class="wp-postbox-inside text-center">
-                        <button
-                            type="button"
-                            x-on:click="openArticleMediaModal('featured')"
-                            class="wp-featured-image-picker"
-                            title="Chọn ảnh từ thư viện WordPress"
-                        >
-                            @if ($featuredImageUrl)
-                                <img
-                                    src="{{ $featuredImageUrl }}"
-                                    alt="Ảnh đại diện"
-                                    class="wp-featured-image-picker__img"
-                                />
-                            @else
-                                <span class="wp-featured-image-picker__empty">
-                                    <svg class="mx-auto h-12 w-12 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                                    </svg>
-                                    <span class="wp-featured-image-picker__label">Đặt ảnh đại diện</span>
-                                </span>
-                            @endif
-                        </button>
-                        <p class="mt-2 text-xs text-gray-500">
-                            @if ($featuredImageUrl)
-                                Đã lưu cục bộ · «Đồng bộ» để đẩy lên WordPress
-                            @else
-                                Bấm để chọn từ thư viện Media
-                            @endif
-                        </p>
-                    </div>
-                </div>
+                @endif
 
                 @if ($this->supportsProductGallery())
                     {{-- Album hình ảnh sản phẩm (WooCommerce) --}}
@@ -388,23 +399,78 @@
                         <div class="wp-postbox-header">
                             <h2>Album hình ảnh sản phẩm</h2>
                         </div>
-                        <div class="wp-postbox-inside">
+                        <div
+                            class="wp-postbox-inside"
+                            x-data="{
+                                dragUrl: null,
+                                startDrag(event) {
+                                    this.dragUrl = event.currentTarget.dataset.galleryUrl || null;
+                                },
+                                onDrop(event) {
+                                    event.preventDefault();
+                                    if (!this.dragUrl) return;
+                                    const target = event.currentTarget.closest('[data-gallery-url]');
+                                    const targetUrl = target?.dataset?.galleryUrl || null;
+                                    if (!targetUrl || targetUrl === this.dragUrl) return;
+
+                                    const list = Array.from($el.querySelectorAll('[data-gallery-url]'));
+                                    const dragNode = list.find((node) => node.dataset.galleryUrl === this.dragUrl);
+                                    const targetNode = list.find((node) => node.dataset.galleryUrl === targetUrl);
+                                    if (!dragNode || !targetNode) return;
+
+                                    const parent = dragNode.parentNode;
+                                    parent.insertBefore(dragNode, targetNode);
+                                    const ordered = Array.from(parent.querySelectorAll('[data-gallery-url]'))
+                                        .map((node) => node.dataset.galleryUrl)
+                                        .filter(Boolean);
+                                    $wire.reorderProductGallery(ordered);
+                                },
+                                allowDrop(event) {
+                                    event.preventDefault();
+                                },
+                                finishDrag() {
+                                    this.dragUrl = null;
+                                },
+                            }"
+                        >
                             @if (count($productGallery) > 0)
                                 <div class="wp-product-gallery-grid" role="list">
-                                    @foreach ($productGallery as $image)
-                                        <a
-                                            href="{{ $image['url'] }}"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                    @foreach ($productGallery as $idx => $image)
+                                        <div
                                             class="wp-product-gallery-thumb-wrap"
                                             role="listitem"
+                                            draggable="true"
+                                            data-gallery-url="{{ $image['url'] }}"
+                                            x-on:dragstart="startDrag($event)"
+                                            x-on:dragover="allowDrop($event)"
+                                            x-on:drop="onDrop($event)"
+                                            x-on:dragend="finishDrag()"
                                         >
-                                            <img
-                                                src="{{ $image['url'] }}"
-                                                alt=""
-                                                class="wp-product-gallery-thumb"
-                                            />
-                                        </a>
+                                            <a
+                                                href="{{ $image['url'] }}"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="wp-product-gallery-thumb-link"
+                                            >
+                                                <img
+                                                    src="{{ $image['url'] }}"
+                                                    alt=""
+                                                    class="wp-product-gallery-thumb"
+                                                />
+                                            </a>
+                                            @if ($idx === 0)
+                                                <span class="wp-product-gallery-badge">Đại diện</span>
+                                            @endif
+                                            <button
+                                                type="button"
+                                                class="wp-product-gallery-remove"
+                                                wire:click="removeProductGalleryImage(@js($image['url']))"
+                                                title="Xóa ảnh khỏi album"
+                                                aria-label="Xóa ảnh khỏi album"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
                                     @endforeach
                                 </div>
                             @endif
@@ -418,11 +484,21 @@
                             </button>
                             <p class="mt-1 text-xs text-gray-500">
                                 @if (count($productGallery) > 0)
-                                    {{ count($productGallery) }} ảnh · «Đồng bộ» để đẩy lên WordPress
+                                    {{ count($productGallery) }} ảnh · Ảnh đầu là đại diện · Kéo thả để đổi vị trí
                                 @else
                                     Chưa có ảnh trong album
                                 @endif
                             </p>
+                            <script>
+                                try {
+                                    window.localStorage.setItem(
+                                        'seo_product_album_list_{{ (int) $record->getKey() }}',
+                                        JSON.stringify(@json($productGallery))
+                                    );
+                                } catch (error) {
+                                    // ignore localStorage failures
+                                }
+                            </script>
                         </div>
                     </div>
                 @endif
@@ -466,6 +542,13 @@
                 <div class="seo-article-media-modal__tabs">
                     <button
                         type="button"
+                        wire:click="setMediaPickerTab('article')"
+                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'article' ? 'is-active' : '' }}"
+                    >
+                        Trong bài
+                    </button>
+                    <button
+                        type="button"
                         wire:click="setMediaPickerTab('original')"
                         class="seo-article-media-modal__tab {{ $mediaPickerTab === 'original' ? 'is-active' : '' }}"
                     >
@@ -485,10 +568,21 @@
                         type="search"
                         wire:model.live.debounce.400ms="mediaPickerSearch"
                         class="seo-article-media-modal__search"
-                        placeholder="{{ $mediaPickerTab === 'local' ? 'Tìm slug, alt, tên file (Laravel)…' : 'Tìm slug, alt, caption (WP search)…' }}"
+                        placeholder="{{ match ($mediaPickerTab) {
+                            'article' => 'Tìm slug, alt trong bài…',
+                            'local' => 'Tìm slug, alt, tên file (Laravel)…',
+                            default => 'Tìm slug, alt, caption (WP search)…',
+                        } }}"
                         autocomplete="off"
                         x-on:keydown.escape="closeArticleMediaModal()"
                     />
+                    <button
+                        type="button"
+                        wire:click="reloadMediaPickerImages"
+                        class="seo-article-media-modal__reload"
+                    >
+                        Reload
+                    </button>
                 </div>
 
                 @if ($mediaPickerError)
@@ -510,14 +604,16 @@
 
                     <div x-show="!pickerLoading" x-cloak>
                         @if (empty($mediaPickerImages) && ! $mediaPickerError)
-                            <p class="seo-article-media-modal__empty">Không có ảnh trong thư viện.</p>
+                            <p class="seo-article-media-modal__empty">
+                                {{ $mediaPickerTab === 'article' ? 'Chưa có ảnh trong nội dung bài viết.' : 'Không có ảnh trong thư viện.' }}
+                            </p>
                         @elseif (! empty($mediaPickerImages))
                             <div class="seo-article-media-modal__grid">
                                 @foreach ($mediaPickerImages as $image)
                                     <button
                                         type="button"
                                         class="seo-article-media-modal__item"
-                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? 0) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''), {{ (int) ($image['seo_media_id'] ?? ($mediaPickerTab === 'local' ? ($image['id'] ?? 0) : 0)) }})"
+                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? ($mediaPickerTab === 'original' ? ($image['id'] ?? 0) : 0)) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''), {{ (int) ($image['seo_media_id'] ?? ($mediaPickerTab === 'local' ? ($image['id'] ?? 0) : 0)) }})"
                                         wire:key="picker-media-{{ $mediaPickerTab }}-{{ $mediaPickerPage }}-{{ $image['id'] }}"
                                     >
                                         <img

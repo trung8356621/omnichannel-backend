@@ -27,7 +27,7 @@ class AiConnectionResource extends Resource
 
     public static function shouldRegisterNavigation(): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return false;
     }
 
     public static function canViewAny(): bool
@@ -50,16 +50,16 @@ class AiConnectionResource extends Resource
         return SeoAccessControl::canAccessManagerFeatures();
     }
 
-    protected static ?string $modelLabel = 'Kết nối AI';
+    protected static ?string $modelLabel = 'AI connection';
 
-    protected static ?string $pluralModelLabel = 'Cấu hình AI';
+    protected static ?string $pluralModelLabel = 'AI settings';
 
     public static function form(Form $form): Form
     {
         return $form
             ->schema([
                 Forms\Components\Select::make('provider')
-                    ->label('Nhà cung cấp')
+                    ->label(__('seo-content-ai::filament.ai_connection.provider'))
                     ->options([
                         'gemini' => 'Google Gemini',
                         'claude' => 'Anthropic Claude',
@@ -72,39 +72,35 @@ class AiConnectionResource extends Resource
                             '<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" '
                             . 'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
                             . 'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            . e(app()->getLocale() === 'vi'
-                                ? '👉 Hướng dẫn lấy API Key Gemini tại Google AI Studio'
-                                : '👉 How to get Gemini API Key from Google AI Studio')
+                            . e('👉 How to get Gemini API key from Google AI Studio')
                             . '</a>'
                         ),
                         'claude' => new HtmlString(
                             '<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" '
                             . 'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
                             . 'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            . e(app()->getLocale() === 'vi'
-                                ? '👉 Hướng dẫn lấy API Key Claude tại Anthropic Console'
-                                : '👉 How to get Claude API Key from Anthropic Console')
+                            . e('👉 How to get Claude API key from Anthropic Console')
                             . '</a>'
                         ),
                         default => null,
                     }),
                 Forms\Components\TextInput::make('name')
-                    ->label('Tên gợi nhớ (VD: API Claude Chính)')
+                    ->label(__('seo-content-ai::filament.ai_connection.name'))
                     ->required()
                     ->maxLength(255),
                 Forms\Components\TextInput::make('api_key')
-                    ->label('API Key')
+                    ->label(__('seo-content-ai::filament.ai_connection.api_key'))
                     ->password()
                     ->revealable()
                     ->required(fn (string $operation): bool => $operation === 'create')
                     ->dehydrated(fn (?string $state): bool => filled($state))
                     ->maxLength(65535)
-                    ->helperText('Sau khi lưu, hệ thống tự đồng bộ danh sách model từ API (nút «Đồng bộ model» trên trang sửa).'),
+                    ->helperText(__('seo-content-ai::filament.ai_connection.helper_sync')),
                 Forms\Components\Select::make('status')
-                    ->label('Trạng thái')
+                    ->label(__('seo-content-ai::filament.ai_connection.status'))
                     ->options([
-                        'active' => 'Hoạt động',
-                        'inactive' => 'Tắt',
+                        'active' => __('seo-content-ai::filament.ai_connection.active'),
+                        'inactive' => __('seo-content-ai::filament.ai_connection.inactive'),
                     ])
                     ->default('active')
                     ->native(false),
@@ -119,7 +115,7 @@ class AiConnectionResource extends Resource
             ])
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label('Kết nối')
+                    ->label(__('seo-content-ai::filament.ai_connection.model'))
                     ->description(fn (ApiConnection $record): string => match ($record->provider) {
                         'gemini' => 'Google Gemini',
                         'claude' => 'Anthropic Claude',

@@ -16,7 +16,7 @@ class CreateAiConnection extends CreateRecord
 
     public function getTitle(): string
     {
-        return __('Thêm kết nối AI');
+        return __('Add AI connection');
     }
 
     protected function mutateFormDataBeforeCreate(array $data): array

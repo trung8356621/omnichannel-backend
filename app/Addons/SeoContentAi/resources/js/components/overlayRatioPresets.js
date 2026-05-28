@@ -1,6 +1,6 @@
 /**
- * Tỉ lệ khung hình thông dụng (màn hình + ảnh web).
- * Export: cạnh dài = OVERLAY_EXPORT_MAX px để render không bể.
+ * Common aspect ratios (screen + web images).
+ * Export long edge = OVERLAY_EXPORT_MAX px.
  */
 export const OVERLAY_EXPORT_MAX = 2000;
 
@@ -9,11 +9,11 @@ export const OVERLAY_EXPORT_MAX = 2000;
 /** @type {OverlayRatioPreset[]} */
 export const OVERLAY_RATIO_PRESETS = [
     { key: '16x9', label: '16:9 — Desktop / hero', rw: 16, rh: 9 },
-    { key: '4x3', label: '4:3 — Ảnh / tablet ngang', rw: 4, rh: 3 },
-    { key: '3x2', label: '3:2 — Máy ảnh', rw: 3, rh: 2 },
-    { key: '1x1', label: '1:1 — Vuông', rw: 1, rh: 1 },
-    { key: '9x16', label: '9:16 — Mobile / Story', rw: 9, rh: 16 },
-    { key: '3x4', label: '3:4 — Portrait nhỏ', rw: 3, rh: 4 },
+    { key: '4x3', label: '4:3 — Image / landscape tablet', rw: 4, rh: 3 },
+    { key: '3x2', label: '3:2 — Camera', rw: 3, rh: 2 },
+    { key: '1x1', label: '1:1 — Square', rw: 1, rh: 1 },
+    { key: '9x16', label: '9:16 — Mobile / story', rw: 9, rh: 16 },
+    { key: '3x4', label: '3:4 — Small portrait', rw: 3, rh: 4 },
     { key: '2x3', label: '2:3 — Portrait', rw: 2, rh: 3 },
     { key: '21x9', label: '21:9 — Ultrawide', rw: 21, rh: 9 },
 ];
@@ -47,7 +47,7 @@ export function dimensionsForPreset(preset) {
 }
 
 /**
- * Chọn overlay có tỉ lệ gần ảnh đích nhất (cùng logic server).
+ * Pick overlay variant closest to target ratio.
  *
  * @param {number} targetWidth
  * @param {number} targetHeight

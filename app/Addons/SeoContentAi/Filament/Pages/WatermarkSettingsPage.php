@@ -29,13 +29,13 @@ class WatermarkSettingsPage extends Page implements HasForms
 
     protected static ?string $navigationIcon = 'heroicon-o-bookmark-square';
 
-    protected static ?string $navigationLabel = 'Cấu hình tự động';
+    protected static ?string $navigationLabel = 'Auto watermark settings';
 
-    protected static ?string $title = 'Cài đặt tự động đóng dấu ảnh';
+    protected static ?string $title = 'Automatic image watermark settings';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationParentItem = 'Thư viện hình ảnh';
+    protected static ?string $navigationParentItem = 'Media library';
 
     protected static ?int $navigationSort = 7;
 
@@ -73,7 +73,7 @@ class WatermarkSettingsPage extends Page implements HasForms
                 'auto_watermark' => false,
                 'position' => 'bottom-right',
                 'opacity' => 0.7,
-                'text_content' => 'Bản quyền hình ảnh',
+                'text_content' => 'Image copyright',
             ]);
 
             return;
@@ -87,7 +87,7 @@ class WatermarkSettingsPage extends Page implements HasForms
                 'auto_watermark' => false,
                 'position' => 'bottom-right',
                 'opacity' => 0.7,
-                'text_content' => 'Bản quyền hình ảnh',
+                'text_content' => 'Image copyright',
                 'text_color' => '#ffffff',
                 'text_size' => 20,
                 'logo_width_pct' => 20,
@@ -113,51 +113,51 @@ class WatermarkSettingsPage extends Page implements HasForms
     {
         return $form
             ->schema([
-                Section::make('Cài đặt tự động hóa đóng dấu bản quyền')
-                    ->description('Áp dụng khi upload/dán ảnh vào thư viện nội bộ. Thiết kế trực quan mở tại «Thiết kế đóng dấu».')
+                Section::make('Automatic watermark settings')
+                    ->description('Applied when uploading/pasting images to local library. Visual design is managed in "Watermark designer".')
                     ->schema([
                         Toggle::make('auto_watermark')
-                            ->label('Tự động đóng dấu khi tải ảnh lên (Upload/Paste)'),
+                            ->label('Automatically watermark on image upload (Upload/Paste)'),
 
                         Select::make('type')
-                            ->label('Loại đóng dấu mặc định')
+                            ->label('Default watermark type')
                             ->options([
-                                'none' => 'Không đóng dấu',
-                                'text' => 'Sử dụng chữ (Text)',
-                                'image' => 'Sử dụng Logo (Image)',
+                                'none' => 'No watermark',
+                                'text' => 'Text watermark',
+                                'image' => 'Logo watermark',
                             ])
                             ->live()
                             ->required(),
 
                         TextInput::make('text_content')
-                            ->label('Nội dung chữ đóng dấu mặc định')
+                            ->label('Default watermark text content')
                             ->visible(fn ($get) => $get('type') === 'text')
                             ->maxLength(500),
 
                         FileUpload::make('logo_path')
-                            ->label('File ảnh Logo bản quyền')
+                            ->label('Watermark logo image file')
                             ->disk('public')
                             ->directory('uploads/watermarks')
                             ->image()
                             ->visible(fn ($get) => $get('type') === 'image'),
 
                         Select::make('position')
-                            ->label('Vị trí mặc định')
+                            ->label('Default position')
                             ->options([
-                                'top-left' => 'Góc trên — Trái',
-                                'top-center' => 'Góc trên — Giữa',
-                                'top-right' => 'Góc trên — Phải',
-                                'center-left' => 'Giữa — Trái',
-                                'center' => 'Chính giữa ảnh',
-                                'center-right' => 'Giữa — Phải',
-                                'bottom-left' => 'Góc dưới — Trái',
-                                'bottom-center' => 'Góc dưới — Giữa',
-                                'bottom-right' => 'Góc dưới — Phải',
+                                'top-left' => 'Top - Left',
+                                'top-center' => 'Top - Center',
+                                'top-right' => 'Top - Right',
+                                'center-left' => 'Center - Left',
+                                'center' => 'Center',
+                                'center-right' => 'Center - Right',
+                                'bottom-left' => 'Bottom - Left',
+                                'bottom-center' => 'Bottom - Center',
+                                'bottom-right' => 'Bottom - Right',
                             ])
                             ->required(),
 
                         TextInput::make('opacity')
-                            ->label('Độ mờ mặc định (0.1 — 1.0)')
+                            ->label('Default opacity (0.1 - 1.0)')
                             ->numeric()
                             ->minValue(0.1)
                             ->maxValue(1)
@@ -166,13 +166,13 @@ class WatermarkSettingsPage extends Page implements HasForms
                             ->required(),
 
                         TextInput::make('text_size')
-                            ->label('Cỡ chữ (px)')
+                            ->label('Text size (px)')
                             ->numeric()
                             ->visible(fn ($get) => $get('type') === 'text')
                             ->default(20),
 
                         TextInput::make('logo_width_pct')
-                            ->label('Chiều rộng logo (% ảnh)')
+                            ->label('Logo width (% of image)')
                             ->numeric()
                             ->visible(fn ($get) => $get('type') === 'image')
                             ->default(20),
@@ -189,7 +189,7 @@ class WatermarkSettingsPage extends Page implements HasForms
     public function save(): void
     {
         if ($this->siteId === null) {
-            Notification::make()->title('Chọn website')->warning()->send();
+            Notification::make()->title('Select website')->warning()->send();
 
             return;
         }
@@ -225,7 +225,7 @@ class WatermarkSettingsPage extends Page implements HasForms
         );
 
         Notification::make()
-            ->title('Đã lưu cấu hình tự động đóng dấu thành công!')
+            ->title('Automatic watermark settings saved successfully')
             ->success()
             ->send();
     }
@@ -233,7 +233,7 @@ class WatermarkSettingsPage extends Page implements HasForms
     public function applyBatchToCurrentSite(): void
     {
         if ($this->siteId === null) {
-            Notification::make()->title('Chọn tên miền')->warning()->send();
+            Notification::make()->title('Select domain')->warning()->send();
 
             return;
         }
@@ -260,33 +260,33 @@ class WatermarkSettingsPage extends Page implements HasForms
         }
 
         $modeLabel = $this->batchApplyWatermark
-            ? 'Đóng dấu + tối ưu (WebP)'
-            : 'Chỉ tối ưu (bỏ qua file .webp)';
+            ? 'Watermark + optimize (WebP)'
+            : 'Optimize only (skip .webp files)';
 
         $body = $modeLabel . "\n";
         $body .= sprintf(
-            'Nội bộ — đóng dấu: %d · tối ưu: %d · bỏ qua: %d.',
+            'Local - watermarked: %d · optimized: %d · skipped: %d.',
             (int) ($result['local_watermark'] ?? 0),
             (int) ($result['local_optimize'] ?? 0),
             (int) ($result['local_skipped'] ?? 0),
         );
         $body .= "\n" . sprintf(
-            'WordPress — đóng dấu: %d · tối ưu: %d · bỏ qua: %d.',
+            'WordPress - watermarked: %d · optimized: %d · skipped: %d.',
             (int) ($result['wp_watermark'] ?? 0),
             (int) ($result['wp_optimize'] ?? 0),
             (int) ($result['wp_skipped'] ?? 0),
         );
 
         if ((int) ($result['wp_errors'] ?? 0) > 0) {
-            $body .= "\nLỗi WP: " . (int) $result['wp_errors'] . '.';
+            $body .= "\nWP errors: " . (int) $result['wp_errors'] . '.';
         }
 
         if ($this->batchApplyWatermark) {
-            $body .= "\nẢnh gốc WP được backup trên Laravel (lần đầu).";
+            $body .= "\nOriginal WordPress images are backed up on Laravel (first run).";
         }
 
         Notification::make()
-            ->title('Đã xử lý hàng loạt')
+            ->title('Batch processing completed')
             ->body($body)
             ->success()
             ->duration(15000)
@@ -297,22 +297,22 @@ class WatermarkSettingsPage extends Page implements HasForms
     {
         return [
             Action::make('open_designer')
-                ->label('Mở thiết kế trực quan')
+                ->label('Open visual designer')
                 ->icon('heroicon-o-paint-brush')
                 ->url(fn (): string => WatermarkEditor::getUrl([
                     'siteId' => $this->siteId,
                 ])),
             Action::make('batch_watermark')
-                ->label('Áp dụng toàn bộ ảnh')
+                ->label('Apply to all images')
                 ->icon('heroicon-o-photo')
                 ->color('warning')
                 ->requiresConfirmation()
-                ->modalHeading('Áp dụng toàn bộ ảnh')
+                ->modalHeading('Apply to all images')
                 ->modalDescription(
-                    'Tối ưu ảnh (resize, WebP theo cấu hình «Tối ưu hình ảnh»). '
-                    . 'Nếu bật Watermark trên trang: thêm đóng dấu trước khi tối ưu. '
-                    . 'Chế độ chỉ tối ưu: bỏ qua file đã là .webp. '
-                    . 'Ảnh WP được backup gốc trên Laravel khi có chỉnh sửa.'
+                    'Optimize images (resize, WebP based on "Image optimization settings"). '
+                    . 'If watermark is enabled: apply watermark before optimization. '
+                    . 'Optimize-only mode skips files already in .webp format. '
+                    . 'WordPress images are backed up on Laravel when edited.'
                 )
                 ->action('applyBatchToCurrentSite')
                 ->visible(fn (): bool => $this->siteId !== null),
@@ -341,5 +341,20 @@ class WatermarkSettingsPage extends Page implements HasForms
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.auto_watermark_settings');
+    }
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return __('seo-content-ai::filament.nav.media_library');
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.nav.auto_watermark_settings_title');
     }
 }

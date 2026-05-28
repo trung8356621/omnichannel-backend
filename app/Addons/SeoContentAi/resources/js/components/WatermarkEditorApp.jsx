@@ -17,6 +17,7 @@ import { drawCtaButton } from './watermarkCtaDraw';
 import { WATERMARK_CTA_ICONS } from './watermarkCtaIcons';
 import { loadCustomIconImage } from './watermarkCustomIcon';
 import WatermarkOverlayPreviewPanel from './WatermarkOverlayPreviewPanel';
+import { t } from '../utils/i18n';
 
 function extractOverlayPreviews(config) {
     return Array.isArray(config?.overlay_previews) ? config.overlay_previews : [];
@@ -79,8 +80,8 @@ const POSITIONABLE_PATTERNS = new Set(['cta_button', 'circular_badge', 'security
 const PATTERNS = [
     {
         id: 'cta_button',
-        name: 'Nút kêu gọi (CTA)',
-        description: 'Button icon + viền đa tầng',
+        name: t('watermark_pattern_cta_name'),
+        description: t('watermark_pattern_cta_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <rect x="3" y="7" width="18" height="10" rx="3" strokeWidth={1.5} />
@@ -90,8 +91,8 @@ const PATTERNS = [
     },
     {
         id: 'classic_grid',
-        name: 'Lưới chéo (Grid)',
-        description: 'Chữ lặp phủ kín ảnh',
+        name: t('watermark_pattern_grid_name'),
+        description: t('watermark_pattern_grid_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6h16M4 12h16M4 18h16M10 6v12M14 6v12" />
@@ -100,8 +101,8 @@ const PATTERNS = [
     },
     {
         id: 'circular_badge',
-        name: 'Dấu tròn cổ điển',
-        description: 'Chữ uốn vòng tròn',
+        name: t('watermark_pattern_badge_name'),
+        description: t('watermark_pattern_badge_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <circle cx="12" cy="12" r="9" strokeWidth={1.5} />
@@ -111,8 +112,8 @@ const PATTERNS = [
     },
     {
         id: 'security_rect',
-        name: 'Khung bảo mật',
-        description: 'Viền nét đứt, chữ nghiêng',
+        name: t('watermark_pattern_security_name'),
+        description: t('watermark_pattern_security_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <rect x="3" y="6" width="18" height="12" rx="2" strokeWidth={1.5} strokeDasharray="3 2" />
@@ -122,8 +123,8 @@ const PATTERNS = [
     },
     {
         id: 'elegant_sig',
-        name: 'Chữ ký nghiêng',
-        description: 'Minimalist góc ảnh',
+        name: t('watermark_pattern_signature_name'),
+        description: t('watermark_pattern_signature_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <path
@@ -137,8 +138,8 @@ const PATTERNS = [
     },
     {
         id: 'minimal_frame',
-        name: 'Khung viền kép',
-        description: 'Viền mảnh toàn ảnh',
+        name: t('watermark_pattern_frame_name'),
+        description: t('watermark_pattern_frame_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <rect x="4" y="4" width="16" height="16" strokeWidth={1.5} />
@@ -148,8 +149,8 @@ const PATTERNS = [
     },
     {
         id: 'full_cross',
-        name: 'Khung góc thẩm mỹ',
-        description: 'L-shape 4 góc + chữ dọc',
+        name: t('watermark_pattern_corner_name'),
+        description: t('watermark_pattern_corner_desc'),
         icon: (
             <svg className="wm-pattern-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
                 <path
@@ -269,7 +270,7 @@ export default function WatermarkEditorApp({
     const [text1, setText1] = useState(
         initialConfig.text1 ?? initialConfig.text ?? '© OMI SEO WORKFLOW',
     );
-    const [text2, setText2] = useState(initialConfig.text2 ?? 'LIÊN HỆ NGAY');
+    const [text2, setText2] = useState(initialConfig.text2 ?? t('watermark_contact_now'));
     const [textColorConfig, setTextColorConfig] = useState(
         initialConfig.textColorConfig ??
             defaultColorConfig({
@@ -343,7 +344,7 @@ export default function WatermarkEditorApp({
             setSampleImage(img);
             setMessage(null);
         };
-        img.onerror = () => setMessage({ type: 'error', text: 'Không tải được ảnh mẫu.' });
+        img.onerror = () => setMessage({ type: 'error', text: t('watermark_sample_image_load_failed') });
     }, [sampleUrl]);
 
     // Tự động nạp Google Font khi chọn trên select
@@ -366,7 +367,7 @@ export default function WatermarkEditorApp({
         }
 
         const fontUrl = googleFontStylesheetUrl(fontObj.url_param);
-        setFontStatus('Đang nạp font chữ...');
+        setFontStatus(t('watermark_loading_font'));
 
         let link = document.querySelector(`link[data-wm-font="${fontObj.url_param}"]`);
         if (!link) {
@@ -389,7 +390,7 @@ export default function WatermarkEditorApp({
 
         link.onload = onReady;
         link.onerror = () => {
-            setFontStatus('Lỗi nạp font!');
+            setFontStatus(t('watermark_font_load_error'));
             setTimeout(() => setFontStatus(''), 3000);
         };
     }, [selectedFont]);
@@ -414,7 +415,7 @@ export default function WatermarkEditorApp({
             .catch(() => {
                 if (!cancelled) {
                     setCustomIconImage(null);
-                    setCustomIconError('SVG không hợp lệ hoặc trình duyệt không đọc được.');
+                    setCustomIconError(t('watermark_custom_svg_invalid'));
                 }
             });
 
@@ -603,11 +604,11 @@ export default function WatermarkEditorApp({
     const exportBlob = () =>
         new Promise((resolve, reject) => {
             if (!canvasRef.current) {
-                reject(new Error('Canvas chưa sẵn sàng.'));
+                reject(new Error(t('watermark_canvas_not_ready')));
                 return;
             }
             canvasRef.current.toBlob(
-                (blob) => (blob ? resolve(blob) : reject(new Error('Xuất ảnh thất bại.'))),
+                (blob) => (blob ? resolve(blob) : reject(new Error(t('watermark_export_failed_alt')))),
                 'image/png',
                 0.92,
             );
@@ -629,7 +630,7 @@ export default function WatermarkEditorApp({
 
     const handleSaveConfig = async () => {
         if (!siteId) {
-            setMessage({ type: 'error', text: 'Chọn website trước khi lưu.' });
+            setMessage({ type: 'error', text: t('watermark_choose_site_before_save') });
             return;
         }
 
@@ -722,11 +723,11 @@ export default function WatermarkEditorApp({
                 await saveWatermarkedMedia(imageId, blob, mode);
                 setMessage({
                     type: 'success',
-                    text: mode === 'new' ? 'Đã lưu ảnh mới.' : 'Đã lưu đè ảnh.',
+                    text: mode === 'new' ? t('watermark_saved_new_image') : t('watermark_saved_overwritten'),
                 });
             } else {
                 await saveNewWatermarkedImage(siteId, blob);
-                setMessage({ type: 'success', text: 'Đã lưu ảnh vào thư viện nội bộ.' });
+                setMessage({ type: 'success', text: t('watermark_saved_to_internal_library') });
             }
         } catch (err) {
             setMessage({ type: 'error', text: err.message });
@@ -829,7 +830,7 @@ export default function WatermarkEditorApp({
             {/* Cột trái: mẫu đóng dấu */}
             <aside className="wm-patterns">
                 <div className="wm-patterns__head">
-                    <span>1. Mẫu đóng dấu</span>
+                    <span>{t('watermark_step_1_pattern')}</span>
                 </div>
                 <div className="wm-patterns__list">
                     {PATTERNS.map((p) => (
@@ -849,7 +850,7 @@ export default function WatermarkEditorApp({
                 </div>
                 <div className="wm-patterns__foot">
                     <button type="button" className="wm-btn wm-btn--ghost wm-btn--block" onClick={handleClose}>
-                        Quay lại
+                        {t('watermark_back')}
                     </button>
                 </div>
             </aside>
@@ -858,9 +859,9 @@ export default function WatermarkEditorApp({
             <div className="wm-workspace">
                 <div className="wm-topbar">
                     <span className="wm-topbar__title">
-                        Bộ thiết kế Watermark
+                        {t('watermark_design_suite')}
                         {siteDomain ? (
-                            <span className="wm-topbar__domain" title="Domain đang cấu hình">
+                            <span className="wm-topbar__domain" title={t('watermark_configuring_domain')}>
                                 {' '}
                                 · {siteDomain}
                             </span>
@@ -871,10 +872,10 @@ export default function WatermarkEditorApp({
                     </span>
                     <div className="wm-topbar__actions">
                         <button type="button" className="wm-btn wm-btn--ghost" onClick={() => setPickerOpen(true)}>
-                            Ảnh mẫu
+                            {t('watermark_sample_image')}
                         </button>
                         <button type="button" className="wm-btn wm-btn--ghost" onClick={handleDownload}>
-                            Tải ảnh test
+                            {t('watermark_download_test')}
                         </button>
                         <button
                             type="button"
@@ -882,7 +883,7 @@ export default function WatermarkEditorApp({
                             disabled={saving}
                             onClick={handleSaveConfig}
                         >
-                            Lưu cấu hình
+                            {t('watermark_save_config')}
                         </button>
                         {imageId ? (
                             <>
@@ -892,7 +893,7 @@ export default function WatermarkEditorApp({
                                     disabled={saving}
                                     onClick={() => handleApplyToImage('overwrite')}
                                 >
-                                    Lưu đè
+                                    {t('watermark_save_overwrite_short')}
                                 </button>
                                 <button
                                     type="button"
@@ -900,12 +901,12 @@ export default function WatermarkEditorApp({
                                     disabled={saving}
                                     onClick={() => handleApplyToImage('new')}
                                 >
-                                    Ảnh mới
+                                    {t('watermark_new_image')}
                                 </button>
                             </>
                         ) : null}
                         <button type="button" className="wm-btn wm-btn--danger" onClick={handleClose}>
-                            Hủy
+                            {t('cancel')}
                         </button>
                     </div>
                 </div>
@@ -924,7 +925,7 @@ export default function WatermarkEditorApp({
                         aria-selected={workspaceTab === 'design'}
                         onClick={() => setWorkspaceTab('design')}
                     >
-                        Thiết kế
+                        {t('watermark_design')}
                     </button>
                     <button
                         type="button"
@@ -933,7 +934,7 @@ export default function WatermarkEditorApp({
                         aria-selected={workspaceTab === 'overlay'}
                         onClick={() => setWorkspaceTab('overlay')}
                     >
-                        Xem overlay (~2k)
+                        {t('watermark_view_overlay_2k')}
                         {overlayPreviews.length > 0 ? (
                             <span className="wm-workspace-tabs__badge">{overlayPreviews.length}</span>
                         ) : null}
@@ -977,7 +978,7 @@ export default function WatermarkEditorApp({
                                             startOffset: { ...anchorOffset },
                                         };
                                     }}
-                                    title="Kéo để đổi offset (px từ góc neo)"
+                                    title={t('watermark_drag_offset_hint')}
                                 />
                             </div>
                         ) : null}
@@ -988,27 +989,27 @@ export default function WatermarkEditorApp({
             {/* Cột phải: cấu hình */}
             <aside className="wm-sidebar wm-sidebar--wide">
                 <div className="wm-sidebar__head">
-                    <span>2. Tùy chỉnh thuộc tính</span>
+                    <span>{t('watermark_step_2_customize')}</span>
                 </div>
 
                 <div className="wm-sidebar__body">
                     <section className="wm-section">
-                        <h4 className="wm-section__title">Nội dung chữ</h4>
+                        <h4 className="wm-section__title">{t('watermark_text_content')}</h4>
                         <div className="wm-field">
-                            <label>Dòng chính</label>
+                            <label>{t('watermark_main_line')}</label>
                             <input
                                 type="text"
                                 value={text1}
                                 onChange={(e) => setText1(e.target.value)}
-                                placeholder="Nội dung dòng 1..."
+                                placeholder={t('watermark_main_line_placeholder')}
                             />
                         </div>
                         {['circular_badge', 'full_cross'].includes(activePattern) ? (
                             <div className="wm-field">
                                 <label>
                                     {activePattern === 'full_cross'
-                                        ? 'Chữ chạy dọc (2 cạnh)'
-                                        : 'Dòng phụ (cung dưới)'}
+                                        ? t('watermark_vertical_text')
+                                        : t('watermark_secondary_line')}
                                 </label>
                                 <input
                                     type="text"
@@ -1016,8 +1017,8 @@ export default function WatermarkEditorApp({
                                     onChange={(e) => setText2(e.target.value)}
                                     placeholder={
                                         activePattern === 'full_cross'
-                                            ? 'Thương hiệu chạy dọc...'
-                                            : 'Dòng 2 (dấu tròn)...'
+                                            ? t('watermark_vertical_brand_placeholder')
+                                            : t('watermark_secondary_line_placeholder')
                                     }
                                 />
                             </div>
@@ -1025,18 +1026,18 @@ export default function WatermarkEditorApp({
                     </section>
 
                     <section className="wm-section">
-                        <h4 className="wm-section__title">Font chữ</h4>
+                        <h4 className="wm-section__title">{t('watermark_font')}</h4>
                         <div className="wm-field">
-                            <label>Chọn font</label>
+                            <label>{t('watermark_choose_font')}</label>
                             <select value={selectedFont} onChange={(e) => setSelectedFont(e.target.value)}>
-                                <optgroup label="Font mặc định hệ thống">
+                                <optgroup label={t('watermark_system_fonts')}>
                                     {SYSTEM_FONTS.map((f) => (
                                         <option key={f} value={f}>
                                             {f}
                                         </option>
                                     ))}
                                 </optgroup>
-                                <optgroup label="Google Fonts (nạp tự động)">
+                                <optgroup label={t('watermark_google_fonts_auto')}>
                                     {GOOGLE_FONTS_DATA.map((f) => (
                                         <option key={f.family} value={f.family}>
                                             {f.family}
@@ -1050,7 +1051,7 @@ export default function WatermarkEditorApp({
 
                     <section className="wm-section">
                         <GradientColorPicker
-                            label="Màu sắc chữ"
+                            label={t('watermark_text_color')}
                             value={textColorConfig}
                             onChange={setTextColorConfig}
                         />
@@ -1058,15 +1059,15 @@ export default function WatermarkEditorApp({
 
                     {activePattern === 'cta_button' ? (
                         <section className="wm-section">
-                            <h4 className="wm-section__title">Cài đặt nút CTA</h4>
+                            <h4 className="wm-section__title">{t('watermark_cta_settings')}</h4>
                             <GradientColorPicker
-                                label="Màu nền button"
+                                label={t('watermark_button_background_color')}
                                 value={bgColorConfig}
                                 onChange={setBgColorConfig}
                             />
                             <div className="wm-field-row">
                                 <div className="wm-field">
-                                    <label>Bo góc</label>
+                                    <label>{t('watermark_border_radius')}</label>
                                     <PreciseControl
                                         min={0}
                                         max={80}
@@ -1077,7 +1078,7 @@ export default function WatermarkEditorApp({
                                     />
                                 </div>
                                 <div className="wm-field">
-                                    <label>Padding ngang</label>
+                                    <label>{t('watermark_padding_x')}</label>
                                     <PreciseControl
                                         min={0}
                                         max={120}
@@ -1089,7 +1090,7 @@ export default function WatermarkEditorApp({
                                 </div>
                             </div>
                             <div className="wm-field">
-                                <label>Padding dọc</label>
+                                <label>{t('watermark_padding_y')}</label>
                                 <PreciseControl
                                     min={0}
                                     max={80}
@@ -1101,7 +1102,7 @@ export default function WatermarkEditorApp({
                             </div>
                             <div className="wm-field-row">
                                 <div className="wm-field">
-                                    <label>Icon</label>
+                                    <label>{t('watermark_icon')}</label>
                                     <select
                                         value={selectedIcon}
                                         onChange={(e) => setSelectedIcon(e.target.value)}
@@ -1114,25 +1115,25 @@ export default function WatermarkEditorApp({
                                     </select>
                                 </div>
                                 <div className="wm-field">
-                                    <label>Vị trí icon</label>
+                                    <label>{t('watermark_icon_position')}</label>
                                     <select
                                         value={iconPosition}
                                         onChange={(e) => setIconPosition(e.target.value)}
                                         disabled={selectedIcon === 'none'}
                                     >
-                                        <option value="left">Trái</option>
-                                        <option value="right">Phải</option>
+                                        <option value="left">{t('left')}</option>
+                                        <option value="right">{t('right')}</option>
                                     </select>
                                 </div>
                             </div>
                             {selectedIcon === 'custom' ? (
                                 <div className="wm-field wm-field--custom-svg">
-                                    <label>Mã SVG tùy chỉnh</label>
+                                    <label>{t('watermark_custom_svg_code')}</label>
                                     <textarea
                                         className="wm-custom-svg"
                                         rows={6}
                                         spellCheck={false}
-                                        placeholder={'Dán thẻ <svg>…</svg> hoặc chỉ phần bên trong (path, circle…).\nVí dụ path Lucide:\n<path d="M22 16.92v3a2 2 0 0 1-2.18 2…"/>\nMàu icon theo màu chữ nút CTA.'}
+                                        placeholder={t('watermark_custom_svg_placeholder')}
                                         value={customIconSvg}
                                         onChange={(e) => setCustomIconSvg(e.target.value)}
                                     />
@@ -1179,7 +1180,7 @@ export default function WatermarkEditorApp({
                                                 />
                                             </div>
                                             <GradientColorPicker
-                                                label="Màu viền"
+                                                label={t('watermark_border_color')}
                                                 value={border.colorConfig}
                                                 onChange={(val) => updateBorder(border.id, 'colorConfig', val)}
                                             />
@@ -1192,10 +1193,10 @@ export default function WatermarkEditorApp({
 
                     {showBorderBgControls ? (
                         <section className="wm-section">
-                            <h4 className="wm-section__title">Viền &amp; nền stamp</h4>
+                            <h4 className="wm-section__title">{t('watermark_stamp_border_background')}</h4>
                             <div className="wm-field-row">
                                 <div className="wm-field">
-                                    <label>Màu viền</label>
+                                    <label>{t('watermark_border_color')}</label>
                                     <input
                                         type="color"
                                         value={borderColor}
@@ -1203,7 +1204,7 @@ export default function WatermarkEditorApp({
                                     />
                                 </div>
                                 <div className="wm-field">
-                                    <label>Độ dày viền</label>
+                                    <label>{t('watermark_border_thickness')}</label>
                                     <PreciseControl
                                         min={1}
                                         max={12}
@@ -1217,7 +1218,7 @@ export default function WatermarkEditorApp({
                             {showBgOpacityControls ? (
                                 <div className="wm-field-row">
                                     <div className="wm-field">
-                                        <label>Màu nền đè</label>
+                                        <label>{t('watermark_overlay_bg_color')}</label>
                                         <input
                                             type="color"
                                             value={backgroundColor}
@@ -1225,7 +1226,7 @@ export default function WatermarkEditorApp({
                                         />
                                     </div>
                                     <div className="wm-field">
-                                        <label>Độ mờ nền</label>
+                                        <label>{t('watermark_bg_opacity')}</label>
                                         <PreciseControl
                                             min={0}
                                             max={100}
@@ -1242,21 +1243,21 @@ export default function WatermarkEditorApp({
 
                     {showPositionControls ? (
                         <section className="wm-section">
-                            <h4 className="wm-section__title">Vị trí</h4>
+                            <h4 className="wm-section__title">{t('watermark_position')}</h4>
                             <div className="wm-field">
-                                <label>Chế độ</label>
+                                <label>{t('watermark_mode')}</label>
                                 <select
                                     value={positionType}
                                     onChange={(e) => setPositionType(e.target.value)}
                                 >
-                                    <option value="anchor">Góc neo + offset (px)</option>
-                                    <option value="preset">Lưới 9 ô</option>
+                                    <option value="anchor">{t('watermark_anchor_offset_mode')}</option>
+                                    <option value="preset">{t('watermark_grid_9_mode')}</option>
                                 </select>
                             </div>
                             {positionType === 'anchor' ? (
                                 <>
                                     <div className="wm-field">
-                                        <label>Góc neo</label>
+                                        <label>{t('watermark_anchor_corner')}</label>
                                         <select
                                             value={positionAnchor}
                                             onChange={(e) => setPositionAnchor(e.target.value)}
@@ -1270,13 +1271,13 @@ export default function WatermarkEditorApp({
                                     </div>
                                     <div className="wm-field">
                                         <label>
-                                            Offset X (px)
+                                            {t('watermark_offset_x')}
                                             <span className="wm-label-hint">
                                                 {positionAnchor.includes('right')
-                                                    ? ' từ cạnh phải'
+                                                    ? t('watermark_from_right_edge')
                                                     : positionAnchor.includes('left')
-                                                      ? ' từ cạnh trái'
-                                                      : ' từ giữa ngang'}
+                                                      ? t('watermark_from_left_edge')
+                                                      : t('watermark_from_horizontal_center')}
                                             </span>
                                         </label>
                                         <PreciseControl
@@ -1292,13 +1293,13 @@ export default function WatermarkEditorApp({
                                     </div>
                                     <div className="wm-field">
                                         <label>
-                                            Offset Y (px)
+                                            {t('watermark_offset_y')}
                                             <span className="wm-label-hint">
                                                 {positionAnchor.includes('bottom')
-                                                    ? ' từ cạnh dưới'
+                                                    ? t('watermark_from_bottom_edge')
                                                     : positionAnchor.includes('top')
-                                                      ? ' từ cạnh trên'
-                                                      : ' từ giữa dọc'}
+                                                      ? t('watermark_from_top_edge')
+                                                      : t('watermark_from_vertical_center')}
                                             </span>
                                         </label>
                                         <PreciseControl
@@ -1333,7 +1334,7 @@ export default function WatermarkEditorApp({
                                         ))}
                                     </div>
                                     <div className="wm-field">
-                                        <label>Lề (margin)</label>
+                                        <label>{t('watermark_margin')}</label>
                                         <PreciseControl
                                             min={5}
                                             max={100}
@@ -1349,9 +1350,9 @@ export default function WatermarkEditorApp({
                     ) : null}
 
                     <section className="wm-section">
-                        <h4 className="wm-section__title">Hiệu ứng</h4>
+                        <h4 className="wm-section__title">{t('watermark_effects')}</h4>
                         <div className="wm-field">
-                            <label>Cỡ chữ</label>
+                            <label>{t('watermark_font_size')}</label>
                             <PreciseControl
                                 min={12}
                                 max={100}
@@ -1365,10 +1366,10 @@ export default function WatermarkEditorApp({
                             <div className="wm-field">
                                 <label>
                                     {activePattern === 'cta_button'
-                                        ? 'Căn lề / khoảng cách'
+                                        ? t('watermark_align_spacing')
                                         : activePattern === 'full_cross'
-                                          ? 'Khoảng cách từ lề'
-                                          : 'Khoảng cách lặp'}
+                                          ? t('watermark_spacing_from_margin')
+                                          : t('watermark_repeat_spacing')}
                                 </label>
                                 <PreciseControl
                                     min={activePattern === 'classic_grid' ? 50 : 20}
@@ -1381,7 +1382,7 @@ export default function WatermarkEditorApp({
                             </div>
                         ) : null}
                         <div className="wm-field">
-                            <label>Độ mờ watermark</label>
+                            <label>{t('watermark_opacity')}</label>
                             <PreciseControl
                                 min={10}
                                 max={100}
@@ -1393,7 +1394,7 @@ export default function WatermarkEditorApp({
                         </div>
                         {!['minimal_frame', 'full_cross'].includes(activePattern) ? (
                             <div className="wm-field">
-                                <label>Góc xoay</label>
+                                <label>{t('watermark_rotation')}</label>
                                 <PreciseControl
                                     min={-180}
                                     max={180}

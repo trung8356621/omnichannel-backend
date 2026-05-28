@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ListTree, MessageCircle, Sparkles, X } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 export default function ArticleAiFloatingLauncher() {
     const [menuOpen, setMenuOpen] = useState(false);
@@ -67,12 +68,12 @@ export default function ArticleAiFloatingLauncher() {
                         disabled={!hasSelection}
                         title={
                             hasSelection
-                                ? 'Tách FAQ từ đoạn đang chọn'
-                                : 'Chọn đoạn văn trong editor trước'
+                                ? 'Extract FAQ from current selection'
+                                : 'Select text in editor first'
                         }
                     >
                         <ListTree size={16} aria-hidden />
-                        Tách FAQ
+                        Extract FAQ
                     </button>
                     <button
                         type="button"
@@ -81,7 +82,7 @@ export default function ArticleAiFloatingLauncher() {
                         onClick={openChat}
                     >
                         <MessageCircle size={16} aria-hidden />
-                        AI ảnh & video
+                        {t('ai_images_videos')}
                     </button>
                 </div>
             ) : null}
@@ -91,7 +92,7 @@ export default function ArticleAiFloatingLauncher() {
                 className={`seo-ai-fab__trigger ${menuOpen ? 'is-open' : ''}`}
                 aria-expanded={menuOpen}
                 aria-haspopup="menu"
-                title="Trợ lý AI"
+                title="AI assistant"
                 onClick={() => setMenuOpen((open) => !open)}
             >
                 {menuOpen ? <X size={22} aria-hidden /> : <Sparkles size={22} aria-hidden />}

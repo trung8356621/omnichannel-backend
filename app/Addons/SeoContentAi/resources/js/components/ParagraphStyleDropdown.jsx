@@ -1,15 +1,16 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 const STYLES = [
-    { value: 'p', label: 'Đoạn văn', previewClass: 'seo-fmt-preview-p' },
-    { value: 'h1', label: 'Tiêu đề 1', previewClass: 'seo-fmt-preview-h1' },
-    { value: 'h2', label: 'Tiêu đề 2', previewClass: 'seo-fmt-preview-h2' },
-    { value: 'h3', label: 'Tiêu đề 3', previewClass: 'seo-fmt-preview-h3' },
-    { value: 'h4', label: 'Tiêu đề 4', previewClass: 'seo-fmt-preview-h4' },
-    { value: 'h5', label: 'Tiêu đề 5', previewClass: 'seo-fmt-preview-h5' },
-    { value: 'h6', label: 'Tiêu đề 6', previewClass: 'seo-fmt-preview-h6' },
-    { value: 'pre', label: 'Được định dạng trước', previewClass: 'seo-fmt-preview-pre' },
+    { value: 'p', label: t('style_paragraph'), previewClass: 'seo-fmt-preview-p' },
+    { value: 'h1', label: t('style_heading_1'), previewClass: 'seo-fmt-preview-h1' },
+    { value: 'h2', label: t('style_heading_2'), previewClass: 'seo-fmt-preview-h2' },
+    { value: 'h3', label: t('style_heading_3'), previewClass: 'seo-fmt-preview-h3' },
+    { value: 'h4', label: t('style_heading_4'), previewClass: 'seo-fmt-preview-h4' },
+    { value: 'h5', label: t('style_heading_5'), previewClass: 'seo-fmt-preview-h5' },
+    { value: 'h6', label: t('style_heading_6'), previewClass: 'seo-fmt-preview-h6' },
+    { value: 'pre', label: t('style_preformatted'), previewClass: 'seo-fmt-preview-pre' },
 ];
 
 function getActiveStyle(editor) {
@@ -39,7 +40,7 @@ export default function ParagraphStyleDropdown({ editor }) {
     const rootRef = useRef(null);
 
     const activeValue = getActiveStyle(editor);
-    const activeLabel = STYLES.find((s) => s.value === activeValue)?.label ?? 'Đoạn văn';
+    const activeLabel = STYLES.find((s) => s.value === activeValue)?.label ?? t('style_paragraph');
 
     useEffect(() => {
         if (!open) return;
@@ -58,7 +59,7 @@ export default function ParagraphStyleDropdown({ editor }) {
                 type="button"
                 className="seo-fmt-dropdown-trigger"
                 onClick={() => setOpen((v) => !v)}
-                title="Kiểu đoạn"
+                title={t('style_block_type')}
                 aria-expanded={open}
             >
                 <span className="seo-fmt-dropdown-label">{activeLabel}</span>

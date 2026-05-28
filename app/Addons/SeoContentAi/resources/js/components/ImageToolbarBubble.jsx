@@ -9,12 +9,13 @@ import {
     X,
 } from 'lucide-react';
 import { getArticleImageSelection } from '../utils/articleImageExtension';
+import { t } from '../utils/i18n';
 
 const ALIGN_OPTIONS = [
-    { id: 'left', icon: AlignLeft, title: 'Căn trái' },
-    { id: 'center', icon: AlignCenter, title: 'Căn giữa' },
-    { id: 'right', icon: AlignRight, title: 'Căn phải' },
-    { id: 'full', icon: Maximize2, title: 'Rộng toàn khối' },
+    { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
+    { id: 'center', icon: AlignCenter, title: t('toolbar_align_center') },
+    { id: 'right', icon: AlignRight, title: t('toolbar_align_right') },
+    { id: 'full', icon: Maximize2, title: t('image_align_full_width') },
 ];
 
 export default function ImageToolbarBubble({ editor, anchorRect, onEditMeta, onClose }) {
@@ -76,7 +77,7 @@ export default function ImageToolbarBubble({ editor, anchorRect, onEditMeta, onC
             <button
                 type="button"
                 className="seo-image-toolbar-btn"
-                title="Chỉnh alt, title, caption"
+                title={t('edit_image_meta')}
                 onClick={onEditMeta}
             >
                 <Pencil size={18} strokeWidth={1.75} />
@@ -84,7 +85,7 @@ export default function ImageToolbarBubble({ editor, anchorRect, onEditMeta, onC
             <button
                 type="button"
                 className="seo-image-toolbar-btn is-danger"
-                title="Xóa ảnh"
+                title={t('delete_image')}
                 onClick={removeImage}
             >
                 <X size={18} strokeWidth={1.75} />

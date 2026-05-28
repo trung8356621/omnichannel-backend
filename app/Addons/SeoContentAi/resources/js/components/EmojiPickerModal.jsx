@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Search, X } from 'lucide-react';
 import { filterEmojiCategories } from '../data/emojiCatalog';
+import { t } from '../utils/i18n';
 
 /**
  * @param {{ open: boolean, onClose: () => void, onSelect: (emoji: string) => void }} props
@@ -26,7 +27,7 @@ export default function EmojiPickerModal({ open, onClose, onSelect }) {
             className="seo-emoji-modal-backdrop"
             role="dialog"
             aria-modal="true"
-            aria-label="Chọn emoji"
+            aria-label={t('emoji_choose')}
             onMouseDown={(e) => {
                 if (e.target === e.currentTarget) {
                     onClose();
@@ -35,8 +36,8 @@ export default function EmojiPickerModal({ open, onClose, onSelect }) {
         >
             <div className="seo-emoji-modal">
                 <div className="seo-emoji-modal__head">
-                    <h3>Chèn emoji</h3>
-                    <button type="button" className="seo-emoji-modal__close" onClick={onClose} aria-label="Đóng">
+                    <h3>{t('toolbar_insert_emoji')}</h3>
+                    <button type="button" className="seo-emoji-modal__close" onClick={onClose} aria-label={t('magic_close')}>
                         <X size={18} />
                     </button>
                 </div>
@@ -46,12 +47,12 @@ export default function EmojiPickerModal({ open, onClose, onSelect }) {
                         type="search"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Tìm: ghi chú, vui, bước, giỏ hàng..."
+                        placeholder={t('emoji_search_placeholder')}
                     />
                 </div>
                 <div className="seo-emoji-modal__body">
                     {!hasResults ? (
-                        <p className="seo-emoji-modal__empty">Không tìm thấy emoji phù hợp.</p>
+                        <p className="seo-emoji-modal__empty">{t('emoji_no_results')}</p>
                     ) : (
                         categories.map((cat) => (
                             <section key={cat.id} className="seo-emoji-modal__section">

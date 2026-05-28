@@ -35,26 +35,12 @@ final class ArticleFaqEditorService
         $article->load(['faqs']);
 
         $siteId = (int) ($article->site_id ?? 0);
-        $seenInArticle = [];
 
         $items = [];
         foreach ($article->faqs as $faq) {
             $normalized = $this->normalizeQuestion((string) $faq->question);
-            $duplicateInArticle = $normalized !== '' && isset($seenInArticle[$normalized]);
-            if ($normalized !== '') {
-                $seenInArticle[$normalized] = true;
-            }
-
             $duplicateOnSite = $normalized !== ''
                 && $this->existsOnSite($siteId, $normalized, (int) $article->id, (int) $faq->id);
-
-            $duplicate = $duplicateInArticle || $duplicateOnSite;
-            $scope = null;
-            if ($duplicateInArticle) {
-                $scope = 'article';
-            } elseif ($duplicateOnSite) {
-                $scope = 'site';
-            }
 
             $items[] = [
                 'id' => (int) $faq->id,
@@ -62,8 +48,8 @@ final class ArticleFaqEditorService
                 'answer' => (string) $faq->answer,
                 'more' => (string) ($faq->more ?? ''),
                 'sort_order' => (int) $faq->sort_order,
-                'duplicate' => $duplicate,
-                'duplicate_scope' => $scope,
+                'duplicate' => $duplicateOnSite,
+                'duplicate_scope' => $duplicateOnSite ? 'site' : null,
             ];
         }
 
@@ -82,16 +68,6 @@ final class ArticleFaqEditorService
 
         $siteId = (int) ($article->site_id ?? 0);
         $articleId = (int) $article->id;
-
-        $query = SeoFaq::query()
-            ->where('article_id', $articleId)
-            ->when($faqId !== null, fn ($q) => $q->where('id', '!=', $faqId));
-
-        foreach ($query->get(['id', 'question']) as $row) {
-            if ($this->normalizeQuestion((string) $row->question) === $normalized) {
-                return ['duplicate' => true, 'duplicate_scope' => 'article'];
-            }
-        }
 
         if ($this->existsOnSite($siteId, $normalized, $articleId, $faqId)) {
             return ['duplicate' => true, 'duplicate_scope' => 'site'];

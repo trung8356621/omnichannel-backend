@@ -23,7 +23,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
 
     protected static bool $shouldRegisterNavigation = false;
 
-    protected static ?string $title = 'Quy trình';
+    protected static ?string $title = 'Workflows';
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-settings-workflows';
 
@@ -42,64 +42,59 @@ class SeoSettingsWorkflows extends Page implements HasForms
             ->schema([
                 $this->taskSelect(
                     SeoCreateArticleSettingsService::KEY_PUBLISH_ARTICLE,
-                    'Đăng bài viết',
-                    'Chạy khi tạo bài mới từ khóa, đăng nội dung bài viết, v.v.',
+                    __('seo-content-ai::filament.settings_workflows.publish_article'),
+                    __('seo-content-ai::filament.settings_workflows.publish_article_hint'),
                 ),
                 $this->taskSelect(
                     SeoCreateArticleSettingsService::KEY_EDIT_ARTICLE,
-                    'Sửa bài viết',
-                    'Chạy khi cập nhật / chỉnh sửa bài có sẵn. Để trống sẽ dùng quy trình «Đăng bài viết».',
+                    __('seo-content-ai::filament.settings_workflows.edit_article'),
+                    __('seo-content-ai::filament.settings_workflows.edit_article_hint'),
                 ),
                 $this->taskSelect(
                     SeoCreateArticleSettingsService::KEY_POST_REVIEW,
-                    'Đăng review',
-                    'Chạy khi đăng bình luận / review lên WordPress.',
+                    __('seo-content-ai::filament.settings_workflows.post_review'),
+                    __('seo-content-ai::filament.settings_workflows.post_review_hint'),
                 ),
-                Forms\Components\Section::make('Editor bài viết — Tạo ảnh / video')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.editor_media_section'))
                     ->description(
-                        'Prompt chạy khi biên tập bấm «Tạo ảnh» hoặc «Tạo video» trên panel AI. '
-                        . 'Gợi ý biến: {{post_title}}, {{post_content}}, {{focus_keyword}}, {{selected_text}}, '
-                        . '{{selected_html}}, {{user_brief}}, {{input}}, {{site_domain}}.'
+                        __('seo-content-ai::filament.settings_workflows.editor_media_description')
                     )
                     ->schema([
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_IMAGE)
-                            ->label('Prompt tạo ảnh')
+                            ->label(__('seo-content-ai::filament.settings_workflows.create_image_prompt'))
                             ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeImagePromptOptions())
                             ->searchable()
                             ->native(false)
-                            ->placeholder('Chọn prompt Hình ảnh…'),
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_image_prompt')),
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_VIDEO)
-                            ->label('Prompt tạo video')
+                            ->label(__('seo-content-ai::filament.settings_workflows.create_video_prompt'))
                             ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeVideoPromptOptions())
                             ->searchable()
                             ->native(false)
-                            ->placeholder('Chọn prompt Video…'),
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_video_prompt')),
                     ]),
-                Forms\Components\Section::make('Dự án Content — AI từ khóa')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.project_keywords_section'))
                     ->description(
-                        'Prompt sinh danh sách từ khóa khi tạo dự án (nút AI Generator). '
-                        . 'Biến gợi ý: {{project_month}}, {{project_month_label}}, {{days_in_month}}, {{keyword_count}}, '
-                        . '{{project_description}}, {{user_brief}}. '
-                        . 'Đầu ra: mỗi từ khóa một dòng, hoặc JSON mảng chuỗi, hoặc Markdown bullet.'
+                        __('seo-content-ai::filament.settings_workflows.project_keywords_description')
                     )
                     ->schema([
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID)
-                            ->label('Prompt AI từ khóa dự án')
+                            ->label(__('seo-content-ai::filament.settings_workflows.project_keywords_prompt'))
                             ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
                             ->searchable()
                             ->native(false)
-                            ->placeholder('Chọn prompt…'),
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
                     ]),
 
-                Forms\Components\Section::make('FAQ trên editor bài viết')
-                    ->description('Prompt dùng khi biên tập bấm «Làm mới» một câu FAQ. Gợi ý biến: {{faq_question}}, {{faq_answer}}, {{post_title}}, {{post_content}}, {{site_domain}}. Đầu ra JSON: {"question":"…","answer":"…"} hoặc Markdown H3 + nội dung.')
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.faq_section'))
+                    ->description(__('seo-content-ai::filament.settings_workflows.faq_description'))
                     ->schema([
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID)
-                            ->label('Prompt làm mới FAQ')
+                            ->label(__('seo-content-ai::filament.settings_workflows.renew_faq_prompt'))
                             ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
                             ->searchable()
                             ->native(false)
-                            ->placeholder('Chọn prompt…'),
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
                     ]),
             ])
             ->statePath('settingsData');
@@ -112,7 +107,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
             ->options(fn (CreateArticlesFromTaskService $service): array => $service->taskOptionsForSettings())
             ->searchable()
             ->native(false)
-            ->placeholder('Chọn quy trình…')
+            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_workflow'))
             ->helperText($helperText);
     }
 
@@ -131,7 +126,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
         ]);
 
         Notification::make()
-            ->title('Đã lưu cấu hình quy trình')
+            ->title(__('seo-content-ai::filament.settings_workflows.saved'))
             ->success()
             ->send();
     }

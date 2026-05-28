@@ -18,13 +18,13 @@ class WatermarkEditor extends Page
 {
     protected static ?string $navigationIcon = 'heroicon-o-paint-brush';
 
-    protected static ?string $navigationLabel = 'Thiết kế đóng dấu';
+    protected static ?string $navigationLabel = 'Watermark designer';
 
-    protected static ?string $title = 'Bộ thiết kế Watermark';
+    protected static ?string $title = 'Watermark design suite';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationParentItem = 'Thư viện hình ảnh';
+    protected static ?string $navigationParentItem = 'Media library';
 
     protected static ?int $navigationSort = 8;
 
@@ -154,5 +154,20 @@ class WatermarkEditor extends Page
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessContentFeatures();
+    }
+
+    public static function getNavigationLabel(): string
+    {
+        return __('seo-content-ai::filament.nav.watermark_designer');
+    }
+
+    public static function getNavigationParentItem(): ?string
+    {
+        return __('seo-content-ai::filament.nav.media_library');
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.nav.watermark_design_suite');
     }
 }

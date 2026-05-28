@@ -1,5 +1,6 @@
 import React from 'react';
 import { Eraser, Grid3x3 } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 export const MEDIA_EDITOR_TAB_ERASER = 'eraser';
 export const MEDIA_EDITOR_TAB_SPLITTER = 'splitter';
@@ -19,7 +20,7 @@ const TABS = [
 
 export default function MediaEditorTabBar({ activeTab, onTabChange }) {
     return (
-        <div className="media-editor-tabbar" role="tablist" aria-label="Công cụ chỉnh sửa ảnh">
+        <div className="media-editor-tabbar" role="tablist" aria-label={t('edit_image')}>
             {TABS.map(({ id, label, icon: Icon }) => {
                 const isActive = activeTab === id;
 

@@ -23,7 +23,7 @@ class ListAiConnections extends ListRecords
     {
         return [
             Actions\CreateAction::make()
-                ->label('Thêm kết nối AI'),
+                ->label('Add AI connection'),
         ];
     }
 }

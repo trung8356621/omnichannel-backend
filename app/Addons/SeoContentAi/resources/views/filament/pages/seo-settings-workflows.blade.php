@@ -5,8 +5,8 @@
 
             <div class="seo-settings-main">
                 <header class="seo-settings-header">
-                    <h1>{{ __('Quy trình') }}</h1>
-                    <p>{{ __('Chọn quy trình (Task) tương ứng khi hệ thống nhận từng loại yêu cầu. Cấu hình lưu trong wp_options.') }}</p>
+                    <h1>{{ __('Workflows') }}</h1>
+                    <p>{{ __('Choose the workflow (Task) used for each request type. Configuration is stored in wp_options.') }}</p>
                 </header>
 
                 <form wire:submit="saveSettings" class="max-w-3xl mx-auto space-y-6">
@@ -14,7 +14,7 @@
 
                     <div class="flex justify-end">
                         <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('Lưu cấu hình') }}
+                            {{ __('Save settings') }}
                         </x-filament::button>
                     </div>
                 </form>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
+import { t } from '../utils/i18n';
 
 function scoreColor(score) {
     if (score >= 70) return 'text-emerald-600 dark:text-emerald-400';
@@ -103,17 +104,17 @@ function ContentBonusRow({ item, faqCount }) {
                     }
                     : undefined
             }
-            title={isFeaturedSnippet ? 'Click để nhảy tới bảng Featured Snippet trong bài' : undefined}
+            title={isFeaturedSnippet ? t('seo_score_featured_snippet_jump') : undefined}
         >
             <div className="seo-content-bonus-row__head">
                 <span className="seo-content-bonus-row__label">{item.label}:</span>
                 <span className="seo-content-bonus-row__points">
-                    {points} / {maxPoints} điểm
+                    {points} / {maxPoints} {t('seo_score_points')}
                 </span>
             </div>
             {item.key === 'faq' && typeof faqCount === 'number' ? (
                 <p className="seo-content-bonus-row__meta">
-                    Số câu hỏi: <strong>{faqCount}</strong>
+                    {t('seo_score_faq_count')}: <strong>{faqCount}</strong>
                 </p>
             ) : null}
             {item.message ? (
@@ -136,9 +137,9 @@ function ContentBonusSection({ contentBonus }) {
 
     return (
         <div className="seo-content-bonus">
-            <h3 className="seo-content-bonus__title">Nội dung bổ sung (workflow)</h3>
+            <h3 className="seo-content-bonus__title">{t('seo_score_bonus_title')}</h3>
             <p className="seo-content-bonus__subtitle">
-                Tổng cộng <strong>{totalBonus}</strong> / 20 điểm (cộng vào điểm bài khi chạy workflow)
+                {t('seo_score_bonus_subtitle_before')} <strong>{totalBonus}</strong> / 20 {t('seo_score_points')} {t('seo_score_bonus_subtitle_after')}
             </p>
             <ContentBonusRow item={items.featured_snippet} />
             <ContentBonusRow item={items.faq} faqCount={contentBonus.faq_count} />
@@ -165,10 +166,10 @@ export default function SeoScorePanel({
                 <ScoreRing score={score} loading={loading || analyzing} />
                 <div className="seo-score-meta">
                     <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">
-                        Điểm SEO
+                        {t('seo_score_title')}
                     </p>
                     <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
-                        {analyzing ? 'Đang phân tích…' : 'Cập nhật theo nội dung hiện tại'}
+                        {analyzing ? t('seo_score_analyzing') : t('seo_score_updated_by_content')}
                     </p>
                     {focusKeyword ? (
                         <p className="mt-2 text-sm">
@@ -177,7 +178,7 @@ export default function SeoScorePanel({
                         </p>
                     ) : (
                         <p className="mt-2 text-sm text-rose-600 dark:text-rose-400">
-                            Chưa gán từ khóa chính cho bài viết.
+                            {t('seo_score_missing_focus_keyword')}
                         </p>
                     )}
                 </div>
@@ -186,9 +187,9 @@ export default function SeoScorePanel({
             <ContentBonusSection contentBonus={contentBonus} />
 
             <div className="seo-score-checks space-y-4">
-                <CheckList title="Đạt" icon={CheckCircle2} items={good} tone="good" />
-                <CheckList title="Lỗi" icon={AlertCircle} items={errors} tone="error" />
-                <CheckList title="Cảnh báo" icon={AlertTriangle} items={warnings} tone="warning" />
+                <CheckList title={t('seo_score_good')} icon={CheckCircle2} items={good} tone="good" />
+                <CheckList title={t('seo_score_errors')} icon={AlertCircle} items={errors} tone="error" />
+                <CheckList title={t('seo_score_warnings')} icon={AlertTriangle} items={warnings} tone="warning" />
             </div>
         </div>
     );
