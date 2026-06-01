@@ -53,6 +53,8 @@ final class ArticleEditorSeoPayloadService
             'content_bonus' => $contentBonus,
             'extracted_links' => $extractedLinks,
             'suggested_internal_links' => $suggestedInternalLinks,
+            'domain_link_list' => app(DomainLinkListEditorService::class)->forSite($article->site),
+            'domain_cta_list' => app(DomainCtaEditorService::class)->forSite($article->site),
         ];
     }
 

@@ -672,7 +672,7 @@ class WorkflowParserService
                 continue;
             }
 
-            if (preg_match('/^#{3,6}\s+(.*)/u', $trimmed, $matches) === 1 && ! $this->isFaqSectionHeading($trimmed)) {
+            if ($this->isFaqMarkdownBulletQuestion($trimmed)) {
                 if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
                     $faqs[] = [
                         'question' => $currentQuestion,
@@ -680,7 +680,21 @@ class WorkflowParserService
                     ];
                 }
 
-                $currentQuestion = trim(str_replace('**', '', $matches[1]));
+                $currentQuestion = $this->parseFaqMarkdownBulletQuestion($trimmed);
+                $answerLines = [];
+
+                continue;
+            }
+
+            if ($this->isFaqItemHeadingLine($trimmed)) {
+                if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                    $faqs[] = [
+                        'question' => $currentQuestion,
+                        'answer' => trim(implode("\n", $answerLines)),
+                    ];
+                }
+
+                $currentQuestion = $this->faqItemHeadingText($trimmed);
                 $answerLines = [];
 
                 continue;
@@ -700,8 +714,8 @@ class WorkflowParserService
                 continue;
             }
 
-            if ($currentQuestion !== null && $trimmed !== '' && ! preg_match('/^#{1,6}\s+/', $trimmed)) {
-                $answerLines[] = $trimmed;
+            if ($currentQuestion !== null && $trimmed !== '' && $this->lineHeadingLevel($trimmed) === null) {
+                $answerLines[] = $this->normalizeFaqMarkdownAnswerLine($trimmed);
             }
         }
 
@@ -1481,20 +1495,62 @@ class WorkflowParserService
 
     private function headingText(string $headingLine): string
     {
-        if (preg_match('/^#{1,6}\s+(.*)$/u', trim($headingLine), $matches) !== 1) {
-            return '';
+        $trimmed = trim($headingLine);
+
+        if (preg_match('/^#{1,6}\s+(.*)$/u', $trimmed, $matches) === 1) {
+            return $this->stripHeadingLabelPrefixes(trim(str_replace(['**', '*'], '', $matches[1])));
         }
 
-        return trim(str_replace(['**', '*'], '', $matches[1]));
+        if (preg_match('/^Section\s+\d+:\s*H[1-6]:\s*(.+)$/iu', $trimmed, $matches) === 1) {
+            return trim(str_replace(['**', '*'], '', $matches[1]));
+        }
+
+        if (preg_match('/^H[1-6]:\s*(.+)$/iu', $trimmed, $matches) === 1) {
+            return trim(str_replace(['**', '*'], '', $matches[1]));
+        }
+
+        return '';
     }
 
     private function lineHeadingLevel(string $line): ?int
     {
-        if (preg_match('/^(#{1,6})\s+/u', $line, $matches) !== 1) {
-            return null;
+        if (preg_match('/^(#{1,6})\s+/u', $line, $matches) === 1) {
+            return strlen($matches[1]);
         }
 
-        return strlen($matches[1]);
+        if (preg_match('/^Section\s+\d+:\s*H([1-6]):\s+/iu', $line, $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        if (preg_match('/^H([1-6]):\s+/iu', $line, $matches) === 1) {
+            return (int) $matches[1];
+        }
+
+        return null;
+    }
+
+    private function isFaqItemHeadingLine(string $line): bool
+    {
+        if ($this->isFaqSectionHeading($line)) {
+            return false;
+        }
+
+        if (preg_match('/^#{3,6}\s+/u', $line) === 1) {
+            return true;
+        }
+
+        $level = $this->lineHeadingLevel($line);
+
+        return $level !== null && $level >= 3;
+    }
+
+    private function faqItemHeadingText(string $line): string
+    {
+        if (preg_match('/^#{3,6}\s+(.*)$/u', trim($line), $matches) === 1) {
+            return trim(str_replace('**', '', $matches[1]));
+        }
+
+        return $this->headingText($line);
     }
 
     private function isFaqQuestionLine(string $line): bool
@@ -1511,6 +1567,41 @@ class WorkflowParserService
     private function normalizeFaqQuestionLine(string $line): string
     {
         return trim(str_replace(['**', '*'], '', $line));
+    }
+
+    private function isFaqMarkdownBulletQuestion(string $line): bool
+    {
+        return preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line)) === 1;
+    }
+
+    private function parseFaqMarkdownBulletQuestion(string $line): string
+    {
+        if (preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line), $matches) !== 1) {
+            return '';
+        }
+
+        return trim(str_replace(['**', '*'], '', $matches[1]));
+    }
+
+    private function normalizeFaqMarkdownAnswerLine(string $line): string
+    {
+        $content = trim($line);
+        if (preg_match('/^[-*]\s+(.+)$/u', $content, $matches) === 1) {
+            $content = trim($matches[1]);
+        }
+
+        $content = preg_replace('/^\*(?:Trả lời bởi|Tra loi boi)[^*]*\*:\s*/iu', '', $content) ?? $content;
+        $content = preg_replace('/^\*([^*]+?)\*:\s*/u', '', $content) ?? $content;
+        $content = str_replace(['**', '*'], '', $content);
+
+        return trim($content);
+    }
+
+    private function stripHeadingLabelPrefixes(string $text): string
+    {
+        $text = preg_replace('/\bH([1-6]):\s*/iu', '', $text) ?? $text;
+
+        return trim($text);
     }
 
     private function loadHtmlFaqRoot(string $html): ?DOMElement

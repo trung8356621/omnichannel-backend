@@ -57,6 +57,7 @@ export default function ImageSplitterApp({
         seoMediaId: null,
         wpAttachmentId: null,
         resolvedSiteId: null,
+        resolvedArticleId: null,
     });
     const [imgNatural, setImgNatural] = useState({ width: 0, height: 0 });
     const [rows, setRows] = useState(3);
@@ -105,6 +106,7 @@ export default function ImageSplitterApp({
             seoMediaId: meta.seoMediaId ?? (laravelId > 0 ? laravelId : null),
             wpAttachmentId: meta.wpAttachmentId ?? (wpId > 0 ? wpId : null),
             resolvedSiteId: meta.resolvedSiteId ?? siteId ?? null,
+            resolvedArticleId: meta.resolvedArticleId ?? articleId ?? null,
         });
 
         if (!splitPayloadRef.current?.pieces?.length) {
@@ -150,6 +152,7 @@ export default function ImageSplitterApp({
                         seoMediaId: laravelId,
                         wpAttachmentId: wpId > 0 ? wpId : null,
                         resolvedSiteId: siteId ?? null,
+                        resolvedArticleId: articleId ?? null,
                     });
                 } catch (e) {
                     if (!cancelled) {
@@ -180,6 +183,8 @@ export default function ImageSplitterApp({
                     seoMediaId: resolved.seo_media_id > 0 ? resolved.seo_media_id : null,
                     wpAttachmentId: resolved.wp_attachment_id > 0 ? resolved.wp_attachment_id : null,
                     resolvedSiteId: resolved.site_id ?? siteId ?? null,
+                    resolvedArticleId:
+                        resolved.article_id > 0 ? resolved.article_id : (articleId ?? null),
                 });
             } catch (e) {
                 if (!cancelled) {
@@ -200,6 +205,7 @@ export default function ImageSplitterApp({
     }, [siteId, articleId, seoMediaId, wpAttachmentId, slug, hasSourceId, laravelId, wpId, fallbackImageUrl]);
 
     const effectiveSiteId = sourceMeta.resolvedSiteId ?? siteId ?? null;
+    const effectiveArticleId = sourceMeta.resolvedArticleId ?? articleId ?? null;
     const hasImage = imageSrc !== '';
 
     useEffect(() => {
@@ -381,7 +387,7 @@ export default function ImageSplitterApp({
         try {
             const data = await saveSplitPiecesToLibrary({
                 siteId: effectiveSiteId,
-                articleId,
+                articleId: effectiveArticleId,
                 originalSeoMediaId: sourceMeta.seoMediaId,
                 pieces,
             });
@@ -397,6 +403,7 @@ export default function ImageSplitterApp({
                 seoMediaId: null,
                 wpAttachmentId: null,
                 resolvedSiteId: effectiveSiteId,
+                resolvedArticleId: effectiveArticleId,
             });
 
             setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));

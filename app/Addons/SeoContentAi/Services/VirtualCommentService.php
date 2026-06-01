@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewRatingAssigner;
+use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -130,15 +132,20 @@ final class VirtualCommentService
                 continue;
             }
 
+            $date = trim((string) ($row['date'] ?? ''));
+            if ($date === '') {
+                $date = now()->format('Y-m-d H:i:s');
+            }
+
             $result[] = [
                 'author' => trim((string) ($row['author'] ?? 'Khách mua hàng')) ?: 'Khách mua hàng',
                 'content' => $content,
-                'date' => trim((string) ($row['date'] ?? '')),
+                'date' => $date,
                 'rating' => isset($row['rating']) ? (int) $row['rating'] : null,
             ];
         }
 
-        return array_values(array_filter($result, static fn (array $row): bool => $row['date'] !== ''));
+        return array_values($result);
     }
 
     /**
@@ -164,7 +171,7 @@ final class VirtualCommentService
             ];
         }
 
-        $isProduct = (string) ($article->type ?? '') === 'product';
+        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
 
         if ($items !== null) {
             $this->storeOnArticle($article, $items, $isProduct);
@@ -189,23 +196,44 @@ final class VirtualCommentService
             ];
         }
 
+        $payloadComments = array_values(array_map(
+            static function (array $row): array {
+                $normalized = [
+                    'author' => (string) ($row['author'] ?? 'Khách mua hàng'),
+                    'content' => (string) ($row['content'] ?? ''),
+                    'date' => (string) ($row['date'] ?? ''),
+                ];
+
+                if (isset($row['rating']) && is_numeric($row['rating'])) {
+                    $normalized['rating'] = max(1, min(5, (int) $row['rating']));
+                }
+
+                return $normalized;
+            },
+            $virtualComments,
+        ));
+
         try {
             $response = Http::timeout(60)
                 ->acceptJson()
                 ->withToken($writeToken)
                 ->post($url, [
-                    'virtual_comments' => $virtualComments,
+                    'virtual_comments' => $payloadComments,
                     'meta_input' => [
-                        self::WP_META_KEY => json_encode($virtualComments, JSON_UNESCAPED_UNICODE),
+                        self::WP_META_KEY => json_encode(
+                            $payloadComments,
+                            JSON_UNESCAPED_UNICODE | (defined('JSON_INVALID_UTF8_SUBSTITUTE') ? JSON_INVALID_UTF8_SUBSTITUTE : 0),
+                        ),
                     ],
                 ]);
 
             if (! $response->successful()) {
-                $message = (string) ($response->json('message') ?? $response->body());
-
                 return [
                     'success' => false,
-                    'message' => 'WordPress trả lỗi HTTP ' . $response->status() . ': ' . mb_substr($message, 0, 400),
+                    'message' => WordPressRestResponseParser::formatHttpErrorMessage(
+                        $response->status(),
+                        $response,
+                    ),
                 ];
             }
 

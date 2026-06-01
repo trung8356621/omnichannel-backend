@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
+use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,7 +26,8 @@ class GenerateMediaJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public int $timeout = 240;
+    /** Must exceed GeminiMediaGenerationService HTTP budget × số model dự phòng. */
+    public int $timeout = 360;
 
     public int $tries = 1;
 
@@ -39,10 +41,15 @@ class GenerateMediaJob implements ShouldQueue
         protected int $promptId,
         protected array $variables,
         protected string $toolType = 'image',
+        /** Editor jobs need one image — not the full text→image chain (can run 10+ minutes). */
+        protected bool $runFullDependentChain = false,
     ) {}
 
-    public function handle(PromptRunnerService $promptRunner, PromptMediaStorageService $promptMediaStorage): void
-    {
+    public function handle(
+        PromptRunnerService $promptRunner,
+        PromptMediaStorageService $promptMediaStorage,
+        PromptPostProcessingApplyService $postProcessing,
+    ): void {
         $media = SeoMedia::query()->find($this->seoMediaId);
         $prompt = SeoPrompt::query()->where('is_active', true)->find($this->promptId);
 
@@ -62,7 +69,12 @@ class GenerateMediaJob implements ShouldQueue
         try {
             $promptResult = $promptMediaStorage->usingTargetMedia(
                 $media,
-                fn () => $promptRunner->run($prompt, $this->variables, isTaskMode: false),
+                fn () => $promptRunner->run(
+                    $prompt,
+                    $this->variables,
+                    isTaskMode: false,
+                    runFullDependentChain: $this->runFullDependentChain,
+                ),
             );
             $output = trim((string) ($promptResult->output_text ?? ''));
             $finalUrl = trim((string) (explode("\n", $output, 2)[0] ?? ''));
@@ -86,6 +98,25 @@ class GenerateMediaJob implements ShouldQueue
                 'status' => 'completed',
                 'error_message' => null,
             ]);
+
+            $media = $media->fresh();
+            if ($this->toolType === 'image' && $media instanceof SeoMedia) {
+                try {
+                    $postResult = $postProcessing->applyIfConfigured($media, $prompt);
+                    if ($postResult->applied && count($postResult->pieces) > 0) {
+                        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+                        $variables['post_processing_piece_ids'] = array_values(array_map(
+                            static fn (SeoMedia $piece): int => (int) $piece->id,
+                            $postResult->pieces,
+                        ));
+                        $media->update(['prompt_variables' => $variables]);
+                    }
+                } catch (Throwable $postProcessingException) {
+                    logger()->warning(
+                        "GenerateMediaJob post-processing failed [media_id={$this->seoMediaId}]: {$postProcessingException->getMessage()}",
+                    );
+                }
+            }
         } catch (Throwable $exception) {
             $media->update([
                 'status' => 'failed',
@@ -107,9 +138,15 @@ class GenerateMediaJob implements ShouldQueue
             return;
         }
 
-        $message = $exception instanceof TimeoutExceededException
-            ? 'Job AI bị timeout khi xử lý (quá lâu). Vui lòng bấm Thử lại.'
-            : trim((string) $exception->getMessage());
+        $rawMessage = trim((string) $exception->getMessage());
+
+        $message = match (true) {
+            $exception instanceof TimeoutExceededException => 'Job AI bị timeout khi xử lý (quá lâu). Chạy queue worker với --timeout=360 rồi bấm Thử lại.',
+            str_contains($rawMessage, 'attempted too many times') => 'Job AI bị hủy giữa chừng (queue worker timeout). Khởi động lại worker với --timeout=360 rồi bấm Thử lại.',
+            str_contains(strtolower($rawMessage), 'curl error 28')
+                || str_contains(strtolower($rawMessage), 'timed out') => 'Gemini API không phản hồi kịp. Thử lại sau hoặc đổi model Imagen 4 trong Cấu hình AI.',
+            default => $rawMessage,
+        };
 
         if ($message === '') {
             $message = 'Job AI thất bại. Vui lòng bấm Thử lại.';

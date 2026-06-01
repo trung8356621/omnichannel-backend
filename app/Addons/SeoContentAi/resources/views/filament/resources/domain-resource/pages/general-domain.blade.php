@@ -10,7 +10,9 @@
     $stats = $this->getSyncStatistics();
     $technical = $this->getTechnicalSeoSummary();
     $internalLinksUrl = DomainResource::getUrl('internal-links', ['record' => $site]);
-    $technicalUrl = DomainResource::getUrl('info', ['record' => $site]);
+    $technicalUrl = DomainResource::getUrl('edit', ['record' => $site]);
+    $editDomainUrl = DomainResource::getUrl('edit', ['record' => $site]);
+    $canDeleteDomain = DomainResource::canDelete($site);
     $keywordsTabUrl = $this->getInternalLinkTabUrl('keywords');
     $linksTabUrl = $this->getInternalLinkTabUrl('links');
 
@@ -50,6 +52,30 @@
             <x-slot name="heading">{{ __('API Key') }}</x-slot>
             <x-slot name="description">
                 {{ __('Read token & Migration token. Bấm icon mắt để hiển thị; focus ô input để tự copy.') }}
+            </x-slot>
+            <x-slot name="headerEnd">
+                <div class="flex flex-wrap items-center gap-2">
+                    <x-filament::button
+                        tag="a"
+                        :href="$editDomainUrl"
+                        size="sm"
+                        color="gray"
+                        icon="heroicon-o-pencil-square"
+                    >
+                        {{ __('Chỉnh sửa') }}
+                    </x-filament::button>
+                    @if($canDeleteDomain)
+                        <x-filament::button
+                            type="button"
+                            size="sm"
+                            color="danger"
+                            icon="heroicon-o-trash"
+                            wire:click="mountAction('delete')"
+                        >
+                            {{ __('Xóa domain') }}
+                        </x-filament::button>
+                    @endif
+                </div>
             </x-slot>
 
             @if(($api['platform'] ?? '') !== 'wordpress')
@@ -291,8 +317,9 @@
             <x-filament::section>
                 <x-slot name="heading">{{ __('Technical SEO') }}</x-slot>
                 <x-slot name="description">
-                    {{ __('Mô tả site, CTA và liên kết dùng trong prompt') }}
-                    (@{{site_short_description}}, @{{site_cta}}, @{{site_links}}).
+                    {{ __('Mô tả site và CTA dùng trong prompt') }}
+                    (@{{site_short_description}}, @{{site_cta}}).
+                    {{ __('Link list chỉ dùng để gợi ý chèn link trong bài, không đưa vào prompt.') }}
                 </x-slot>
 
                 @if(! $technical['has_content'])
@@ -305,7 +332,7 @@
                         <p>
                             <span class="font-semibold">{{ __('CTA') }}:</span> {{ $technical['cta_count'] }} {{ __('mục') }}
                             ·
-                            <span class="font-semibold">{{ __('Liên kết prompt') }}:</span> {{ $technical['links_count'] }} {{ __('mục') }}
+                            <span class="font-semibold">{{ __('Link list') }}:</span> {{ $technical['links_count'] }} {{ __('mục') }}
                         </p>
                     </div>
                 @endif

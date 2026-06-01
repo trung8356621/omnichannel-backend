@@ -18,6 +18,7 @@ final class CreateArticlesFromTaskService
         private readonly TaskTestInputResolver $inputResolver,
         private readonly TaskWorkflowTestRunner $workflowRunner,
         private readonly SeoMainDomainService $mainDomain,
+        private readonly DomainLinkListKeywordSyncService $linkListSync,
     ) {}
 
     /**
@@ -57,6 +58,7 @@ final class CreateArticlesFromTaskService
         }
 
         $this->assertSiteAccessible($siteId);
+        $this->syncDomainLinkListKeywords($siteId);
 
         $keywords = $this->parseKeywords($keywordsRaw);
         if ($keywords === []) {
@@ -214,6 +216,14 @@ final class CreateArticlesFromTaskService
 
         if (! $query->exists()) {
             throw new \InvalidArgumentException('Website không hợp lệ hoặc bạn không có quyền.');
+        }
+    }
+
+    private function syncDomainLinkListKeywords(int $siteId): void
+    {
+        $site = Site::query()->find($siteId);
+        if ($site instanceof Site) {
+            $this->linkListSync->syncFromStoredContext($site);
         }
     }
 

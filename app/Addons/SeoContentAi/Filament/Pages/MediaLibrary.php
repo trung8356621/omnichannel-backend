@@ -478,6 +478,22 @@ class MediaLibrary extends Page
         return $this->resolveSitesQuery()->get();
     }
 
+    public function hasLockedGlobalSite(): bool
+    {
+        return SeoAccessControl::hasGlobalSiteScope();
+    }
+
+    public function currentSiteDomain(): ?string
+    {
+        if ($this->siteId === null || $this->siteId === '' || (int) $this->siteId <= 0) {
+            return null;
+        }
+
+        $site = $this->sites->firstWhere('id', (int) $this->siteId);
+
+        return $site instanceof Site ? (string) $site->domain : null;
+    }
+
     public function handleImageSelectClick(string $key, bool $shiftKey = false): void
     {
         if ($shiftKey && filled($this->selectionAnchorKey)) {
@@ -527,6 +543,37 @@ class MediaLibrary extends Page
     {
         $this->selectedKeys = [];
         $this->selectionAnchorKey = null;
+    }
+
+    /**
+     * @param  list<string>  $keys
+     */
+    public function syncSelectedKeys(array $keys, ?string $anchorKey = null): void
+    {
+        $this->selectedKeys = $this->sanitizeSelectedKeys($keys);
+        $this->selectionAnchorKey = $anchorKey !== null && in_array($anchorKey, $this->selectedKeys, true)
+            ? $anchorKey
+            : null;
+    }
+
+    /**
+     * @param  list<string>  $keys
+     */
+    public function resizeSelectedImagesFromClient(array $keys, ?string $anchorKey = null): void
+    {
+        $this->syncSelectedKeys($keys, $anchorKey);
+        $this->resizeSelectedImages();
+    }
+
+    /**
+     * @param  list<string>  $keys
+     * @return array{success: bool, removed_keys: list<string>, staging_only: bool}
+     */
+    public function deleteSelectedImagesFromClient(array $keys, ?string $anchorKey = null): array
+    {
+        $this->syncSelectedKeys($keys, $anchorKey);
+
+        return $this->deleteSelectedImages();
     }
 
     public function isImageSelected(string $key): bool
@@ -625,31 +672,41 @@ class MediaLibrary extends Page
         }
     }
 
-    public function deleteLibraryImage(string $key): void
+    /**
+     * @return array{success: bool, removed_keys: list<string>, staging_only: bool}
+     */
+    public function deleteLibraryImage(string $key): array
     {
         if ($this->siteId === null || $this->siteId <= 0) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         $image = $this->findImageRowBySelectionKey($key);
         if ($image === null) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.image_not_found'))->warning()->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         $result = app(SeoMediaLibraryDeleteService::class)->delete($site, $image);
 
         if ($result['success'] ?? false) {
+            $stagingOnly = ($result['scope'] ?? '') === 'staging';
+            $removedKeys = $stagingOnly ? [] : [$key];
+
+            if ($removedKeys !== []) {
+                $this->removeImagesFromListByKeys($removedKeys);
+            }
+
             Notification::make()
                 ->title(__('seo-content-ai::filament.media_runtime.deleted'))
                 ->body((string) ($result['message'] ?? ''))
@@ -659,22 +716,32 @@ class MediaLibrary extends Page
                 $this->selectedKeys,
                 static fn (string $selected): bool => $selected !== $key,
             ));
-            $this->loadImages();
-        } else {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.media_runtime.delete_failed'))
-                ->body((string) ($result['message'] ?? ''))
-                ->danger()
-                ->send();
+
+            return [
+                'success' => true,
+                'removed_keys' => $removedKeys,
+                'staging_only' => $stagingOnly,
+            ];
         }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.media_runtime.delete_failed'))
+            ->body((string) ($result['message'] ?? ''))
+            ->danger()
+            ->send();
+
+        return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
     }
 
-    public function deleteSelectedImages(): void
+    /**
+     * @return array{success: bool, removed_keys: list<string>, staging_only: bool}
+     */
+    public function deleteSelectedImages(): array
     {
         if ($this->siteId === null || $this->siteId <= 0) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         if ($this->selectedKeys === []) {
@@ -684,19 +751,21 @@ class MediaLibrary extends Page
                 ->warning()
                 ->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         $site = Site::query()->find($this->siteId);
         if (! $site instanceof Site) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.domain_not_found'))->danger()->send();
 
-            return;
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
         }
 
         $deleter = app(SeoMediaLibraryDeleteService::class);
         $successCount = 0;
+        $successScopes = [];
         $failedMessages = [];
+        $removedKeys = [];
 
         foreach ($this->selectedKeys as $key) {
             $image = $this->findImageRowBySelectionKey($key);
@@ -707,25 +776,55 @@ class MediaLibrary extends Page
             $result = $deleter->delete($site, $image);
             if ($result['success'] ?? false) {
                 $successCount++;
+                $scope = strtolower(trim((string) ($result['scope'] ?? '')));
+                if ($scope !== '') {
+                    $successScopes[] = $scope;
+                }
+                if ($scope !== 'staging') {
+                    $removedKeys[] = $key;
+                }
             } else {
                 $failedMessages[] = (string) ($image['slug'] ?? $key) . ': ' . ($result['message'] ?? '');
             }
         }
 
+        $removedKeys = array_values(array_unique($removedKeys));
+        if ($removedKeys !== []) {
+            $this->removeImagesFromListByKeys($removedKeys);
+        }
+
         $this->selectedKeys = [];
         $this->selectionAnchorKey = null;
-        $this->loadImages();
+
+        if ($failedMessages !== []) {
+            $this->loadImages();
+        }
+
+        $isOriginalTab = $this->activeTab === 'original';
+        $hasWordPressDeletes = in_array('wordpress', $successScopes, true);
+        $allStagingDeletes = $successCount > 0
+            && $successScopes !== []
+            && count(array_unique($successScopes)) === 1
+            && $successScopes[0] === 'staging';
 
         if ($successCount > 0 && $failedMessages === []) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.media_runtime.deleted'))
-                ->body("{$successCount} images were deleted.")
+                ->body(
+                    $isOriginalTab && ! $hasWordPressDeletes && $allStagingDeletes
+                        ? __('seo-content-ai::filament.media_runtime.deleted_staging_only_bulk', ['count' => $successCount])
+                        : "{$successCount} images were deleted.",
+                )
                 ->success()
                 ->send();
         } elseif ($successCount > 0) {
+            $partialBody = $isOriginalTab && ! $hasWordPressDeletes && $allStagingDeletes
+                ? __('seo-content-ai::filament.media_runtime.deleted_staging_only_partial', ['count' => $successCount])
+                : "Success: {$successCount}.";
+
             Notification::make()
                 ->title(__('seo-content-ai::filament.media_runtime.deleted_partial'))
-                ->body("Success: {$successCount}. " . implode(' ', array_slice($failedMessages, 0, 2)))
+                ->body($partialBody . ' ' . implode(' ', array_slice($failedMessages, 0, 2)))
                 ->warning()
                 ->send();
         } else {
@@ -735,6 +834,18 @@ class MediaLibrary extends Page
                 ->danger()
                 ->send();
         }
+
+        $stagingOnly = $successCount > 0
+            && $successScopes !== []
+            && count(array_unique($successScopes)) === 1
+            && $successScopes[0] === 'staging'
+            && $removedKeys === [];
+
+        return [
+            'success' => $successCount > 0,
+            'removed_keys' => $removedKeys,
+            'staging_only' => $stagingOnly,
+        ];
     }
 
     public function openImagePreview(array $image): void
@@ -1029,6 +1140,55 @@ class MediaLibrary extends Page
 
             $this->images[$index]['url'] = $url;
         }
+    }
+
+    /**
+     * @param  list<string>  $keys
+     */
+    private function removeImagesFromListByKeys(array $keys): void
+    {
+        if ($keys === []) {
+            return;
+        }
+
+        $removeSet = array_flip($keys);
+        $before = count($this->images);
+        $this->images = array_values(array_filter(
+            $this->images,
+            fn (array $image): bool => ! isset($removeSet[$this->imageSelectionKey($image)]),
+        ));
+
+        $removed = $before - count($this->images);
+        if ($removed > 0) {
+            $this->total = max(0, $this->total - $removed);
+        }
+    }
+
+    /**
+     * @param  list<string>  $keys
+     * @return list<string>
+     */
+    private function sanitizeSelectedKeys(array $keys): array
+    {
+        if ($keys === []) {
+            return [];
+        }
+
+        $allowed = array_flip(array_map(
+            fn (array $image): string => $this->imageSelectionKey($image),
+            $this->images,
+        ));
+
+        $sanitized = [];
+        foreach ($keys as $key) {
+            if (! is_string($key) || ! isset($allowed[$key])) {
+                continue;
+            }
+
+            $sanitized[$key] = $key;
+        }
+
+        return array_values($sanitized);
     }
 
     public static function canAccess(): bool

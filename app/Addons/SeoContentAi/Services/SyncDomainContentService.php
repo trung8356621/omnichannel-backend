@@ -266,6 +266,7 @@ class SyncDomainContentService
             }
 
             $this->syncWordPressPostMeta($article, $item);
+            $this->syncSchemaAndWooCommerceMeta($article, $item);
             app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
 
             if (! $hasLocalBody) {
@@ -392,6 +393,50 @@ class SyncDomainContentService
     /**
      * @param  array<string, mixed>  $item
      */
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function syncSchemaAndWooCommerceMeta(SeoArticle $article, array $item): void
+    {
+        $schema = trim((string) ($item['schema_json_ld'] ?? ''));
+        if ($schema !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'rank_math_schema_json'],
+                ['meta_value' => $schema],
+            );
+        }
+
+        $woocommerce = is_array($item['woocommerce'] ?? null) ? $item['woocommerce'] : [];
+        if ($woocommerce === []) {
+            return;
+        }
+
+        $currency = strtoupper(trim((string) ($woocommerce['currency'] ?? 'VND')));
+
+        $map = [
+            '_price'         => (string) ($woocommerce['price'] ?? ''),
+            'regular_price'  => (string) ($woocommerce['regular_price'] ?? ''),
+            '_regular_price' => (string) ($woocommerce['regular_price'] ?? ''),
+            'sale_price'     => (string) ($woocommerce['sale_price'] ?? ''),
+            '_sale_price'    => (string) ($woocommerce['sale_price'] ?? ''),
+            'min_price'      => (string) ($woocommerce['min_price'] ?? ''),
+            'max_price'      => (string) ($woocommerce['max_price'] ?? ''),
+            'price_currency' => $currency !== '' ? $currency : 'VND',
+        ];
+
+        foreach ($map as $metaKey => $metaValue) {
+            $metaValue = trim($metaValue);
+            if ($metaValue === '') {
+                continue;
+            }
+
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $metaKey],
+                ['meta_value' => $metaValue],
+            );
+        }
+    }
+
     private function syncSeoMetaFromWordPress(SeoArticle $article, array $item): void
     {
         $article->articleMetas()->where('meta_key', 'seo_plugin')->delete();
@@ -430,7 +475,7 @@ class SyncDomainContentService
             return;
         }
 
-        KeywordFocusAttach::attachMainKeyword($article, $site->id, $userId, $phrase);
+        KeywordFocusAttach::syncMainKeyword($article, $site->id, $userId, $phrase);
     }
 
     private function buildSyncUrl(Site $site): string

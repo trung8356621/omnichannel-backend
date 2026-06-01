@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import SeoSelect from './SeoSelect';
 import {
     WATERMARK_POSITIONS,
     applyWatermarkBatch,
@@ -149,29 +150,27 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                 <section className="seo-watermark-config__panel">
                     <h3>{t('watermark_default_config')}</h3>
                     <label className="seo-watermark-config__label">{t('watermark_config_site')}</label>
-                    <select
+                    <SeoSelect
                         value={configSiteId ?? ''}
                         onChange={(e) => setConfigSiteId(e.target.value ? Number(e.target.value) : null)}
-                        className="seo-watermark-config__select"
-                    >
-                        <option value="">{t('watermark_choose_site')}</option>
-                        {sites.map((site) => (
-                            <option key={site.id} value={site.id}>
-                                {site.domain}
-                            </option>
-                        ))}
-                    </select>
+                        placeholder={t('watermark_choose_site')}
+                        options={sites.map((site) => ({ value: site.id, label: site.domain }))}
+                    />
 
                     {loading ? <p>{t('watermark_loading_config')}</p> : null}
 
                     {configSiteId ? (
                         <div className="seo-watermark-config__form">
                             <label className="seo-watermark-config__label">{t('watermark_type')}</label>
-                            <select value={type} onChange={(e) => setType(e.target.value)} className="seo-watermark-config__select">
-                                <option value="none">{t('watermark_none')}</option>
-                                <option value="text">{t('watermark_text_type')}</option>
-                                <option value="image">{t('watermark_logo_type')}</option>
-                            </select>
+                            <SeoSelect
+                                value={type}
+                                onChange={(e) => setType(e.target.value)}
+                                options={[
+                                    { value: 'none', label: t('watermark_none') },
+                                    { value: 'text', label: t('watermark_text_type') },
+                                    { value: 'image', label: t('watermark_logo_type') },
+                                ]}
+                            />
 
                             {type === 'text' ? (
                                 <>
@@ -227,17 +226,14 @@ export default function WatermarkConfigPanel({ sites = [], defaultSiteId = null,
                             {type !== 'none' ? (
                                 <>
                                     <label className="seo-watermark-config__label">{t('watermark_position')}</label>
-                                    <select
+                                    <SeoSelect
                                         value={position}
                                         onChange={(e) => setPosition(e.target.value)}
-                                        className="seo-watermark-config__select"
-                                    >
-                                        {WATERMARK_POSITIONS.map((opt) => (
-                                            <option key={opt.value} value={opt.value}>
-                                                {opt.label}
-                                            </option>
-                                        ))}
-                                    </select>
+                                        options={WATERMARK_POSITIONS.map((opt) => ({
+                                            value: opt.value,
+                                            label: opt.label,
+                                        }))}
+                                    />
                                     <label className="seo-watermark-config__label">{t('watermark_opacity')}: {opacity}</label>
                                     <input
                                         type="range"

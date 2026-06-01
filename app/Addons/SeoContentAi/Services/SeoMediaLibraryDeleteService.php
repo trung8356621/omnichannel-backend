@@ -11,9 +11,13 @@ use Illuminate\Support\Facades\Storage;
 
 final class SeoMediaLibraryDeleteService
 {
+    public function __construct(
+        private readonly WordPressMediaLibraryService $wordPressMediaLibrary,
+    ) {}
+
     /**
      * @param  array<string, mixed>  $imageRow
-     * @return array{success: bool, message: string}
+     * @return array{success: bool, message: string, scope?: string}
      */
     public function delete(Site $site, array $imageRow): array
     {
@@ -48,7 +52,7 @@ final class SeoMediaLibraryDeleteService
 
     /**
      * @param  array<string, mixed>  $imageRow
-     * @return array{success: bool, message: string}
+     * @return array{success: bool, message: string, scope?: string}
      */
     private function deleteWordPressRow(Site $site, array $imageRow): array
     {
@@ -67,10 +71,7 @@ final class SeoMediaLibraryDeleteService
             ->first();
 
         if ($staging === null) {
-            return [
-                'success' => false,
-                'message' => 'Không có bản Laravel staging — ảnh WordPress không bị xóa từ đây.',
-            ];
+            return $this->wordPressMediaLibrary->deleteAttachment($site, $attachmentId);
         }
 
         $this->deleteSeoMedia($site, $staging);
@@ -78,11 +79,12 @@ final class SeoMediaLibraryDeleteService
         return [
             'success' => true,
             'message' => 'Đã xóa bản staging Laravel (ảnh trên WordPress vẫn giữ nguyên).',
+            'scope' => 'staging',
         ];
     }
 
     /**
-     * @return array{success: bool, message: string}
+     * @return array{success: bool, message: string, scope: string}
      */
     private function deleteSeoMedia(Site $site, SeoMedia $media): array
     {
@@ -102,6 +104,7 @@ final class SeoMediaLibraryDeleteService
         return [
             'success' => true,
             'message' => 'Đã xóa ảnh.',
+            'scope' => 'local',
         ];
     }
 }

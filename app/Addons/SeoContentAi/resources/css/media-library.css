@@ -1,3 +1,5 @@
+@import './seo-select.css';
+
 /* Thư viện — kế thừa tone tab Hình ảnh bài viết */
 .seo-media-library-react-host {
     display: contents;
@@ -91,25 +93,6 @@
     width: 100%;
     min-width: 12rem;
     max-width: 18rem;
-    font-size: 0.8125rem;
-    line-height: 1.4;
-    padding: 0.45rem 2rem 0.45rem 0.65rem;
-    border: 1px solid #dcdcde;
-    border-radius: 6px;
-    background-color: #fff;
-    color: #1d2327;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23646970' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 0.45rem center;
-    background-size: 1.1rem;
-}
-
-.dark .seo-media-library-select {
-    background-color: rgb(30 41 59);
-    border-color: rgb(71 85 105);
-    color: #e2e8f0;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
 }
 
 .seo-media-library-field-search {
@@ -277,7 +260,19 @@
     background: #fff;
     border: 1px solid #dcdcde;
     border-radius: 8px;
-    transition: box-shadow 0.15s;
+    transition:
+        opacity 0.28s ease,
+        transform 0.28s ease,
+        filter 0.28s ease,
+        box-shadow 0.15s,
+        border-color 0.15s;
+}
+
+.seo-media-library-card.is-removing {
+    opacity: 0;
+    transform: scale(0.94);
+    filter: grayscale(0.35) blur(0.4px);
+    pointer-events: none;
 }
 
 .seo-media-library-card:hover {
@@ -1140,7 +1135,6 @@
     color: #646970;
 }
 
-.seo-watermark-config__select,
 .seo-watermark-config__input {
     width: 100%;
     padding: 0.4rem 0.5rem;
@@ -1180,4 +1174,144 @@
 .seo-watermark-config__btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* AI image processing page */
+.seo-ai-processing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.seo-ai-processing-card {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    background: #fff;
+    overflow: hidden;
+}
+
+.seo-ai-processing-card.is-processing {
+    border-color: #dba617;
+}
+
+.seo-ai-processing-card.is-failed {
+    border-color: #d63638;
+}
+
+.seo-ai-processing-card__thumb {
+    position: relative;
+    aspect-ratio: 16 / 10;
+    background: #f0f0f1;
+}
+
+.seo-ai-processing-card__thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.seo-ai-processing-card__spinner {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(0, 0, 0, 0.08);
+    border-top-color: #2271b1;
+    border-radius: 50%;
+    animation: seo-ai-spin 0.8s linear infinite;
+}
+
+@keyframes seo-ai-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.seo-ai-processing-card__body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.75rem;
+}
+
+.seo-ai-processing-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.seo-ai-processing-card__status {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.seo-ai-processing-card__status.is-processing {
+    color: #8a6d00;
+    background: #fcf9e8;
+}
+
+.seo-ai-processing-card__status.is-completed {
+    color: #007017;
+    background: #edfaef;
+}
+
+.seo-ai-processing-card__status.is-failed {
+    color: #8a2424;
+    background: #fcf0f1;
+}
+
+.seo-ai-processing-card__type {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #646970;
+}
+
+.seo-ai-processing-card__slug {
+    margin: 0;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #1d2327;
+    word-break: break-word;
+}
+
+.seo-ai-processing-card__error {
+    margin: 0;
+    font-size: 0.8rem;
+    color: #d63638;
+    word-break: break-word;
+}
+
+.seo-ai-processing-card__meta {
+    margin: 0;
+    font-size: 0.75rem;
+    color: #646970;
+}
+
+.seo-ai-processing-card__article {
+    font-size: 0.8rem;
+    color: #2271b1;
+    text-decoration: none;
+}
+
+.seo-ai-processing-card__article:hover {
+    text-decoration: underline;
+}
+
+.seo-ai-processing-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
 }

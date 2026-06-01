@@ -20,6 +20,13 @@ final class SiteDomainPromptContextServiceTest extends TestCase
                 ['type' => 'phone', 'value' => '090'],
             ]),
         );
+        $merged = $service->formatCtaForPrompt(
+            [['type' => 'phone', 'value' => '090']],
+            'Hướng dẫn CTA',
+        );
+        $this->assertStringContainsString('Hướng dẫn CTA', $merged);
+        $this->assertStringContainsString('phone: 090', $merged);
+        $this->assertStringContainsString('[website]', $merged);
         $this->assertStringContainsString(
             'báo giá → https://example.com/bao-gia',
             $service->formatLinksForPrompt([

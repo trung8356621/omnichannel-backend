@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
 
@@ -49,6 +50,12 @@ class EditPrompt extends EditRecord
                 : \App\Addons\SeoContentAi\Support\AiModelCategory::GEMINI_FLASH;
         }
 
+        $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
+        $data['settings'] = PromptPostProcessing::mergeIntoSettings(
+            $settings,
+            is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [],
+        );
+
         return $data;
     }
 
@@ -64,6 +71,18 @@ class EditPrompt extends EditRecord
             $markdown,
             $data['variables'] ?? [],
         );
+
+        $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
+        $postProcessing = is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [];
+
+        if (($data['tools'] ?? '') !== 'image' && $postProcessing === []) {
+            $existingSettings = is_array($this->record->settings ?? null) ? $this->record->settings : [];
+            $postProcessing = is_array($existingSettings['post_processing'] ?? null)
+                ? $existingSettings['post_processing']
+                : [];
+        }
+
+        $data['settings'] = PromptPostProcessing::mergeIntoSettings($settings, $postProcessing);
 
         return $data;
     }

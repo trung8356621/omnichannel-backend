@@ -116,7 +116,6 @@ final class ArticleFaqWordPressImportService
      */
     public function importFromWordPressSyncItem(SeoArticle $article, array $item): array
     {
-        $article->faqs()->delete();
         $this->extractDebug->clear($article);
 
         $content = trim((string) ($item['post_content'] ?? ''));
@@ -136,10 +135,12 @@ final class ArticleFaqWordPressImportService
         if ($bestRows === []) {
             return [
                 'imported' => false,
-                'faq_count' => 0,
+                'faq_count' => $article->faqs()->count(),
                 'extract_debug' => null,
             ];
         }
+
+        $article->faqs()->delete();
 
         $result = $this->persistImportedFaqs(
             $article,

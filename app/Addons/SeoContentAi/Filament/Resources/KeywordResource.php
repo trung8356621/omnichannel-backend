@@ -127,7 +127,10 @@ class KeywordResource extends Resource
                     ->label(__('seo-content-ai::filament.keyword.target_url'))
                     ->maxLength(2000)
                     ->url()
-                    ->visible(fn (Get $get): bool => $get('type') === Keyword::TYPE_INTERNAL)
+                    ->visible(fn (Get $get): bool => in_array($get('type'), [Keyword::TYPE_FOCUS, Keyword::TYPE_INTERNAL], true))
+                    ->helperText(fn (Get $get): ?string => $get('type') === Keyword::TYPE_FOCUS
+                        ? __('seo-content-ai::filament.keyword.target_url_focus_hint')
+                        : null)
                     ->columnSpanFull(),
             ]);
     }

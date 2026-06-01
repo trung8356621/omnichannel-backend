@@ -4,36 +4,87 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
-use Illuminate\Database\Eloquent\Builder;
+use App\Models\SiteMeta;
+use Illuminate\Support\Collection;
 
 final class SeoMainDomainService
 {
-    public function resolveMainSite(): ?Site
+    public const META_KEY = 'seo_is_main';
+
+    public function isMain(Site $site): bool
     {
-        $query = Site::query()
-            ->whereHas('metas', function (Builder $inner): void {
-                $inner->where('meta_key', 'seo_is_main')
-                    ->where('meta_value', '1');
-            });
+        $primaryId = $this->primarySiteIdForOwner((int) $site->user_id);
+
+        return $primaryId !== null && $primaryId === (int) $site->getKey();
+    }
+
+    public function setAsMain(Site|int $site): void
+    {
+        $site = $site instanceof Site ? $site : Site::query()->findOrFail((int) $site);
+
+        $ownerId = (int) $site->user_id;
+
+        if (auth()->user()?->role !== 'admin') {
+            abort_unless($ownerId === (int) auth()->id(), 403);
+        }
+
+        $this->clearPrimaryForOwner($ownerId);
+
+        $site->metas()->updateOrCreate(
+            ['meta_key' => self::META_KEY],
+            ['meta_value' => '1'],
+        );
+
+        session(['seo_global_site_id' => (int) $site->getKey()]);
+    }
+
+    /**
+     * Mỗi user (manager) chỉ giữ một miền chính — dọn dữ liệu cũ trùng.
+     */
+    public function deduplicatePrimarySitesForVisibleOwners(): void
+    {
+        $query = Site::query()->select('user_id')->distinct();
 
         if (auth()->user()?->role !== 'admin') {
             $query->where('user_id', auth()->id());
         }
 
-        $site = $query->orderBy('id')->first();
-        if ($site instanceof Site) {
-            return $site;
+        foreach ($query->pluck('user_id') as $ownerId) {
+            if ($ownerId !== null && (int) $ownerId > 0) {
+                $this->ensureSinglePrimaryForOwner((int) $ownerId);
+            }
+        }
+    }
+
+    public function resolveMainSite(): ?Site
+    {
+        $globalId = SeoAccessControl::globalSiteId();
+        if ($globalId !== null && $globalId > 0) {
+            $site = Site::query()->find($globalId);
+            if ($site instanceof Site) {
+                return $site;
+            }
         }
 
-        $fallback = Site::query()->orderBy('id');
+        $userId = (int) auth()->id();
+
         if (auth()->user()?->role !== 'admin') {
-            $fallback->where('user_id', auth()->id());
+            $primaryId = $this->primarySiteIdForOwner($userId);
+            if ($primaryId !== null) {
+                return Site::query()->find($primaryId);
+            }
+
+            return Site::query()->where('user_id', $userId)->orderBy('id')->first();
         }
 
-        $site = $fallback->first();
+        $primaryId = $this->primarySiteIdForOwner($userId);
+        if ($primaryId !== null) {
+            return Site::query()->find($primaryId);
+        }
 
-        return $site instanceof Site ? $site : null;
+        return Site::query()->orderBy('id')->first();
     }
 
     public function resolveMainSiteId(): ?int
@@ -51,5 +102,70 @@ final class SeoMainDomainService
         }
 
         return trim((string) $site->domain) ?: ('Site #' . $site->id);
+    }
+
+    public function primarySiteIdForOwner(int $ownerId): ?int
+    {
+        if ($ownerId <= 0) {
+            return null;
+        }
+
+        $this->ensureSinglePrimaryForOwner($ownerId);
+
+        $siteIds = Site::query()->where('user_id', $ownerId)->pluck('id');
+        if ($siteIds->isEmpty()) {
+            return null;
+        }
+
+        $primarySiteId = SiteMeta::query()
+            ->where('meta_key', self::META_KEY)
+            ->where('meta_value', '1')
+            ->whereIn('site_id', $siteIds)
+            ->orderBy('site_id')
+            ->value('site_id');
+
+        return $primarySiteId !== null ? (int) $primarySiteId : null;
+    }
+
+    private function clearPrimaryForOwner(int $ownerId): void
+    {
+        $siteIds = Site::query()->where('user_id', $ownerId)->pluck('id');
+        if ($siteIds->isEmpty()) {
+            return;
+        }
+
+        SiteMeta::query()
+            ->whereIn('site_id', $siteIds)
+            ->where('meta_key', self::META_KEY)
+            ->delete();
+    }
+
+    private function ensureSinglePrimaryForOwner(int $ownerId): void
+    {
+        $siteIds = Site::query()->where('user_id', $ownerId)->pluck('id');
+        if ($siteIds->isEmpty()) {
+            return;
+        }
+
+        /** @var Collection<int, int> $primarySiteIds */
+        $primarySiteIds = SiteMeta::query()
+            ->where('meta_key', self::META_KEY)
+            ->where('meta_value', '1')
+            ->whereIn('site_id', $siteIds)
+            ->orderBy('site_id')
+            ->pluck('site_id')
+            ->map(static fn ($id): int => (int) $id);
+
+        if ($primarySiteIds->count() <= 1) {
+            return;
+        }
+
+        $keepId = $primarySiteIds->first();
+        $removeIds = $primarySiteIds->slice(1)->values();
+
+        SiteMeta::query()
+            ->where('meta_key', self::META_KEY)
+            ->whereIn('site_id', $removeIds)
+            ->delete();
     }
 }

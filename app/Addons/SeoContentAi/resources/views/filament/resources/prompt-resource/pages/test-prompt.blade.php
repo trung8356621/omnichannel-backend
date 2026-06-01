@@ -77,8 +77,10 @@
                         </p>
                     @endif
                     @if ($this->isImageToolPrompt() && $this->currentMediaOutputUrl())
-                        <div class="seo-prompt-test-media-wrap">
-                            <img src="{{ $this->currentMediaOutputUrl() }}" alt="AI generated image" class="seo-prompt-test-image" />
+                        <div class="seo-prompt-test-media-wrap @if (count($this->testResultMediaUrls()) > 1) is-grid @endif">
+                            @foreach ($this->testResultMediaUrls() as $mediaUrl)
+                                <img src="{{ $mediaUrl }}" alt="AI generated image" class="seo-prompt-test-image" />
+                            @endforeach
                         </div>
                         <div class="seo-media-preview-modal__actions seo-prompt-test-media-actions">
                             @if ($this->testResultCanOpenImageEditor())
@@ -113,6 +115,18 @@
                                 >
                                     Tách theo lưới
                                 </a>
+                            @endif
+                            @if ($this->canReapplyPostProcessing())
+                                <button
+                                    type="button"
+                                    class="seo-media-preview-btn"
+                                    wire:click="reapplyPostProcessing"
+                                    wire:loading.attr="disabled"
+                                    wire:target="reapplyPostProcessing"
+                                >
+                                    <span wire:loading.remove wire:target="reapplyPostProcessing">Chạy lại hậu kỳ</span>
+                                    <span wire:loading wire:target="reapplyPostProcessing">Đang xử lý…</span>
+                                </button>
                             @endif
                         </div>
                         @if ($this->testResultIsGeneratedMedia())
@@ -733,6 +747,24 @@
         .dark .seo-prompt-test-media-wrap {
             border-color: #4b5563;
             background: #111827;
+        }
+
+        .seo-prompt-test-media-wrap.is-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+            gap: 0.5rem;
+            padding: 0.5rem;
+        }
+
+        .seo-prompt-test-media-wrap.is-grid .seo-prompt-test-image {
+            width: 100%;
+            max-height: 12rem;
+            border-radius: 0.375rem;
+            border: 1px solid #e5e7eb;
+        }
+
+        .dark .seo-prompt-test-media-wrap.is-grid .seo-prompt-test-image {
+            border-color: #374151;
         }
 
         .seo-prompt-test-image,

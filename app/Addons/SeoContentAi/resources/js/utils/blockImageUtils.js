@@ -1,3 +1,6 @@
+import { detectWordPressImageSize } from './wordpressImageSize';
+import { isLocalSeoMediaSrc, resolveFullWordPressImageUrl } from './wordpressImageUrl';
+
 const ALIGN_CLASSES = {
     none: '',
     left: 'alignleft',
@@ -5,6 +8,14 @@ const ALIGN_CLASSES = {
     right: 'alignright',
     full: 'alignfull',
 };
+
+export const IMAGE_ALIGN_OPTIONS = [
+    { id: 'none', labelKey: 'image_align_default' },
+    { id: 'left', labelKey: 'toolbar_align_left' },
+    { id: 'center', labelKey: 'toolbar_align_center' },
+    { id: 'right', labelKey: 'toolbar_align_right' },
+    { id: 'full', labelKey: 'image_align_full_width' },
+];
 
 function alignFromElement(el) {
     if (!el) return 'none';
@@ -63,9 +74,13 @@ function parseImageFromFigure(fig, id) {
     const heightAttr = img.getAttribute('height');
     const src = img.getAttribute('src');
 
+    const isLocal = isLocalSeoMediaSrc(src ?? '');
+
     return {
         id,
         src,
+        wpSrc: isLocal ? '' : resolveFullWordPressImageUrl(src ?? ''),
+        size: isLocal ? 'full' : detectWordPressImageSize(src ?? ''),
         slug: slugFromSrc(src),
         alt: img.getAttribute('alt') ?? '',
         title: img.getAttribute('title') ?? '',
@@ -89,9 +104,13 @@ function parseImageFromImg(img, id) {
 
     const src = img.getAttribute('src');
 
+    const isLocal = isLocalSeoMediaSrc(src ?? '');
+
     return {
         id,
         src,
+        wpSrc: isLocal ? '' : resolveFullWordPressImageUrl(src ?? ''),
+        size: isLocal ? 'full' : detectWordPressImageSize(src ?? ''),
         slug: slugFromSrc(src),
         alt: img.getAttribute('alt') ?? '',
         title: img.getAttribute('title') ?? '',

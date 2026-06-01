@@ -188,7 +188,6 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                 detail: { faqs: faqsRef.current },
             }),
         );
-        setSaveStatus('saved');
     }, [articleId]);
 
     const { debounced: debouncedSave } = useDebouncedCallback((rows) => {
@@ -199,7 +198,6 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
                 detail: { faqs: rows },
             }),
         );
-        setSaveStatus('saved');
     }, 1200);
 
     const persistRows = useCallback(
@@ -343,8 +341,13 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         };
 
         window.addEventListener('article-faq-extract-debug', onExtractDebug);
+        const onFaqsSaveFinished = () => {
+            setSaveStatus('saved');
+        };
+
         window.addEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
         window.addEventListener('flush-article-faqs', flushFaqs);
+        window.addEventListener('article-faqs-save-finished', onFaqsSaveFinished);
 
         return () => {
             window.removeEventListener('article-faq-renewed', onRenewed);
@@ -353,6 +356,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
             window.removeEventListener('article-faq-extract-debug', onExtractDebug);
             window.removeEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
             window.removeEventListener('flush-article-faqs', flushFaqs);
+            window.removeEventListener('article-faqs-save-finished', onFaqsSaveFinished);
         };
     }, [debouncedSave, flushFaqs]);
 

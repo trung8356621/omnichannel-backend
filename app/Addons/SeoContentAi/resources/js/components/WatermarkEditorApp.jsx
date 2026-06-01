@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import SeoSelect from './SeoSelect';
 import GradientColorPicker from './GradientColorPicker';
 import PreciseControl from './PreciseControl';
 import WatermarkMediaPicker from './WatermarkMediaPicker';
@@ -1029,7 +1030,7 @@ export default function WatermarkEditorApp({
                         <h4 className="wm-section__title">{t('watermark_font')}</h4>
                         <div className="wm-field">
                             <label>{t('watermark_choose_font')}</label>
-                            <select value={selectedFont} onChange={(e) => setSelectedFont(e.target.value)}>
+                            <SeoSelect value={selectedFont} onChange={(e) => setSelectedFont(e.target.value)} size="compact">
                                 <optgroup label={t('watermark_system_fonts')}>
                                     {SYSTEM_FONTS.map((f) => (
                                         <option key={f} value={f}>
@@ -1044,7 +1045,7 @@ export default function WatermarkEditorApp({
                                         </option>
                                     ))}
                                 </optgroup>
-                            </select>
+                            </SeoSelect>
                             {fontStatus ? <p className="wm-font-loader__status">{fontStatus}</p> : null}
                         </div>
                     </section>
@@ -1103,27 +1104,28 @@ export default function WatermarkEditorApp({
                             <div className="wm-field-row">
                                 <div className="wm-field">
                                     <label>{t('watermark_icon')}</label>
-                                    <select
+                                    <SeoSelect
                                         value={selectedIcon}
                                         onChange={(e) => setSelectedIcon(e.target.value)}
-                                    >
-                                        {WATERMARK_CTA_ICONS.map((icon) => (
-                                            <option key={icon.value} value={icon.value}>
-                                                {icon.label}
-                                            </option>
-                                        ))}
-                                    </select>
+                                        size="compact"
+                                        options={WATERMARK_CTA_ICONS.map((icon) => ({
+                                            value: icon.value,
+                                            label: icon.label,
+                                        }))}
+                                    />
                                 </div>
                                 <div className="wm-field">
                                     <label>{t('watermark_icon_position')}</label>
-                                    <select
+                                    <SeoSelect
                                         value={iconPosition}
                                         onChange={(e) => setIconPosition(e.target.value)}
                                         disabled={selectedIcon === 'none'}
-                                    >
-                                        <option value="left">{t('left')}</option>
-                                        <option value="right">{t('right')}</option>
-                                    </select>
+                                        size="compact"
+                                        options={[
+                                            { value: 'left', label: t('left') },
+                                            { value: 'right', label: t('right') },
+                                        ]}
+                                    />
                                 </div>
                             </div>
                             {selectedIcon === 'custom' ? (
@@ -1246,28 +1248,29 @@ export default function WatermarkEditorApp({
                             <h4 className="wm-section__title">{t('watermark_position')}</h4>
                             <div className="wm-field">
                                 <label>{t('watermark_mode')}</label>
-                                <select
+                                <SeoSelect
                                     value={positionType}
                                     onChange={(e) => setPositionType(e.target.value)}
-                                >
-                                    <option value="anchor">{t('watermark_anchor_offset_mode')}</option>
-                                    <option value="preset">{t('watermark_grid_9_mode')}</option>
-                                </select>
+                                    size="compact"
+                                    options={[
+                                        { value: 'anchor', label: t('watermark_anchor_offset_mode') },
+                                        { value: 'preset', label: t('watermark_grid_9_mode') },
+                                    ]}
+                                />
                             </div>
                             {positionType === 'anchor' ? (
                                 <>
                                     <div className="wm-field">
                                         <label>{t('watermark_anchor_corner')}</label>
-                                        <select
+                                        <SeoSelect
                                             value={positionAnchor}
                                             onChange={(e) => setPositionAnchor(e.target.value)}
-                                        >
-                                            {WATERMARK_ANCHORS.map((a) => (
-                                                <option key={a.value} value={a.value}>
-                                                    {a.label}
-                                                </option>
-                                            ))}
-                                        </select>
+                                            size="compact"
+                                            options={WATERMARK_ANCHORS.map((a) => ({
+                                                value: a.value,
+                                                label: a.label,
+                                            }))}
+                                        />
                                     </div>
                                     <div className="wm-field">
                                         <label>

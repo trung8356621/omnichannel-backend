@@ -251,6 +251,83 @@ final class WordPressMediaLibraryService
     }
 
     /**
+     * @return array{success: bool, message: string, scope?: string}
+     */
+    public function deleteAttachment(Site $site, int $attachmentId): array
+    {
+        if ($attachmentId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Thiếu ID ảnh WordPress.',
+            ];
+        }
+
+        $site->loadMissing('metas');
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return [
+                'success' => false,
+                'message' => 'Thiếu Migration/Write token trên domain.',
+            ];
+        }
+
+        $base = $this->wpContent->getPermalinkBase($site);
+        if ($base === '') {
+            return [
+                'success' => false,
+                'message' => 'Không xác định được URL WordPress của domain.',
+            ];
+        }
+
+        try {
+            $response = $this->requestDeleteAttachment($base, $writeToken, $attachmentId);
+
+            if (! $response->successful()) {
+                $message = (string) ($response->json('message') ?? $response->body());
+                $code = strtolower(trim((string) ($response->json('code') ?? '')));
+                if ($response->status() === 404 && (
+                    $code === 'rest_no_route'
+                    || str_contains(strtolower($message), 'no route')
+                    || str_contains($message, 'đường dẫn nào phù hợp')
+                )) {
+                    $message = 'Plugin TVH SEO AI Bridge trên WordPress chưa có API xóa ảnh. '
+                        . 'Cập nhật plugin lên bản 1.0.12+ (WP Admin → TVH SEO AI → Kiểm tra cập nhật).';
+                }
+
+                return [
+                    'success' => false,
+                    'message' => 'WordPress trả lỗi HTTP ' . $response->status() . ': ' . mb_substr($message, 0, 300),
+                ];
+            }
+
+            $body = $response->json();
+            if (! is_array($body) || ! ($body['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($body['message'] ?? 'WordPress từ chối xóa attachment.'),
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => (string) ($body['message'] ?? 'Đã xóa ảnh trên WordPress.'),
+                'scope' => 'wordpress',
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress media attachment delete failed', [
+                'site_id' => $site->id,
+                'attachment_id' => $attachmentId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * @return array{images: list<array<string, mixed>>, total: int, total_pages: int, page: int, error: string|null}
      */
     private function emptyResult(int $page, ?string $error): array
@@ -262,5 +339,36 @@ final class WordPressMediaLibraryService
             'page' => max(1, $page),
             'error' => $error,
         ];
+    }
+
+    private function requestDeleteAttachment(string $base, string $writeToken, int $attachmentId): \Illuminate\Http\Client\Response
+    {
+        $client = Http::timeout(45)
+            ->acceptJson()
+            ->withToken($writeToken);
+
+        $attempts = [
+            fn () => $client->post($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId . '/delete'),
+            fn () => $client->post($base . '/wp-json/omi-seo-ai/v1/attachments/delete', [
+                'attachment_id' => $attachmentId,
+            ]),
+            fn () => $client->delete($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId),
+        ];
+
+        $lastResponse = null;
+        foreach ($attempts as $attempt) {
+            $response = $attempt();
+            $lastResponse = $response;
+
+            if ($response->successful()) {
+                return $response;
+            }
+
+            if ($response->status() !== 404) {
+                return $response;
+            }
+        }
+
+        return $lastResponse ?? $client->delete($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId);
     }
 }

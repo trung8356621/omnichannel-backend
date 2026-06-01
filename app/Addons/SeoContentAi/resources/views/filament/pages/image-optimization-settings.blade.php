@@ -4,13 +4,20 @@
     <div class="seo-image-opt">
         <div class="seo-image-opt__toolbar">
             <div class="seo-image-opt__toolbar-row">
-                <label class="seo-image-opt__label" for="seo-image-opt-site">Apply to website:</label>
-                <select id="seo-image-opt-site" wire:model.live="siteId" class="seo-image-opt__select">
-                    <option value="">-- System default (Global) --</option>
-                    @foreach ($this->sites as $site)
-                        <option value="{{ $site->id }}">{{ $site->domain }}</option>
-                    @endforeach
-                </select>
+                @unless ($this->hasLockedGlobalSite())
+                    <label class="seo-image-opt__label" for="seo-image-opt-site">Apply to website:</label>
+                    <x-seo-content-ai::seo-select id="seo-image-opt-site" wire:model.live="siteId" size="inline">
+                        <option value="">-- System default (Global) --</option>
+                        @foreach ($this->sites as $site)
+                            <option value="{{ $site->id }}">{{ $site->domain }}</option>
+                        @endforeach
+                    </x-seo-content-ai::seo-select>
+                @else
+                    <span class="seo-image-opt__label">Apply to website:</span>
+                    <span class="seo-image-opt__select">
+                        {{ $this->currentSiteDomain() ?? ('Site #' . (int) ($siteId ?? 0)) }}
+                    </span>
+                @endunless
             </div>
             <p class="seo-image-opt__hint">Site-specific configuration overrides global system defaults.</p>
         </div>

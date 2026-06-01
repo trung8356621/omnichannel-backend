@@ -55,7 +55,7 @@ class MediaImageEditor extends Page
         $this->imageId = (int) $seoMedia->id;
         $this->wpAttachmentId = (int) ($seoMedia->wp_attachment_id ?? 0);
         $this->siteId = (int) ($seoMedia->site_id ?? 0);
-        $this->articleId = (int) ($seoMedia->article_id ?? 0);
+        $this->articleId = $seoMedia->firstArticleId() ?? 0;
 
         $pendingService = app(SeoWpMediaEditedPendingService::class);
         $siteId = (int) ($seoMedia->site_id ?? 0);
@@ -93,8 +93,9 @@ class MediaImageEditor extends Page
 
     private function canAccessMedia(SeoMedia $media): bool
     {
-        if ($media->article_id !== null) {
-            $article = SeoArticle::query()->find($media->article_id);
+        $articleId = $media->firstArticleId();
+        if ($articleId !== null) {
+            $article = SeoArticle::query()->find($articleId);
 
             return $article !== null && $this->canAccessArticle($article);
         }

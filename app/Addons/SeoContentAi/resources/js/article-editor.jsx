@@ -4,8 +4,10 @@ import SeoArticleEditor from './components/SeoArticleEditor';
 import ArticleAiChatPanel from './components/ArticleAiChatPanel';
 import ArticleFaqEditor from './components/ArticleFaqEditor';
 import ArticleLinksSidebar from './components/ArticleLinksSidebar';
+import ArticleDomainWidgetsSidebar from './components/ArticleDomainWidgetsSidebar';
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
+import '../css/seo-select.css';
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
 function normalizeLivewireEventDetail(payload) {
@@ -45,9 +47,29 @@ function registerArticleEditorLivewireBridge() {
         Livewire.on('editor-block-image-selected', forward('editor-block-image-selected'));
         Livewire.on('article-media-selected', forward('article-media-selected'));
         Livewire.on('article-media-removed', forward('article-media-removed'));
+        Livewire.on('article-faqs-save-finished', forward('article-faqs-save-finished'));
+        Livewire.on('seo-product-gallery-updated', (payload) => {
+            const detail = normalizeLivewireEventDetail(payload);
+            const gallery = detail.gallery;
+            const articleId = detail.article_id ?? detail.articleId;
+            if (articleId && Array.isArray(gallery)) {
+                try {
+                    window.localStorage.setItem(
+                        `seo_product_album_list_${articleId}`,
+                        JSON.stringify(gallery),
+                    );
+                } catch {
+                    // ignore
+                }
+            }
+            window.dispatchEvent(new CustomEvent('seo-product-gallery-updated', { detail }));
+        });
         Livewire.on('article-ai-image-generated', forward('article-ai-image-generated'));
         Livewire.on('article-ai-video-generated', forward('article-ai-video-generated'));
         Livewire.on('article-ai-media-failed', forward('article-ai-media-failed'));
+        Livewire.on('article-post-images-synced', forward('article-post-images-synced'));
+        Livewire.on('article-supplemental-images-synced', forward('article-supplemental-images-synced'));
+        Livewire.on('virtual-reviews-updated', forward('virtual-reviews-updated'));
     }
 }
 
@@ -69,7 +91,11 @@ if (rootElement) {
     let siteId = null;
     let articleTitle = '';
     let articlePostType = '';
+    let supportsProductGallery = false;
+    let productCategoryOptions = [];
+    let initialProductGallery = [];
     let aiDebug = { enabled: false };
+    let initialVirtualReviews = [];
 
     try {
         const htmlEl = document.getElementById('seo-article-initial-html');
@@ -130,9 +156,17 @@ if (rootElement) {
             siteId = meta?.site_id ?? meta?.siteId ?? null;
             articleTitle = meta?.title ?? '';
             articlePostType = String(meta?.post_type ?? '').trim();
+            supportsProductGallery = Boolean(meta?.supports_product_gallery);
+            productCategoryOptions = Array.isArray(meta?.product_category_options)
+                ? meta.product_category_options
+                : [];
+            initialProductGallery = Array.isArray(meta?.product_gallery) ? meta.product_gallery : [];
             aiDebug = meta?.ai_debug ?? { enabled: false };
             initialSupplementalImages = Array.isArray(meta?.supplemental_images)
                 ? meta.supplemental_images
+                : [];
+            initialVirtualReviews = Array.isArray(meta?.virtual_reviews)
+                ? meta.virtual_reviews
                 : [];
         }
     } catch (e) {
@@ -162,7 +196,11 @@ if (rootElement) {
             initialPostImages={initialPostImages}
             initialSupplementalImages={initialSupplementalImages}
             initialPostType={articlePostType}
+            supportsProductGallery={supportsProductGallery}
+            productCategoryOptions={productCategoryOptions}
+            initialProductGallery={initialProductGallery}
             initialFaqs={initialFaqs}
+            initialVirtualReviews={initialVirtualReviews}
             articleTitle={articleTitle}
             editorSettings={editorSettings}
         />,
@@ -171,6 +209,16 @@ if (rootElement) {
     const linksRoot = document.getElementById('seo-article-links-root');
     if (linksRoot) {
         createRoot(linksRoot).render(<ArticleLinksSidebar />);
+    }
+
+    const domainWidgetsRoot = document.getElementById('seo-article-domain-widgets-root');
+    if (domainWidgetsRoot) {
+        createRoot(domainWidgetsRoot).render(
+            <ArticleDomainWidgetsSidebar
+                initialDomainLinkList={initialSeo?.domain_link_list ?? []}
+                initialDomainCtaList={initialSeo?.domain_cta_list ?? []}
+            />,
+        );
     }
 
     const launcherRoot = document.getElementById('seo-article-ai-launcher-root');

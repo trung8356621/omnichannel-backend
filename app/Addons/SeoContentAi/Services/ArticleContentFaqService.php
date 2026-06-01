@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Support\SimpleMarkdownHtmlConverter;
 
 /**
  * Cắt FAQ khỏi Markdown/HTML bài viết và gắn shortcode [omi_faq].
@@ -14,8 +13,9 @@ final class ArticleContentFaqService
 {
     public function __construct(
         private readonly WorkflowParserService $workflowParser,
-        private readonly SimpleMarkdownHtmlConverter $markdownHtml,
+        private readonly ArticleMarkdownToHtmlService $markdownHtml,
         private readonly ArticlePostContentFaqPlaceholder $postContentPlaceholder,
+        private readonly ArticleFaqEditorService $faqEditor,
     ) {
     }
 
@@ -37,6 +37,101 @@ final class ArticleContentFaqService
         }
 
         return $this->workflowParser->stripFaqContentKeepHeadingHtml($articleHtml, false);
+    }
+
+    /**
+     * Bóc FAQ, chèn shortcode, convert markdown → HTML (không ghi DB).
+     *
+     * @return array{
+     *     html: string,
+     *     meta_description: string|null,
+     *     h1_title: string|null,
+     *     faqs: list<array{question: string, answer: string}>,
+     * }
+     */
+    public function convertMarkdownImport(string $markdown): array
+    {
+        $markdown = trim($markdown);
+        if ($markdown === '') {
+            return [
+                'html' => '',
+                'meta_description' => null,
+                'h1_title' => null,
+                'faqs' => [],
+            ];
+        }
+
+        $prepared = $this->markdownHtml->prepareImport($markdown);
+        $markdown = $prepared['markdown'];
+        if ($markdown === '') {
+            return [
+                'html' => '',
+                'meta_description' => $prepared['meta_description'],
+                'h1_title' => $prepared['h1_title'],
+                'faqs' => [],
+            ];
+        }
+
+        $faqs = $this->workflowParser->parseFaqsFromContent($markdown);
+        $cleaned = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
+        $converted = $this->markdownHtml->convertWithMetadata($cleaned);
+        $html = $this->ensureEditorPlaceholderMarkup($converted['html']);
+        $h1FromHtml = $this->extractLeadingH1FromHtml($html);
+        $html = $h1FromHtml['html'];
+
+        $metaDescription = trim((string) ($converted['meta_description'] ?? ''));
+        if ($metaDescription === '' && filled($prepared['meta_description'])) {
+            $metaDescription = trim((string) $prepared['meta_description']);
+        }
+
+        $h1Title = filled($prepared['h1_title'])
+            ? trim((string) $prepared['h1_title'])
+            : $h1FromHtml['h1_title'];
+
+        return [
+            'html' => $html,
+            'meta_description' => $metaDescription !== '' ? $metaDescription : null,
+            'h1_title' => filled($h1Title) ? trim((string) $h1Title) : null,
+            'faqs' => $faqs,
+        ];
+    }
+
+    /**
+     * @return array{html: string, h1_title: string|null}
+     */
+    private function extractLeadingH1FromHtml(string $html): array
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return ['html' => '', 'h1_title' => null];
+        }
+
+        if (preg_match('/<h1\b[^>]*>(.*?)<\/h1>\s*/is', $html, $matches, PREG_OFFSET_CAPTURE) !== 1) {
+            return ['html' => $html, 'h1_title' => null];
+        }
+
+        $title = trim(html_entity_decode(strip_tags($matches[1][0]), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        $html = trim(substr_replace($html, '', $matches[0][1], strlen($matches[0][0])));
+
+        return [
+            'html' => $html,
+            'h1_title' => $title !== '' ? $title : null,
+        ];
+    }
+
+    private function persistMetaDescription(SeoArticle $article, ?string $metaDescription): void
+    {
+        $metaDescription = trim((string) $metaDescription);
+        if ($metaDescription === '') {
+            return;
+        }
+
+        foreach (['seo_meta_description', 'meta_description'] as $key) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $key],
+                ['meta_value' => $metaDescription],
+            );
+        }
     }
 
     public function persistArticleBodyHtml(SeoArticle $article, string $html): void
@@ -72,7 +167,7 @@ final class ArticleContentFaqService
             return $markdown;
         }
 
-        return $this->workflowParser->removeFaqAndAppendShortcode($markdown);
+        return $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
     }
 
     private function ensureEditorPlaceholderMarkup(string $html): string
@@ -100,14 +195,16 @@ final class ArticleContentFaqService
      */
     public function applyStrippedContentToArticle(SeoArticle $article, string $markdown): void
     {
-        $cleaned = $this->stripFaqAndAppendShortcode($markdown);
-        if ($cleaned === '') {
+        $import = $this->convertMarkdownImport($markdown);
+        if ($import['html'] === '' && $import['faqs'] === []) {
             return;
         }
 
-        $html = $this->markdownHtml->toHtml($cleaned);
-        $html = $this->ensureEditorPlaceholderMarkup($html);
+        if ($import['faqs'] !== []) {
+            $this->faqEditor->saveFromEditor($article, $import['faqs']);
+        }
 
-        $this->persistArticleBodyHtml($article, $html);
+        $this->persistMetaDescription($article, $import['meta_description']);
+        $this->persistArticleBodyHtml($article, $import['html']);
     }
 }

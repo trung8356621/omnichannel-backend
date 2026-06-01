@@ -5,12 +5,15 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
+use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsDomainPromptContext;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsSeoDomainMetas;
+use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Models\Site;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateDomain extends CreateRecord
 {
+    use PersistsDomainPromptContext;
     use PersistsSeoDomainMetas;
 
     protected static string $resource = DomainResource::class;
@@ -19,7 +22,16 @@ class CreateDomain extends CreateRecord
     {
         parent::mount();
 
-        $this->form->fill($this->defaultSeoMetaForCreateForm([]));
+        $this->form->fill([
+            ...$this->defaultSeoMetaForCreateForm([]),
+            'promptContext' => $this->preparePromptContextForForm([
+                'tone' => '',
+                'short_description' => '',
+                'cta_intro' => SiteDomainPromptContextService::DEFAULT_CTA_INTRO,
+                'cta' => [],
+                'links' => [],
+            ]),
+        ]);
     }
 
     /**
@@ -33,7 +45,7 @@ class CreateDomain extends CreateRecord
         $data['status'] = $data['status'] ?? 'active';
         $data['ssl'] = array_key_exists('ssl', $data) ? (bool) $data['ssl'] : true;
 
-        return $this->stripSeoMetaKeys($data);
+        return $this->stripSeoMetaKeys($this->stripPromptContextFromFormData($data));
     }
 
     protected function afterCreate(): void
@@ -41,7 +53,10 @@ class CreateDomain extends CreateRecord
         /** @var Site $site */
         $site = $this->record;
 
-        $this->persistSeoMetaFormData($site, $this->form->getState());
+        $state = $this->form->getState();
+        $this->queuePromptContextFromFormState($state);
+        $this->persistSeoMetaFormData($site, $this->stripPromptContextFromFormData($state));
+        $this->persistPendingDomainPromptContext($site);
     }
 
     protected function getRedirectUrl(): string

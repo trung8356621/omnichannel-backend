@@ -1,6 +1,13 @@
 import React, { useState } from 'react';
 import { AlignCenter, AlignLeft, AlignRight, Maximize2, Pencil, Trash2 } from 'lucide-react';
 import { t } from '../utils/i18n';
+import {
+    ImageMetaFieldLabel,
+    ImageMetaFormActions,
+    ImageMetaTextInput,
+    ImageMetaTextarea,
+} from './imageMeta/ImageMetaFormFields';
+
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
     { id: 'center', icon: AlignCenter, title: t('toolbar_align_center') },
@@ -15,46 +22,40 @@ function ImageMetaForm({ image, onSave, onCancel }) {
 
     return (
         <div className="seo-block-image-meta-form">
-            <label className="seo-image-meta-label">Alt</label>
-            <input
-                type="text"
-                className="seo-image-meta-input"
+            <ImageMetaFieldLabel htmlFor={`seo-block-panel-alt-${image.id}`}>{t('alt_text')}</ImageMetaFieldLabel>
+            <ImageMetaTextInput
+                id={`seo-block-panel-alt-${image.id}`}
                 value={alt}
                 onChange={(e) => setAlt(e.target.value)}
             />
-            <label className="seo-image-meta-label">Title</label>
-            <input
-                type="text"
-                className="seo-image-meta-input"
+
+            <ImageMetaFieldLabel htmlFor={`seo-block-panel-title-${image.id}`}>{t('title')}</ImageMetaFieldLabel>
+            <ImageMetaTextInput
+                id={`seo-block-panel-title-${image.id}`}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
             />
-            <label className="seo-image-meta-label">Caption</label>
-            <textarea
-                className="seo-image-meta-textarea"
-                rows={2}
+
+            <ImageMetaFieldLabel htmlFor={`seo-block-panel-caption-${image.id}`}>
+                {t('caption')}
+            </ImageMetaFieldLabel>
+            <ImageMetaTextarea
+                id={`seo-block-panel-caption-${image.id}`}
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
             />
-            <div className="seo-image-meta-actions">
-                <button type="button" className="seo-image-meta-btn" onClick={onCancel}>
-                    {t('cancel')}
-                </button>
-                <button
-                    type="button"
-                    className="seo-image-meta-btn is-primary"
-                    onClick={() =>
-                        onSave({
-                            ...image,
-                            alt: alt.trim(),
-                            title: title.trim(),
-                            caption: caption.trim(),
-                        })
-                    }
-                >
-                    {t('apply')}
-                </button>
-            </div>
+
+            <ImageMetaFormActions
+                onCancel={onCancel}
+                onApply={() =>
+                    onSave({
+                        ...image,
+                        alt: alt.trim(),
+                        title: title.trim(),
+                        caption: caption.trim(),
+                    })
+                }
+            />
         </div>
     );
 }

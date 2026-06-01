@@ -66,7 +66,13 @@
                                 </div>
                             </div>
 
-                            @if (($connection['models'] ?? []) === [])
+                            @php
+                                $models = is_array($connection['models'] ?? null) ? $connection['models'] : [];
+                                $modelPreviewLimit = 50;
+                                $visibleModels = array_slice($models, 0, $modelPreviewLimit);
+                            @endphp
+
+                            @if ($models === [])
                                 <p class="seo-ai-models-empty">
                                     No models in <code>seo_ai_models</code> yet. Click "Sync" - Imagen / Nano Banana are seeded from internal catalog (Google API often does not list Imagen).
                                 </p>
@@ -83,7 +89,7 @@
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            @foreach ($connection['models'] as $model)
+                                            @foreach ($visibleModels as $model)
                                                 <tr wire:key="ai-model-{{ $model['id'] }}">
                                                     <td>
                                                         <span class="seo-ai-models-table__cat">{{ $model['category_label'] }}</span>
@@ -105,6 +111,12 @@
                                         </tbody>
                                     </table>
                                 </div>
+                                @if (count($models) > $modelPreviewLimit)
+                                    <p class="seo-ai-models-empty mt-2">
+                                        Showing {{ $modelPreviewLimit }}/{{ count($models) }} models for performance.
+                                        Open <a href="{{ $this->aiConnectionEditUrl($connection['id']) }}" class="text-primary-600 underline">Edit connection</a> to manage all.
+                                    </p>
+                                @endif
                             @endif
                         </div>
                     @empty

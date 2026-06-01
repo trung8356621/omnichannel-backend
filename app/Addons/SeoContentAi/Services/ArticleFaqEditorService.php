@@ -89,7 +89,8 @@ final class ArticleFaqEditorService
             $question = trim((string) ($row['question'] ?? ''));
             $answer = trim((string) ($row['answer'] ?? ''));
             $more = trim((string) ($row['more'] ?? ''));
-            if ($question === '' || $answer === '') {
+            $answerPlain = trim(html_entity_decode(strip_tags($answer), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if ($question === '' || $answerPlain === '') {
                 continue;
             }
             $faqs[] = [

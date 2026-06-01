@@ -17,12 +17,16 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService;
+use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\PromptTestPublishService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\WordPressCommentReviewService;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
+use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\PromptTokenUsage;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\Site;
@@ -81,6 +85,8 @@ class TestPrompt extends Page implements HasForms
 
     public int $chainSubTasksCompleted = 0;
 
+    protected bool $applyPostProcessingOnNextSelect = false;
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -94,6 +100,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         $this->syncVariableValueKeys();
+        $this->applySiteContextDefaults(true);
 
         $this->form->fill($this->variableValues);
 
@@ -254,9 +261,10 @@ class TestPrompt extends Page implements HasForms
 
         if ($this->promptUsesLoaiSanPham) {
             $normalized = PromptLoaiSanPhamVariable::mergeIntoVariables($normalized);
-
-            return Utf8Sanitizer::variables(PromptLoaiSanPhamVariable::withAliases($normalized));
+            $normalized = PromptLoaiSanPhamVariable::withAliases($normalized);
         }
+
+        $normalized = PromptSiteContextVariable::mergeInto($normalized);
 
         return Utf8Sanitizer::variables($normalized);
     }
@@ -304,6 +312,10 @@ class TestPrompt extends Page implements HasForms
         $this->applyResultToView($result);
         $this->applyChainStateFromResult($result);
         $this->syncTestResultSeoMediaContext();
+        if ($this->applyPostProcessingOnNextSelect) {
+            $this->applyPostProcessingOnNextSelect = false;
+            $this->applyPostProcessingToTestResult();
+        }
         unset($this->promptResults);
     }
 
@@ -499,6 +511,7 @@ class TestPrompt extends Page implements HasForms
                 ->send();
 
             unset($this->promptResults);
+            $this->applyPostProcessingOnNextSelect = true;
             $this->selectResult((int) $result->id);
         } catch (PromptRunException $exception) {
             if ($this->redirectIfAiModelsNotReady($exception)) {
@@ -526,11 +539,116 @@ class TestPrompt extends Page implements HasForms
                 ->first();
 
             if ($failed !== null) {
+                $this->applyPostProcessingOnNextSelect = false;
                 $this->selectResult((int) $failed->id);
             }
         } finally {
             $this->isRunning = false;
         }
+    }
+
+    protected function applyPostProcessingToTestResult(): void
+    {
+        if (! $this->isImageToolPrompt() || $this->currentMediaOutputUrl() === null) {
+            return;
+        }
+
+        $config = PromptPostProcessing::fromPrompt($this->getPrompt());
+        if (! PromptPostProcessing::isActive($config)) {
+            return;
+        }
+
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            return;
+        }
+
+        try {
+            $result = app(PromptPostProcessingApplyService::class)
+                ->applyIfConfigured($media, $this->getPrompt());
+        } catch (\Throwable $exception) {
+            Notification::make()
+                ->title('Hậu kỳ ảnh thất bại')
+                ->body(mb_substr($exception->getMessage(), 0, 500))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if (! $result->applied) {
+            if ($result->message !== null && $result->message !== '') {
+                Notification::make()
+                    ->title('Hậu kỳ ảnh')
+                    ->body($result->message)
+                    ->warning()
+                    ->send();
+            }
+
+            return;
+        }
+
+        $urls = $result->publicUrls();
+        if ($urls !== []) {
+            $this->outputText = implode("\n", $urls);
+
+            if ($this->selectedResultId !== null) {
+                PromptResult::query()
+                    ->where('prompt_id', $this->getPrompt()->id)
+                    ->whereKey($this->selectedResultId)
+                    ->update(['output_text' => $this->outputText]);
+            }
+        }
+
+        Notification::make()
+            ->title('Hậu kỳ ảnh')
+            ->body($result->message ?? 'Đã xử lý ảnh sau khi tạo.')
+            ->success()
+            ->send();
+    }
+
+    public function reapplyPostProcessing(): void
+    {
+        $this->applyPostProcessingToTestResult();
+    }
+
+    public function canReapplyPostProcessing(): bool
+    {
+        if (! $this->isImageToolPrompt() || $this->currentMediaOutputUrl() === null) {
+            return false;
+        }
+
+        $config = PromptPostProcessing::fromPrompt($this->getPrompt());
+        if (! PromptPostProcessing::isActive($config)) {
+            return false;
+        }
+
+        return $this->testResultSourceSeoMedia() !== null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function testResultMediaUrls(): array
+    {
+        $raw = trim((string) ($this->outputText ?? ''));
+        if ($raw === '') {
+            return [];
+        }
+
+        $urls = [];
+        foreach (preg_split('/\R/u', $raw) ?: [] as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (str_starts_with($line, '/storage/') || preg_match('#^https?://#i', $line)) {
+                $urls[] = $line;
+            }
+        }
+
+        return $urls;
     }
 
     public function runNextSubTask(PromptRunnerService $runner): void
@@ -604,6 +722,7 @@ class TestPrompt extends Page implements HasForms
                 ->send();
 
             unset($this->promptResults);
+            $this->applyPostProcessingOnNextSelect = true;
             $this->selectResult((int) $result->id);
         } catch (PromptRunException $exception) {
             if ($this->redirectIfAiModelsNotReady($exception)) {
@@ -625,6 +744,7 @@ class TestPrompt extends Page implements HasForms
                 ->first();
 
             if ($failed !== null) {
+                $this->applyPostProcessingOnNextSelect = false;
                 $this->selectResult((int) $failed->id);
             }
         } finally {
@@ -636,11 +756,7 @@ class TestPrompt extends Page implements HasForms
     {
         $this->getRecord()->refresh();
 
-        $values = $this->form->getState();
-        $normalized = [];
-        foreach ($values as $key => $value) {
-            $normalized[(string) $key] = is_string($value) ? $value : (string) $value;
-        }
+        $normalized = $this->normalizedVariableValues();
 
         try {
             $this->compiledPreview = app(PromptRunnerService::class)->compilePrompt(
@@ -693,6 +809,10 @@ class TestPrompt extends Page implements HasForms
         $savedVariables = is_array($snapshot['variables'] ?? null) ? $snapshot['variables'] : [];
         foreach ($savedVariables as $key => $value) {
             $name = (string) $key;
+            if (PromptSiteContextVariable::isName($name)) {
+                continue;
+            }
+
             $this->variableValues[$name] = is_string($value) ? $value : (string) $value;
         }
 
@@ -701,6 +821,7 @@ class TestPrompt extends Page implements HasForms
         }
 
         $this->syncVariableValueKeys();
+        $this->applySiteContextDefaults(true);
         $this->form->fill($this->variableValues);
 
         $usage = is_array($result->token_usage) ? $result->token_usage : null;
@@ -893,6 +1014,16 @@ class TestPrompt extends Page implements HasForms
             ->first();
     }
 
+    public function testResultSourceSeoMedia(): ?SeoMedia
+    {
+        $media = $this->testResultSeoMedia();
+        if ($media === null) {
+            return null;
+        }
+
+        return app(PromptPostProcessingApplyService::class)->resolveSourceMedia($media);
+    }
+
     /**
      * @return array<string, mixed>
      */
@@ -922,7 +1053,7 @@ class TestPrompt extends Page implements HasForms
 
     public function testResultImageSplitterUrl(): ?string
     {
-        $media = $this->testResultSeoMedia();
+        $media = $this->testResultSourceSeoMedia();
         if ($media === null) {
             return null;
         }
@@ -1167,6 +1298,38 @@ class TestPrompt extends Page implements HasForms
                 }
             }
         }
+
+        if (! array_key_exists(PromptSiteContextVariable::POST_TYPE_FIELD, $this->variableValues)) {
+            $this->variableValues[PromptSiteContextVariable::POST_TYPE_FIELD] = 'article';
+        }
+    }
+
+    protected function applySiteContextDefaults(bool $force = false): void
+    {
+        $postType = trim((string) ($this->variableValues[PromptSiteContextVariable::POST_TYPE_FIELD] ?? 'article'));
+        if ($postType === '') {
+            $postType = 'article';
+            $this->variableValues[PromptSiteContextVariable::POST_TYPE_FIELD] = $postType;
+        }
+
+        $resolved = PromptSiteContextVariable::resolveForGlobalSite($postType);
+
+        foreach (PromptSiteContextVariable::names() as $name) {
+            if ($force || ! filled($this->variableValues[$name] ?? null)) {
+                $this->variableValues[$name] = $resolved[$name] ?? '';
+            }
+        }
+    }
+
+    public function updatedVariableValues(mixed $value): void
+    {
+        if (! is_array($value) || ! array_key_exists(PromptSiteContextVariable::POST_TYPE_FIELD, $value)) {
+            return;
+        }
+
+        $this->applySiteContextDefaults(true);
+        $this->form->fill($this->variableValues);
+        $this->refreshCompiledPreview();
     }
 
     /**
@@ -1225,8 +1388,11 @@ class TestPrompt extends Page implements HasForms
             $schema[] = $this->makeLoaiSanPhamVariableGroup();
         }
 
+        $schema[] = $this->makeSiteContextVariablesGroup();
+
         foreach ($otherDefinitions as $definition) {
-            if (PromptLoaiSanPhamVariable::isLoaiSanPhamName((string) $definition['name'])) {
+            $name = (string) ($definition['name'] ?? '');
+            if (PromptLoaiSanPhamVariable::isLoaiSanPhamName($name) || PromptSiteContextVariable::isName($name)) {
                 continue;
             }
 
@@ -1234,6 +1400,57 @@ class TestPrompt extends Page implements HasForms
         }
 
         return $schema;
+    }
+
+    protected function makeSiteContextVariablesGroup(): Forms\Components\Section
+    {
+        $labels = PromptResource::defaultVariableLabels();
+        $siteId = SeoAccessControl::globalSiteId();
+        $siteLabel = $siteId !== null && $siteId > 0
+            ? (string) (Site::query()->whereKey($siteId)->value('domain') ?? '#' . $siteId)
+            : __('seo-content-ai::filament.prompt_test.no_domain_selected');
+
+        return Forms\Components\Section::make(__('seo-content-ai::filament.prompt_test.site_context_section'))
+            ->description(__('seo-content-ai::filament.prompt_test.site_context_description', ['domain' => $siteLabel]))
+            ->schema([
+                Forms\Components\Select::make(PromptSiteContextVariable::POST_TYPE_FIELD)
+                    ->label(__('seo-content-ai::filament.prompt_test.post_type_for_defaults'))
+                    ->options([
+                        'article' => __('seo-content-ai::filament.article_list.post_type_article'),
+                        'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+                    ])
+                    ->default('article')
+                    ->native(false)
+                    ->live()
+                    ->helperText(__('seo-content-ai::filament.prompt_test.post_type_for_defaults_hint')),
+                Forms\Components\Grid::make(2)
+                    ->schema(
+                        collect(['tone', 'keyword_density', 'article_length', 'site_cta', 'site_short_description', 'site_domain'])
+                            ->map(fn (string $name): Forms\Components\Placeholder => Forms\Components\Placeholder::make('_preview_' . $name)
+                                ->dehydrated(false)
+                                ->label($labels[$name] ?? $name)
+                                ->content(function () use ($name): HtmlString {
+                                    $value = trim((string) ($this->variableValues[$name] ?? ''));
+                                    if ($value === '') {
+                                        return new HtmlString('<span class="text-sm text-gray-500">—</span>');
+                                    }
+
+                                    $preview = mb_strlen($value) > 220
+                                        ? mb_substr($value, 0, 220) . '…'
+                                        : $value;
+
+                                    return new HtmlString(
+                                        '<span class="text-sm font-medium text-gray-950 dark:text-white whitespace-pre-wrap">'
+                                        . e($preview)
+                                        . '</span>',
+                                    );
+                                }),
+                            )
+                            ->all(),
+                    ),
+            ])
+            ->columnSpanFull()
+            ->collapsible();
     }
 
     protected function makeLoaiSanPhamVariableGroup(): Forms\Components\Section

@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Forms\DomainTechnicalSeoForm;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
+use App\Addons\SeoContentAi\Services\SeoMainDomainService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Forms;
@@ -15,6 +17,7 @@ use Filament\Forms\Set;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
+use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Str;
@@ -120,6 +123,7 @@ class DomainResource extends Resource
                             ->icon('heroicon-o-arrow-path')
                             ->action(fn (Set $set) => $set('seo_migration_token', Str::random(60)))
                     ),
+                ...DomainTechnicalSeoForm::schema(),
             ]);
     }
 
@@ -131,25 +135,30 @@ class DomainResource extends Resource
                     ->label(__('seo-content-ai::filament.domain.domain'))
                     ->searchable()
                     ->sortable(),
-                Tables\Columns\IconColumn::make('is_main')
+                Tables\Columns\ViewColumn::make('is_main')
                     ->label(__('seo-content-ai::filament.domain.main_domain'))
-                    ->boolean()
-                    ->getStateUsing(function (Site $record): bool {
-                        if ($record->relationLoaded('metas')) {
-                            $v = $record->metas->firstWhere('meta_key', 'seo_is_main')?->meta_value;
-
-                            return $v === '1';
-                        }
-
-                        return $record->getMeta('seo_is_main') === '1';
-                    })
-                    ->trueIcon('heroicon-s-star')
-                    ->falseIcon('heroicon-o-star')
-                    ->trueColor('warning')
-                    ->falseColor('gray'),
+                    ->view('seo-content-ai::filament.tables.columns.domain-main-star'),
             ])
             ->defaultSort('domain')
             ->actions([
+                Tables\Actions\Action::make('set_as_main')
+                    ->label(__('seo-content-ai::filament.domain.set_as_main'))
+                    ->icon('heroicon-o-star')
+                    ->color('warning')
+                    ->visible(fn (Site $record): bool => ! app(SeoMainDomainService::class)->isMain($record))
+                    ->requiresConfirmation()
+                    ->modalDescription(__('seo-content-ai::filament.domain.set_as_main_confirm'))
+                    ->action(function (Site $record): void {
+                        app(SeoMainDomainService::class)->setAsMain($record);
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.domain.set_as_main_success'))
+                            ->body(__('seo-content-ai::filament.domain.set_as_main_success_body', [
+                                'domain' => $record->domain,
+                            ]))
+                            ->success()
+                            ->send();
+                    }),
                 Tables\Actions\Action::make('overview')
                     ->label(__('seo-content-ai::filament.domain.overview'))
                     ->icon('heroicon-o-chart-bar')
@@ -198,7 +207,7 @@ class DomainResource extends Resource
             'index' => Pages\ListDomains::route('/'),
             'create' => Pages\CreateDomain::route('/create'),
             'edit' => Pages\EditDomain::route('/{record}/edit'),
-            'info' => Pages\EditDomainInfo::route('/{record}/info'),
+            'info' => Pages\RedirectDomainInfoToEdit::route('/{record}/info'),
             'general' => Pages\GeneralDomain::route('/{record}/general'),
             'internal-links' => Pages\ListDomainInternalLinks::route('/{record}/internal-links'),
         ];

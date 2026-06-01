@@ -4,20 +4,26 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Jobs\GenerateMediaJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 final class ArticleEditorMediaAiService
 {
+    public const PRODUCT_GALLERY_EDITOR_BLOCK_ID = 'product-gallery';
+
     public function __construct(
         private readonly SeoCreateArticleSettingsService $workflowSettings,
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly SiteDomainPromptContextService $sitePromptContext,
+        private readonly SeoPromptSettingsService $promptSettings,
     ) {
     }
 
@@ -30,7 +36,19 @@ final class ArticleEditorMediaAiService
         string $selectionHtml,
         string $userBrief,
         string $editorBlockId = '',
+        string $target = 'editor',
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
     ): array {
+        $target = trim($target);
+        $editorBlockId = $this->resolveEditorBlockIdForTarget($target, $editorBlockId);
+        [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom] = $this->resolveLoaiSanPhamInputs(
+            $target,
+            $userBrief,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        );
+
         $lockKey = $this->generationLockKey($article, 'image', $editorBlockId);
 
         return $this->runWithGenerationLock($lockKey, function () use (
@@ -38,17 +56,52 @@ final class ArticleEditorMediaAiService
             $selectionText,
             $selectionHtml,
             $userBrief,
-            $editorBlockId
+            $editorBlockId,
+            $target,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
         ): array {
+            $target = trim($target);
+            $promptId = $target === 'product-gallery'
+                ? $this->workflowSettings->getCreateProductGalleryImagePromptId()
+                : $this->workflowSettings->getCreateImagePromptId();
+
             $prompt = $this->resolvePrompt(
-                $this->workflowSettings->getCreateImagePromptId(),
+                $promptId,
                 'Tạo ảnh',
                 'image',
             );
 
+            if ($target === 'product-gallery' && PromptLoaiSanPhamVariable::usesInPrompt($prompt)) {
+                $siteId = (int) ($article->site_id ?? 0);
+                $validation = app(PromptLoaiSanPhamOptionsService::class)->validateTestInputs(
+                    $siteId,
+                    $loaiSanPhamCategoryArticleId,
+                    $loaiSanPhamCustom,
+                );
+                if (! ($validation['valid'] ?? false)) {
+                    throw new \RuntimeException((string) ($validation['message'] ?? 'Thiếu loại sản phẩm (product_cat hoặc Custom).'));
+                }
+            }
+
+            $mergeLoai = $this->shouldMergeLoaiSanPham(
+                $prompt,
+                $target,
+                $loaiSanPhamCategoryArticleId,
+                $loaiSanPhamCustom,
+            );
+
             $variables = $this->filterVariablesForPrompt(
                 $prompt,
-                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
+                $this->buildVariables(
+                    $article,
+                    $selectionText,
+                    $selectionHtml,
+                    $userBrief,
+                    $loaiSanPhamCategoryArticleId,
+                    $loaiSanPhamCustom,
+                    $mergeLoai,
+                ),
             );
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
@@ -62,7 +115,8 @@ final class ArticleEditorMediaAiService
             );
 
             GenerateMediaJob::dispatch($placeholder->id, (int) $prompt->id, $variables, 'image')
-                ->onQueue('media_generation');
+                ->onQueue('media_generation')
+                ->afterResponse();
 
             return [
                 'url' => (string) $placeholder->url,
@@ -83,6 +137,71 @@ final class ArticleEditorMediaAiService
 
             throw new \RuntimeException('Yêu cầu tạo ảnh đang được xử lý, vui lòng thử lại sau vài giây.');
         });
+    }
+
+    /**
+     * @return array{rendered: string, prompt_id: int, prompt_name: string, error?: string}
+     */
+    public function previewRenderedImagePrompt(
+        SeoArticle $article,
+        string $userBrief,
+        string $target = 'editor',
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
+    ): array {
+        $target = trim($target);
+        [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom] = $this->resolveLoaiSanPhamInputs(
+            $target,
+            $userBrief,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        );
+
+        $promptId = $target === 'product-gallery'
+            ? $this->workflowSettings->getCreateProductGalleryImagePromptId()
+            : $this->workflowSettings->getCreateImagePromptId();
+
+        $prompt = $this->resolvePrompt(
+            $promptId,
+            'Tạo ảnh',
+            'image',
+        );
+
+        $mergeLoai = $this->shouldMergeLoaiSanPham(
+            $prompt,
+            $target,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        );
+        $variables = $this->filterVariablesForPrompt(
+            $prompt,
+            $this->buildVariables(
+                $article,
+                '',
+                '',
+                $userBrief,
+                $loaiSanPhamCategoryArticleId,
+                $loaiSanPhamCustom,
+                $mergeLoai,
+            ),
+        );
+
+        try {
+            $rendered = app(PromptRunnerService::class)->compilePrompt($prompt, $variables);
+        } catch (\Throwable $exception) {
+            return [
+                'rendered' => '',
+                'prompt_id' => (int) $prompt->id,
+                'prompt_name' => (string) ($prompt->name ?? ''),
+                'error' => $exception->getMessage(),
+            ];
+        }
+
+        return [
+            'rendered' => $rendered,
+            'prompt_id' => (int) $prompt->id,
+            'prompt_name' => (string) ($prompt->name ?? ''),
+        ];
     }
 
     /**
@@ -157,6 +276,9 @@ final class ArticleEditorMediaAiService
         string $selectionText,
         string $selectionHtml,
         string $userBrief,
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
+        bool $mergeLoaiSanPham = false,
     ): array {
         $article->loadMissing(['site', 'keywords', 'articleMetas']);
 
@@ -171,6 +293,8 @@ final class ArticleEditorMediaAiService
         // Theo yêu cầu: không trộn "Đoạn ngữ cảnh" vào prompt input gửi AI.
         $input = $userBrief;
 
+        $postType = ArticlePostTypeResolver::resolve($article);
+        $promptVars = $this->promptSettings->promptVariables($postType);
         $variables = array_merge(
             [
                 'post_title' => $postTitle,
@@ -181,11 +305,26 @@ final class ArticleEditorMediaAiService
                 'user_brief' => $userBrief,
                 'input' => $input,
             ],
+            $promptVars,
             $this->sitePromptContext->promptVariablesForSite($article->site),
+        );
+        $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
+            $article->site,
+            $promptVars['tone'] ?? '',
         );
 
         if ((int) $article->id > 0) {
             $variables['article_id'] = (string) (int) $article->id;
+        }
+
+        if ($mergeLoaiSanPham) {
+            $loaiInputs = [
+                PromptLoaiSanPhamVariable::SITE_FIELD => (string) (int) ($article->site_id ?? 0),
+                PromptLoaiSanPhamVariable::CATEGORY_FIELD => (string) $loaiSanPhamCategoryArticleId,
+                PromptLoaiSanPhamVariable::CUSTOM_FIELD => trim($loaiSanPhamCustom),
+            ];
+            $variables = array_merge($variables, PromptLoaiSanPhamVariable::mergeIntoVariables($loaiInputs));
+            $variables = PromptLoaiSanPhamVariable::withAliases($variables);
         }
 
         return $variables;
@@ -197,11 +336,18 @@ final class ArticleEditorMediaAiService
      */
     private function filterVariablesForPrompt(SeoPrompt $prompt, array $variables): array
     {
-        $allowedNames = collect(is_array($prompt->variables) ? $prompt->variables : [])
+        $fromDefinitions = collect(is_array($prompt->variables) ? $prompt->variables : [])
             ->map(static function (array $row): string {
                 return trim((string) ($row['name'] ?? ''));
             })
-            ->filter(static fn (string $name): bool => $name !== '')
+            ->filter(static fn (string $name): bool => $name !== '');
+
+        $fromMarkdown = collect(
+            PromptResource::extractVariableNamesFromMarkdown((string) ($prompt->markdown_content ?? '')),
+        );
+
+        $allowedNames = $fromDefinitions
+            ->merge($fromMarkdown)
             ->unique()
             ->values()
             ->all();
@@ -227,6 +373,10 @@ final class ArticleEditorMediaAiService
             $filtered[$name] = $value;
         }
 
+        if (isset($filtered[PromptLoaiSanPhamVariable::NAME])) {
+            $filtered = PromptLoaiSanPhamVariable::withAliases($filtered);
+        }
+
         if ($filtered === []) {
             $input = $this->compactVariableValue((string) ($variables['input'] ?? ''));
             if ($input !== '') {
@@ -235,6 +385,56 @@ final class ArticleEditorMediaAiService
         }
 
         return $filtered;
+    }
+
+    private function shouldMergeLoaiSanPham(
+        SeoPrompt $prompt,
+        string $target,
+        int $loaiSanPhamCategoryArticleId,
+        string $loaiSanPhamCustom,
+    ): bool {
+        if (! PromptLoaiSanPhamVariable::usesInPrompt($prompt)) {
+            return false;
+        }
+
+        if ($target === 'product-gallery') {
+            return true;
+        }
+
+        return $loaiSanPhamCategoryArticleId > 0 || trim($loaiSanPhamCustom) !== '';
+    }
+
+    /**
+     * @return array{0: int, 1: string}
+     */
+    private function resolveLoaiSanPhamInputs(
+        string $target,
+        string $userBrief,
+        int $loaiSanPhamCategoryArticleId,
+        string $loaiSanPhamCustom,
+    ): array {
+        $userBrief = trim($userBrief);
+        $loaiSanPhamCustom = trim($loaiSanPhamCustom);
+
+        if (
+            $target === 'product-gallery'
+            && $loaiSanPhamCustom === ''
+            && $loaiSanPhamCategoryArticleId <= 0
+            && $userBrief !== ''
+        ) {
+            $loaiSanPhamCustom = $userBrief;
+        }
+
+        return [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom];
+    }
+
+    private function resolveEditorBlockIdForTarget(string $target, string $editorBlockId): string
+    {
+        if (trim($target) === 'product-gallery') {
+            return self::PRODUCT_GALLERY_EDITOR_BLOCK_ID;
+        }
+
+        return trim($editorBlockId);
     }
 
     private function compactVariableValue(string $value): string
@@ -322,28 +522,28 @@ final class ArticleEditorMediaAiService
             return;
         }
 
-        SeoMedia::query()
+        $invalidQuery = SeoMedia::query()
             ->where('article_id', $articleId)
             ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
             ->where('status', 'processing')
             ->where(function ($query): void {
                 $query->whereNull('prompt_id')
                     ->orWhereNull('prompt_variables');
-            })
-            ->update([
-                'status' => 'failed',
-                'error_message' => 'Job cũ không hợp lệ (thiếu cấu hình prompt). Hãy tạo ảnh mới.',
-            ]);
+            });
+        $invalidQuery->update([
+            'status' => 'failed',
+            'error_message' => 'Job cũ không hợp lệ (thiếu cấu hình prompt). Hãy tạo ảnh mới.',
+        ]);
 
-        SeoMedia::query()
+        $timeoutQuery = SeoMedia::query()
             ->where('article_id', $articleId)
             ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
             ->where('status', 'processing')
-            ->where('updated_at', '<', now()->subMinutes(20))
-            ->update([
-                'status' => 'failed',
-                'error_message' => 'Quá thời gian chờ xử lý AI. Kiểm tra queue worker rồi bấm Thử lại.',
-            ]);
+            ->where('updated_at', '<', now()->subMinutes(10));
+        $timeoutQuery->update([
+            'status' => 'failed',
+            'error_message' => 'Quá thời gian chờ xử lý AI. Kiểm tra queue worker rồi bấm Thử lại.',
+        ]);
     }
 
     private function findReusableProcessingJob(

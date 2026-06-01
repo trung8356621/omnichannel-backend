@@ -126,16 +126,19 @@ final class SeoImageSplitterService
     }
 
     /**
-     * @return array{url: string, name: string, seo_media_id: int, wp_attachment_id: int, site_id: int|null}
+     * @return array{url: string, name: string, seo_media_id: int, wp_attachment_id: int, site_id: int|null, article_id: int|null}
      */
     private function mapResolvedMedia(SeoMedia $media): array
     {
+        $articleId = $media->firstArticleId();
+
         return [
             'url' => $this->normalizePublicUrl($media->publicUrl()),
             'name' => (string) ($media->slug ?: pathinfo((string) $media->filename, PATHINFO_FILENAME) ?: 'image'),
             'seo_media_id' => (int) $media->id,
             'wp_attachment_id' => (int) ($media->wp_attachment_id ?? 0),
             'site_id' => (int) ($media->site_id ?? 0) > 0 ? (int) $media->site_id : null,
+            'article_id' => $articleId,
         ];
     }
 

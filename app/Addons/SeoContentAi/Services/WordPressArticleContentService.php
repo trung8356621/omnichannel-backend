@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -131,7 +132,7 @@ class WordPressArticleContentService
     /**
      * @return array<string, mixed>
      */
-    public function fetchFromWordPress(SeoArticle $article, bool $importFaqs = true): array
+    public function fetchFromWordPress(SeoArticle $article, bool $importFaqs = true, bool $forceSeoImport = false): array
     {
         $wpId = (int) ($article->wp_post_id ?? 0);
         if ($wpId <= 0) {
@@ -177,7 +178,7 @@ class WordPressArticleContentService
 
             $post = is_array($payload['post'] ?? null) ? $payload['post'] : [];
 
-            $this->persistFetchedMeta($article, $post, $taxonomy !== null, $importFaqs);
+            $this->persistFetchedMeta($article, $post, $taxonomy !== null, $importFaqs, $forceSeoImport);
 
             return $post;
         } catch (Throwable $e) {
@@ -241,12 +242,12 @@ class WordPressArticleContentService
     /**
      * @param  array<string, mixed>  $post
      */
-    private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy, bool $importFaqs = true): void
+    private function persistFetchedMeta(SeoArticle $article, array $post, bool $isTaxonomy, bool $importFaqs = true, bool $forceSeoImport = false): void
     {
         $syncFlags = app(ArticleWordPressSyncFlagService::class);
 
         if (! $syncFlags->shouldBlockWordPressImport($article)) {
-            $title = $syncFlags->decodeWordPressText((string) ($post['post_title'] ?? ''));
+            $title = $syncFlags->decodeWordPressText($this->resolvePostTitle($post));
             if ($title !== '') {
                 $article->update(['title' => $title]);
                 $article->articleMetas()->updateOrCreate(
@@ -325,9 +326,74 @@ class WordPressArticleContentService
             );
         }
 
-        if ($importFaqs && is_array($post['faqs'] ?? null)) {
+        if ($importFaqs && is_array($post['faqs'] ?? null) && $article->faqs()->count() === 0) {
             app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
         }
+
+        $this->importSeoFromFetchedPost($article, $post, $forceSeoImport);
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    private function importSeoFromFetchedPost(SeoArticle $article, array $post, bool $force = false): void
+    {
+        $seo = is_array($post['seo'] ?? null) ? $post['seo'] : [];
+        if ($seo === []) {
+            return;
+        }
+
+        $article->loadMissing(['articleMetas', 'site']);
+
+        $focusKeyword = trim((string) ($seo['focus_keyword'] ?? ''));
+        $existingFocus = trim((string) ($article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''));
+
+        if ($focusKeyword !== '' && ($force || $existingFocus === '')) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_focus_keyword'],
+                ['meta_value' => $focusKeyword],
+            );
+
+            $siteId = (int) ($article->site_id ?? 0);
+            $userId = (int) (auth()->id() ?? $article->user_id ?? $article->site?->user_id ?? 0);
+            if ($siteId > 0 && $userId > 0) {
+                KeywordFocusAttach::syncMainKeyword($article, $siteId, $userId, $focusKeyword);
+            }
+        }
+
+        if (app(ArticleWordPressSyncFlagService::class)->shouldBlockWordPressImport($article) && ! $force) {
+            return;
+        }
+
+        $metaMap = [
+            'seo_title' => (string) ($seo['seo_title'] ?? ''),
+            'seo_meta_description' => (string) ($seo['meta_description'] ?? ''),
+        ];
+
+        foreach ($metaMap as $metaKey => $metaValue) {
+            $metaValue = trim($metaValue);
+            if ($metaValue === '') {
+                continue;
+            }
+
+            $existing = trim((string) ($article->articleMetas->firstWhere('meta_key', $metaKey)?->meta_value ?? ''));
+            if (! $force && $existing !== '') {
+                continue;
+            }
+
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $metaKey],
+                ['meta_value' => $metaValue],
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    public function resolvePostTitle(array $post): string
+    {
+        return trim((string) ($post['title'] ?? $post['post_title'] ?? ''));
     }
 
     private function getMeta(SeoArticle $article, string $key, ?string $default = null): ?string

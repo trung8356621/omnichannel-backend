@@ -166,7 +166,7 @@ class SeoMediaLibraryService
             'kind' => $kind,
             'id' => (int) $media->id,
             'seo_media_id' => (int) $media->id,
-            'article_id' => $media->article_id !== null ? (int) $media->article_id : null,
+            'article_id' => $media->firstArticleId(),
             'wp_attachment_id' => $media->wp_attachment_id !== null ? (int) $media->wp_attachment_id : null,
             'slug' => (string) $media->slug,
             'url' => $media->publicUrl(),

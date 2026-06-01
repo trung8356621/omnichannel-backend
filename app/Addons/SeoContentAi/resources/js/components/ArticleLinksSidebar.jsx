@@ -2,6 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Copy, Link2 } from 'lucide-react';
 import { t } from '../utils/i18n';
+import {
+    filterSuggestedInternalLinks,
+    normalizeHrefForCompare,
+    normalizeLinkLabel,
+} from '../utils/articleLinkSuggestionFilter';
 
 /**
  * @typedef {{ href?: string, text: string, offset?: number, is_nofollow?: boolean, is_suggestion?: boolean, target_url?: string|null, can_insert?: boolean, keyword_id?: number, occurrence_count?: number }} ExtractedLink
@@ -240,10 +245,14 @@ export default function ArticleLinksSidebar() {
             }));
             setCycleByKey({});
 
-            const suggested = event.detail?.suggested_internal;
-            if (Array.isArray(suggested)) {
-                setSuggestedInternal(suggested);
-            }
+            const internal = Array.isArray(payload.internal) ? payload.internal : [];
+            setSuggestedInternal((prevSuggested) => {
+                const suggested = Array.isArray(event.detail?.suggested_internal)
+                    ? event.detail.suggested_internal
+                    : prevSuggested;
+
+                return filterSuggestedInternalLinks(suggested, internal);
+            });
         };
 
         const onFaqUpdate = (event) => {
@@ -258,12 +267,23 @@ export default function ArticleLinksSidebar() {
         };
 
         const onInserted = (event) => {
-            const text = String(event.detail?.text ?? '').trim();
-            if (!text) {
+            const text = normalizeLinkLabel(event.detail?.text);
+            const hrefKey = normalizeHrefForCompare(event.detail?.href);
+            if (!text && !hrefKey) {
                 return;
             }
             setSuggestedInternal((prev) =>
-                prev.filter((item) => normalizeSuggestionText(item.text) !== text),
+                prev.filter((item) => {
+                    if (text && normalizeLinkLabel(item.text) === text) {
+                        return false;
+                    }
+
+                    if (hrefKey && normalizeHrefForCompare(item.href ?? item.target_url) === hrefKey) {
+                        return false;
+                    }
+
+                    return true;
+                }),
             );
         };
 
@@ -448,8 +468,5 @@ export default function ArticleLinksSidebar() {
 }
 
 function normalizeSuggestionText(text) {
-    return String(text ?? '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
+    return normalizeLinkLabel(text);
 }

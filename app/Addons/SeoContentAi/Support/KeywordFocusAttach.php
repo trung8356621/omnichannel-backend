@@ -9,6 +9,31 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 
 final class KeywordFocusAttach
 {
+    public static function syncMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): void
+    {
+        $phrase = trim($phrase);
+        $article->loadMissing('keywords');
+
+        foreach ($article->keywords as $keyword) {
+            if ((int) ($keyword->pivot->is_main ?? 0) === 1) {
+                $article->keywords()->updateExistingPivot($keyword->id, ['is_main' => false]);
+            }
+        }
+
+        if ($phrase === '') {
+            $article->articleMetas()->where('meta_key', 'seo_focus_keyword')->delete();
+
+            return;
+        }
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'seo_focus_keyword'],
+            ['meta_value' => $phrase],
+        );
+
+        self::attachMainKeyword($article, $siteId, $userId, $phrase);
+    }
+
     public static function attachMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): void
     {
         $phrase = trim($phrase);

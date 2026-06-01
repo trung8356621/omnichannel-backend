@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
+use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
 
 /**
  * Đồng bộ cột prompts.variables từ placeholder {{name}} trong markdown_content.
@@ -40,7 +41,9 @@ final class PromptVariableSync
         $merged = [];
 
         foreach (self::extractNames($markdown) as $name) {
-            if (PromptLoaiSanPhamVariable::isLoaiSanPhamName($name) || strtoupper($name) === 'PARENT_RESULT') {
+            if (PromptLoaiSanPhamVariable::isLoaiSanPhamName($name)
+                || PromptSiteContextVariable::isName($name)
+                || strtoupper($name) === 'PARENT_RESULT') {
                 continue;
             }
 

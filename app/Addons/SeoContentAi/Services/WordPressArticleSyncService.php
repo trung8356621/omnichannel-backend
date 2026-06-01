@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -15,9 +16,11 @@ final class WordPressArticleSyncService
     /**
      * Đẩy tiêu đề, slug, trạng thái, nội dung và FAQ lên WordPress (nút «Đồng bộ»).
      *
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     *
      * @return array{success: bool, message: string, faq_count?: int, faq_extract_debug?: array<string, mixed>|null}
      */
-    public function syncForArticle(SeoArticle $article): array
+    public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
     {
         $wpPostId = (int) ($article->wp_post_id ?? 0);
         if ($wpPostId <= 0) {
@@ -58,6 +61,7 @@ final class WordPressArticleSyncService
         $syncedLocalMediaIds = [];
         if ($postContent !== '') {
             $postContent = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($postContent);
+            $postContent = app(ArticleCtaPlaceholderService::class)->replaceInHtml($postContent, $site);
             $postContent = app(WorkflowParserService::class)->removeFaqAndAppendShortcodeFromContent($postContent);
             $postContent = app(ArticlePostContentFaqPlaceholder::class)->normalizeForWordPress($postContent);
             try {
@@ -85,6 +89,7 @@ final class WordPressArticleSyncService
         }
 
         $faqs = $article->resolveFaqs();
+        $faqs = app(ArticleCtaPlaceholderService::class)->replaceInFaqs($faqs, $site);
         $faqExtractDebug = null;
 
         if ($faqs === []) {
@@ -111,6 +116,7 @@ final class WordPressArticleSyncService
             'post_content' => $postContent !== '' ? $postContent : null,
             'faqs' => $faqs,
             'virtual_comments' => $virtualComments,
+            'seo' => $this->resolveSeoPayloadForWordPress($article, $seoOverride),
             'meta_input' => [
                 VirtualCommentService::WP_META_KEY => json_encode(
                     $virtualComments,
@@ -126,11 +132,10 @@ final class WordPressArticleSyncService
                 ->post($url, $payload);
 
             if (! $response->successful()) {
-                $message = 'WordPress trả lỗi HTTP ' . $response->status();
-                $body = $response->json();
-                if (is_array($body) && isset($body['message'])) {
-                    $message .= ': ' . (string) $body['message'];
-                }
+                $message = WordPressRestResponseParser::formatHttpErrorMessage(
+                    $response->status(),
+                    $response,
+                );
 
                 Log::warning('WordPress article sync failed', [
                     'article_id' => $article->id,
@@ -141,7 +146,7 @@ final class WordPressArticleSyncService
 
                 return [
                     'success' => false,
-                    'message' => mb_substr($message, 0, 500),
+                    'message' => $message,
                 ];
             }
 
@@ -160,6 +165,14 @@ final class WordPressArticleSyncService
             }
 
             $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
+            $virtualCount = (int) ($decoded['virtual_count'] ?? 0);
+            if ($virtualCount > 0) {
+                $message .= ' Đã đồng bộ ' . $virtualCount . ' review ảo.';
+            }
+            $virtualError = trim((string) ($decoded['virtual_comments_error'] ?? ''));
+            if ($virtualError !== '') {
+                $message .= ' Review chưa lưu: ' . mb_substr($virtualError, 0, 200);
+            }
             $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
             $dirtySync = app(WordPressLocalMediaSyncService::class)->syncDirtyLocalMediaForArticle($article->fresh());
             $syncedFromPending = is_array($mediaPush['synced_local_media_ids'] ?? null)
@@ -237,6 +250,47 @@ final class WordPressArticleSyncService
             ['meta_key' => 'wp_post_content'],
             ['meta_value' => $html],
         );
+    }
+
+    /**
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $override
+     *
+     * @return array{seo_title: string, meta_description: string, focus_keyword: string}
+     */
+    private function resolveSeoPayloadForWordPress(SeoArticle $article, ?array $override = null): array
+    {
+        $article->loadMissing('articleMetas');
+
+        $seoTitle = trim((string) ($override['seo_title'] ?? ''));
+        if ($seoTitle === '') {
+            $seoTitle = trim((string) ($article->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
+        }
+        if ($seoTitle === '') {
+            $seoTitle = trim((string) ($article->title ?? ''));
+        }
+
+        $metaDescription = trim((string) ($override['meta_description'] ?? ''));
+        if ($metaDescription === '') {
+            $metaDescription = trim((string) (
+                $article->articleMetas->first(
+                    static fn ($meta): bool => in_array((string) $meta->meta_key, [
+                        'seo_meta_description',
+                        'meta_description',
+                    ], true),
+                )?->meta_value ?? ''
+            ));
+        }
+
+        $focusKeyword = trim((string) ($override['focus_keyword'] ?? ''));
+        if ($focusKeyword === '') {
+            $focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? '';
+        }
+
+        return [
+            'seo_title' => $seoTitle,
+            'meta_description' => $metaDescription,
+            'focus_keyword' => $focusKeyword,
+        ];
     }
 
 }

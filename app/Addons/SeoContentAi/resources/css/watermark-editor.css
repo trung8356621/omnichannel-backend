@@ -1,3 +1,5 @@
+@import './seo-select.css';
+
 .seo-watermark-editor-host {
     margin: -1rem -1.5rem;
     min-height: calc(100vh - 4rem);
@@ -466,11 +468,7 @@
     color: #6b7280;
 }
 
-.wm-overlay-preview__controls select {
-    font-size: 0.7rem;
-    padding: 0.25rem 0.4rem;
-    border-radius: 0.35rem;
-    border: 1px solid #d1d5db;
+.wm-overlay-preview__controls .seo-select-wrap {
     min-width: 10rem;
 }
 
@@ -661,7 +659,6 @@
 
 .wm-field input[type='text'],
 .wm-field input[type='number'],
-.wm-field select,
 .wm-field textarea {
     width: 100%;
     font-size: 0.8rem;
@@ -671,8 +668,13 @@
     background: #f9fafb;
 }
 
-.dark .wm-field input,
-.dark .wm-field select {
+.wm-field .seo-select-wrap {
+    width: 100%;
+}
+
+.dark .wm-field input[type='text'],
+.dark .wm-field input[type='number'],
+.dark .wm-field textarea {
     background: #020617;
     border-color: #334155;
     color: #f1f5f9;

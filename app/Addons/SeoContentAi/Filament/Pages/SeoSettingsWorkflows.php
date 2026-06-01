@@ -66,6 +66,13 @@ class SeoSettingsWorkflows extends Page implements HasForms
                             ->searchable()
                             ->native(false)
                             ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_image_prompt')),
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE)
+                            ->label(__('seo-content-ai::filament.settings_workflows.create_product_gallery_image_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.create_product_gallery_image_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeImagePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_image_prompt')),
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_VIDEO)
                             ->label(__('seo-content-ai::filament.settings_workflows.create_video_prompt'))
                             ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeVideoPromptOptions())
@@ -120,6 +127,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
             SeoCreateArticleSettingsService::KEY_EDIT_ARTICLE => $data[SeoCreateArticleSettingsService::KEY_EDIT_ARTICLE] ?? null,
             SeoCreateArticleSettingsService::KEY_POST_REVIEW => $data[SeoCreateArticleSettingsService::KEY_POST_REVIEW] ?? null,
             SeoCreateArticleSettingsService::KEY_CREATE_IMAGE => $data[SeoCreateArticleSettingsService::KEY_CREATE_IMAGE] ?? null,
+            SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $data[SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null,
             SeoCreateArticleSettingsService::KEY_CREATE_VIDEO => $data[SeoCreateArticleSettingsService::KEY_CREATE_VIDEO] ?? null,
             SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null,

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ArticleFlowBuilder from './components/ArticleFlowBuilder';
 import '../css/task-builder.css';
+import '../css/seo-select.css';
 
 const rootElement = document.getElementById('seo-task-workflow-builder-root');
 

@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Models\Site;
 use Filament\Actions\Action;
+use Filament\Actions\DeleteAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
@@ -241,6 +242,10 @@ class GeneralDomain extends Page
     protected function domainActions(): array
     {
         return [
+            DeleteAction::make()
+                ->label(__('Delete domain'))
+                ->icon('heroicon-o-trash')
+                ->successRedirectUrl(DomainResource::getUrl('index')),
             Action::make('sync_data')
                 ->label('Sync data')
                 ->color('warning')

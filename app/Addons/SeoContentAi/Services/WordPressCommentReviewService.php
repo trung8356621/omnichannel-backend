@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewPayloadParser;
 use App\Models\Site;
 
@@ -39,54 +40,83 @@ final class WordPressCommentReviewService
      */
     public function publishItems(SeoArticle $article, array $items): array
     {
+        if ($items === []) {
+            return [
+                'success' => false,
+                'message' => 'Không có mục bình luận/review hợp lệ để lưu.',
+                'created_count' => 0,
+                'error_count' => 0,
+            ];
+        }
+
+        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
+        $kind = $isProduct ? 'review ảo' : 'bình luận ảo';
+
+        $this->virtualComments->storeOnArticle($article, $items, $isProduct);
+        $localCount = count($this->virtualComments->getFromArticle($article));
+
+        if ($localCount <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Không lưu được review vào meta bài viết.',
+                'created_count' => 0,
+                'error_count' => count($items),
+            ];
+        }
+
         $wpPostId = (int) ($article->wp_post_id ?? 0);
         if ($wpPostId <= 0) {
             return [
-                'success' => false,
-                'message' => 'Bài viết chưa có WordPress Post ID.',
+                'success' => true,
+                'message' => sprintf(
+                    'Đã lưu %d %s (chưa đồng bộ WordPress — thiếu WP Post ID).',
+                    $localCount,
+                    $kind,
+                ),
+                'created_count' => $localCount,
+                'error_count' => 0,
             ];
         }
 
         $article->loadMissing('site');
         if (! $article->site instanceof Site) {
             return [
-                'success' => false,
-                'message' => 'Bài viết chưa gắn domain.',
+                'success' => true,
+                'message' => sprintf(
+                    'Đã lưu %d %s (chưa đồng bộ — bài chưa gắn domain).',
+                    $localCount,
+                    $kind,
+                ),
+                'created_count' => $localCount,
+                'error_count' => 0,
             ];
         }
 
-        $result = $this->virtualComments->syncToWordPress($article, $items);
-        $count = (int) ($result['count'] ?? 0);
+        $result = $this->virtualComments->syncToWordPress($article);
+        $count = (int) ($result['count'] ?? $localCount);
 
         if (! ($result['success'] ?? false)) {
             return [
-                'success' => false,
-                'message' => (string) ($result['message'] ?? 'Đồng bộ bình luận ảo thất bại.'),
-                'created_count' => 0,
-                'error_count' => count($items),
+                'success' => true,
+                'message' => sprintf(
+                    'Đã lưu %d %s. Đồng bộ WordPress thất bại: %s',
+                    $localCount,
+                    $kind,
+                    (string) ($result['message'] ?? ''),
+                ),
+                'created_count' => $localCount,
+                'error_count' => 0,
             ];
         }
-
-        if ($count <= 0) {
-            return [
-                'success' => false,
-                'message' => 'Không có mục bình luận/review hợp lệ để lưu.',
-                'created_count' => 0,
-                'error_count' => count($items),
-            ];
-        }
-
-        $isProduct = (string) ($article->type ?? '') === 'product';
-        $kind = $isProduct ? 'review ảo' : 'bình luận ảo';
 
         return [
             'success' => true,
             'message' => (string) ($result['message'] ?? sprintf('Đã lưu %d %s.', $count, $kind)),
-            'created_count' => $count,
+            'created_count' => max($count, $localCount),
             'error_count' => 0,
             'created' => array_map(
                 static fn (int $i): array => ['index' => $i, 'virtual' => true],
-                range(0, $count - 1),
+                range(0, max($count, $localCount) - 1),
             ),
             'errors' => [],
         ];

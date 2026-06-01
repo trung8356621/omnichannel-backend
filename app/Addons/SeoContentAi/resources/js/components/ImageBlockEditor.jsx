@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlignCenter, AlignLeft, AlignRight, Maximize2, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Images, Maximize2, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
 import { importSeoMediaFromUrl, processClipboardImagePaste } from '../utils/seoMediaApi';
 import { ImageBlockPickerBox } from './BlockInsertMenu';
 import { t } from '../utils/i18n';
+import ImageMetaEditForm from './imageMeta/ImageMetaEditForm';
+import { applyWordPressImageSize, detectWordPressImageSize } from '../utils/wordpressImageSize';
+import { resolveWordPressBaseUrl } from '../utils/wordpressImageUrl';
 
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
@@ -20,6 +23,18 @@ function ImageMetaFormPortal({ anchorRef, image, onSave, onCancel }) {
     const [alt, setAlt] = useState(image.alt ?? '');
     const [title, setTitle] = useState(image.title ?? '');
     const [caption, setCaption] = useState(image.caption ?? '');
+    const [align, setAlign] = useState(image.align ?? 'none');
+    const [size, setSize] = useState(
+        image.size ?? detectWordPressImageSize(resolveWordPressBaseUrl(image) || image.src),
+    );
+
+    useEffect(() => {
+        setAlt(image.alt ?? '');
+        setTitle(image.title ?? '');
+        setCaption(image.caption ?? '');
+        setAlign(image.align ?? 'none');
+        setSize(image.size ?? detectWordPressImageSize(resolveWordPressBaseUrl(image) || image.src));
+    }, [image.alt, image.title, image.caption, image.align, image.size, image.src, image.wpSrc, image.wpAttachmentId]);
 
     useLayoutEffect(() => {
         if (!anchorRef.current || !panelRef.current) return;
@@ -60,57 +75,34 @@ function ImageMetaFormPortal({ anchorRef, image, onSave, onCancel }) {
             style={{ top: `${position.top}px`, left: `${position.left}px` }}
             onMouseDown={(e) => e.stopPropagation()}
         >
-            <p className="seo-image-meta-panel-title">{t('edit_image')}</p>
-            <label className="seo-image-meta-label" htmlFor="seo-block-img-alt">
-                {t('alt_text')}
-            </label>
-            <input
-                id="seo-block-img-alt"
-                type="text"
-                className="seo-image-meta-input"
-                value={alt}
-                onChange={(e) => setAlt(e.target.value)}
-                placeholder={t('image_alt_placeholder')}
+            <ImageMetaEditForm
+                idPrefix="seo-block-img"
+                src={image.src ?? ''}
+                wpSrc={image.wpSrc ?? image.wp_src ?? ''}
+                wpAttachmentId={image.wpAttachmentId ?? null}
+                size={size}
+                onSizeChange={setSize}
+                align={align}
+                onAlignChange={setAlign}
+                alt={alt}
+                onAltChange={setAlt}
+                title={title}
+                onTitleChange={setTitle}
+                caption={caption}
+                onCaptionChange={setCaption}
+                onCancel={onCancel}
+                onApply={() => {
+                    const sized = applyWordPressImageSize(image, size);
+
+                    onSave({
+                        ...sized,
+                        alt: alt.trim(),
+                        title: title.trim(),
+                        caption: caption.trim(),
+                        align: align || 'none',
+                    });
+                }}
             />
-            <label className="seo-image-meta-label" htmlFor="seo-block-img-title">
-                {t('title')}
-            </label>
-            <input
-                id="seo-block-img-title"
-                type="text"
-                className="seo-image-meta-input"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-            />
-            <label className="seo-image-meta-label" htmlFor="seo-block-img-caption">
-                {t('caption')}
-            </label>
-            <textarea
-                id="seo-block-img-caption"
-                className="seo-image-meta-textarea"
-                rows={2}
-                value={caption}
-                onChange={(e) => setCaption(e.target.value)}
-            />
-            <div className="seo-image-meta-actions">
-                <button type="button" className="seo-image-meta-btn" onClick={onCancel}>
-                    {t('cancel')}
-                </button>
-                <button
-                    type="button"
-                    className="seo-image-meta-btn is-primary"
-                    onClick={() =>
-                        onSave({
-                            ...image,
-                            alt: alt.trim(),
-                            title: title.trim(),
-                            caption: caption.trim(),
-                        })
-                    }
-                >
-                    {t('apply')}
-                </button>
-            </div>
         </div>
     );
 
@@ -129,6 +121,7 @@ export default function ImageBlockEditor({
     canDeleteBlock,
     articleId = null,
     siteId = null,
+    supportsProductGallery = false,
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
     const [pasteUploading, setPasteUploading] = useState(false);
@@ -359,6 +352,21 @@ export default function ImageBlockEditor({
         return true;
     }, [commitImage]);
 
+    const handleAppendToProductAlbum = useCallback(() => {
+        const src = String(image?.src ?? '').trim();
+        if (!src || typeof Livewire === 'undefined') {
+            return;
+        }
+
+        Livewire.dispatch('append-editor-image-to-product-gallery', {
+            url: src,
+            wpAttachmentId: Number(image?.wpAttachmentId ?? 0),
+            seoMediaId: Number(image?.seoMediaId ?? 0),
+            slug: String(image?.slug ?? '').trim(),
+            alt: String(image?.alt ?? '').trim(),
+        });
+    }, [image]);
+
     useEffect(() => {
         if (!isActive) {
             return undefined;
@@ -585,6 +593,18 @@ export default function ImageBlockEditor({
                         >
                             <RefreshCcw size={18} strokeWidth={1.75} />
                         </button>
+                        {supportsProductGallery ? (
+                            <button
+                                type="button"
+                                className="seo-image-toolbar-btn"
+                                title={t('append_to_product_album')}
+                                aria-label={t('append_to_product_album')}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={handleAppendToProductAlbum}
+                            >
+                                <Images size={18} strokeWidth={1.75} />
+                            </button>
+                        ) : null}
                         <button
                             type="button"
                             className="seo-image-toolbar-btn is-danger"

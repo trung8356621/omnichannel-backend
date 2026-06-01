@@ -3,6 +3,95 @@ import { findPlainTextRangeInRoot, wrapTextRangeWithLink } from './articlePlainT
 import { SEO_EDITOR_LINK_CLASS, stripEditorTransientMarkup } from './articleEditorTransientMarkup';
 
 /**
+ * Thay lần xuất hiện đầu tiên của searchText bằng text thuần (không link).
+ *
+ * @param {string} html
+ * @param {string} searchText
+ * @param {string} insertText
+ * @returns {{ html: string, replaced: boolean }}
+ */
+export function replaceFirstPlainTextWithText(html, searchText, insertText) {
+    const target = normalizeLinkText(searchText);
+    const value = String(insertText ?? '').trim();
+
+    if (!target || !value || !html) {
+        return { html, replaced: false };
+    }
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const body = doc.body;
+    const match = findPlainTextRangeInRoot(body, target, 0);
+
+    if (!match) {
+        return { html, replaced: false };
+    }
+
+    const range = doc.createRange();
+    range.setStart(match.node, match.start);
+    range.setEnd(match.endNode, match.endOffset);
+
+    try {
+        range.deleteContents();
+        range.insertNode(doc.createTextNode(value));
+
+        return {
+            html: stripEditorTransientMarkup(body.innerHTML),
+            replaced: true,
+        };
+    } catch {
+        return { html, replaced: false };
+    }
+}
+
+/**
+ * Thay lần xuất hiện đầu tiên của searchText bằng link có label cố định (dùng khi user bôi đen rồi chèn CTA).
+ *
+ * @param {string} html
+ * @param {string} searchText
+ * @param {string} label
+ * @param {string} href
+ * @returns {{ html: string, replaced: boolean }}
+ */
+export function replaceFirstPlainTextWithLink(html, searchText, label, href) {
+    const target = normalizeLinkText(searchText);
+    const linkLabel = String(label ?? '').trim();
+    const url = String(href ?? '').trim();
+
+    if (!target || !linkLabel || !url || !html) {
+        return { html, replaced: false };
+    }
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const body = doc.body;
+    const match = findPlainTextRangeInRoot(body, target, 0);
+
+    if (!match) {
+        return { html, replaced: false };
+    }
+
+    const range = doc.createRange();
+    range.setStart(match.node, match.start);
+    range.setEnd(match.endNode, match.endOffset);
+
+    const anchor = doc.createElement('a');
+    anchor.href = url;
+    anchor.className = SEO_EDITOR_LINK_CLASS;
+    anchor.textContent = linkLabel;
+
+    try {
+        range.deleteContents();
+        range.insertNode(anchor);
+
+        return {
+            html: stripEditorTransientMarkup(body.innerHTML),
+            replaced: true,
+        };
+    } catch {
+        return { html, replaced: false };
+    }
+}
+
+/**
  * Bọc lần xuất hiện đầu tiên của cụm từ (chưa nằm trong thẻ a) thành link nội bộ.
  * Hỗ trợ cụm từ nằm trong thẻ b/strong hoặc cắt qua nhiều text node.
  *
@@ -11,6 +100,33 @@ import { SEO_EDITOR_LINK_CLASS, stripEditorTransientMarkup } from './articleEdit
  * @param {string} href
  * @returns {{ html: string, replaced: boolean }}
  */
+/**
+ * Tìm cụm từ trong các block editor và bọc link tại vị trí khớp đầu tiên.
+ *
+ * @param {Array<{ id: string, type?: string, content?: string }>} blocks
+ * @param {string} phrase
+ * @param {string} href
+ * @returns {{ blockId: string, html: string } | null}
+ */
+export function wrapFirstPlainTextWithLinkInBlocks(blocks, phrase, href) {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+        return null;
+    }
+
+    for (const block of blocks) {
+        if (block?.type === 'image' || !block?.content) {
+            continue;
+        }
+
+        const { html, replaced } = wrapFirstPlainTextWithLink(block.content, phrase, href);
+        if (replaced) {
+            return { blockId: block.id, html };
+        }
+    }
+
+    return null;
+}
+
 export function wrapFirstPlainTextWithLink(html, phrase, href) {
     const target = normalizeLinkText(phrase);
     const url = String(href ?? '').trim();

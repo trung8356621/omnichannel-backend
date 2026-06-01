@@ -8,7 +8,7 @@ Không thể hoàn tác tự động.`;
 
 export function confirmSlugRename({ count = 1, isQuickFix = false } = {}) {
     const intro = isQuickFix
-        ? `Sẽ áp dụng alt/title và đổi slug cho ${count} ảnh, đồng thời gọi WordPress đổi tên file.`
+        ? `Sẽ đổi slug (kebab-case từ khóa) cho ${count} ảnh và gọi WordPress đổi tên file.`
         : `Sẽ đổi slug ảnh và gọi WordPress đổi tên file.`;
 
     return window.confirm(`${SLUG_RENAME_WARNING}\n\n${intro}\n\nBạn có chắc muốn tiếp tục?`);

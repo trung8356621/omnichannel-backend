@@ -42,13 +42,13 @@ final class PromptMediaPersistContext
     }
 
     /**
-     * @return array<string, int|null>
+     * @return array<string, int|list<int>|null>
      */
     public static function attributesForNewRecord(): array
     {
         return [
             'site_id' => self::$siteId,
-            'article_id' => self::$articleId,
+            'article_id' => self::$articleId !== null ? [self::$articleId] : null,
             'prompt_id' => self::$promptId,
         ];
     }
@@ -64,8 +64,12 @@ final class PromptMediaPersistContext
             $updates['site_id'] = self::$siteId;
         }
 
-        if (self::$articleId > 0 && (int) ($media->article_id ?? 0) <= 0) {
-            $updates['article_id'] = self::$articleId;
+        if (self::$articleId > 0) {
+            $existing = SeoMedia::normalizeArticleIds($media->article_id);
+            if (! in_array(self::$articleId, $existing, true)) {
+                $existing[] = self::$articleId;
+                $updates['article_id'] = array_values(array_unique($existing));
+            }
         }
 
         if (self::$promptId > 0 && (int) ($media->prompt_id ?? 0) <= 0) {

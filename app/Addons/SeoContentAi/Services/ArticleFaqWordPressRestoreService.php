@@ -35,7 +35,7 @@ final class ArticleFaqWordPressRestoreService
         }
 
         $post = $this->wordpressContent->fetchFromWordPress($article, importFaqs: false);
-        $html = $this->resolveRestoredEditorHtml($article, $post);
+        $html = $this->resolveRestoredEditorHtml($article, $post, preferFreshRemote: true);
 
         if ($html === '') {
             return [
@@ -46,6 +46,7 @@ final class ArticleFaqWordPressRestoreService
         }
 
         $this->contentFaq->persistArticleBodyHtml($article, $html);
+        $this->persistFreshWordPressContentMeta($article, $post, $html);
         $this->extractDebug->clear($article);
 
         return [
@@ -78,7 +79,7 @@ final class ArticleFaqWordPressRestoreService
             ];
         }
 
-        $post = $this->wordpressContent->fetchFromWordPress($article, importFaqs: false);
+        $post = $this->wordpressContent->fetchFromWordPress($article, importFaqs: false, forceSeoImport: true);
 
         if ($post === []) {
             return [
@@ -90,33 +91,7 @@ final class ArticleFaqWordPressRestoreService
             ];
         }
 
-        $wpFaqs = is_array($post['faqs'] ?? null) ? $post['faqs'] : [];
-        if ($wpFaqs !== []) {
-            $import = app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
-            $article->refresh();
-
-            $title = trim((string) ($post['post_title'] ?? ''));
-            $slug = trim((string) ($post['slug'] ?? ''));
-
-            if ($title !== '') {
-                $article->update(['title' => $title]);
-            }
-
-            return [
-                'restored' => true,
-                'editor_html' => trim((string) ($article->body ?? '')),
-                'title' => $title !== '' ? $title : null,
-                'slug' => $slug !== '' ? $slug : null,
-                'message' => ($import['imported'] ?? false)
-                    ? 'Đã khôi phục bài viết và ' . ($import['faq_count'] ?? 0) . ' FAQ từ WordPress.'
-                    : 'Đã khôi phục bài viết từ WordPress.',
-            ];
-        }
-
-        $article->faqs()->delete();
-        $article->articleMetas()->where('meta_key', 'seo_article_faqs')->delete();
-
-        $html = $this->resolveRestoredEditorHtml($article, $post);
+        $html = $this->resolveRestoredEditorHtml($article, $post, preferFreshRemote: true);
 
         if ($html === '') {
             return [
@@ -129,9 +104,20 @@ final class ArticleFaqWordPressRestoreService
         }
 
         $this->contentFaq->persistArticleBodyHtml($article, $html);
+        $this->persistFreshWordPressContentMeta($article, $post, $html);
         $this->extractDebug->clear($article);
 
-        $title = $this->syncFlags->decodeWordPressText((string) ($post['post_title'] ?? ''));
+        $wpFaqs = $this->normalizeWordPressFaqRows($post['faqs'] ?? null);
+        if ($wpFaqs !== []) {
+            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
+            $article->refresh();
+            $html = trim((string) ($article->body ?? $html));
+        } else {
+            $article->faqs()->delete();
+            $article->articleMetas()->where('meta_key', 'seo_article_faqs')->delete();
+        }
+
+        $title = $this->syncFlags->decodeWordPressText($this->wordpressContent->resolvePostTitle($post));
         $slug = trim((string) ($post['slug'] ?? ''));
 
         $this->applyRestoredTitleAndSlug($article, $title, $slug);
@@ -139,17 +125,36 @@ final class ArticleFaqWordPressRestoreService
 
         return [
             'restored' => true,
-            'editor_html' => $html,
+            'editor_html' => $html !== '' ? $html : null,
             'title' => $title !== '' ? $title : null,
             'slug' => $slug !== '' ? $slug : null,
-            'message' => 'Đã khôi phục bài viết gốc từ WordPress.',
+            'message' => $wpFaqs !== []
+                ? 'Đã khôi phục bài viết và FAQ từ WordPress.'
+                : 'Đã khôi phục bài viết gốc từ WordPress.',
         ];
     }
 
     private function applyRestoredTitleAndSlug(SeoArticle $article, string $title, string $slug): void
     {
+        $updates = [];
+
         if ($title !== '') {
-            $article->update(['title' => $title]);
+            $updates['title'] = $title;
+        }
+
+        if ($slug !== '') {
+            $updates['slug'] = $slug;
+        }
+
+        if ($updates !== []) {
+            $article->update($updates);
+        }
+
+        if ($title !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_title'],
+                ['meta_value' => $title],
+            );
         }
 
         if ($slug !== '') {
@@ -178,7 +183,7 @@ final class ArticleFaqWordPressRestoreService
         }
 
         $post = $this->wordpressContent->fetchFromWordPress($article, importFaqs: false);
-        $sourceHtml = $this->resolveRestoredEditorHtml($article, $post);
+        $sourceHtml = $this->resolveRestoredEditorHtml($article, $post, preferFreshRemote: true);
 
         if ($sourceHtml === '') {
             return [
@@ -245,13 +250,25 @@ final class ArticleFaqWordPressRestoreService
     /**
      * @param  array<string, mixed>  $post
      */
-    private function resolveRestoredEditorHtml(SeoArticle $article, array $post): string
+    private function persistFreshWordPressContentMeta(SeoArticle $article, array $post, string $editorHtml): void
+    {
+        $rawContent = trim((string) ($post['post_content'] ?? ''));
+        if ($rawContent !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_content'],
+                ['meta_value' => $rawContent],
+            );
+        }
+
+        $this->persistWordPressSourceSnapshot($article, $editorHtml);
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    private function resolveRestoredEditorHtml(SeoArticle $article, array $post, bool $preferFreshRemote = false): string
     {
         $article->loadMissing('articleMetas');
-
-        $snapshot = trim((string) (
-            $article->articleMetas->firstWhere('meta_key', 'wp_post_content_source')?->meta_value ?? ''
-        ));
 
         $content = trim((string) ($post['post_content'] ?? ''));
         if ($content === '') {
@@ -259,12 +276,12 @@ final class ArticleFaqWordPressRestoreService
             $content = trim((string) ($scoring['body'] ?? ''));
         }
 
-        if ($content === '' && $snapshot !== '') {
-            return $snapshot;
-        }
+        $snapshot = trim((string) (
+            $article->articleMetas->firstWhere('meta_key', 'wp_post_content_source')?->meta_value ?? ''
+        ));
 
         if ($content === '') {
-            return '';
+            return $snapshot;
         }
 
         $wpFaqs = $this->normalizeWordPressFaqRows($post['faqs'] ?? null);
@@ -277,7 +294,7 @@ final class ArticleFaqWordPressRestoreService
         }
 
         if ($wpFaqs !== []) {
-            $headingSource = $snapshot !== '' ? $snapshot : $content;
+            $headingSource = ($preferFreshRemote || $snapshot === '') ? $content : $snapshot;
             $foundHeading = $this->workflowParser->findFaqSectionHeadingInContent($headingSource);
             $heading = is_array($foundHeading) ? (string) ($foundHeading['text'] ?? 'FAQ') : 'FAQ';
             $faqBlock = $this->workflowParser->buildFaqSectionHtmlForEditor($wpFaqs, $heading);
@@ -287,7 +304,7 @@ final class ArticleFaqWordPressRestoreService
             return $rebuilt;
         }
 
-        if ($snapshot !== '') {
+        if (! $preferFreshRemote && $snapshot !== '') {
             return $snapshot;
         }
 

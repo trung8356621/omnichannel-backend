@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
+use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
@@ -308,8 +309,11 @@ class SeoMediaController extends Controller
 
         $site = Site::query()->findOrFail($siteId);
 
-        $articleId = isset($validated['article_id']) ? (int) $validated['article_id'] : null;
-        if ($articleId !== null && $articleId > 0) {
+        $articleId = $this->resolveSplitSaveArticleId(
+            isset($validated['article_id']) ? (int) $validated['article_id'] : null,
+            isset($validated['original_seo_media_id']) ? (int) $validated['original_seo_media_id'] : null,
+        );
+        if ($articleId !== null) {
             $article = SeoArticle::query()->findOrFail($articleId);
             abort_unless($this->canAccessArticle($article), 403);
         }
@@ -525,7 +529,40 @@ class SeoMediaController extends Controller
             'retry_input' => $this->extractRetryInput($media),
             'created_at' => $media->created_at?->toIso8601String(),
             'is_placeholder' => $status === 'processing' || str_contains($url, 'placeholder-loading'),
+            'gallery_urls' => $this->resolvePostProcessingGalleryUrls($media),
         ];
+    }
+
+    /**
+     * @return list<array{id: int, url: string}>
+     */
+    private function resolvePostProcessingGalleryUrls(SeoMedia $media): array
+    {
+        $source = app(PromptPostProcessingApplyService::class)->resolveSourceMedia($media);
+        $variables = is_array($source->prompt_variables) ? $source->prompt_variables : [];
+        $pieceIds = is_array($variables['post_processing_piece_ids'] ?? null)
+            ? $variables['post_processing_piece_ids']
+            : [];
+
+        $ids = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $pieceIds,
+        ), static fn (int $id): bool => $id > 0));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return SeoMedia::query()
+            ->whereIn('id', $ids)
+            ->orderBy('id')
+            ->get()
+            ->map(static fn (SeoMedia $piece): array => [
+                'id' => (int) $piece->id,
+                'url' => $piece->publicUrl(),
+            ])
+            ->values()
+            ->all();
     }
 
     private function extractRetryInput(SeoMedia $media): string
@@ -555,8 +592,9 @@ class SeoMediaController extends Controller
 
     private function canAccessMedia(SeoMedia $media): bool
     {
-        if ($media->article_id !== null) {
-            $article = SeoArticle::query()->find($media->article_id);
+        $articleId = $media->firstArticleId();
+        if ($articleId !== null) {
+            $article = SeoArticle::query()->find($articleId);
 
             return $article !== null && $this->canAccessArticle($article);
         }
@@ -600,5 +638,22 @@ class SeoMediaController extends Controller
             ->whereKey($siteId)
             ->where('user_id', $user->id)
             ->exists();
+    }
+
+    private function resolveSplitSaveArticleId(?int $requestedArticleId, ?int $originalSeoMediaId): ?int
+    {
+        if ($requestedArticleId !== null && $requestedArticleId > 0) {
+            if (SeoArticle::query()->whereKey($requestedArticleId)->exists()) {
+                return $requestedArticleId;
+            }
+        }
+
+        if ($originalSeoMediaId === null || $originalSeoMediaId <= 0) {
+            return null;
+        }
+
+        $media = SeoMedia::query()->find($originalSeoMediaId);
+
+        return $media?->firstArticleId();
     }
 }

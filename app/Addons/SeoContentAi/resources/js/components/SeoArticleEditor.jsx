@@ -14,25 +14,43 @@ import {
     scrollToKeywordAnchor,
     scrollToPlainTextInBlock,
 } from '../utils/articleLinkScroll';
-import { wrapFirstPlainTextWithLink } from '../utils/articleLinkInsert';
+import {
+    wrapFirstPlainTextWithLink,
+    wrapFirstPlainTextWithLinkInBlocks,
+    replaceFirstPlainTextWithLink,
+    replaceFirstPlainTextWithText,
+} from '../utils/articleLinkInsert';
+import { insertCtaInEditor, insertLinkInEditor } from '../utils/editorSelectionUtils';
+import { isCtaPlainTextType } from '../utils/ctaLinkFormat';
+import { SEO_EDITOR_LINK_CLASS } from '../utils/articleEditorTransientMarkup';
+import { filterSuggestedInternalLinks } from '../utils/articleLinkSuggestionFilter';
+import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
 import SeoScorePanel from './SeoScorePanel';
 import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
-import AutoImageGenerateTab from './AutoImageGenerateTab';
+import ArticleReviewsTab from './ArticleReviewsTab';
+import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
     applyImagePatchToBlocks,
-    applyQuickFixMetaToBlock,
-    applyQuickFixMetaToBlocks,
+    applyQuickFixAltTitleToBlock,
+    applyQuickFixAltTitleToBlocks,
+    applyQuickFixSlugToBlock,
+    applyQuickFixSlugToBlocks,
     collectImagesFromBlocks,
+    computeQuickFixAltTitleSupplementalOutcome,
+    computeQuickFixSlugSupplementalOutcome,
     finalizeBlocksAfterWpRename,
     enrichBlocksWithPostImages,
     imageSlugFromKeyword,
+    slugFromUrl,
 } from '../utils/articleImagesUtils';
 import {
     confirmSlugRename,
     dispatchWordPressSlugRename,
 } from '../utils/imageSlugRenameConfirm';
+import { dispatchWordPressAttachmentMetaUpdate } from '../utils/imageAttachmentMetaUpdate';
 import {
     createClipboardPasteHandler,
     fetchSeoMediaStatus,
@@ -52,6 +70,8 @@ import {
     renderImageFigure,
 } from '../utils/blockImageUtils';
 import { coalesceTiptapExportHtml, FAQ_SHORTCODE_HTML, flattenHtmlBodyNodes, isFaqPlaceholderHtml } from '../utils/editorHtmlUtils';
+import { resolveArticleImageSrc, resolveFullWordPressImageUrl, isLocalSeoMediaSrc, supportsWordPressImageSizes } from '../utils/wordpressImageUrl';
+import { applyWordPressImageSize } from '../utils/wordpressImageSize';
 import {
     SEO_EDITOR_LINK_MARK_CLASS,
     SEO_EDITOR_LINK_SCROLL_LEGACY_CLASS,
@@ -105,6 +125,28 @@ const createEmptySectionBlock = () => ({
 
 const articleHasFaqShortcode = (blocks) =>
     blocks.some((block) => isFaqPlaceholderHtml(block.content || ''));
+
+const stripLeadingH1FromHtml = (html) => {
+    const trimmed = String(html || '').trim();
+    if (!trimmed) {
+        return trimmed;
+    }
+
+    try {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(trimmed, 'text/html');
+        const h1 = doc.body.querySelector('h1');
+        if (!h1) {
+            return trimmed;
+        }
+
+        h1.remove();
+
+        return doc.body.innerHTML.trim();
+    } catch {
+        return trimmed.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>\s*/i, '').trim();
+    }
+};
 
 const extractSectionHeading = (block) => {
     if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
@@ -299,6 +341,48 @@ const hasBlockH2 = (block) => {
     }
 };
 
+const DISTRIBUTE_IMAGE_ALIGN = 'center';
+const DISTRIBUTE_IMAGE_SIZE = 'full';
+
+const resolveDistributeImageSrc = (row) => {
+    const wpRaw = String(row?.wpSrc || row?.wp_url || '').trim();
+    const wpFull = wpRaw ? resolveFullWordPressImageUrl(wpRaw) : '';
+    if (wpFull && !isLocalSeoMediaSrc(wpFull)) {
+        return wpFull;
+    }
+
+    const src = String(row?.src || '').trim();
+    if (src && !isLocalSeoMediaSrc(src)) {
+        return resolveFullWordPressImageUrl(src);
+    }
+
+    const local = String(row?.localSrc || row?.local_src || '').trim();
+    return local || resolveArticleImageSrc(row) || src;
+};
+
+const buildDistributedImage = (media) => {
+    const wpSrc = resolveFullWordPressImageUrl(String(media.wpSrc || '').trim());
+    let image = {
+        src: media.src,
+        alt: media.alt || '',
+        title: media.title || media.alt || '',
+        caption: media.caption || '',
+        align: DISTRIBUTE_IMAGE_ALIGN,
+        size: DISTRIBUTE_IMAGE_SIZE,
+        wpAttachmentId: media.wpAttachmentId,
+        seoMediaId: media.seoMediaId,
+        slug: media.slug || '',
+        wpSrc: wpSrc || (isLocalSeoMediaSrc(media.src) ? '' : resolveFullWordPressImageUrl(media.src)),
+        localSrc: media.localSrc || (isLocalSeoMediaSrc(media.src) ? media.src : ''),
+    };
+
+    if (supportsWordPressImageSizes(image)) {
+        image = applyWordPressImageSize(image, DISTRIBUTE_IMAGE_SIZE);
+    }
+
+    return image;
+};
+
 const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
     if (!Array.isArray(blocks) || blocks.length === 0) {
         return blocks;
@@ -328,17 +412,20 @@ const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
             return;
         }
         poolSeen.add(srcKey);
+        const displaySrc = resolveDistributeImageSrc(row);
+        const isLocal = isLocalSeoMediaSrc(displaySrc);
         pool.push({
-            src,
-            slug: String(row?.slug || '').trim(),
+            src: displaySrc,
+            slug: String(row?.slug || '').trim() || slugFromUrl(displaySrc),
             alt: String(row?.alt || '').trim(),
             title: String(row?.title || '').trim(),
             caption: String(row?.caption || '').trim(),
-            align: String(row?.align || 'none').trim(),
+            align: DISTRIBUTE_IMAGE_ALIGN,
+            size: DISTRIBUTE_IMAGE_SIZE,
             wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
             seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
-            wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
-            localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+            wpSrc: resolveFullWordPressImageUrl(String(row?.wpSrc || row?.wp_url || src).trim()),
+            localSrc: String(row?.localSrc || row?.local_src || '').trim() || (isLocal ? displaySrc : ''),
         });
     });
 
@@ -412,18 +499,7 @@ const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
         }
 
         const media = pool[cursor++];
-        const image = {
-            src: media.src,
-            alt: media.alt || '',
-            title: media.title || media.alt || '',
-            caption: media.caption || '',
-            align: media.align || 'none',
-            wpAttachmentId: media.wpAttachmentId,
-            seoMediaId: media.seoMediaId,
-            slug: media.slug || '',
-            wpSrc: media.wpSrc || '',
-            localSrc: media.localSrc || '',
-        };
+        const image = buildDistributedImage(media);
         const imageBlock = {
             ...createEmptyImageBlock(),
             image,
@@ -434,7 +510,96 @@ const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
         inserted += 1;
     }
 
-    return inserted > 0 ? normalizeBlocks(next) : blocks;
+    return {
+        blocks: inserted > 0 ? normalizeBlocks(next) : blocks,
+        inserted,
+    };
+};
+
+const readProductAlbumFromStorage = (articleId) => {
+    if (!articleId) {
+        return [];
+    }
+
+    try {
+        const raw = window.localStorage.getItem(`seo_product_album_list_${articleId}`);
+        if (!raw) {
+            return [];
+        }
+
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+};
+
+const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleId) => {
+    const rows = [];
+    const seen = new Set();
+
+    const append = (row) => {
+        const src = String(row?.src || '').trim();
+        if (!src) {
+            return;
+        }
+
+        const key = normalizeImageSrcKey(src);
+        if (!key || seen.has(key)) {
+            return;
+        }
+
+        seen.add(key);
+        rows.push(row);
+    };
+
+    (Array.isArray(supplementalImages) ? supplementalImages : []).forEach((row) => {
+        if (String(row?.origin || '').trim() !== 'gallery') {
+            return;
+        }
+
+        append({
+            src: String(row?.src || '').trim(),
+            slug: String(row?.slug || '').trim(),
+            alt: String(row?.alt || '').trim(),
+            title: String(row?.title || row?.alt || '').trim(),
+            caption: String(row?.caption || '').trim(),
+            align: String(row?.align || 'none').trim(),
+            wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
+            seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
+            wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
+            localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+            origin: 'gallery',
+        });
+    });
+
+    const albumItems = Array.isArray(storageAlbum) && storageAlbum.length > 0
+        ? storageAlbum
+        : readProductAlbumFromStorage(articleId);
+
+    albumItems.forEach((item) => {
+        const src = String(item?.url || item?.src || '').trim();
+        if (!src) {
+            return;
+        }
+
+        const wpId = Number(item?.id ?? item?.wp_attachment_id ?? 0) || null;
+        append({
+            src,
+            slug: String(item?.slug || '').trim() || src.split('/').pop()?.replace(/\.\w+$/, '') || '',
+            alt: String(item?.alt || '').trim(),
+            title: String(item?.alt || '').trim(),
+            caption: '',
+            align: 'none',
+            wpAttachmentId: wpId,
+            seoMediaId: null,
+            wpSrc: src.includes('/storage/uploads/seo_media/') ? '' : src,
+            localSrc: src.includes('/storage/uploads/seo_media/') ? src : '',
+            origin: 'gallery',
+        });
+    });
+
+    return rows;
 };
 
 const escapeRegExp = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -668,6 +833,7 @@ function ActiveBlockEditor({
     suppressBlockUpdate,
     onUpdate,
     onRegisterFlush,
+    onRegisterEditor,
     setGlobalEditor,
     onDelete,
     canDeleteBlock,
@@ -721,6 +887,18 @@ function ActiveBlockEditor({
         editor.commands.setContent(sourceHtml || '<p></p>', { emitUpdate: false });
         isHydratingRef.current = false;
     }, [editor, block.id, sourceHtml]);
+
+    useEffect(() => {
+        if (!editor) {
+            return undefined;
+        }
+
+        onRegisterEditor?.(editor);
+
+        return () => {
+            onRegisterEditor?.(null);
+        };
+    }, [editor, onRegisterEditor]);
 
     useEffect(() => {
         if (!onRegisterFlush) return undefined;
@@ -846,11 +1024,13 @@ function BlockEditor({
     suppressBlockUpdate,
     onUpdate,
     onRegisterFlush,
+    onRegisterEditor,
     setGlobalEditor,
     onDelete,
     canDeleteBlock,
     articleId,
     siteId,
+    supportsProductGallery = false,
     panelFaqs,
 }) {
     const blockHtml = displayContent ?? block.content;
@@ -870,6 +1050,7 @@ function BlockEditor({
                 canDeleteBlock={canDeleteBlock}
                 articleId={articleId}
                 siteId={siteId}
+                supportsProductGallery={supportsProductGallery}
             />
         );
     }
@@ -950,6 +1131,7 @@ function BlockEditor({
             suppressBlockUpdate={suppressBlockUpdate}
             onUpdate={onUpdate}
             onRegisterFlush={onRegisterFlush}
+            onRegisterEditor={onRegisterEditor}
             setGlobalEditor={setGlobalEditor}
             onDelete={onDelete}
             canDeleteBlock={canDeleteBlock}
@@ -957,13 +1139,14 @@ function BlockEditor({
     );
 }
 
-const TABS = [
+const BASE_TABS = [
     { id: 'editor', label: 'Editor' },
     { id: 'images', label: t('image_block_label') },
-    { id: 'auto-image', label: t('generate_image') },
     { id: 'outline', label: 'Outline' },
     { id: 'seo', label: 'SEO point' },
 ];
+
+const REVIEWS_TAB = { id: 'reviews', label: t('reviews_tab_label') };
 
 export default function SeoArticleEditor({
     articleId,
@@ -974,7 +1157,11 @@ export default function SeoArticleEditor({
     initialPostImages = [],
     initialSupplementalImages = [],
     initialPostType = '',
+    supportsProductGallery = false,
+    productCategoryOptions = [],
+    initialProductGallery = [],
     initialFaqs = [],
+    initialVirtualReviews = [],
     articleTitle = '',
     editorSettings = {},
 }) {
@@ -985,6 +1172,35 @@ export default function SeoArticleEditor({
     const [tempMerge, setTempMerge] = useState(null);
     const [globalEditor, setGlobalEditor] = useState(null);
     const [activeTab, setActiveTab] = useState('editor');
+    const [virtualReviews, setVirtualReviews] = useState(() =>
+        Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
+    );
+    const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
+    const editorTabs = useMemo(() => {
+        if (!isProductPost) {
+            return BASE_TABS;
+        }
+
+        const tabs = [...BASE_TABS];
+        tabs.splice(2, 0, REVIEWS_TAB);
+
+        return tabs;
+    }, [isProductPost]);
+
+    useEffect(() => {
+        const onReviewsUpdated = (event) => {
+            const detail = event?.detail ?? {};
+            const next = detail.reviews ?? detail.params?.reviews;
+            if (Array.isArray(next)) {
+                setVirtualReviews(next);
+            }
+        };
+
+        window.addEventListener('virtual-reviews-updated', onReviewsUpdated);
+
+        return () => window.removeEventListener('virtual-reviews-updated', onReviewsUpdated);
+    }, []);
+
     const [saveStatus, setSaveStatus] = useState('saved');
     const [analyzing, setAnalyzing] = useState(false);
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
@@ -995,10 +1211,51 @@ export default function SeoArticleEditor({
     const [supplementalImages, setSupplementalImages] = useState(() =>
         Array.isArray(initialSupplementalImages) ? initialSupplementalImages : [],
     );
+    const [postImages, setPostImages] = useState(() =>
+        Array.isArray(initialPostImages) ? initialPostImages : [],
+    );
+    const postImagesRef = useRef(postImages);
+    postImagesRef.current = postImages;
     const [quickReplaceFind, setQuickReplaceFind] = useState('');
     const [quickReplaceValue, setQuickReplaceValue] = useState('');
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     const pendingQuickFixKeywordRef = useRef('');
+    const generateImageTargetRef = useRef('editor');
+    const [generateImageModalOpen, setGenerateImageModalOpen] = useState(false);
+    const [generateImageModalPrompt, setGenerateImageModalPrompt] = useState('');
+    const [generateImageModalTarget, setGenerateImageModalTarget] = useState('editor');
+
+    const parseGalleryUrlList = useCallback((items) => {
+        if (!Array.isArray(items)) {
+            return [];
+        }
+
+        return items
+            .map((item) => {
+                if (typeof item === 'string') {
+                    return item.trim();
+                }
+                return String(item?.url ?? item?.src ?? '').trim();
+            })
+            .filter(Boolean);
+    }, []);
+
+    const [productGalleryUrls, setProductGalleryUrls] = useState(() => parseGalleryUrlList(initialProductGallery));
+
+    useEffect(() => {
+        const onGalleryUpdated = (event) => {
+            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
+            const gallery = detail.gallery;
+            if (!Array.isArray(gallery)) {
+                return;
+            }
+            setProductGalleryUrls(parseGalleryUrlList(gallery));
+        };
+
+        window.addEventListener('seo-product-gallery-updated', onGalleryUpdated);
+
+        return () => window.removeEventListener('seo-product-gallery-updated', onGalleryUpdated);
+    }, [parseGalleryUrlList]);
 
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
@@ -1008,8 +1265,11 @@ export default function SeoArticleEditor({
     const [extractedLinks, setExtractedLinks] = useState(
         initialSeo?.extracted_links ?? { internal: [], external: [] },
     );
-    const [suggestedInternalLinks, setSuggestedInternalLinks] = useState(
-        initialSeo?.suggested_internal_links ?? [],
+    const [suggestedInternalLinks, setSuggestedInternalLinks] = useState(() =>
+        filterSuggestedInternalLinks(
+            initialSeo?.suggested_internal_links ?? [],
+            initialSeo?.extracted_links?.internal ?? [],
+        ),
     );
 
     const mainKeyword = useMemo(() => {
@@ -1029,6 +1289,74 @@ export default function SeoArticleEditor({
             }
         };
     }, [mainKeyword]);
+
+    useEffect(() => {
+        if (activeTab === 'auto-image') {
+            setActiveTab('editor');
+        }
+    }, []);
+
+    useEffect(() => {
+        const onOpenGenerateImageModal = (event) => {
+            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
+            const target = String(detail.target ?? 'editor').trim() || 'editor';
+            generateImageTargetRef.current = target;
+            setGenerateImageModalTarget(target);
+
+            const preset = String(detail.prompt ?? detail.userBrief ?? '').trim();
+            setGenerateImageModalPrompt(
+                preset || (target === 'product-gallery' ? mainKeyword : ''),
+            );
+            setGenerateImageModalOpen(true);
+        };
+
+        window.addEventListener('seo-open-generate-image-modal', onOpenGenerateImageModal);
+
+        return () => {
+            window.removeEventListener('seo-open-generate-image-modal', onOpenGenerateImageModal);
+        };
+    }, [mainKeyword]);
+
+    const submitGenerateImageFromModal = useCallback(
+        (payload) => {
+            const normalized = payload != null && typeof payload === 'object'
+                ? payload
+                : { userBrief: String(payload ?? '') };
+            const userBrief = String(normalized.userBrief ?? '').trim();
+            const target = generateImageTargetRef.current || 'editor';
+            const galleryBlockId = target === 'product-gallery' ? 'product-gallery' : '';
+
+            window.dispatchEvent(
+                new CustomEvent('generate-article-image', {
+                    detail: {
+                        selectionText: '',
+                        selectionHtml: '',
+                        userBrief,
+                        activeBlockId: galleryBlockId,
+                        target,
+                        loaiSanPhamCategoryArticleId: Number.parseInt(
+                            String(normalized.loaiSanPhamCategoryArticleId ?? 0),
+                            10,
+                        ) || 0,
+                        loaiSanPhamCustom: String(
+                            normalized.loaiSanPhamCustom ?? normalized.userBrief ?? '',
+                        ).trim(),
+                    },
+                }),
+            );
+
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('generate_image'),
+                        body: t('generating_image'),
+                        status: 'success',
+                    },
+                }),
+            );
+        },
+        [],
+    );
 
     const enrichLinksWithOccurrences = useCallback((links) => {
         const source = links && typeof links === 'object' ? links : { internal: [], external: [] };
@@ -1070,11 +1398,15 @@ export default function SeoArticleEditor({
 
     const publishExtractedLinks = useCallback((links, suggestedInternal = suggestedInternalLinks) => {
         const enrichedLinks = enrichLinksWithOccurrences(links);
+        const filteredSuggested = filterSuggestedInternalLinks(
+            suggestedInternal,
+            enrichedLinks.internal ?? [],
+        );
         window.dispatchEvent(
             new CustomEvent('seo-editor-links-updated', {
                 detail: {
                     links: enrichedLinks,
-                    suggested_internal: Array.isArray(suggestedInternal) ? suggestedInternal : [],
+                    suggested_internal: filteredSuggested,
                 },
             }),
         );
@@ -1182,6 +1514,8 @@ export default function SeoArticleEditor({
     const activeBlockIdRef = useRef(null);
     const linkScrollTokenRef = useRef(0);
     const intraSelectionRef = useRef({ text: '', html: '' });
+    const globalEditorRef = useRef(null);
+    const blockEditorsRef = useRef(new Map());
     const pendingAiMediaRef = useRef(new Map());
     const mediaPollTimersRef = useRef(new Map());
 
@@ -1189,7 +1523,26 @@ export default function SeoArticleEditor({
         activeBlockIdRef.current = activeBlockId;
     }, [activeBlockId]);
 
+    useEffect(() => {
+        globalEditorRef.current = globalEditor;
+    }, [globalEditor]);
+
     const getExportHtml = useCallback(() => exportBlocksToHtml(blocksRef.current), []);
+
+    const requestOutlineRewrite = useCallback(
+        (mode) => {
+            window.dispatchEvent(
+                new CustomEvent('seo-rewrite-outline', {
+                    detail: {
+                        mode: mode === 'content' ? 'content' : 'title',
+                        title: String(articleTitle || '').trim(),
+                        html: getExportHtml(),
+                    },
+                }),
+            );
+        },
+        [articleTitle, getExportHtml],
+    );
 
     const requestAnalyze = useCallback(() => {
         window.dispatchEvent(
@@ -1255,6 +1608,22 @@ export default function SeoArticleEditor({
             );
 
         const onWindowKeyDown = (event) => {
+            const articleAction = articleShortcutActionFromEvent(event);
+            if (articleAction) {
+                event.preventDefault();
+                if (articleAction === 'analyze') {
+                    setAnalyzing(true);
+                    requestAnalyze();
+                } else {
+                    window.dispatchEvent(
+                        new CustomEvent('article-editor-shortcut', {
+                            detail: { action: articleAction },
+                        }),
+                    );
+                }
+                return;
+            }
+
             const mod = event.ctrlKey || event.metaKey;
             if (!mod || event.altKey || isTypingTarget(event.target)) {
                 return;
@@ -1286,7 +1655,7 @@ export default function SeoArticleEditor({
         return () => {
             window.removeEventListener('keydown', onWindowKeyDown, true);
         };
-    }, [undo, redo, canUndo, canRedo]);
+    }, [undo, redo, canUndo, canRedo, requestAnalyze]);
 
     useEffect(() => {
         if (!articleId) return;
@@ -1301,27 +1670,16 @@ export default function SeoArticleEditor({
         if (draft?.blocks?.length) {
             parsed = normalizeBlocks(draft.blocks);
         } else if (draft?.html) {
-            parsed = parseHtmlToBlocks(draft.html);
+            parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(draft.html));
         } else {
-            parsed = parseHtmlToBlocks(initialHtml);
+            parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml));
         }
-        let nextBlocks = enrichBlocksWithPostImages(parsed, initialPostImages);
-        if (String(initialPostType || '').toLowerCase() === 'product') {
-            nextBlocks = distributeProductImagesToEmptySections(nextBlocks, initialSupplementalImages);
-        }
+        let nextBlocks = enrichBlocksWithPostImages(parsed, postImagesRef.current);
         setBlocks(nextBlocks);
 
         setActiveBlockId(null);
         setGlobalEditor(null);
-    }, [articleId, initialHtml, initialPostImages, initialPostType, initialSupplementalImages, clearTempMerge]);
-
-    useEffect(() => {
-        if (String(initialPostType || '').toLowerCase() !== 'product') {
-            return;
-        }
-
-        setBlocks((prev) => distributeProductImagesToEmptySections(prev, supplementalImages));
-    }, [initialPostType, supplementalImages]);
+    }, [articleId, initialHtml, initialPostImages, clearTempMerge]);
 
     useEffect(() => {
         if (initialSeo) {
@@ -1329,7 +1687,12 @@ export default function SeoArticleEditor({
             setAnalysis(initialSeo.analysis ?? null);
             setContentBonus(initialSeo.content_bonus ?? initialSeo.analysis?.content_bonus ?? null);
             setExtractedLinks(initialSeo.extracted_links ?? { internal: [], external: [] });
-            setSuggestedInternalLinks(initialSeo.suggested_internal_links ?? []);
+            setSuggestedInternalLinks(
+                filterSuggestedInternalLinks(
+                    initialSeo.suggested_internal_links ?? [],
+                    initialSeo.extracted_links?.internal ?? [],
+                ),
+            );
         }
     }, [initialSeo]);
 
@@ -1355,10 +1718,101 @@ export default function SeoArticleEditor({
         blockFlushRef.current = fn;
     }, []);
 
+    const registerBlockEditor = useCallback((blockId, editor) => {
+        if (!blockId) {
+            return;
+        }
+
+        if (editor) {
+            blockEditorsRef.current.set(blockId, editor);
+            return;
+        }
+
+        blockEditorsRef.current.delete(blockId);
+    }, []);
+
+    const resolveActiveEditor = useCallback(() => {
+        const activeId = activeBlockIdRef.current;
+        if (globalEditorRef.current && !globalEditorRef.current.isDestroyed) {
+            return globalEditorRef.current;
+        }
+
+        if (!activeId) {
+            return null;
+        }
+
+        const blockEditor = blockEditorsRef.current.get(activeId);
+        if (blockEditor && !blockEditor.isDestroyed) {
+            return blockEditor;
+        }
+
+        return null;
+    }, []);
+
     const commitActiveBlock = useCallback(() => {
         if (tempMergeRef.current) return;
         blockFlushRef.current?.();
     }, []);
+
+    const distributeProductGalleryImages = useCallback(() => {
+        if (!supportsProductGallery) {
+            return;
+        }
+
+        commitActiveBlock();
+
+        const galleryRows = buildGallerySupplementalRows(supplementalImages, null, articleId);
+        if (galleryRows.length === 0) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('product_gallery_distribute_none_title'),
+                        body: t('product_gallery_distribute_no_images'),
+                        status: 'warning',
+                    },
+                }),
+            );
+            return;
+        }
+
+        let inserted = 0;
+        const result = distributeProductImagesToEmptySections(blocksRef.current, galleryRows);
+        inserted = result.inserted;
+        if (inserted > 0) {
+            setBlocks(result.blocks);
+            setActiveTab('editor');
+            scheduleAutosave();
+            requestAnalyze();
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-article-editor-notify', {
+                detail: inserted > 0
+                    ? {
+                          title: t('product_gallery_distribute_success_title'),
+                          body: t('product_gallery_distribute_success', { count: inserted }),
+                          status: 'success',
+                      }
+                    : {
+                          title: t('product_gallery_distribute_none_title'),
+                          body: t('product_gallery_distribute_no_sections'),
+                          status: 'warning',
+                      },
+            }),
+        );
+    }, [supportsProductGallery, supplementalImages, articleId, commitActiveBlock, requestAnalyze, scheduleAutosave]);
+
+    useEffect(() => {
+        const onDistributeGallery = () => {
+            distributeProductGalleryImages();
+        };
+
+        window.addEventListener('seo-editor-distribute-product-gallery', onDistributeGallery);
+
+        return () => {
+            window.removeEventListener('seo-editor-distribute-product-gallery', onDistributeGallery);
+        };
+    }, [distributeProductGalleryImages]);
 
     const patchImageInBlocks = useCallback(
         (blockId, patch, withoutHistory = false) => {
@@ -1374,6 +1828,10 @@ export default function SeoArticleEditor({
 
     const requestWordPressRenames = useCallback((items) => {
         dispatchWordPressSlugRename(items);
+    }, []);
+
+    const requestWordPressAttachmentMetaUpdate = useCallback((items) => {
+        dispatchWordPressAttachmentMetaUpdate(items);
     }, []);
 
     const handleImageSlugChange = useCallback(
@@ -1492,63 +1950,112 @@ export default function SeoArticleEditor({
         );
     }, []);
 
-    const quickFixSupplementalRow = useCallback(
-        (row, keyword) => {
-            const slugIndex = Number(row?.quickFixIndex ?? 0);
-            const suggestedSlug = slugIndex > 0 ? imageSlugFromKeyword(keyword, slugIndex) : '';
-            patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+    const enrichSupplementalRow = useCallback((row, fallbackIndex = 0) => {
+        return Number(row?.quickFixIndex ?? 0) > 0
+            ? row
+            : {
+                  ...row,
+                  quickFixIndex: Number(fallbackIndex ?? 0) > 0 ? Number(fallbackIndex) : 0,
+              };
+    }, []);
 
-            const wpAttachmentId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
-            if (wpAttachmentId > 0 && suggestedSlug) {
-                return {
-                    wpRename: {
-                        attachment_id: wpAttachmentId,
-                        new_slug: suggestedSlug,
-                        old_url: row.src,
-                        old_slug: row.slug ?? '',
-                    },
-                    localRename: null,
-                };
+    const runSupplementalLocalRenames = useCallback(
+        (localRenames, supplementalOnlyRows) => {
+            if (!localRenames.length) {
+                return;
             }
 
-            const seoMediaId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
-            if (seoMediaId > 0 && suggestedSlug) {
-                return {
-                    wpRename: null,
-                    localRename: {
-                        seo_media_id: seoMediaId,
-                        src: row.src,
-                        new_slug: suggestedSlug,
-                        old_slug: row.slug ?? '',
-                    },
-                };
-            }
+            const supplementalLocalRenameKeys = new Set();
+            const uniqueLocalRenames = [];
+            localRenames.forEach((item) => {
+                const localKey =
+                    Number(item.seo_media_id ?? 0) > 0
+                        ? `id:${Number(item.seo_media_id)}`
+                        : `src:${normalizeImageSrcKey(item.src)}`;
+                if (supplementalLocalRenameKeys.has(localKey)) {
+                    return;
+                }
+                supplementalLocalRenameKeys.add(localKey);
+                uniqueLocalRenames.push(item);
+            });
 
-            if (row?.src && String(row.src).includes('/storage/uploads/seo_media/') && suggestedSlug) {
-                return {
-                    wpRename: null,
-                    localRename: {
-                        seo_media_id: null,
-                        src: row.src,
-                        new_slug: suggestedSlug,
-                        old_slug: row.slug ?? '',
-                    },
-                };
-            }
+            (async () => {
+                for (const item of uniqueLocalRenames) {
+                    try {
+                        const newSlug = String(item.new_slug ?? '').trim();
+                        const src = String(item.src ?? '').trim();
+                        const id = Number(item.seo_media_id ?? 0);
+                        if (!newSlug || !src) {
+                            continue;
+                        }
 
-            if (suggestedSlug) {
-                patchSupplementalImageRow(row, { slug: suggestedSlug });
-            }
+                        const data =
+                            id > 0 ? await renameSeoMedia(id, newSlug) : await renameSeoMediaByUrl(src, newSlug);
 
-            return {
-                wpRename: null,
-                localRename: null,
-            };
+                        const matchedRow = supplementalOnlyRows.find((row) => {
+                            const rowId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+                            const rowSrc = normalizeImageSrcKey(row?.src);
+                            return (
+                                (id > 0 && rowId === id) ||
+                                normalizeImageSrcKey(src) === rowSrc
+                            );
+                        });
+
+                        if (matchedRow) {
+                            patchSupplementalImageRow(matchedRow, {
+                                slug: data.slug,
+                                src: data.url,
+                                seoMediaId: data.id ?? id,
+                            });
+                        }
+                    } catch (error) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    }
+                }
+                setImagesReloadKey((k) => k + 1);
+            })();
         },
         [patchSupplementalImageRow],
     );
 
-    const applyQuickFixPreview = useCallback(
+    const buildQuickFixContext = useCallback(
+        (imageRows = null) => {
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            if (!keyword) {
+                return null;
+            }
+
+            const sourceRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
+                (row) => !row?.excludeQuickFix,
+            );
+
+            const indexByBlockId = {};
+            sourceRows.forEach((row) => {
+                const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+                const quickFixIndex = Number(row?.quickFixIndex ?? 0);
+                if (blockId && quickFixIndex > 0) {
+                    indexByBlockId[blockId] = quickFixIndex;
+                }
+            });
+
+            const supplementalOnlyRows = sourceRows.filter(
+                (row) => String(row?.blockId ?? row?.block_id ?? '').trim() === '',
+            );
+
+            return { keyword, sourceRows, indexByBlockId, supplementalOnlyRows };
+        },
+        [focusKeyword, articleTitle, supplementalImages],
+    );
+
+    const applyQuickFixSlugPreview = useCallback(
         (preview, keyword) => {
             const renameCount = preview.renameQueue.length;
             const localRenameCount = (preview.localRenameQueue ?? []).length;
@@ -1636,96 +2143,132 @@ export default function SeoArticleEditor({
         [requestWordPressRenames],
     );
 
-    const quickFixAllImages = useCallback((imageRows = null) => {
-        const keyword = (focusKeyword || articleTitle || '').trim();
-        if (!keyword) {
-            return;
-        }
-
-        const preview = applyQuickFixMetaToBlocks(blocksRef.current, keyword);
-        const renameCount = preview.renameQueue.length;
-        const localRenameCount = (preview.localRenameQueue ?? []).length;
-
-        if (renameCount > 0 && !confirmSlugRename({ count: renameCount, isQuickFix: true })) {
-            return;
-        }
-
-        if (renameCount === 0 && localRenameCount === 0 && !window.confirm(t('editor_quick_fix_all_confirm'))) {
-            return;
-        }
-
-        applyQuickFixPreview(preview, keyword);
-        const supplementalRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
-            (row) => !row?.excludeQuickFix,
-        );
-        if (supplementalRows.length === 0) {
-            return;
-        }
-
-        const supplementalWpRenames = [];
-        const supplementalLocalRenames = [];
-        const supplementalLocalRenameKeys = new Set();
-        supplementalRows.forEach((row) => {
-            const outcome = quickFixSupplementalRow(row, keyword);
-            if (outcome?.wpRename) {
-                supplementalWpRenames.push(outcome.wpRename);
-            }
-            if (outcome?.localRename) {
-                const localKey = Number(outcome.localRename.seo_media_id ?? 0) > 0
-                    ? `id:${Number(outcome.localRename.seo_media_id)}`
-                    : `src:${normalizeImageSrcKey(outcome.localRename.src)}`;
-                if (!supplementalLocalRenameKeys.has(localKey)) {
-                    supplementalLocalRenameKeys.add(localKey);
-                    supplementalLocalRenames.push(outcome.localRename);
-                }
-            }
-        });
-
-        if (supplementalWpRenames.length > 0) {
-            if (!confirmSlugRename({ count: supplementalWpRenames.length, isQuickFix: true })) {
+    const quickFixSlugAllImages = useCallback(
+        (imageRows = null) => {
+            const context = buildQuickFixContext(imageRows);
+            if (!context) {
                 return;
             }
-            requestWordPressRenames(supplementalWpRenames);
-        }
 
-        if (supplementalLocalRenames.length > 0) {
-            (async () => {
-                for (const item of supplementalLocalRenames) {
-                    try {
-                        const newSlug = String(item.new_slug ?? '').trim();
-                        const src = String(item.src ?? '').trim();
-                        const id = Number(item.seo_media_id ?? 0);
-                        if (!newSlug || !src) {
-                            continue;
-                        }
+            const { keyword, indexByBlockId, supplementalOnlyRows } = context;
 
-                        const data = id > 0
-                            ? await renameSeoMedia(id, newSlug)
-                            : await renameSeoMediaByUrl(src, newSlug);
+            const supplementalOutcomes = supplementalOnlyRows.map((row, index) => ({
+                row,
+                outcome: computeQuickFixSlugSupplementalOutcome(
+                    Number(row?.quickFixIndex ?? 0) > 0 ? row : { ...row, quickFixIndex: index + 1 },
+                    keyword,
+                ),
+            }));
 
-                        patchSupplementalImageRow(item, {
-                            slug: data.slug,
-                            src: data.url,
-                            seoMediaId: data.id ?? id,
-                        });
-                    } catch (error) {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_rename_image_slug'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
-                    }
+            const preview = applyQuickFixSlugToBlocks(blocksRef.current, keyword, indexByBlockId);
+            const supplementalWpRenames = supplementalOutcomes
+                .map(({ outcome }) => outcome.wpRename)
+                .filter(Boolean);
+            const supplementalLocalRenames = supplementalOutcomes
+                .map(({ outcome }) => outcome.localRename)
+                .filter(Boolean);
+
+            const totalWpRenames = preview.renameQueue.length + supplementalWpRenames.length;
+            const totalLocalRenames =
+                (preview.localRenameQueue ?? []).length + supplementalLocalRenames.length;
+
+            if (totalWpRenames > 0 && !confirmSlugRename({ count: totalWpRenames, isQuickFix: true })) {
+                return;
+            }
+
+            if (totalWpRenames === 0 && totalLocalRenames === 0 && preview.applied === 0) {
+                return;
+            }
+
+            applyQuickFixSlugPreview(preview, keyword);
+
+            supplementalOutcomes.forEach(({ row, outcome }) => {
+                if (Object.keys(outcome.patch ?? {}).length > 0) {
+                    patchSupplementalImageRow(row, outcome.patch);
                 }
-                setImagesReloadKey((k) => k + 1);
-            })();
-        }
-    }, [focusKeyword, articleTitle, applyQuickFixPreview, supplementalImages, quickFixSupplementalRow, requestWordPressRenames, patchSupplementalImageRow]);
+            });
 
-    const quickFixSingleImage = useCallback(
+            if (supplementalWpRenames.length > 0) {
+                requestWordPressRenames(supplementalWpRenames);
+            }
+
+            if (supplementalLocalRenames.length > 0) {
+                runSupplementalLocalRenames(supplementalLocalRenames, supplementalOnlyRows);
+            }
+        },
+        [
+            applyQuickFixSlugPreview,
+            buildQuickFixContext,
+            patchSupplementalImageRow,
+            requestWordPressRenames,
+            runSupplementalLocalRenames,
+        ],
+    );
+
+    const quickFixAltTitleAllImages = useCallback(
+        (imageRows = null) => {
+            const context = buildQuickFixContext(imageRows);
+            if (!context) {
+                return;
+            }
+
+            const { keyword, supplementalOnlyRows } = context;
+
+            const supplementalOutcomes = supplementalOnlyRows.map((row, index) => ({
+                row,
+                outcome: computeQuickFixAltTitleSupplementalOutcome(
+                    Number(row?.quickFixIndex ?? 0) > 0 ? row : { ...row, quickFixIndex: index + 1 },
+                    keyword,
+                ),
+            }));
+
+            const preview = applyQuickFixAltTitleToBlocks(blocksRef.current, keyword);
+            const wpMetaQueue = [...(preview.wpMetaQueue ?? [])];
+            supplementalOutcomes.forEach(({ outcome }) => {
+                if (outcome.wpMeta) {
+                    wpMetaQueue.push(outcome.wpMeta);
+                }
+            });
+
+            const dedupedMeta = [];
+            const seenMeta = new Set();
+            wpMetaQueue.forEach((item) => {
+                const id = Number(item?.attachment_id ?? 0);
+                if (id <= 0 || seenMeta.has(id)) {
+                    return;
+                }
+                seenMeta.add(id);
+                dedupedMeta.push(item);
+            });
+
+            if (preview.applied === 0 && supplementalOutcomes.length === 0) {
+                return;
+            }
+
+            if (!window.confirm(t('editor_quick_fix_alt_title_all_confirm'))) {
+                return;
+            }
+
+            setBlocks(preview.blocks);
+
+            supplementalOutcomes.forEach(({ row, outcome }) => {
+                patchSupplementalImageRow(row, outcome.patch);
+            });
+
+            if (dedupedMeta.length > 0) {
+                requestWordPressAttachmentMetaUpdate(dedupedMeta);
+            }
+
+            setImagesReloadKey((k) => k + 1);
+        },
+        [
+            buildQuickFixContext,
+            patchSupplementalImageRow,
+            requestWordPressAttachmentMetaUpdate,
+        ],
+    );
+
+    const quickFixSlugSingleImage = useCallback(
         (target) => {
             const keyword = (focusKeyword || articleTitle || '').trim();
             if (!keyword || !target) {
@@ -1738,7 +2281,7 @@ export default function SeoArticleEditor({
                     : String(target?.blockId ?? target?.block_id ?? '').trim();
 
             if (blockId) {
-                const preview = applyQuickFixMetaToBlock(blocksRef.current, keyword, blockId);
+                const preview = applyQuickFixSlugToBlock(blocksRef.current, keyword, blockId);
                 if (preview.applied === 0) {
                     return;
                 }
@@ -1750,103 +2293,150 @@ export default function SeoArticleEditor({
                     return;
                 }
 
-                if (
-                    renameCount === 0 &&
-                    localRenameCount === 0 &&
-                    !window.confirm(t('editor_quick_fix_one_confirm'))
-                ) {
+                if (renameCount === 0 && localRenameCount === 0) {
                     return;
                 }
 
-                applyQuickFixPreview(preview, keyword);
+                applyQuickFixSlugPreview(preview, keyword);
 
                 return;
             }
 
             const row = typeof target === 'object' ? target : null;
-            if (!row) {
+            if (!row || row.excludeQuickFix) {
                 return;
             }
 
-            const slugIndex = Number(row.quickFixIndex ?? 1);
-            const suggestedSlug = imageSlugFromKeyword(keyword, slugIndex) || String(row.slug || '').trim();
-            patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+            const sourceRows = supplementalImages ?? [];
+            const fallbackIndex = Math.max(
+                1,
+                sourceRows.findIndex((item) => {
+                    const srcMatched =
+                        normalizeImageSrcKey(item?.src) !== '' &&
+                        normalizeImageSrcKey(item?.src) === normalizeImageSrcKey(row?.src);
+                    const wpMatched =
+                        Number(item?.wpAttachmentId ?? item?.wp_attachment_id ?? 0) > 0 &&
+                        Number(item?.wpAttachmentId ?? item?.wp_attachment_id ?? 0) ===
+                            Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+                    const seoMatched =
+                        Number(item?.seoMediaId ?? item?.seo_media_id ?? 0) > 0 &&
+                        Number(item?.seoMediaId ?? item?.seo_media_id ?? 0) ===
+                            Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+                    return srcMatched || wpMatched || seoMatched;
+                }) + 1,
+            );
 
-            const wpAttachmentId = Number(row.wpAttachmentId ?? row.wp_attachment_id ?? 0);
-            if (wpAttachmentId > 0) {
-                if (suggestedSlug && !confirmSlugRename({ count: 1, isQuickFix: true })) {
+            const enrichedRow = enrichSupplementalRow(row, fallbackIndex);
+            const outcome = computeQuickFixSlugSupplementalOutcome(enrichedRow, keyword);
+
+            if (Object.keys(outcome.patch ?? {}).length > 0) {
+                patchSupplementalImageRow(enrichedRow, outcome.patch);
+            }
+
+            if (outcome?.wpRename) {
+                if (!confirmSlugRename({ count: 1, isQuickFix: true })) {
+                    return;
+                }
+                pendingQuickFixKeywordRef.current = keyword;
+                requestWordPressRenames([outcome.wpRename]);
+                patchSupplementalImageRow(row, { slug: outcome.wpRename.new_slug });
+                return;
+            }
+
+            if (outcome?.localRename) {
+                const newSlug = String(outcome.localRename.new_slug ?? '').trim();
+                const src = String(outcome.localRename.src ?? '').trim();
+                const id = Number(outcome.localRename.seo_media_id ?? 0);
+                if (!newSlug || !src) {
+                    return;
+                }
+                const renamePromise = id > 0 ? renameSeoMedia(id, newSlug) : renameSeoMediaByUrl(src, newSlug);
+                renamePromise
+                    .then((data) => {
+                        patchSupplementalImageRow(row, {
+                            slug: data.slug,
+                            src: data.url,
+                            seoMediaId: data.id ?? id,
+                        });
+                        setImagesReloadKey((k) => k + 1);
+                    })
+                    .catch((error) => {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cannot_rename_image_slug'),
+                                    body: error?.message ?? t('editor_try_again_later'),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    });
+            }
+        },
+        [
+            focusKeyword,
+            articleTitle,
+            applyQuickFixSlugPreview,
+            enrichSupplementalRow,
+            patchSupplementalImageRow,
+            requestWordPressRenames,
+            supplementalImages,
+        ],
+    );
+
+    const quickFixAltTitleSingleImage = useCallback(
+        (target) => {
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            if (!keyword || !target) {
+                return;
+            }
+
+            const blockId =
+                typeof target === 'string'
+                    ? target
+                    : String(target?.blockId ?? target?.block_id ?? '').trim();
+
+            if (blockId) {
+                const preview = applyQuickFixAltTitleToBlock(blocksRef.current, keyword, blockId);
+                if (preview.applied === 0) {
                     return;
                 }
 
-                pendingQuickFixKeywordRef.current = keyword;
-                requestWordPressRenames([
-                    {
-                        attachment_id: wpAttachmentId,
-                        new_slug: suggestedSlug,
-                        old_url: row.src,
-                        old_slug: row.slug ?? '',
-                    },
-                ]);
-                patchSupplementalImageRow(row, { slug: suggestedSlug });
+                if (!window.confirm(t('editor_quick_fix_alt_title_one_confirm'))) {
+                    return;
+                }
+
+                setBlocks(preview.blocks);
+                if ((preview.wpMetaQueue ?? []).length > 0) {
+                    requestWordPressAttachmentMetaUpdate(preview.wpMetaQueue);
+                }
+                setImagesReloadKey((k) => k + 1);
 
                 return;
             }
 
-            const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
-            if (seoMediaId > 0 && suggestedSlug) {
-                renameSeoMedia(seoMediaId, suggestedSlug)
-                    .then((data) => {
-                        patchSupplementalImageRow(row, {
-                            slug: data.slug,
-                            src: data.url,
-                            seoMediaId: data.id ?? seoMediaId,
-                        });
-                        setImagesReloadKey((k) => k + 1);
-                    })
-                    .catch((error) => {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_rename_image_slug'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
-                    });
-
+            const row = typeof target === 'object' ? target : null;
+            if (!row || row.excludeQuickFix) {
                 return;
             }
 
-            if (row.src && String(row.src).includes('/storage/uploads/seo_media/') && suggestedSlug) {
-                renameSeoMediaByUrl(row.src, suggestedSlug)
-                    .then((data) => {
-                        patchSupplementalImageRow(row, {
-                            slug: data.slug,
-                            src: data.url,
-                            seoMediaId: data.id ?? seoMediaId,
-                        });
-                        setImagesReloadKey((k) => k + 1);
-                    })
-                    .catch((error) => {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_rename_image_slug'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
-                    });
+            if (!window.confirm(t('editor_quick_fix_alt_title_one_confirm'))) {
                 return;
             }
 
-            if (suggestedSlug) {
-                patchSupplementalImageRow(row, { slug: suggestedSlug });
+            const outcome = computeQuickFixAltTitleSupplementalOutcome(row, keyword);
+            patchSupplementalImageRow(row, outcome.patch);
+            if (outcome.wpMeta) {
+                requestWordPressAttachmentMetaUpdate([outcome.wpMeta]);
             }
+            setImagesReloadKey((k) => k + 1);
         },
-        [focusKeyword, articleTitle, applyQuickFixPreview, patchSupplementalImageRow, requestWordPressRenames],
+        [
+            focusKeyword,
+            articleTitle,
+            patchSupplementalImageRow,
+            requestWordPressAttachmentMetaUpdate,
+        ],
     );
 
     useEffect(() => {
@@ -2205,23 +2795,8 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            commitActiveBlock();
-            setActiveTab('editor');
-
-            const currentBlocks = blocksRef.current;
-            for (const block of currentBlocks) {
-                if (block.type === 'image' || !block.content) {
-                    continue;
-                }
-
-                const { html, replaced } = wrapFirstPlainTextWithLink(block.content, text, href);
-                if (!replaced) {
-                    continue;
-                }
-
-                updateBlockContent(block.id, html);
+            const notifyInserted = () => {
                 requestAnalyze();
-
                 window.dispatchEvent(
                     new CustomEvent('seo-editor-suggested-link-inserted', {
                         detail: { text, href },
@@ -2236,6 +2811,49 @@ export default function SeoArticleEditor({
                         },
                     }),
                 );
+            };
+
+            setActiveTab('editor');
+            commitActiveBlock();
+
+            // Case 1: Cụm từ đã có trong bài → bọc link đúng vị trí tìm được (không chèn sau con trỏ).
+            const wrapped = wrapFirstPlainTextWithLinkInBlocks(blocksRef.current, text, href);
+            if (wrapped) {
+                updateBlockContent(wrapped.blockId, wrapped.html);
+                notifyInserted();
+
+                return;
+            }
+
+            // Case 2: Không có trong bài → chèn tại vùng chọn / con trỏ hiện tại.
+            const editor = resolveActiveEditor();
+            const selectionText = getSelectionTextFromEditor(editor);
+            const selectedText = (selectionText || intraSelectionRef.current.text || '').trim();
+
+            if (selectedText) {
+                const activeId = activeBlockIdRef.current;
+                const activeBlock = blocksRef.current.find(
+                    (block) => block.id === activeId && block.type !== 'image',
+                );
+                if (activeBlock) {
+                    const { html, replaced } = replaceFirstPlainTextWithLink(
+                        activeBlock.content ?? '',
+                        selectedText,
+                        text,
+                        href,
+                    );
+                    if (replaced) {
+                        updateBlockContent(activeBlock.id, html);
+                        notifyInserted();
+
+                        return;
+                    }
+                }
+            }
+
+            if (insertLinkInEditor(editor, text, href)) {
+                commitActiveBlock();
+                notifyInserted();
 
                 return;
             }
@@ -2250,7 +2868,155 @@ export default function SeoArticleEditor({
                 }),
             );
         },
-        [commitActiveBlock, updateBlockContent, requestAnalyze],
+        [commitActiveBlock, updateBlockContent, requestAnalyze, resolveActiveEditor],
+    );
+
+    const insertCtaLinkIntoContent = useCallback(
+        (detail) => {
+            const text = String(detail?.text ?? '').trim();
+            const href = String(detail?.href ?? '').trim();
+            const type = String(detail?.type ?? '').toLowerCase();
+            const plainText = isCtaPlainTextType(type);
+
+            if (!text || (!href && !plainText)) {
+                return;
+            }
+
+            setActiveTab('editor');
+
+            const editor = resolveActiveEditor();
+            if (insertCtaInEditor(editor, text, href, type)) {
+                commitActiveBlock();
+                requestAnalyze();
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_cta_link_inserted'),
+                            body: `«${text}»`,
+                            status: 'success',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            const selectedText = intraSelectionRef.current.text;
+            const activeId = activeBlockIdRef.current;
+            if (selectedText) {
+                const activeBlock = blocksRef.current.find(
+                    (block) => block.id === activeId && block.type !== 'image',
+                );
+                if (activeBlock) {
+                    const replaceResult = plainText
+                        ? replaceFirstPlainTextWithText(activeBlock.content ?? '', selectedText, text)
+                        : replaceFirstPlainTextWithLink(
+                              activeBlock.content ?? '',
+                              selectedText,
+                              text,
+                              href,
+                          );
+                    if (replaceResult.replaced) {
+                        updateBlockContent(activeBlock.id, replaceResult.html);
+                        requestAnalyze();
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: t('editor_cta_link_inserted'),
+                                    body: `«${text}»`,
+                                    status: 'success',
+                                },
+                            }),
+                        );
+
+                        return;
+                    }
+                }
+            }
+
+            commitActiveBlock();
+
+            const currentBlocks = blocksRef.current;
+            const hasActiveEditor = Boolean(activeId && blockEditorsRef.current.has(activeId));
+
+            if (hasActiveEditor) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_cta_insert_failed'),
+                            body: t('editor_cta_insert_failed_body'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            if (!plainText) {
+                for (const block of currentBlocks) {
+                    if (block.type === 'image' || !block.content) {
+                        continue;
+                    }
+
+                    const { html, replaced } = wrapFirstPlainTextWithLink(block.content, text, href);
+                    if (!replaced) {
+                        continue;
+                    }
+
+                    updateBlockContent(block.id, html);
+                    requestAnalyze();
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: t('editor_cta_link_inserted'),
+                                body: `«${text}»`,
+                                status: 'success',
+                            },
+                        }),
+                    );
+
+                    return;
+                }
+            }
+
+            const targetBlock =
+                currentBlocks.find((block) => block.id === activeId && block.type !== 'image') ??
+                currentBlocks.find((block) => block.type !== 'image' && block.content);
+
+            if (!targetBlock) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_cta_insert_failed'),
+                            body: t('editor_cta_insert_failed_body'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+                return;
+            }
+
+            const safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const insertion = plainText
+                ? safeText
+                : `<a href="${href.replace(/"/g, '&quot;')}" class="${SEO_EDITOR_LINK_CLASS}">${safeText}</a>`;
+            const base = String(targetBlock.content ?? '').trim();
+            const nextHtml = base !== '' ? `${base} ${insertion}` : `<p>${insertion}</p>`;
+
+            updateBlockContent(targetBlock.id, nextHtml);
+            requestAnalyze();
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_cta_link_inserted'),
+                        body: `«${text}»`,
+                        status: 'success',
+                    },
+                }),
+            );
+        },
+        [commitActiveBlock, updateBlockContent, requestAnalyze, resolveActiveEditor],
     );
 
     useEffect(() => {
@@ -2266,20 +3032,26 @@ export default function SeoArticleEditor({
             insertSuggestedLinkIntoContent(event.detail ?? {});
         };
 
+        const onInsertCtaLink = (event) => {
+            insertCtaLinkIntoContent(event.detail ?? {});
+        };
+
         const onScrollToFeaturedSnippetTable = () => {
             scrollToFeaturedSnippetTable();
         };
 
         window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
         window.addEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
+        window.addEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
         window.addEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
 
         return () => {
             window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
             window.removeEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
+            window.removeEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
             window.removeEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
         };
-    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, scrollToFeaturedSnippetTable]);
+    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, scrollToFeaturedSnippetTable]);
 
     const deleteBlock = useCallback(
         (id) => {
@@ -2477,6 +3249,63 @@ export default function SeoArticleEditor({
         return true;
     }, [patchImageInBlocks, updateBlocksWithoutHistory]);
 
+    const applyCompletedMediaToProductGallery = useCallback((mediaId, finalUrl, galleryItems = null) => {
+        const items = Array.isArray(galleryItems) && galleryItems.length > 0
+            ? galleryItems
+            : [{ id: mediaId, url: finalUrl }];
+
+        if (typeof Livewire === 'undefined') {
+            return false;
+        }
+
+        let appended = false;
+        for (const item of items) {
+            const url = String(item?.url ?? '').trim();
+            const id = Number(item?.id ?? mediaId);
+            if (!url || id <= 0) {
+                continue;
+            }
+
+            Livewire.dispatch('append-editor-image-to-product-gallery', {
+                url,
+                seoMediaId: id,
+                wpAttachmentId: 0,
+                slug: '',
+                alt: String(window.__SEO_MAIN_KEYWORD__ ?? '').trim(),
+            });
+            appended = true;
+        }
+
+        if (!appended) {
+            return false;
+        }
+
+        pendingAiMediaRef.current.delete(mediaId);
+        window.dispatchEvent(new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }));
+
+        const galleryUrls = items
+            .map((item) => ({
+                id: Number(item?.id ?? mediaId) || mediaId,
+                url: String(item?.url ?? '').trim(),
+            }))
+            .filter((item) => item.url !== '');
+
+        window.dispatchEvent(
+            new CustomEvent('article-ai-image-generated', {
+                detail: {
+                    target: 'product-gallery',
+                    status: 'completed',
+                    url: String(galleryUrls[0]?.url ?? finalUrl ?? '').trim(),
+                    seoMediaId: mediaId,
+                    gallery_urls: galleryUrls,
+                    galleryUrls,
+                },
+            }),
+        );
+
+        return true;
+    }, []);
+
     const clearMediaPolling = useCallback((mediaId) => {
         const timer = mediaPollTimersRef.current.get(mediaId);
         if (timer) {
@@ -2505,6 +3334,16 @@ export default function SeoArticleEditor({
                 const url = String(payload?.url ?? '').trim();
 
                 if (status === 'completed' && url) {
+                    const pending = pendingAiMediaRef.current.get(mediaId);
+                    if (pending?.target === 'product-gallery' && mediaType === 'image') {
+                        const galleryItems = Array.isArray(payload?.gallery_urls) && payload.gallery_urls.length > 0
+                            ? payload.gallery_urls
+                            : null;
+                        applyCompletedMediaToProductGallery(mediaId, url, galleryItems);
+                        clearMediaPolling(mediaId);
+                        return;
+                    }
+
                     applyCompletedMediaToPlaceholder(mediaId, mediaType, url);
                     clearMediaPolling(mediaId);
                     return;
@@ -2546,7 +3385,7 @@ export default function SeoArticleEditor({
 
         const initialTimer = window.setTimeout(poll, AI_JOBS_INITIAL_POLL_MS);
         mediaPollTimersRef.current.set(mediaId, initialTimer);
-    }, [applyCompletedMediaToPlaceholder, clearMediaPolling]);
+    }, [applyCompletedMediaToPlaceholder, applyCompletedMediaToProductGallery, clearMediaPolling]);
 
     useEffect(() => {
         for (const block of blocks) {
@@ -2792,7 +3631,7 @@ export default function SeoArticleEditor({
         };
 
         const applyEditorHtml = (event) => {
-            const html = (event.detail?.editorHtml ?? '').trim();
+            const html = stripLeadingH1FromHtml(event.detail?.editorHtml ?? '');
             if (!html) {
                 return;
             }
@@ -2802,7 +3641,7 @@ export default function SeoArticleEditor({
             blockFlushRef.current = null;
             setActiveBlockId(null);
             setGlobalEditor(null);
-            setBlocks(enrichBlocksWithPostImages(parseHtmlToBlocks(html), initialPostImages));
+            setBlocks(enrichBlocksWithPostImages(parseHtmlToBlocks(html), postImagesRef.current));
             saveDraft(articleId, { blocks: parseHtmlToBlocks(html), html });
             setSaveStatus('saved');
         };
@@ -2831,6 +3670,26 @@ export default function SeoArticleEditor({
         window.addEventListener('collect-editor-html', onCollectEditorHtml);
         window.addEventListener('extract-article-faqs', enrichExtractFaq);
         window.addEventListener('article-faqs-extracted', applyEditorHtml);
+
+        const onPostImagesSynced = (event) => {
+            const images = event.detail?.images;
+            if (!Array.isArray(images)) {
+                return;
+            }
+            setPostImages(images);
+            postImagesRef.current = images;
+        };
+
+        const onSupplementalImagesSynced = (event) => {
+            const images = event.detail?.images;
+            if (!Array.isArray(images)) {
+                return;
+            }
+            setSupplementalImages(images);
+        };
+
+        window.addEventListener('article-post-images-synced', onPostImagesSynced);
+        window.addEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
 
         const syncPanelFaqs = (event) => {
             const fromExtract = event.detail?.faqs;
@@ -2867,9 +3726,13 @@ export default function SeoArticleEditor({
                 const suggested = Array.isArray(result.suggested_internal_links)
                     ? result.suggested_internal_links
                     : [];
+                const filteredSuggested = filterSuggestedInternalLinks(
+                    suggested,
+                    result.extracted_links.internal ?? [],
+                );
                 setExtractedLinks(result.extracted_links);
-                setSuggestedInternalLinks(suggested);
-                publishExtractedLinks(result.extracted_links, suggested);
+                setSuggestedInternalLinks(filteredSuggested);
+                publishExtractedLinks(result.extracted_links, filteredSuggested);
             }
         };
 
@@ -2911,7 +3774,15 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
         };
 
+        const handleFocusKeywordUpdated = (e) => {
+            const keyword = e.detail?.focus_keyword ?? null;
+            setFocusKeyword(keyword);
+            setAnalyzing(true);
+            requestAnalyze();
+        };
+
         window.addEventListener('seo-editor-analyze-result', handleAnalyzeResult);
+        window.addEventListener('seo-focus-keyword-updated', handleFocusKeywordUpdated);
         document.addEventListener('mousedown', handleClickOutside);
 
         const onImageGenerateRequest = (event) => {
@@ -2938,11 +3809,12 @@ export default function SeoArticleEditor({
 
         const onEditorBlockImageSelected = (event) => {
             const blockId = event.detail?.blockId;
-            const url = (event.detail?.url ?? '').trim();
+            const rawUrl = (event.detail?.url ?? '').trim();
             const attachmentId = Number(event.detail?.attachmentId ?? 0);
-            if (!blockId || !url) return;
+            if (!blockId || !rawUrl) return;
 
-            const slug = (event.detail?.slug ?? '').trim();
+            const url = resolveFullWordPressImageUrl(rawUrl);
+            const slug = (event.detail?.slug ?? '').trim() || slugFromUrl(url);
             const kw = String(window.__SEO_MAIN_KEYWORD__ ?? '').trim();
             const alt = kw || (event.detail?.alt ?? '').trim();
             const seoMediaId = Number(event.detail?.seoMediaId ?? event.detail?.id ?? 0);
@@ -2953,6 +3825,7 @@ export default function SeoArticleEditor({
                 wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
                 seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
                 slug: slug || undefined,
+                wpSrc: url,
             };
             const html = renderImageFigure(image);
             updateBlockContent(blockId, html, image);
@@ -2965,8 +3838,32 @@ export default function SeoArticleEditor({
             const url = (event.detail?.url ?? '').trim();
             const status = String(event.detail?.status ?? '').toLowerCase();
             const mediaId = Number(event.detail?.seoMediaId ?? 0);
+            const target = String(event.detail?.target ?? generateImageTargetRef.current ?? 'editor').trim() || 'editor';
+            if (!url && status !== 'processing') {
+                return;
+            }
 
-            if (!url) {
+            if (target === 'product-gallery') {
+                if (status === 'processing' && mediaId > 0) {
+                    pendingAiMediaRef.current.set(mediaId, {
+                        target: 'product-gallery',
+                        mediaType: 'image',
+                    });
+                    startMediaStatusPolling(mediaId, 'image');
+                    generateImageTargetRef.current = 'editor';
+                    return;
+                }
+
+                if (status === 'completed' && mediaId > 0) {
+                    const galleryItems = Array.isArray(event.detail?.gallery_urls) && event.detail.gallery_urls.length > 0
+                        ? event.detail.gallery_urls
+                        : (Array.isArray(event.detail?.galleryUrls) && event.detail.galleryUrls.length > 0
+                            ? event.detail.galleryUrls
+                            : null);
+                    applyCompletedMediaToProductGallery(mediaId, url, galleryItems);
+                    generateImageTargetRef.current = 'editor';
+                }
+
                 return;
             }
 
@@ -3107,9 +4004,12 @@ export default function SeoArticleEditor({
             window.removeEventListener('collect-editor-html', onCollectEditorHtml);
             window.removeEventListener('extract-article-faqs', enrichExtractFaq);
             window.removeEventListener('article-faqs-extracted', applyEditorHtml);
+            window.removeEventListener('article-post-images-synced', onPostImagesSynced);
+            window.removeEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
             window.removeEventListener('article-faqs-extracted', syncPanelFaqs);
             window.removeEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
             window.removeEventListener('seo-editor-analyze-result', handleAnalyzeResult);
+            window.removeEventListener('seo-focus-keyword-updated', handleFocusKeywordUpdated);
             document.removeEventListener('mousedown', handleClickOutside);
             for (const timer of mediaPollTimersRef.current.values()) {
                 window.clearTimeout(timer);
@@ -3121,6 +4021,7 @@ export default function SeoArticleEditor({
         activeBlockId,
         globalEditor,
         applyCompletedMediaToPlaceholder,
+        applyCompletedMediaToProductGallery,
         placeProcessingImagePlaceholder,
         resolveAiRefBlockId,
         updateBlockContent,
@@ -3407,7 +4308,7 @@ export default function SeoArticleEditor({
                 }
             />
             <div className="seo-editor-tabs">
-                {TABS.map((tab) => (
+                {editorTabs.map((tab) => (
                     <button
                         key={tab.id}
                         type="button"
@@ -3418,6 +4319,11 @@ export default function SeoArticleEditor({
                         {tab.id === 'images' ? (
                             <span className="seo-editor-tab-badge">
                                 {imageTabCount}
+                            </span>
+                        ) : null}
+                        {tab.id === 'reviews' ? (
+                            <span className="seo-editor-tab-badge">
+                                {virtualReviews.length}
                             </span>
                         ) : null}
                         {tab.id === 'seo' && analysis?.score != null ? (
@@ -3662,6 +4568,7 @@ export default function SeoArticleEditor({
                                                                 block={block}
                                                                 articleId={articleId}
                                                                 siteId={siteId}
+                                                                supportsProductGallery={supportsProductGallery}
                                                                 isActive={isActive}
                                                                 isHiddenInMerge={
                                                                     Boolean(
@@ -3690,6 +4597,11 @@ export default function SeoArticleEditor({
                                                                 }
                                                                 onRegisterFlush={
                                                                     isActive ? registerBlockFlush : undefined
+                                                                }
+                                                                onRegisterEditor={
+                                                                    isActive
+                                                                        ? (editor) => registerBlockEditor(block.id, editor)
+                                                                        : undefined
                                                                 }
                                                                 setGlobalEditor={setGlobalEditor}
                                                                 panelFaqs={panelFaqs}
@@ -3746,25 +4658,28 @@ export default function SeoArticleEditor({
                     onPatchImage={patchImageInBlocks}
                     onSlugChange={handleImageSlugChange}
                     onFocusBlock={focusImageBlock}
-                    onQuickFixAll={quickFixAllImages}
-                    onQuickFixOne={quickFixSingleImage}
+                    onQuickFixSlugAll={quickFixSlugAllImages}
+                    onQuickFixSlugOne={quickFixSlugSingleImage}
+                    onQuickFixAltTitleAll={quickFixAltTitleAllImages}
+                    onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
                     onNotify={(payload) => {
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', { detail: payload }),
                         );
                     }}
                 />
-            ) : activeTab === 'auto-image' ? (
-                <AutoImageGenerateTab
-                    onNotify={(payload) => {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', { detail: payload }),
-                        );
-                    }}
+            ) : activeTab === 'reviews' ? (
+                <ArticleReviewsTab
+                    initialReviews={virtualReviews}
+                    onRefresh={() => callEditArticleLivewire('refreshVirtualReviewsForEditor')}
                 />
             ) : activeTab === 'outline' ? (
                 <div className="seo-tab-panel seo-outline-tab">
-                    <OutlineMarkdownPanel articleId={articleId} initialOutline={initialOutline} />
+                    <OutlineMarkdownPanel
+                        articleId={articleId}
+                        initialOutline={initialOutline}
+                        onRewriteOutline={requestOutlineRewrite}
+                    />
                 </div>
             ) : (
                 <div className="seo-tab-panel">
@@ -3777,6 +4692,16 @@ export default function SeoArticleEditor({
                     />
                 </div>
             )}
+            <GenerateImageModal
+                open={generateImageModalOpen}
+                onClose={() => setGenerateImageModalOpen(false)}
+                onSubmit={submitGenerateImageFromModal}
+                initialPrompt={generateImageModalPrompt}
+                mode={generateImageModalTarget === 'product-gallery' ? 'product-gallery' : 'editor'}
+                productCategoryOptions={productCategoryOptions}
+                articleId={articleId}
+                productGalleryUrls={productGalleryUrls}
+            />
         </div>
     );
 }

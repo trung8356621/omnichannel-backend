@@ -200,7 +200,7 @@ final class WordPressLocalMediaSyncService
             })
             ->where(function ($query): void {
                 $query->whereNull('wp_synced_at')
-                    ->orWhereColumn('updated_at', '>', 'wp_synced_at');
+                    ->orWhereColumnAfterMeta('updated_at', '>', 'wp_synced_at');
             })
             ->orderBy('id')
             ->get();
@@ -247,6 +247,9 @@ final class WordPressLocalMediaSyncService
             ];
         }
 
+        $media = $this->hydrateMediaUsageForArticle($media, $article);
+        $mediaId = (int) $media->id;
+
         $existingAttachmentId = (int) ($media->wp_attachment_id ?? 0);
         $existingWpUrl = '';
         if ($existingAttachmentId > 0) {
@@ -283,6 +286,15 @@ final class WordPressLocalMediaSyncService
         }
 
         $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+        if ($path === '' || ! Storage::disk('public')->exists($path)) {
+            $fallback = $this->cloneRemoteMediaToArticleSite($media, $article);
+            if ($fallback instanceof SeoMedia) {
+                $media = $fallback;
+                $mediaId = (int) $media->id;
+                $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+            }
+        }
+
         if ($path === '' || ! Storage::disk('public')->exists($path)) {
             return $this->cache[$mediaId] = [
                 'success' => false,
@@ -469,6 +481,57 @@ final class WordPressLocalMediaSyncService
             'seo_media_id' => (int) $media->id,
             'message' => '',
         ];
+    }
+
+    private function hydrateMediaUsageForArticle(SeoMedia $media, SeoArticle $article): SeoMedia
+    {
+        $payload = [];
+        $siteId = (int) ($article->site_id ?? 0);
+        if ($siteId > 0 && (int) ($media->site_id ?? 0) <= 0) {
+            $payload['site_id'] = $siteId;
+        }
+
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId > 0) {
+            $ids = SeoMedia::normalizeArticleIds($media->article_id);
+            if (! in_array($articleId, $ids, true)) {
+                $ids[] = $articleId;
+                $payload['article_id'] = $ids;
+            }
+        }
+
+        if ($payload === []) {
+            return $media;
+        }
+
+        $media->update($payload);
+
+        return $media->fresh() ?? $media;
+    }
+
+    private function cloneRemoteMediaToArticleSite(SeoMedia $media, SeoArticle $article): ?SeoMedia
+    {
+        $remoteUrl = trim((string) ($media->url ?? ''));
+        if ($remoteUrl === '' || ! filter_var($remoteUrl, FILTER_VALIDATE_URL)) {
+            return null;
+        }
+
+        try {
+            return app(SeoMediaStorageService::class)->storeFromRemoteUrl(
+                $remoteUrl,
+                (int) ($article->site_id ?? 0) > 0 ? (int) $article->site_id : null,
+                (int) ($article->id ?? 0) > 0 ? (int) $article->id : null,
+            );
+        } catch (Throwable $exception) {
+            Log::warning('WordPress sync fallback remote clone failed', [
+                'article_id' => (int) ($article->id ?? 0),
+                'seo_media_id' => (int) ($media->id ?? 0),
+                'url' => $remoteUrl,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
     }
 
     /**

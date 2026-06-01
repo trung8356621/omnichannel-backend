@@ -495,26 +495,32 @@ class SeoAnalyzerService
 
     private function resolveFocusKeyword(SeoArticle $article): ?string
     {
-        $article->loadMissing('keywords');
+        $article->loadMissing(['keywords', 'articleMetas']);
 
-        $main = $article->keywords->first(function ($keyword): bool {
-            return ((int) ($keyword->pivot->is_main ?? 0) === 1) || ((int) ($keyword->is_main ?? 0) === 1);
-        });
+        $metaKeyword = $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword');
+        if ($metaKeyword && is_string($metaKeyword->meta_value) && trim($metaKeyword->meta_value) !== '') {
+            $fromMeta = $this->normalizeFocusKeyword($metaKeyword->meta_value);
 
-        $keywordModel = $main ?? $article->keywords->first();
-
-        if (! $keywordModel) {
-            $article->loadMissing('articleMetas');
-            $metaKeyword = $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword');
-            if ($metaKeyword && is_string($metaKeyword->meta_value) && trim($metaKeyword->meta_value) !== '') {
-                return $this->normalizeFocusKeyword($metaKeyword->meta_value) ?: null;
+            if ($fromMeta !== '') {
+                return $fromMeta;
             }
+        }
 
+        $main = $article->keywords
+            ->filter(function ($keyword): bool {
+                return ((int) ($keyword->pivot->is_main ?? 0) === 1) || ((int) ($keyword->is_main ?? 0) === 1);
+            })
+            ->sortBy(function ($keyword): int {
+                return (string) ($keyword->type ?? '') === Keyword::TYPE_FOCUS ? 0 : 1;
+            })
+            ->first();
+
+        if (! $main) {
             return null;
         }
 
         $keyword = $this->normalizeFocusKeyword(
-            (string) ($keywordModel->phrase ?? $keywordModel->keyword ?? $keywordModel->name ?? '')
+            (string) ($main->phrase ?? $main->keyword ?? $main->name ?? '')
         );
 
         return $keyword !== '' ? $keyword : null;

@@ -31,9 +31,31 @@ final class SeoFaqPersistenceService
             SeoFaq::insert($chunk);
         }
 
+        $this->persistFaqsMetaSnapshot($article, $faqs);
         $this->removeLegacyMeta($article);
 
         return count($rows);
+    }
+
+    /**
+     * @param  list<array{question?: string, answer?: string, more?: string|null}>  $faqs
+     */
+    private function persistFaqsMetaSnapshot(SeoArticle $article, array $faqs): void
+    {
+        if ($faqs === []) {
+            return;
+        }
+
+        $payload = array_map(static fn (array $faq): array => [
+            'question' => (string) ($faq['question'] ?? ''),
+            'answer' => (string) ($faq['answer'] ?? ''),
+            'more' => (string) ($faq['more'] ?? ''),
+        ], $faqs);
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_faqs'],
+            ['meta_value' => json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR)],
+        );
     }
 
     /**

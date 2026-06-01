@@ -8,13 +8,13 @@ use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\MarkdownOutlineParser;
 use App\Addons\SeoContentAi\Support\MarkdownSemanticKeywordsParser;
-use App\Addons\SeoContentAi\Support\SimpleMarkdownHtmlConverter;
+
 final class PromptTestPublishService
 {
     public function __construct(
         private readonly MarkdownOutlineParser $outlineParser,
         private readonly MarkdownSemanticKeywordsParser $keywordsParser,
-        private readonly SimpleMarkdownHtmlConverter $markdownHtml,
+        private readonly ArticleMarkdownToHtmlService $markdownHtml,
     ) {}
 
     /**
@@ -51,14 +51,24 @@ final class PromptTestPublishService
         $this->persistOutlineAndKeywords($article, $markdown);
         $this->syncFocusKeyword($article, $variables, $markdown);
 
-        $faqs = app(WorkflowParserService::class)->parseFaqs($markdown);
-        if ($faqs !== []) {
-            app(SeoFaqPersistenceService::class)->persistForArticle($article, $faqs);
-            $markdown = app(WorkflowParserService::class)->removeFaqAndAppendShortcode($markdown);
+        $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
+        if ($import['faqs'] !== []) {
+            app(SeoFaqPersistenceService::class)->persistForArticle($article, $import['faqs']);
         }
 
-        $title = $this->resolveTitle($variables, $markdown, $article);
-        $html = $this->markdownHtml->toHtml($markdown);
+        $h1Title = trim((string) ($import['h1_title'] ?? ''));
+        $title = $h1Title !== ''
+            ? $h1Title
+            : $this->resolveTitle($variables, $markdown, $article);
+        $html = $import['html'];
+        $this->persistMetaDescription($article, $import['meta_description']);
+        if ($h1Title !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_title'],
+                ['meta_value' => $h1Title],
+            );
+        }
+        $faqs = $import['faqs'];
 
         $article->update([
             'title' => $title,
@@ -80,6 +90,21 @@ final class PromptTestPublishService
                 $title,
             ),
         ];
+    }
+
+    private function persistMetaDescription(SeoArticle $article, ?string $metaDescription): void
+    {
+        $metaDescription = trim((string) $metaDescription);
+        if ($metaDescription === '') {
+            return;
+        }
+
+        foreach (['seo_meta_description', 'meta_description'] as $key) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $key],
+                ['meta_value' => $metaDescription],
+            );
+        }
     }
 
     private function persistOutlineAndKeywords(SeoArticle $article, string $markdown): void

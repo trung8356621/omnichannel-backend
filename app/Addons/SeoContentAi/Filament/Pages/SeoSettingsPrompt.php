@@ -33,10 +33,15 @@ class SeoSettingsPrompt extends Page implements HasForms
         $raw = $settings->getSettings();
 
         $this->promptSettingsData = [
+            SeoPromptSettingsService::KEY_TONE_TEXT => $raw[SeoPromptSettingsService::KEY_TONE_TEXT],
             SeoPromptSettingsService::KEY_TONE_OF_VOICE => array_map(
                 static fn (string $tone): array => ['label' => $tone],
                 $raw[SeoPromptSettingsService::KEY_TONE_OF_VOICE],
             ),
+            SeoPromptSettingsService::KEY_ARTICLE_LENGTH_PRODUCT => $raw[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_PRODUCT],
+            SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT => $raw[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT],
+            SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT => $raw[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT],
+            SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT => $raw[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS],
@@ -52,6 +57,12 @@ class SeoSettingsPrompt extends Page implements HasForms
                 Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.tone_section'))
                     ->description(__('seo-content-ai::filament.settings_prompt.tone_section_description'))
                     ->schema([
+                        Forms\Components\Textarea::make(SeoPromptSettingsService::KEY_TONE_TEXT)
+                            ->label(__('seo-content-ai::filament.settings_prompt.tone_text'))
+                            ->helperText(__('seo-content-ai::filament.settings_prompt.tone_text_hint'))
+                            ->rows(4)
+                            ->maxLength(4000)
+                            ->columnSpanFull(),
                         Forms\Components\Repeater::make(SeoPromptSettingsService::KEY_TONE_OF_VOICE)
                             ->label('')
                             ->schema([
@@ -68,6 +79,39 @@ class SeoSettingsPrompt extends Page implements HasForms
                             ->itemLabel(fn (array $state): ?string => filled($state['label'] ?? null)
                                 ? (string) $state['label']
                                 : __('seo-content-ai::filament.settings_prompt.new_tone')),
+                    ]),
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.content_rules_section'))
+                    ->description(__('seo-content-ai::filament.settings_prompt.content_rules_description'))
+                    ->schema([
+                        Forms\Components\Fieldset::make(__('seo-content-ai::filament.settings_prompt.article_length_fieldset'))
+                            ->schema([
+                                Forms\Components\TextInput::make(SeoPromptSettingsService::KEY_ARTICLE_LENGTH_PRODUCT)
+                                    ->label(__('seo-content-ai::filament.settings_prompt.article_length_product'))
+                                    ->helperText('{{article_length_product}} · runtime: {{article_length}} (post_type = product)')
+                                    ->required()
+                                    ->maxLength(64),
+                                Forms\Components\TextInput::make(SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT)
+                                    ->label(__('seo-content-ai::filament.settings_prompt.article_length_default'))
+                                    ->helperText('{{article_length_default}} · runtime: {{article_length}} (các loại khác)')
+                                    ->required()
+                                    ->maxLength(64),
+                            ])
+                            ->columns(2),
+                        Forms\Components\Fieldset::make(__('seo-content-ai::filament.settings_prompt.keyword_density_fieldset'))
+                            ->schema([
+                                Forms\Components\Textarea::make(SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT)
+                                    ->label(__('seo-content-ai::filament.settings_prompt.keyword_density_product'))
+                                    ->helperText('{{keyword_density_product}} · runtime: {{keyword_density}} (post_type = product)')
+                                    ->rows(3)
+                                    ->maxLength(2000)
+                                    ->columnSpanFull(),
+                                Forms\Components\Textarea::make(SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT)
+                                    ->label(__('seo-content-ai::filament.settings_prompt.keyword_density_default'))
+                                    ->helperText('{{keyword_density_default}} · runtime: {{keyword_density}} (các loại khác)')
+                                    ->rows(3)
+                                    ->maxLength(2000)
+                                    ->columnSpanFull(),
+                            ]),
                     ]),
                 Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.featured_snippet'))
                     ->description(__('seo-content-ai::filament.settings_prompt.featured_snippet_description'))
@@ -104,7 +148,12 @@ class SeoSettingsPrompt extends Page implements HasForms
         $data = $this->form->getState();
 
         $settings->saveSettings([
+            SeoPromptSettingsService::KEY_TONE_TEXT => $data[SeoPromptSettingsService::KEY_TONE_TEXT] ?? '',
             SeoPromptSettingsService::KEY_TONE_OF_VOICE => $data[SeoPromptSettingsService::KEY_TONE_OF_VOICE] ?? [],
+            SeoPromptSettingsService::KEY_ARTICLE_LENGTH_PRODUCT => $data[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_PRODUCT] ?? '',
+            SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT => $data[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT] ?? '',
+            SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT => $data[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT] ?? '',
+            SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT => $data[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT] ?? '',
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? 10,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS] ?? 2,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS] ?? 5,

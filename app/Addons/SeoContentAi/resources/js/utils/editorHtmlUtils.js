@@ -1,6 +1,7 @@
 import { stripEditorTransientMarkup } from './articleEditorTransientMarkup';
 
 const HEADING_TAG_RE = /^h([1-6])$/i;
+const BLOCK_WRAPPER_TAGS = new Set(['p', 'div']);
 
 export const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
 
@@ -32,9 +33,52 @@ export function standaloneHeadingLevel(html) {
     return match ? Number(match[1]) : null;
 }
 
+function standaloneBodyNodes(html) {
+    const doc = new DOMParser().parseFromString((html || '').trim(), 'text/html');
+
+    return Array.from(doc.body.childNodes).filter((node) => {
+        if (node.nodeType === 3) {
+            return Boolean(node.textContent?.trim());
+        }
+
+        return node.nodeType === 1;
+    });
+}
+
+function extractStandaloneInnerHtml(exportedHtml) {
+    const trimmed = (exportedHtml || '').trim();
+    if (!trimmed) {
+        return '';
+    }
+
+    const nodes = standaloneBodyNodes(trimmed);
+    if (nodes.length === 1 && nodes[0].nodeType === 1) {
+        const element = nodes[0];
+        const tag = element.tagName.toLowerCase();
+        if (BLOCK_WRAPPER_TAGS.has(tag)) {
+            return element.innerHTML.trim();
+        }
+
+        return element.outerHTML.trim();
+    }
+
+    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+
+    return doc.body.innerHTML.trim();
+}
+
+function rebuildStandaloneHeadingHtml(originalHtml, innerHtml, level) {
+    const doc = new DOMParser().parseFromString((originalHtml || '').trim(), 'text/html');
+    const originalHeading = doc.body.querySelector('h1,h2,h3,h4,h5,h6');
+    const className = originalHeading?.getAttribute('class');
+    const classAttr = className ? ` class="${className}"` : '';
+
+    return `<h${level}${classAttr}>${innerHtml}</h${level}>`;
+}
+
 /**
  * TipTap đôi khi đổi `<h2>…</h2>` thành `<p><strong>…</strong></p>` khi block chỉ có heading.
- * Giữ HTML gốc nếu export làm mất cấp heading.
+ * Giữ cấp heading và nội dung người dùng vừa sửa thay vì revert về HTML gốc.
  */
 export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
     if (isFaqPlaceholderHtml(originalHtml)) {
@@ -51,7 +95,7 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
 
     const originalLevel = standaloneHeadingLevel(originalHtml);
     if (originalLevel === null) {
-        return exportedHtml;
+        return stripEditorTransientMarkup(exportedHtml);
     }
 
     const exportedLevel = standaloneHeadingLevel(exportedHtml);
@@ -64,7 +108,12 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
         return originalHtml;
     }
 
-    return stripEditorTransientMarkup(originalHtml);
+    const innerHtml = extractStandaloneInnerHtml(trimmedExport);
+    if (!innerHtml) {
+        return originalHtml;
+    }
+
+    return stripEditorTransientMarkup(rebuildStandaloneHeadingHtml(originalHtml, innerHtml, originalLevel));
 }
 
 /**

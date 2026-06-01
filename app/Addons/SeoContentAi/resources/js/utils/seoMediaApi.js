@@ -77,8 +77,9 @@ export async function saveSplitPiecesToLibrary({
 }) {
     const formData = new FormData();
     formData.append('site_id', String(siteId));
-    if (articleId != null && !Number.isNaN(Number(articleId))) {
-        formData.append('article_id', String(articleId));
+    const resolvedArticleId = Number.parseInt(String(articleId ?? ''), 10);
+    if (Number.isFinite(resolvedArticleId) && resolvedArticleId > 0) {
+        formData.append('article_id', String(resolvedArticleId));
     }
     if (originalSeoMediaId != null && Number(originalSeoMediaId) > 0) {
         formData.append('original_seo_media_id', String(originalSeoMediaId));

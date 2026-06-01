@@ -6,6 +6,8 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
+use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
@@ -18,19 +20,35 @@ use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
+use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
+use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
+use App\Addons\SeoContentAi\Services\VirtualCommentService;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use Illuminate\Support\Facades\Cache;
+use App\Addons\SeoContentAi\Services\ArticleContentFaqService;
+use App\Addons\SeoContentAi\Services\ArticleMarkdownToHtmlService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
+use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
+use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
+use App\Addons\SeoContentAi\Support\WordPressImageUrl;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use Filament\Actions;
+use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Filament\Support\Enums\MaxWidth;
@@ -47,6 +65,12 @@ class EditArticle extends EditRecord
     public string $articleTitle = '';
 
     public string $articleSlug = '';
+
+    public string $seoTitle = '';
+
+    public string $seoMetaDescription = '';
+
+    public string $focusKeyword = '';
 
     public string $articleStatus = 'draft';
 
@@ -101,6 +125,8 @@ class EditArticle extends EditRecord
     /** @var 'save'|'sync'|null Thu thập HTML sau khi flush FAQ (Lưu / Đồng bộ WP). */
     public ?string $pendingEditorCollectTarget = null;
 
+    public bool $quickReviewsJobPending = false;
+
     public string $editorHtml = '';
 
     public function mount(int|string $record): void
@@ -117,6 +143,18 @@ class EditArticle extends EditRecord
         if ($this->articleSlug !== $normalized) {
             $this->articleSlug = $normalized;
         }
+    }
+
+    public function updatedFocusKeyword(): void
+    {
+        $this->persistFocusKeyword();
+        $this->record->refresh();
+
+        $keyword = trim($this->focusKeyword);
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-focus-keyword-updated", { detail: { focus_keyword: %s } }))',
+            json_encode($keyword !== '' ? $keyword : null, JSON_THROW_ON_ERROR),
+        ));
     }
 
     /**
@@ -142,15 +180,19 @@ class EditArticle extends EditRecord
 
     private function importFaqsFromWordPressOnLoad(): void
     {
-        if ((int) ($this->record->wp_post_id ?? 0) > 0) {
-            $this->record->loadCount('faqs');
-            $needsWpPull = $this->record->faqs_count === 0
-                || ! $this->articleHasStoredWordPressFaqs($this->record);
-            if ($needsWpPull) {
-                app(WordPressArticleContentService::class)->fetchFromWordPress($this->record);
+        $this->record->loadCount('faqs');
+        $hasLocalFaqs = $this->record->faqs_count > 0;
+
+        if ((int) ($this->record->wp_post_id ?? 0) > 0 && ! $hasLocalFaqs) {
+            if (! $this->articleHasStoredWordPressFaqs($this->record)) {
+                app(WordPressArticleContentService::class)->fetchFromWordPress($this->record, importFaqs: false);
                 $this->record->refresh();
                 $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
             }
+        }
+
+        if ($hasLocalFaqs) {
+            return;
         }
 
         $result = app(ArticleFaqWordPressImportService::class)
@@ -196,6 +238,35 @@ class EditArticle extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('assign_to_content_project')
+                ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                ->icon('heroicon-o-folder-plus')
+                ->color('warning')
+                ->form([
+                    Forms\Components\Select::make('project_id')
+                        ->label(__('seo-content-ai::filament.article_list.content_project'))
+                        ->options(fn (): array => ArticleResource::contentProjectOptions())
+                        ->required()
+                        ->searchable()
+                        ->preload()
+                        ->native(false),
+                ])
+                ->requiresConfirmation()
+                ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
+                ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                ->action(function (array $data): void {
+                    $summary = ArticleResource::assignArticlesToContentProject(
+                        collect([$this->record]),
+                        (int) ($data['project_id'] ?? 0),
+                    );
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.article_list.assign_completed'))
+                        ->body(ArticleResource::buildAssignContentProjectBody($summary))
+                        ->success()
+                        ->send();
+                }),
             Actions\Action::make('restoreFromWordPress')
                 ->label('Restore from WordPress')
                 ->icon('heroicon-o-arrow-path')
@@ -208,6 +279,23 @@ class EditArticle extends EditRecord
                 ->modalDescription('Replace editor content and clear FAQ panel with original WordPress content. Unsaved or unsynced SEO edits will be overwritten.')
                 ->modalSubmitActionLabel('Restore')
                 ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
+            Actions\Action::make('debugImportMarkdown')
+                ->label('Debug import Markdown')
+                ->icon('heroicon-o-bug-ant')
+                ->color('gray')
+                ->visible(fn (): bool => SeoAccessControl::canAccessManagerFeatures())
+                ->form([
+                    Forms\Components\Textarea::make('markdown')
+                        ->label('Nội dung markdown')
+                        ->rows(14)
+                        ->required(),
+                ])
+                ->modalHeading('Debug: import nội dung markdown')
+                ->modalDescription('Dùng để test nội dung AI trả về ở dạng markdown và convert sang HTML editor.')
+                ->modalSubmitActionLabel('Import')
+                ->action(function (array $data): void {
+                    $this->importMarkdownDebug((string) ($data['markdown'] ?? ''));
+                }),
             Actions\DeleteAction::make()
                 ->icon('heroicon-o-trash')
                 ->iconButton()
@@ -280,6 +368,7 @@ class EditArticle extends EditRecord
             $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
         }
         $this->editorHtml = $service->resolveEditorHtml($this->record);
+        $this->hydrateSeoMetaState();
         $this->syncPublishDatePartsFromRecord();
     }
 
@@ -312,6 +401,90 @@ class EditArticle extends EditRecord
     public function openEditorBlockMediaPicker(string $blockId): void
     {
         $this->prepareMediaPicker('editor-block', $blockId);
+    }
+
+    #[On('append-editor-image-to-product-gallery')]
+    public function appendEditorImageToProductGallery(
+        string $url = '',
+        int $wpAttachmentId = 0,
+        int $seoMediaId = 0,
+        string $slug = '',
+        string $alt = '',
+    ): void {
+        if (! $this->supportsProductGallery()) {
+            Notification::make()
+                ->title('Không áp dụng album sản phẩm')
+                ->body('Chỉ bài sản phẩm WooCommerce mới có album hình ảnh.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $url = trim($url);
+        if ($url === '') {
+            Notification::make()
+                ->title('Thiếu URL ảnh')
+                ->body('Không thể thêm ảnh vào album vì thiếu đường dẫn.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $wpAttachmentId = max(0, $wpAttachmentId);
+        $seoMediaId = max(0, $seoMediaId);
+        $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+
+        if ($localRefId <= 0) {
+            $localRefId = app(ArticleMediaLocalService::class)
+                ->resolveLocalRefIdFromImageUrl((int) ($this->record->site_id ?? 0), $url);
+        }
+
+        if ($localRefId <= 0) {
+            Notification::make()
+                ->title('Không thể thêm vào album')
+                ->body('Ảnh chưa có ID thư viện (WP hoặc Laravel). Hãy chọn ảnh từ thư viện hoặc đồng bộ WordPress trước.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $beforeCount = count($this->productGallery);
+        $this->productGallery = app(ArticleMediaLocalService::class)
+            ->appendProductAlbumLocal($this->record, $localRefId, $url);
+        $afterCount = count($this->productGallery);
+
+        if ($afterCount <= $beforeCount) {
+            Notification::make()
+                ->title('Ảnh đã có trong album')
+                ->info()
+                ->send();
+
+            return;
+        }
+
+        $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+        $this->record->refresh();
+
+        $this->syncProductGalleryToEditor();
+
+        $this->dispatch(
+            'article-media-selected',
+            mode: 'gallery',
+            url: $url,
+            wpAttachmentId: $wpAttachmentId > 0 ? $wpAttachmentId : null,
+            seoMediaId: $seoMediaId > 0 ? $seoMediaId : null,
+            slug: trim($slug),
+            alt: trim($alt),
+        );
+
+        Notification::make()
+            ->title('Đã thêm vào album sản phẩm')
+            ->body('Ảnh đã được append vào Album hình ảnh sản phẩm (lưu cục bộ).')
+            ->success()
+            ->send();
     }
 
     /**
@@ -563,9 +736,14 @@ class EditArticle extends EditRecord
         string $slug = '',
         int $seoMediaId = 0,
     ): void {
-        $url = trim($url);
+        $url = WordPressImageUrl::toFullSize(trim($url));
         if ($url === '') {
             return;
+        }
+
+        $slug = trim($slug);
+        if ($slug === '' || WordPressImageUrl::isScaledVariant($url)) {
+            $slug = WordPressImageUrl::slugFromUrl($url);
         }
 
         $seoMediaId = max(0, $seoMediaId);
@@ -612,29 +790,18 @@ class EditArticle extends EditRecord
             return;
         }
 
-        $localMedia = app(ArticleMediaLocalService::class);
-
         if ($this->mediaPickerMode === 'gallery') {
-            if (! $this->supportsProductGallery()) {
-                Notification::make()
-                    ->title('Album not applicable')
-                    ->body('Category only supports featured image.')
-                    ->warning()
-                    ->send();
-
-                return;
-            }
-
-            $this->productGallery = $localMedia->appendProductAlbumLocal($this->record, $localRefId, $url);
-            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
-            $title = 'Added to album (saved locally)';
-        } else {
-            $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
-            $this->featuredImageUrl = trim($url);
-            $title = 'Featured image selected (saved locally)';
+            return;
         }
 
+        $localMedia = app(ArticleMediaLocalService::class);
+
+        $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
+        $this->featuredImageUrl = trim($url);
+        $title = 'Featured image selected (saved locally)';
+
         $this->record->refresh();
+        $this->syncProductGalleryToEditor();
         $this->dispatch(
             'article-media-selected',
             mode: (string) $this->mediaPickerMode,
@@ -645,19 +812,123 @@ class EditArticle extends EditRecord
             alt: trim($alt),
         );
 
-        if ($this->mediaPickerMode !== 'gallery') {
-            $this->dispatch('close-article-media-modal');
-        } else {
-            $this->loadMediaPickerImages();
-        }
+        $this->dispatch('close-article-media-modal');
 
         Notification::make()
             ->title($title)
-            ->body(
-                $this->mediaPickerMode === 'gallery'
-                    ? 'Continue selecting images or close popup when done.'
-                    : 'Click "Sync" to upload images to WordPress.'
-            )
+            ->body('Click "Sync" to upload images to WordPress.')
+            ->success()
+            ->send();
+    }
+
+    /**
+     * @param  array{items?: list<array<string, mixed>>|list<array<string, mixed>>}  $payload
+     */
+    public function confirmGallerySelectionFromPicker(array $payload): void
+    {
+        $items = is_array($payload['items'] ?? null) ? $payload['items'] : $payload;
+        $items = array_values(array_filter($items, static fn (mixed $row): bool => is_array($row)));
+        if (! $this->supportsProductGallery()) {
+            Notification::make()
+                ->title('Album not applicable')
+                ->body('Category only supports featured image.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($items === []) {
+            Notification::make()
+                ->title('Chưa chọn ảnh')
+                ->body('Hãy chọn ít nhất một ảnh trước khi thêm vào album.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $localMedia = app(ArticleMediaLocalService::class);
+        $added = 0;
+        $skipped = 0;
+
+        $album = $this->productGallery;
+        if ($album === []) {
+            $this->record->unsetRelation('articleMetas');
+            $album = $localMedia->resolveProductAlbum($this->record);
+        }
+
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
+            $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? 0));
+            $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+
+            if ($localRefId <= 0) {
+                $localRefId = $localMedia->resolveLocalRefIdFromImageUrl((int) ($this->record->site_id ?? 0), $url);
+            }
+
+            if ($localRefId <= 0) {
+                $skipped++;
+
+                continue;
+            }
+
+            $duplicate = collect($album)->contains(
+                static fn (array $row): bool => ((int) ($row['id'] ?? 0) > 0 && (int) ($row['id'] ?? 0) === $localRefId)
+                    || (string) ($row['url'] ?? '') === $url
+            );
+            if ($duplicate) {
+                $skipped++;
+
+                continue;
+            }
+
+            $album[] = [
+                'id' => $localRefId,
+                'url' => $url,
+            ];
+            $added++;
+        }
+
+        if ($added > 0) {
+            $this->productGallery = $localMedia->saveProductAlbumLocal($this->record, $album);
+        }
+
+        $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+        $this->record->refresh();
+        $this->syncProductGalleryToEditor();
+
+        $this->mediaPickerOpen = false;
+        $this->dispatch('close-article-media-modal');
+
+        if ($added <= 0) {
+            Notification::make()
+                ->title('Không thêm được ảnh mới')
+                ->body($skipped > 0
+                    ? 'Các ảnh đã chọn có thể đã có trong album hoặc thiếu ID thư viện.'
+                    : 'Không có ảnh hợp lệ để thêm.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Đã thêm vào album sản phẩm')
+            ->body(sprintf(
+                'Đã thêm %d ảnh vào album%s.',
+                $added,
+                $skipped > 0 ? " ({$skipped} ảnh bỏ qua)" : '',
+            ))
             ->success()
             ->send();
     }
@@ -672,6 +943,7 @@ class EditArticle extends EditRecord
             ->removeProductAlbumItemByUrl($this->record, $url);
         $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
         $this->record->refresh();
+        $this->syncProductGalleryToEditor();
         $this->dispatch('article-media-removed', mode: 'gallery', url: trim($url));
 
         Notification::make()
@@ -693,6 +965,20 @@ class EditArticle extends EditRecord
             ->reorderProductAlbumLocal($this->record, $orderedUrls);
         $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
         $this->record->refresh();
+        $this->syncProductGalleryToEditor();
+    }
+
+    private function syncProductGalleryToEditor(): void
+    {
+        if (! $this->supportsProductGallery()) {
+            return;
+        }
+
+        $this->dispatch(
+            'seo-product-gallery-updated',
+            gallery: $this->productGallery,
+            article_id: (int) $this->record->id,
+        );
     }
 
     public function getPermalinkBase(): string
@@ -749,6 +1035,26 @@ class EditArticle extends EditRecord
         }
 
         return rtrim($base, '/') . '/' . $this->getDisplaySlug() . $this->getPermalinkSuffix();
+    }
+
+    /**
+     * @return array{
+     *     type: string,
+     *     title: string,
+     *     url: string,
+     *     description: string,
+     *     display_url: string,
+     *     meta: array<string, mixed>
+     * }
+     */
+    public function getGoogleSerpPreview(): array
+    {
+        return app(ArticleGoogleSerpPreviewService::class)->buildForArticle(
+            $this->record,
+            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            trim($this->seoMetaDescription),
+            $this->getDisplayPermalink(),
+        );
     }
 
     public function getArticlePermalink(): string
@@ -925,6 +1231,273 @@ class EditArticle extends EditRecord
         return route('seo.articles.preview', ['article' => $this->record->id]);
     }
 
+    public function getReviewStatusLabel(): string
+    {
+        return (bool) $this->record->is_reviewed
+            ? __('seo-content-ai::filament.article_list.reviewed')
+            : __('seo-content-ai::filament.article_list.not_reviewed');
+    }
+
+    public function getReviewedAtLabel(): ?string
+    {
+        $reviewedAt = $this->record->reviewed_at;
+
+        return $reviewedAt instanceof Carbon
+            ? $reviewedAt->timezone(config('app.timezone'))->format('d/m/Y H:i')
+            : null;
+    }
+
+    public function getVirtualCommentsCount(): int
+    {
+        return count(app(VirtualCommentService::class)->getFromArticle($this->record));
+    }
+
+    public function canGenerateQuickPostReviews(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getPostReviewTaskId() !== null;
+    }
+
+    public function shouldShowQuickCreateReviewsButton(): bool
+    {
+        return $this->canGenerateQuickPostReviews() && $this->getVirtualCommentsCount() === 0;
+    }
+
+    public function generateQuickPostReviews(): void
+    {
+        if (! $this->canGenerateQuickPostReviews()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
+                ->body(__('seo-content-ai::filament.article_list.quick_create_reviews_configure_hint'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($this->getVirtualCommentsCount() > 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
+                ->body(__('seo-content-ai::filament.article_list.quick_create_reviews_already_exists'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->quickReviewsJobPending = true;
+
+        try {
+            if (function_exists('set_time_limit')) {
+                @set_time_limit(300);
+            }
+
+            $result = app(ArticleQuickPostReviewService::class)->runForArticle($this->record->fresh());
+            $this->applyQuickPostReviewsResult($result);
+        } catch (\Throwable $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+        } finally {
+            $this->quickReviewsJobPending = false;
+        }
+    }
+
+    /**
+     * @param  array{success?: bool, message?: string, created_count?: int|null}  $result
+     */
+    private function applyQuickPostReviewsResult(array $result): void
+    {
+        $this->record->refresh();
+
+        $reviews = $this->getVirtualReviewsPayload();
+        if ($reviews !== []) {
+            $this->dispatch('virtual-reviews-updated', reviews: $reviews);
+        }
+
+        $success = (bool) ($result['success'] ?? false);
+        $message = trim((string) ($result['message'] ?? ''));
+
+        $notification = Notification::make()
+            ->title(
+                $success
+                    ? __('seo-content-ai::filament.article_list.quick_create_reviews_success')
+                    : __('seo-content-ai::filament.article_list.quick_create_reviews_failed'),
+            )
+            ->body(
+                $message !== ''
+                    ? $message
+                    : ($success
+                        ? __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => count($reviews)])
+                        : ''),
+            );
+
+        if ($success) {
+            if ($message !== '' && str_contains($message, 'Đồng bộ WordPress thất bại')) {
+                $notification->warning();
+            } else {
+                $notification->success();
+            }
+        } else {
+            $notification->danger();
+        }
+
+        $notification->send();
+    }
+
+    public function syncVirtualReviewsToWordPress(): void
+    {
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
+                ->body('Bài viết chưa có WordPress Post ID.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($this->getVirtualCommentsCount() === 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
+                ->body(__('seo-content-ai::filament.article_list.reviews_tab_empty'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $result = app(VirtualCommentService::class)->syncToWordPress($this->record->fresh());
+
+        if ($result['success'] ?? false) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_success'))
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
+            ->body((string) ($result['message'] ?? ''))
+            ->danger()
+            ->send();
+    }
+
+    /**
+     * @return list<array{author: string, content: string, rating?: int|null, date: string}>
+     */
+    #[On('request-virtual-reviews-refresh')]
+    public function refreshVirtualReviewsForEditor(): array
+    {
+        $this->record->refresh();
+        $reviews = $this->getVirtualReviewsPayload();
+        $this->dispatch('virtual-reviews-updated', reviews: $reviews);
+
+        return $reviews;
+    }
+
+    public function pollQuickReviewsJob(): void
+    {
+        if (! $this->quickReviewsJobPending) {
+            return;
+        }
+
+        $userId = (int) (auth()->id() ?? 0);
+        if ($userId <= 0) {
+            return;
+        }
+
+        $cacheKey = 'seo_article_reviews_ready:' . (int) $this->record->id . ':' . $userId;
+        if (! Cache::pull($cacheKey)) {
+            return;
+        }
+
+        $this->quickReviewsJobPending = false;
+        $this->record->refresh();
+
+        $reviews = $this->getVirtualReviewsPayload();
+        $this->dispatch('virtual-reviews-updated', reviews: $reviews);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_success'))
+            ->body(__('seo-content-ai::filament.article_list.virtual_comments_count', [
+                'count' => count($reviews),
+            ]))
+            ->success()
+            ->send();
+    }
+
+    /**
+     * @return list<array{author: string, content: string, rating?: int|null, date: string}>
+     */
+    public function getVirtualReviewsPayload(): array
+    {
+        return app(VirtualCommentService::class)->getFromArticle($this->record);
+    }
+
+    public function approveArticle(): void
+    {
+        if ((bool) $this->record->is_reviewed) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.already_reviewed'))
+                ->info()
+                ->send();
+
+            return;
+        }
+
+        $deletedCount = ArticleResource::markArticleReviewed($this->record);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
+            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+            ->success()
+            ->send();
+
+        if (! SeoAccessControl::canAccessManagerFeatures()) {
+            $this->redirect(ArticleResource::getUrl('index'));
+
+            return;
+        }
+
+        $this->record->refresh();
+    }
+
+    /**
+     * Cập nhật editor + meta ảnh sau khi body đã được thay URL WordPress.
+     */
+    private function refreshEditorAfterWordPressSync(): void
+    {
+        $this->record->refresh();
+        $this->record->loadMissing('articleMetas');
+
+        $syncedHtml = trim((string) ($this->record->body ?? ''));
+        if ($syncedHtml !== '') {
+            app(ArticlePostImagesService::class)->syncFromHtml($this->record, $syncedHtml);
+            $this->editorHtml = $syncedHtml;
+        }
+
+        $this->featuredImageUrl = app(WordPressArticleContentService::class)->resolveFeaturedImageUrl($this->record);
+        $this->productGallery = $this->supportsProductGallery()
+            ? app(ArticleMediaLocalService::class)->resolveProductAlbum($this->record)
+            : [];
+        if ($this->supportsProductGallery()) {
+            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? $this->featuredImageUrl;
+        }
+
+        $this->dispatch(
+            'article-faqs-extracted',
+            faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
+            editorHtml: $syncedHtml !== '' ? $syncedHtml : $this->editorHtml,
+        );
+        $this->dispatch('article-post-images-synced', images: $this->getEditorImagesPayload());
+        $this->dispatch('article-supplemental-images-synced', images: $this->getEditorSupplementalImagesPayload());
+    }
+
     /**
      * Lưu vào Laravel (không đẩy WordPress).
      */
@@ -941,6 +1514,8 @@ class EditArticle extends EditRecord
         }
 
         $slug = Str::slug($this->articleSlug);
+        $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
+        $seoMetaDescription = trim($this->seoMetaDescription);
 
         $publishAt = $this->resolvePublishAtForSave();
 
@@ -952,6 +1527,7 @@ class EditArticle extends EditRecord
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
+        $this->persistSeoMetaFields();
 
         $this->articleSlug = $slug;
         $this->editingSlug = false;
@@ -965,8 +1541,9 @@ class EditArticle extends EditRecord
         $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
             $this->record->fresh(),
             $html,
-            trim($this->articleTitle),
+            $seoTitle,
             $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+            $seoMetaDescription !== '' ? $seoMetaDescription : null,
         );
         $this->dispatch('seo-analyze-result', result: $seoResult);
 
@@ -991,13 +1568,18 @@ class EditArticle extends EditRecord
      */
     public function syncArticleToWordPress(string $html): void
     {
-        $this->persistArticleLocalSilent($html);
+        $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
 
-        $result = app(WordPressArticleSyncService::class)->syncForArticle($this->record->fresh());
+        $result = app(WordPressArticleSyncService::class)->syncForArticle(
+            $this->record->fresh(),
+            $this->resolveLivewireSeoPayloadForWordPress(),
+        );
 
         $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
 
         if ($result['success']) {
+            $this->refreshEditorAfterWordPressSync();
+
             $syncBody = $result['message'];
             if (! empty($result['faq_extract_debug'])) {
                 $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
@@ -1015,14 +1597,16 @@ class EditArticle extends EditRecord
             return;
         }
 
+        $failureBody = (string) ($result['message'] ?? '');
+
         Notification::make()
             ->title('WordPress sync failed')
-            ->body($result['message'])
+            ->body($failureBody !== '' ? $failureBody : 'WordPress sync failed.')
             ->danger()
             ->send();
     }
 
-    private function persistArticleLocalSilent(string $html): void
+    private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): void
     {
         $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
 
@@ -1046,6 +1630,7 @@ class EditArticle extends EditRecord
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
+        $this->persistSeoMetaFields();
 
         $this->articleSlug = $slug;
         $this->syncPublishDatePartsFromRecord();
@@ -1053,6 +1638,115 @@ class EditArticle extends EditRecord
         $this->record->refresh();
 
         app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
+
+        if ($syncVirtualCommentsToWordPress) {
+            $this->syncVirtualCommentsToWordPressIfLinked();
+        }
+    }
+
+    private function syncVirtualCommentsToWordPressIfLinked(): void
+    {
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            return;
+        }
+
+        if ($this->getVirtualCommentsCount() === 0) {
+            return;
+        }
+
+        $result = app(VirtualCommentService::class)->syncToWordPress($this->record->fresh());
+        if ($result['success'] ?? false) {
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
+            ->body((string) ($result['message'] ?? ''))
+            ->warning()
+            ->send();
+    }
+
+    public function importMarkdownDebug(string $markdown): void
+    {
+        abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
+
+        $markdown = trim($markdown);
+        if ($markdown === '') {
+            Notification::make()
+                ->title('Markdown trống')
+                ->body('Vui lòng nhập nội dung markdown để import.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
+        $html = $import['html'];
+        if ($html === '') {
+            Notification::make()
+                ->title('Không thể convert markdown')
+                ->body('Nội dung markdown không hợp lệ hoặc rỗng sau khi xử lý.')
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $faqCount = 0;
+        if ($import['faqs'] !== []) {
+            $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $import['faqs']);
+        }
+
+        $h1Title = trim((string) ($import['h1_title'] ?? ''));
+        if ($h1Title !== '') {
+            $this->articleTitle = $h1Title;
+            $this->seoTitle = $h1Title;
+        }
+
+        $metaDescription = trim((string) ($import['meta_description'] ?? ''));
+        if ($metaDescription !== '') {
+            $this->seoMetaDescription = $metaDescription;
+        }
+
+        $this->editorHtml = $html;
+        $this->persistArticleLocalSilent($html);
+
+        if ($h1Title !== '' || $metaDescription !== '') {
+            $this->persistSeoMetaFields();
+        }
+
+        app(SeoAnalyzerService::class)->analyze($this->record->fresh());
+
+        $slug = Str::slug($this->articleSlug);
+        $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
+            $this->record->fresh(),
+            $html,
+            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+            trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+        );
+        $this->dispatch('seo-analyze-result', result: $seoResult);
+
+        $this->dispatch(
+            'article-faqs-extracted',
+            faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record->fresh()),
+            editorHtml: $html,
+        );
+
+        $importBody = 'Nội dung markdown đã convert sang HTML và cập nhật vào editor.';
+        if ($h1Title !== '') {
+            $importBody .= ' H1 đã gán làm tiêu đề bài + tiêu đề SEO.';
+        }
+        if ($faqCount > 0) {
+            $importBody .= sprintf(' Đã tách %d FAQ vào panel và chèn shortcode [omi_faq].', $faqCount);
+        }
+
+        Notification::make()
+            ->title('Đã import markdown debug')
+            ->body($importBody)
+            ->success()
+            ->send();
     }
 
     /**
@@ -1104,11 +1798,35 @@ class EditArticle extends EditRecord
      */
     public function getEditorMetaPayload(): array
     {
+        $siteId = (int) $this->record->site_id;
+        $productCategoryOptions = $siteId > 0
+            ? app(\App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService::class)
+                ->productCategoryOptionsForSite($siteId)
+            : [];
+
         return [
             'id' => (int) $this->record->id,
-            'site_id' => (int) $this->record->site_id,
+            'site_id' => $siteId,
             'title' => (string) $this->articleTitle,
-            'post_type' => (string) ($this->record->post_type ?? ''),
+            'post_type' => ArticlePostTypeResolver::resolve($this->record),
+            'virtual_reviews' => $this->getVirtualReviewsPayload(),
+            'supports_product_gallery' => $this->supportsProductGallery(),
+            'product_category_options' => collect($productCategoryOptions)
+                ->map(static fn (string $label, int $id): array => [
+                    'id' => $id,
+                    'label' => $label,
+                ])
+                ->values()
+                ->all(),
+            'product_gallery' => collect($this->productGallery)
+                ->map(static fn (array $item): array => [
+                    'url' => (string) ($item['url'] ?? ''),
+                ])
+                ->filter(static fn (array $item): bool => ($item['url'] ?? '') !== '')
+                ->values()
+                ->all(),
+            'preview_url' => $this->getArticlePreviewUrl(),
+            'can_sync_wp' => filled($this->record->wp_post_id),
             'ai_debug' => $this->getEditorAiDebugPayload(),
             'supplemental_images' => $this->getEditorSupplementalImagesPayload(),
         ];
@@ -1145,11 +1863,12 @@ class EditArticle extends EditRecord
         $featuredUrl = trim((string) ($this->featuredImageUrl ?? ''));
         $featuredId = (int) ($this->record->articleMetas->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
         if ($featuredUrl !== '') {
+            $featuredRefs = $this->resolveSupplementalImageRefIds($featuredUrl, $featuredId);
             $append($rows, $seen, [
                 'key' => $featuredId > 0 ? 'featured_wp_' . $featuredId : 'featured_src_' . md5($featuredUrl),
                 'block_id' => '',
-                'wp_attachment_id' => $featuredId > 0 ? $featuredId : null,
-                'seo_media_id' => null,
+                'wp_attachment_id' => $featuredRefs['wp_attachment_id'],
+                'seo_media_id' => $featuredRefs['seo_media_id'],
                 'src' => $featuredUrl,
                 'wp_url' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? '' : $featuredUrl,
                 'local_src' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? $featuredUrl : '',
@@ -1170,11 +1889,12 @@ class EditArticle extends EditRecord
                 continue;
             }
 
+            $refs = $this->resolveSupplementalImageRefIds($url, $id);
             $append($rows, $seen, [
                 'key' => $id > 0 ? 'gallery_wp_' . $id : 'gallery_src_' . md5($url),
                 'block_id' => '',
-                'wp_attachment_id' => $id > 0 ? $id : null,
-                'seo_media_id' => null,
+                'wp_attachment_id' => $refs['wp_attachment_id'],
+                'seo_media_id' => $refs['seo_media_id'],
                 'src' => $url,
                 'wp_url' => str_contains($url, '/storage/uploads/seo_media/') ? '' : $url,
                 'local_src' => str_contains($url, '/storage/uploads/seo_media/') ? $url : '',
@@ -1189,6 +1909,34 @@ class EditArticle extends EditRecord
         }
 
         return $rows;
+    }
+
+    /**
+     * @return array{wp_attachment_id: int|null, seo_media_id: int|null}
+     */
+    private function resolveSupplementalImageRefIds(string $url, int $refId): array
+    {
+        $url = trim($url);
+        $refId = max(0, $refId);
+        $isLocal = str_contains($url, '/storage/uploads/seo_media/');
+
+        if ($isLocal) {
+            $seoId = $refId;
+            if ($seoId <= 0) {
+                $seoId = app(ArticleMediaLocalService::class)
+                    ->resolveLocalRefIdFromImageUrl((int) ($this->record->site_id ?? 0), $url);
+            }
+
+            return [
+                'wp_attachment_id' => null,
+                'seo_media_id' => $seoId > 0 ? $seoId : null,
+            ];
+        }
+
+        return [
+            'wp_attachment_id' => $refId > 0 ? $refId : null,
+            'seo_media_id' => null,
+        ];
     }
 
     /**
@@ -1335,7 +2083,37 @@ class EditArticle extends EditRecord
     public function saveArticleFaqs(array $faqs): void
     {
         $previousCount = $this->record->faqs()->count();
+        $incomingCount = count(array_filter($faqs, static function ($row): bool {
+            if (! is_array($row)) {
+                return false;
+            }
+
+            return trim((string) ($row['question'] ?? '')) !== '';
+        }));
+
         $savedCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+
+        if ($savedCount > 0) {
+            $this->dispatch('article-faqs-save-finished');
+        }
+
+        if ($savedCount === 0 && $incomingCount > 0) {
+            if ($this->pendingEditorCollectTarget !== null) {
+                $target = $this->pendingEditorCollectTarget;
+                $this->pendingEditorCollectTarget = null;
+                $this->dispatch('collect-editor-html', target: $target);
+
+                return;
+            }
+
+            Notification::make()
+                ->title('FAQ not saved')
+                ->body('Each FAQ needs a question and a non-empty answer.')
+                ->warning()
+                ->send();
+
+            return;
+        }
 
         if ($savedCount === 0) {
             $restore = app(ArticleFaqWordPressRestoreService::class)->restoreWhenFaqsCleared($this->record);
@@ -1430,11 +2208,32 @@ class EditArticle extends EditRecord
             ->send();
     }
 
+    /**
+     * @return array{rendered: string, prompt_id: int, prompt_name: string, error?: string}
+     */
+    public function previewGenerateArticleImagePrompt(
+        string $userBrief,
+        string $target = 'editor',
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
+    ): array {
+        return app(ArticleEditorMediaAiService::class)->previewRenderedImagePrompt(
+            $this->record,
+            $userBrief,
+            $target,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        );
+    }
+
     public function generateArticleImageFromEditor(
         string $selectionText,
         string $selectionHtml,
         string $userBrief,
         string $activeBlockId = '',
+        string $target = 'editor',
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
     ): void {
         try {
             $result = app(ArticleEditorMediaAiService::class)->generateImage(
@@ -1443,6 +2242,9 @@ class EditArticle extends EditRecord
                 $selectionHtml,
                 $userBrief,
                 $activeBlockId,
+                $target,
+                $loaiSanPhamCategoryArticleId,
+                $loaiSanPhamCustom,
             );
         } catch (\Throwable $exception) {
             $this->dispatch('article-ai-media-failed', type: 'image', message: $exception->getMessage());
@@ -1456,13 +2258,21 @@ class EditArticle extends EditRecord
             return;
         }
 
+        $seoMediaId = (int) ($result['seo_media_id'] ?? 0);
+        $galleryUrls = $seoMediaId > 0
+            ? $this->resolvePostProcessingGalleryUrlsByMediaId($seoMediaId)
+            : [];
+
         $this->dispatch(
             'article-ai-image-generated',
             url: $result['url'],
             activeBlockId: $activeBlockId,
-            seoMediaId: (int) ($result['seo_media_id'] ?? 0),
+            seoMediaId: $seoMediaId,
             status: (string) ($result['status'] ?? 'processing'),
             mediaType: 'image',
+            target: $target,
+            gallery_urls: $galleryUrls,
+            galleryUrls: $galleryUrls,
         );
 
         Notification::make()
@@ -1470,6 +2280,43 @@ class EditArticle extends EditRecord
             ->body(__('seo-content-ai::common.placeholder_inserted'))
             ->success()
             ->send();
+    }
+
+    /**
+     * @return list<array{id: int, url: string}>
+     */
+    private function resolvePostProcessingGalleryUrlsByMediaId(int $seoMediaId): array
+    {
+        $media = SeoMedia::query()->find($seoMediaId);
+        if (! $media instanceof SeoMedia) {
+            return [];
+        }
+
+        $source = app(PromptPostProcessingApplyService::class)->resolveSourceMedia($media);
+        $variables = is_array($source->prompt_variables) ? $source->prompt_variables : [];
+        $pieceIds = is_array($variables['post_processing_piece_ids'] ?? null)
+            ? $variables['post_processing_piece_ids']
+            : [];
+
+        $ids = array_values(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $pieceIds,
+        ), static fn (int $id): bool => $id > 0));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return SeoMedia::query()
+            ->whereIn('id', $ids)
+            ->orderBy('id')
+            ->get()
+            ->map(static fn (SeoMedia $piece): array => [
+                'id' => (int) $piece->id,
+                'url' => $piece->publicUrl(),
+            ])
+            ->values()
+            ->all();
     }
 
     public function generateArticleVideoFromEditor(
@@ -1576,6 +2423,149 @@ class EditArticle extends EditRecord
     }
 
     /**
+     * @return array{success: bool, message: string, outline: string}
+     */
+    public function rewriteOutlineFromWorkflow(string $mode = 'title', string $title = '', string $html = ''): array
+    {
+        $mode = $mode === 'content' ? 'content' : 'title';
+
+        $taskId = app(SeoCreateArticleSettingsService::class)->getEditArticleTaskId();
+        if ($taskId === null) {
+            return [
+                'success' => false,
+                'message' => 'Chưa cấu hình workflow Sửa bài viết / Đăng bài viết trong SEO -> Settings -> Workflows.',
+                'outline' => '',
+            ];
+        }
+
+        $task = SeoTask::query()->find($taskId);
+        if (! $task instanceof SeoTask) {
+            return [
+                'success' => false,
+                'message' => 'Không tìm thấy workflow #' . $taskId . '.',
+                'outline' => '',
+            ];
+        }
+
+        if (! $task->is_active) {
+            return [
+                'success' => false,
+                'message' => 'Workflow "' . $task->name . '" đang tắt.',
+                'outline' => '',
+            ];
+        }
+
+        $currentTitle = trim($title !== '' ? $title : (string) ($this->record->title ?? ''));
+        if ($currentTitle === '') {
+            $currentTitle = 'Article #' . (int) $this->record->id;
+        }
+
+        $input = $mode === 'content'
+            ? trim(strip_tags($html !== '' ? $html : (string) ($this->record->body ?? '')))
+            : $currentTitle;
+        if ($input === '') {
+            $input = $currentTitle;
+        }
+
+        $focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? $currentTitle;
+        $scope = function (\Illuminate\Database\Eloquent\Builder $query): void {
+            if (auth()->user()?->role === 'admin') {
+                return;
+            }
+
+            $query->whereIn(
+                'site_id',
+                \App\Models\Site::query()->where('user_id', auth()->id())->select('id'),
+            );
+        };
+
+        try {
+            $context = app(TaskTestInputResolver::class)->resolve(
+                (int) $this->record->id,
+                $currentTitle,
+                $focusKeyword,
+                $scope,
+            );
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'outline' => '',
+            ];
+        }
+
+        $variables = $context->variables;
+        $variables['input'] = $input;
+        if ($mode === 'content') {
+            $variables['post_content'] = $input;
+        }
+
+        $workflowContext = new TaskTestContext(
+            article: $context->article,
+            isNewArticle: false,
+            matchedBy: $context->matchedBy,
+            variables: $variables,
+            summary: $context->summary,
+        );
+
+        try {
+            $steps = app(TaskWorkflowTestRunner::class)->run($task, $workflowContext);
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'outline' => '',
+            ];
+        }
+
+        $hasFailedStep = collect($steps)->contains(fn (array $step): bool => (string) ($step['status'] ?? '') === 'failed');
+        if ($hasFailedStep) {
+            $failedMessage = collect($steps)
+                ->filter(fn (array $step): bool => (string) ($step['status'] ?? '') === 'failed')
+                ->map(fn (array $step): string => trim((string) ($step['message'] ?? 'Workflow step failed.')))
+                ->filter(fn (string $message): bool => $message !== '')
+                ->first();
+
+            return [
+                'success' => false,
+                'message' => $failedMessage !== null ? $failedMessage : 'Workflow chạy lỗi.',
+                'outline' => '',
+            ];
+        }
+
+        app(TaskWorkflowTestRunner::class)->applyParsedMetaFromSteps($this->record, $steps);
+        $this->record->refresh();
+
+        $outline = trim($this->getEditorOutlineMarkdown());
+        if ($outline === '') {
+            $outline = trim((string) collect($steps)
+                ->reverse()
+                ->map(fn (array $step): string => trim((string) ($step['output'] ?? '')))
+                ->first(fn (string $output): bool => $output !== ''));
+        }
+
+        if ($outline === '') {
+            return [
+                'success' => false,
+                'message' => 'Workflow đã chạy nhưng chưa tạo được outline.',
+                'outline' => '',
+            ];
+        }
+
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'seo_article_outline'],
+            ['meta_value' => $outline],
+        );
+        $this->record->refresh();
+
+        return [
+            'success' => true,
+            'message' => 'Đã tạo outline từ workflow.',
+            'outline' => $outline,
+        ];
+    }
+
+    /**
      * Đổi tên file attachment trên WordPress + thay URL cũ trong mọi bài viết.
      *
      * @param  array<int, array<string, mixed>>  $items
@@ -1607,6 +2597,32 @@ class EditArticle extends EditRecord
             ->send();
     }
 
+    /**
+     * Cập nhật alt/title attachment trên WordPress (Media Library).
+     *
+     * @param  array<int, array<string, mixed>>  $items
+     */
+    public function updateAttachmentMetaOnWordPress(array $items): void
+    {
+        $result = app(WordPressAttachmentMetaUpdateService::class)->updateBatch($this->record, $items);
+
+        if ($result['success']) {
+            Notification::make()
+                ->title('Image alt/title updated on WordPress')
+                ->body($result['message'])
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Unable to update image alt/title on WordPress')
+            ->body($result['message'])
+            ->danger()
+            ->send();
+    }
+
     /** @deprecated Chỉ dùng persistArticleLocal / syncArticleToWordPress từ nút sidebar */
     public function saveContent(string $html, bool $silent = false): void
     {
@@ -1633,6 +2649,86 @@ class EditArticle extends EditRecord
         $decoded = json_decode($meta->meta_value, true);
 
         return is_array($decoded) ? $decoded : null;
+    }
+
+    private function hydrateSeoMetaState(): void
+    {
+        $this->record->loadMissing('articleMetas');
+
+        $this->seoTitle = trim((string) ($this->record->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
+
+        $this->seoMetaDescription = trim((string) (
+            $this->record->articleMetas->first(
+                static fn ($meta): bool => in_array((string) $meta->meta_key, [
+                    'seo_meta_description',
+                    'meta_description',
+                ], true),
+            )?->meta_value ?? ''
+        ));
+
+        $this->focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '';
+    }
+
+    private function persistSeoMetaFields(): void
+    {
+        $this->record->loadMissing('articleMetas');
+
+        $seoTitle = trim($this->seoTitle);
+        $seoDescription = trim($this->seoMetaDescription);
+
+        if ($seoTitle === '') {
+            $this->record->articleMetas()
+                ->where('meta_key', 'seo_title')
+                ->delete();
+        } else {
+            $this->record->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_title'],
+                ['meta_value' => $seoTitle],
+            );
+        }
+
+        foreach (['seo_meta_description', 'meta_description'] as $key) {
+            if ($seoDescription === '') {
+                $this->record->articleMetas()
+                    ->where('meta_key', $key)
+                    ->delete();
+                continue;
+            }
+
+            $this->record->articleMetas()->updateOrCreate(
+                ['meta_key' => $key],
+                ['meta_value' => $seoDescription],
+            );
+        }
+
+        $this->persistFocusKeyword();
+    }
+
+    private function persistFocusKeyword(): void
+    {
+        $siteId = (int) ($this->record->site_id ?? 0);
+        if ($siteId <= 0) {
+            return;
+        }
+
+        KeywordFocusAttach::syncMainKeyword(
+            $this->record,
+            $siteId,
+            (int) auth()->id(),
+            trim($this->focusKeyword),
+        );
+    }
+
+    /**
+     * @return array{seo_title: string, meta_description: string, focus_keyword: string}
+     */
+    private function resolveLivewireSeoPayloadForWordPress(): array
+    {
+        return [
+            'seo_title' => trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            'meta_description' => trim($this->seoMetaDescription),
+            'focus_keyword' => trim($this->focusKeyword),
+        ];
     }
 
     protected function mutateFormDataBeforeSave(array $data): array

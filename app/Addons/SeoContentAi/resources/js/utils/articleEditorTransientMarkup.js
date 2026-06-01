@@ -41,7 +41,9 @@ function unwrapElement(el) {
 }
 
 /**
- * Gỡ đánh dấu link / highlight cuộn trước khi lưu hoặc đồng bộ WordPress.
+ * Gỡ markup tạm editor trước khi lưu / đồng bộ WordPress:
+ * - mọi &lt;mark&gt; (highlight gợi ý từ khóa, TipTap highlight, cuộn sidebar)
+ * - class đánh dấu link tạm trên thẻ khác
  *
  * @param {string} html
  * @returns {string}
@@ -56,11 +58,7 @@ export function stripEditorTransientMarkup(html) {
     const body = doc.body;
 
     body.querySelectorAll('mark').forEach((mark) => {
-        const classes = [...mark.classList];
-        const isTransient = classes.some((c) => TRANSIENT_CLASSES.includes(c));
-        if (isTransient) {
-            unwrapElement(mark);
-        }
+        unwrapElement(mark);
     });
 
     body.querySelectorAll('*').forEach((el) => {

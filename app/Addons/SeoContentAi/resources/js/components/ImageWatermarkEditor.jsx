@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import SeoSelect from './SeoSelect';
 import { saveNewWatermarkedImage, saveWatermarkedMedia } from '../utils/watermarkApi';
 import { t } from '../utils/i18n';
 
@@ -289,17 +290,11 @@ export default function ImageWatermarkEditor({
                     )}
 
                     <label className="seo-watermark-editor__label">{t('watermark_position')}</label>
-                    <select
+                    <SeoSelect
                         value={position}
                         onChange={(e) => setPosition(e.target.value)}
-                        className="seo-watermark-editor__select"
-                    >
-                        {POSITIONS.map((pos) => (
-                            <option key={pos} value={pos}>
-                                {pos}
-                            </option>
-                        ))}
-                    </select>
+                        options={POSITIONS.map((pos) => ({ value: pos, label: pos }))}
+                    />
 
                     <label className="seo-watermark-editor__label">{t('watermark_opacity')}: {opacity}</label>
                     <input
@@ -314,14 +309,14 @@ export default function ImageWatermarkEditor({
                     {imageId ? (
                         <>
                             <label className="seo-watermark-editor__label">{t('watermark_save_mode')}</label>
-                            <select
+                            <SeoSelect
                                 value={saveMode}
                                 onChange={(e) => setSaveMode(e.target.value)}
-                                className="seo-watermark-editor__select"
-                            >
-                                <option value="overwrite">{t('watermark_save_overwrite')}</option>
-                                <option value="new">{t('watermark_save_new')}</option>
-                            </select>
+                                options={[
+                                    { value: 'overwrite', label: t('watermark_save_overwrite') },
+                                    { value: 'new', label: t('watermark_save_new') },
+                                ]}
+                            />
                         </>
                     ) : (
                         <p className="seo-watermark-editor__hint">

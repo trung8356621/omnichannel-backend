@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import SeoSelect from './SeoSelect';
 import {
   buildFlowTheme,
   getDefaultNodeHeight,
@@ -54,6 +55,11 @@ function getPromptConfig(promptId) {
   }
 
   return mockPrompts.find((p) => String(p.id) === String(promptId)) ?? null;
+}
+
+function getPromptTags(promptId) {
+  const config = getPromptConfig(promptId);
+  return Array.isArray(config?.detected_tags) ? config.detected_tags : [];
 }
 
 function defaultPromptNodeData(promptId) {
@@ -175,7 +181,16 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
       title = 'Prompt block';
       data = defaultPromptNodeData(mockPrompts[0]?.id ?? 'p1');
     }
-    else if (type === 'filter') { title = 'Filter / Process'; data = { filterType: 'custom', rule: '' }; }
+    else if (type === 'filter') {
+      title = 'Filter / Process';
+      data = {
+        filterType: 'extract_segment',
+        rule: '',
+        inputSource: 'auto',
+        filterTag: '',
+        customTag: '',
+      };
+    }
     else if (type === 'action') {
       title = 'Action';
       data = { actionType: 'create_article', isTrigger: false };
@@ -228,6 +243,20 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
   };
 
   const selectedNode = nodes.find(n => n.id === selectedNodeId);
+  const incomingEdges = selectedNode
+    ? edges.filter((edge) => edge.targetNode === selectedNode.id)
+    : [];
+  const sourcePromptTags = selectedNode?.type === 'filter'
+    ? incomingEdges
+      .map((edge) => nodes.find((node) => node.id === edge.sourceNode))
+      .filter((node) => node?.type === 'prompt')
+      .flatMap((node) => getPromptTags(node.data?.promptId))
+    : [];
+  const uniqueSourcePromptTags = sourcePromptTags.filter((tag, index, arr) => {
+    const key = String(tag?.key || '').trim();
+    if (!key) return false;
+    return arr.findIndex((candidate) => String(candidate?.key || '').trim() === key) === index;
+  });
   const chipClass = (active) => (active ? t.chipOnSky : t.chipOff);
   const actionChipClass = (active) => (active ? t.chipOnEmerald : t.chipOff);
 
@@ -389,12 +418,20 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                   {node.type === 'filter' && (
                     <div className="flex flex-col gap-1">
                       <span className="font-semibold text-amber-600 dark:text-amber-400">
-                        {node.data.filterType === 'parse_outline' ? 'Extract outline' :
+                        {node.data.filterType === 'extract_segment' ? 'Extract by tag' :
+                         node.data.filterType === 'parse_outline' ? 'Extract outline' :
                          node.data.filterType === 'parse_keywords' ? 'Extract keywords' :
                          node.data.filterType === 'parse_faq' ? 'Extract FAQ' :
                          node.data.filterType === 'score_seo' ? 'SEO scoring' :
                          'Custom filter'}
                       </span>
+                      {node.data.filterType === 'extract_segment' ? (
+                        <span className="truncate text-[10px]">
+                          Tag: {(node.data.filterTag === '__custom__'
+                            ? node.data.customTag
+                            : node.data.filterTag) || 'Not selected'}
+                        </span>
+                      ) : null}
                       {(!node.data.filterType || node.data.filterType === 'custom') && (
                         <span className="truncate text-[10px]">Logic: {node.data.rule || 'Not configured'}</span>
                       )}
@@ -538,7 +575,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                 <div className="space-y-4">
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Chọn Prompt thực thi</label>
-                    <select
+                    <SeoSelect
                       value={selectedNode.data.promptId}
                       onChange={(e) => {
                         const promptId = e.target.value;
@@ -548,22 +585,21 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                           aiModel: config?.defaultModel ?? '',
                         });
                       }}
-                      className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`}
-                    >
-                      {mockPrompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
+                      className="w-full"
+                      options={mockPrompts.map((p) => ({ value: p.id, label: p.name }))}
+                    />
                   </div>
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Model AI</label>
-                    <select
+                    <SeoSelect
                       value={selectedNode.data.aiModel || getPromptConfig(selectedNode.data.promptId)?.defaultModel || ''}
                       onChange={(e) => updateNodeData(selectedNode.id, 'aiModel', e.target.value)}
-                      className={`w-full border rounded p-2 text-sm focus:outline-none transition-colors shadow-sm ${t.field}`}
-                    >
-                      {Object.entries(getPromptConfig(selectedNode.data.promptId)?.models || {}).map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
+                      className="w-full"
+                      options={Object.entries(getPromptConfig(selectedNode.data.promptId)?.models || {}).map(([value, label]) => ({
+                        value,
+                        label,
+                      }))}
+                    />
                     <p className={`text-[11px] mt-1.5 leading-relaxed ${t.emptyHint}`}>
                       Kết nối AI lấy từ Prompt đã chọn. Dùng biến <code>{'{{input}}'}</code> trong prompt để nhận kết quả từ edge nối vào.
                     </p>
@@ -575,18 +611,95 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                 <div className="space-y-4">
                   <div>
                     <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1 font-semibold">Chức năng Xử lý / Lọc</label>
-                    <select
+                    <SeoSelect
                       value={selectedNode.data.filterType || 'custom'}
                       onChange={(e) => updateNodeData(selectedNode.id, 'filterType', e.target.value)}
-                      className="w-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-700 rounded-md p-2 text-sm text-gray-800 dark:text-slate-200 focus:border-amber-500 outline-none shadow-sm transition-colors"
-                    >
-                      <option value="custom">Lọc điều kiện tùy chỉnh</option>
-                      <option value="parse_outline">1. Bóc tách Dàn ý (Markdown -&gt; JSON)</option>
-                      <option value="parse_keywords">2. Bóc tách Từ khóa (Markdown -&gt; JSON)</option>
-                      <option value="parse_faq">3. Bóc tách FAQ</option>
-                      <option value="score_seo">4. Chấm điểm SEO (FAQ + Bảng)</option>
-                    </select>
+                      className="w-full"
+                      options={[
+                        { value: 'extract_segment', label: '0. Bóc tách theo Tag [START...END]' },
+                        { value: 'custom', label: 'Lọc điều kiện tùy chỉnh' },
+                        { value: 'parse_outline', label: '1. Bóc tách Dàn ý (Markdown -> JSON)' },
+                        { value: 'parse_keywords', label: '2. Bóc tách Từ khóa (Markdown -> JSON)' },
+                        { value: 'parse_faq', label: '3. Bóc tách FAQ' },
+                        { value: 'score_seo', label: '4. Chấm điểm SEO (FAQ + Bảng)' },
+                      ]}
+                    />
                   </div>
+
+                  {selectedNode.data.filterType === 'extract_segment' && (
+                    <>
+                      <div>
+                        <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1 font-semibold">
+                          Chọn dữ liệu đầu vào
+                        </label>
+                        <SeoSelect
+                          value={selectedNode.data.inputSource || 'auto'}
+                          onChange={(e) => updateNodeData(selectedNode.id, 'inputSource', e.target.value)}
+                          className="w-full"
+                        >
+                          <option value="auto">Auto (Output từ node nối vào gần nhất)</option>
+                          {incomingEdges.map((edge) => {
+                            const sourceNode = nodes.find((node) => node.id === edge.sourceNode);
+                            const sourceTitle = sourceNode?.title || edge.sourceNode;
+                            return (
+                              <option key={`${edge.id}-source`} value={edge.sourcePort || 'out_main'}>
+                                {`${sourceTitle} -> ${(edge.sourcePort || 'out_main')}`}
+                              </option>
+                            );
+                          })}
+                        </SeoSelect>
+                      </div>
+
+                      <div>
+                        <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1 font-semibold">
+                          Tên bộ lọc cần bóc tách
+                        </label>
+                        <SeoSelect
+                          value={selectedNode.data.filterTag || ''}
+                          onChange={(e) => updateNodeData(selectedNode.id, 'filterTag', e.target.value)}
+                          className="w-full"
+                          placeholder="Chọn tag..."
+                        >
+                          {uniqueSourcePromptTags.map((tag) => (
+                            <option key={tag.key} value={tag.key}>
+                              {tag.label || tag.key}
+                            </option>
+                          ))}
+                          <option value="__custom__">Tùy chỉnh (Gõ tay)</option>
+                        </SeoSelect>
+                      </div>
+
+                      {selectedNode.data.filterTag === '__custom__' && (
+                        <div>
+                          <label className="text-xs text-gray-500 dark:text-slate-400 block mb-1">
+                            Tag tùy chỉnh
+                          </label>
+                          <input
+                            type="text"
+                            value={selectedNode.data.customTag || ''}
+                            onChange={(e) => updateNodeData(selectedNode.id, 'customTag', e.target.value)}
+                            placeholder="TASK_1_OUTLINE"
+                            className="w-full bg-white dark:bg-slate-900 border border-gray-300 dark:border-slate-700 rounded-md p-2 text-sm text-gray-800 dark:text-white focus:outline-none focus:border-amber-500 transition-colors shadow-sm"
+                          />
+                        </div>
+                      )}
+
+                      <div className="bg-sky-50 dark:bg-sky-500/10 border border-sky-200 dark:border-sky-500/20 p-3 rounded-lg text-xs text-sky-700 dark:text-sky-300 leading-relaxed shadow-sm">
+                        <div className="font-semibold mb-1">Xem trước định dạng</div>
+                        <code className="block">
+                          [START {(selectedNode.data.filterTag === '__custom__'
+                            ? selectedNode.data.customTag
+                            : selectedNode.data.filterTag) || 'TAG_NAME'}]
+                        </code>
+                        <code className="block">...</code>
+                        <code className="block">
+                          [END {(selectedNode.data.filterTag === '__custom__'
+                            ? selectedNode.data.customTag
+                            : selectedNode.data.filterTag) || 'TAG_NAME'}]
+                        </code>
+                      </div>
+                    </>
+                  )}
 
                   {(!selectedNode.data.filterType || selectedNode.data.filterType === 'custom') && (
                     <div>
@@ -650,16 +763,17 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
 
                   <div>
                     <label className={`text-xs block mb-2 font-semibold ${t.label}`}>Thực thi Hành động</label>
-                    <select
+                    <SeoSelect
                       value={selectedNode.data.actionType || 'create_article'}
                       onChange={(e) => updateNodeData(selectedNode.id, 'actionType', e.target.value)}
-                      className={`w-full border rounded-md p-2 text-sm focus:border-rose-500 focus:ring-1 focus:ring-rose-500 outline-none transition-colors shadow-sm ${t.field}`}
-                    >
-                      <option value="create_article">Tạo bài viết mới</option>
-                      <option value="edit_article">Cập nhật / Sửa bài viết</option>
-                      <option value="save_vocabulary_research">Lưu nghiên cứu từ vựng (Topic Cluster)</option>
-                      <option value="post_comment_review">Đăng bình luận / review (WordPress)</option>
-                    </select>
+                      className="w-full"
+                      options={[
+                        { value: 'create_article', label: 'Tạo bài viết mới' },
+                        { value: 'edit_article', label: 'Cập nhật / Sửa bài viết' },
+                        { value: 'save_vocabulary_research', label: 'Lưu nghiên cứu từ vựng (Topic Cluster)' },
+                        { value: 'post_comment_review', label: 'Đăng bình luận / review (WordPress)' },
+                      ]}
+                    />
                   </div>
 
                   {selectedNode.data.actionType === 'post_comment_review' ? (

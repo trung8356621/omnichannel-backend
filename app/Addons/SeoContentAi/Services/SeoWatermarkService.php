@@ -226,7 +226,7 @@ class SeoWatermarkService
             return $this->mediaStorage->storeUpload(
                 $file,
                 $media->site_id !== null ? (int) $media->site_id : null,
-                $media->article_id !== null ? (int) $media->article_id : null,
+                $media->firstArticleId(),
                 'watermark',
             );
         }

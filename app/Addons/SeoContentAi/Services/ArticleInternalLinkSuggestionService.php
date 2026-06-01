@@ -37,7 +37,9 @@ final class ArticleInternalLinkSuggestionService
             return [];
         }
 
-        $linkedLabels = $this->collectLinkedLabels($internalLinks);
+        $linkedContext = $this->collectLinkedContext($internalLinks);
+        $linkedLabels = $linkedContext['labels'];
+        $linkedHrefs = $linkedContext['hrefs'];
         $maxSuggestions = self::MAX_INTERNAL_LINKS - count($internalLinks);
         $ownArticlePhrases = $this->ownArticlePhraseBlocklist($article);
 
@@ -84,6 +86,10 @@ final class ArticleInternalLinkSuggestionService
             $href = $resolved['href'] ?? null;
             $keywordId = (int) ($resolved['keyword_id'] ?? $keyword->id);
 
+            if ($href !== null && $href !== '' && $this->isHrefAlreadyLinked($href, $linkedHrefs)) {
+                continue;
+            }
+
             $suggestions[] = [
                 'text' => $phrase,
                 'keyword_id' => $keywordId,
@@ -94,6 +100,12 @@ final class ArticleInternalLinkSuggestionService
             ];
 
             $linkedLabels[] = mb_strtolower($phrase);
+            if ($href !== null && $href !== '') {
+                $normalizedHref = $this->normalizeHrefForCompare($href);
+                if ($normalizedHref !== '') {
+                    $linkedHrefs[] = $normalizedHref;
+                }
+            }
         }
 
         return $suggestions;
@@ -109,11 +121,12 @@ final class ArticleInternalLinkSuggestionService
 
     /**
      * @param  array<int, array<string, mixed>>  $internalLinks
-     * @return list<string>
+     * @return array{labels: list<string>, hrefs: list<string>}
      */
-    private function collectLinkedLabels(array $internalLinks): array
+    private function collectLinkedContext(array $internalLinks): array
     {
         $labels = [];
+        $hrefs = [];
 
         foreach ($internalLinks as $link) {
             $text = trim((string) ($link['text'] ?? ''));
@@ -124,6 +137,11 @@ final class ArticleInternalLinkSuggestionService
             $href = trim((string) ($link['href'] ?? ''));
             if ($href === '') {
                 continue;
+            }
+
+            $normalizedHref = $this->normalizeHrefForCompare($href);
+            if ($normalizedHref !== '') {
+                $hrefs[] = $normalizedHref;
             }
 
             $path = parse_url($href, PHP_URL_PATH);
@@ -137,8 +155,61 @@ final class ArticleInternalLinkSuggestionService
             }
         }
 
-        return array_values(array_unique($labels));
+        return [
+            'labels' => array_values(array_unique($labels)),
+            'hrefs' => array_values(array_unique($hrefs)),
+        ];
     }
+
+    /**
+     * @param  list<string>  $linkedHrefs
+     */
+    private function isHrefAlreadyLinked(string $href, array $linkedHrefs): bool
+    {
+        $normalized = $this->normalizeHrefForCompare($href);
+        if ($normalized === '') {
+            return false;
+        }
+
+        return in_array($normalized, $linkedHrefs, true);
+    }
+
+    private function normalizeHrefForCompare(string $href): string
+    {
+        $href = trim(html_entity_decode($href, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($href === '') {
+            return '';
+        }
+
+        if (str_starts_with($href, '/')) {
+            $path = strtolower(rtrim($href, '/')) ?: '/';
+            $query = '';
+            if (str_contains($path, '?')) {
+                [$path, $queryPart] = explode('?', $path, 2);
+                $path = $path !== '' ? $path : '/';
+                $query = '?' . strtolower($queryPart);
+            }
+
+            return $path . $query;
+        }
+
+        if (str_starts_with($href, '//')) {
+            $href = 'https:' . $href;
+        }
+
+        $parsed = parse_url($href);
+        if (! is_array($parsed)) {
+            return strtolower(rtrim($href, '/'));
+        }
+
+        $path = strtolower(rtrim((string) ($parsed['path'] ?? ''), '/')) ?: '/';
+        $query = isset($parsed['query']) && $parsed['query'] !== ''
+            ? '?' . strtolower((string) $parsed['query'])
+            : '';
+
+        return $path . $query;
+    }
+
 
     /**
      * @param  list<string>  $linkedLabels

@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -25,6 +27,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -415,16 +418,42 @@ class ArticleResource extends Resource
                     ->modalHeading(__('seo-content-ai::filament.article_list.review_article'))
                     ->modalDescription(__('seo-content-ai::filament.article_list.review_article_description'))
                     ->action(function (SeoArticle $record): void {
-                        $deletedCount = static::deleteLocalMediaForArticle($record);
-
-                        $record->forceFill([
-                            'is_reviewed' => true,
-                            'reviewed_at' => Carbon::now(),
-                        ])->save();
+                        $deletedCount = static::markArticleReviewed($record);
 
                         Notification::make()
                             ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
                             ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+                            ->success()
+                            ->send();
+                    }),
+                Tables\Actions\Action::make('assign_to_content_project')
+                    ->icon('heroicon-o-folder-plus')
+                    ->iconButton()
+                    ->color('warning')
+                    ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                    ->requiresConfirmation()
+                    ->form([
+                        Forms\Components\Select::make('project_id')
+                            ->label(__('seo-content-ai::filament.article_list.content_project'))
+                            ->options(fn (): array => static::contentProjectOptions())
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->native(false),
+                    ])
+                    ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                    ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                    ->action(function (SeoArticle $record, array $data): void {
+                        $projectId = (int) ($data['project_id'] ?? 0);
+                        $summary = static::assignArticlesToContentProject(
+                            Collection::make([$record]),
+                            $projectId,
+                        );
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.article_list.assign_completed'))
+                            ->body(static::buildAssignContentProjectBody($summary))
                             ->success()
                             ->send();
                     }),
@@ -450,12 +479,7 @@ class ArticleResource extends Resource
                                     continue;
                                 }
 
-                                $deletedMediaCount += static::deleteLocalMediaForArticle($record);
-
-                                $record->forceFill([
-                                    'is_reviewed' => true,
-                                    'reviewed_at' => Carbon::now(),
-                                ])->save();
+                                $deletedMediaCount += static::markArticleReviewed($record);
 
                                 $approvedCount++;
                             }
@@ -466,6 +490,34 @@ class ArticleResource extends Resource
                                     'approved' => $approvedCount,
                                     'deleted' => $deletedMediaCount,
                                 ]))
+                                ->success()
+                                ->send();
+                        }),
+                    Tables\Actions\BulkAction::make('assign_to_content_project')
+                        ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                        ->icon('heroicon-o-folder-plus')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->deselectRecordsAfterCompletion()
+                        ->form([
+                            Forms\Components\Select::make('project_id')
+                                ->label(__('seo-content-ai::filament.article_list.content_project'))
+                                ->options(fn (): array => static::contentProjectOptions())
+                                ->required()
+                                ->searchable()
+                                ->preload()
+                                ->native(false),
+                        ])
+                        ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                        ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
+                        ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                        ->action(function (Collection $records, array $data): void {
+                            $projectId = (int) ($data['project_id'] ?? 0);
+                            $summary = static::assignArticlesToContentProject($records, $projectId);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.assign_completed'))
+                                ->body(static::buildAssignContentProjectBody($summary))
                                 ->success()
                                 ->send();
                         }),
@@ -575,6 +627,18 @@ class ArticleResource extends Resource
         return null;
     }
 
+    public static function markArticleReviewed(SeoArticle $article): int
+    {
+        $deletedCount = static::deleteLocalMediaForArticle($article);
+
+        $article->forceFill([
+            'is_reviewed' => true,
+            'reviewed_at' => Carbon::now(),
+        ])->save();
+
+        return $deletedCount;
+    }
+
     private static function deleteLocalMediaForArticle(SeoArticle $article): int
     {
         $mediaRows = SeoMedia::query()
@@ -604,6 +668,134 @@ class ArticleResource extends Resource
         }
 
         return count($mediaIds);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public static function contentProjectOptions(): array
+    {
+        $query = SeoProject::query()
+            ->orderByDesc('month')
+            ->orderBy('id');
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->where('user_id', auth()->id());
+        }
+
+        return $query
+            ->get()
+            ->filter(function (SeoProject $project): bool {
+                return in_array((string) $project->status, [
+                    SeoProject::STATUS_PENDING,
+                    SeoProject::STATUS_RUNNING,
+                ], true) && $project->maxTasksAllowed() > (int) ($project->total_tasks ?? 0);
+            })
+            ->mapWithKeys(function (SeoProject $project): array {
+                $remaining = max(0, $project->maxTasksAllowed() - (int) ($project->total_tasks ?? 0));
+
+                return [
+                    (int) $project->id => sprintf(
+                        '%s (%s, con %d)',
+                        (string) $project->name,
+                        $project->monthCarbon()->format('m/Y'),
+                        $remaining
+                    ),
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  Collection<int, SeoArticle>  $records
+     * @return array{added:int, duplicate:int, overflow:int}
+     */
+    public static function assignArticlesToContentProject(Collection $records, int $projectId): array
+    {
+        $project = SeoProject::query()->find($projectId);
+        if (! $project instanceof SeoProject) {
+            return ['added' => 0, 'duplicate' => 0, 'overflow' => $records->count()];
+        }
+
+        if (! in_array((string) $project->status, [SeoProject::STATUS_PENDING, SeoProject::STATUS_RUNNING], true)) {
+            return ['added' => 0, 'duplicate' => 0, 'overflow' => $records->count()];
+        }
+
+        $records = $records
+            ->filter(fn (mixed $record): bool => $record instanceof SeoArticle)
+            ->values();
+
+        $added = 0;
+        $duplicate = 0;
+        $overflow = 0;
+
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, &$added, &$duplicate, &$overflow): void {
+            $project->refresh();
+            $max = $project->maxTasksAllowed();
+            $currentTotal = (int) ($project->total_tasks ?? 0);
+
+            $existingKeys = SeoProjectTask::query()
+                ->where('project_id', (int) $project->id)
+                ->get(['site_id', 'type', 'source_content'])
+                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id . '|' . SeoProjectTask::TYPE_REWRITE . '|' . mb_strtolower(trim((string) $task->source_content)))
+                ->all();
+            $existingMap = array_fill_keys($existingKeys, true);
+
+            foreach ($records as $record) {
+                if ($currentTotal >= $max) {
+                    $overflow++;
+
+                    continue;
+                }
+
+                $sourceContent = trim((string) ($record->title ?? ''));
+                if ($sourceContent === '') {
+                    $sourceContent = 'Article #' . (int) $record->id;
+                }
+
+                $siteId = (int) ($record->site_id ?? 0);
+                $key = $siteId . '|' . SeoProjectTask::TYPE_REWRITE . '|' . mb_strtolower($sourceContent);
+                if (isset($existingMap[$key])) {
+                    $duplicate++;
+
+                    continue;
+                }
+
+                SeoProjectTask::query()->create([
+                    'project_id' => (int) $project->id,
+                    'site_id' => $siteId > 0 ? $siteId : null,
+                    'type' => SeoProjectTask::TYPE_REWRITE,
+                    'source_content' => $sourceContent,
+                    'description' => null,
+                    'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
+                    'status' => SeoProjectTask::STATUS_PENDING,
+                ]);
+
+                $existingMap[$key] = true;
+                $currentTotal++;
+                $added++;
+            }
+
+            $project->update(['total_tasks' => $currentTotal]);
+        });
+
+        return [
+            'added' => $added,
+            'duplicate' => $duplicate,
+            'overflow' => $overflow,
+        ];
+    }
+
+    /**
+     * @param  array{added:int, duplicate:int, overflow:int}  $summary
+     */
+    public static function buildAssignContentProjectBody(array $summary): string
+    {
+        return __('seo-content-ai::filament.article_list.assign_completed_body', [
+            'added' => (int) ($summary['added'] ?? 0),
+            'duplicate' => (int) ($summary['duplicate'] ?? 0),
+            'overflow' => (int) ($summary['overflow'] ?? 0),
+        ]);
     }
 
     public static function canCreate(): bool

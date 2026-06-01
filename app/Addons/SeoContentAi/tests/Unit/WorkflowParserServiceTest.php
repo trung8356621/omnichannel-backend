@@ -100,6 +100,54 @@ HTML;
         $this->assertTrue($score['checklist']['table']['passed']);
     }
 
+    public function test_parse_faqs_with_label_style_headings(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+H2: Giới thiệu
+Nội dung chính.
+
+H2: Câu hỏi thường gặp
+H3: Giá bao nhiêu?
+Trả lời giá.
+
+H3: Có bảo hành không?
+Có bảo hành 12 tháng.
+MD;
+
+        $faqs = $parser->parseFaqs($markdown);
+        $result = $parser->removeFaqAndAppendShortcode($markdown);
+
+        $this->assertCount(2, $faqs);
+        $this->assertSame('Giá bao nhiêu?', $faqs[0]['question']);
+        $this->assertStringContainsString('[omi_faq]', $result);
+        $this->assertStringNotContainsString('Trả lời giá', $result);
+    }
+
+    public function test_parse_faqs_from_markdown_bullet_list(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+## H2: Câu hỏi thường gặp (FAQ)
+
+* **Số lượng đặt may tối thiểu (MOQ) là bao nhiêu?**
+* *Trả lời bởi Mr. Nam:* Chúng tôi nhận đơn hàng từ 100 sản phẩm trở lên.
+* **Thời gian hoàn thiện đơn hàng mẫu là bao lâu?**
+* *Trả lời bởi Mr. Nam:* Quy trình lên mẫu thường mất từ 3-5 ngày.
+MD;
+
+        $faqs = $parser->parseFaqs($markdown);
+        $stripped = $parser->removeFaqAndAppendShortcodeFromContent($markdown);
+
+        $this->assertCount(2, $faqs);
+        $this->assertSame('Số lượng đặt may tối thiểu (MOQ) là bao nhiêu?', $faqs[0]['question']);
+        $this->assertStringContainsString('100 sản phẩm', $faqs[0]['answer']);
+        $this->assertStringContainsString('[omi_faq]', $stripped);
+        $this->assertStringNotContainsString('MOQ', $stripped);
+    }
+
     public function test_remove_faq_and_append_shortcode(): void
     {
         $parser = $this->parser();

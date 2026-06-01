@@ -4,7 +4,90 @@
             mediaModalOpen: @entangle('mediaPickerOpen').live,
             mediaModalMode: 'featured',
             pickerLoading: @entangle('mediaPickerLoading').live,
+            galleryPickerSelectedKeys: [],
+            galleryPickerSelectedItems: {},
+            galleryPickerAnchorKey: null,
+            get galleryPickerSelectedCount() {
+                return this.galleryPickerSelectedKeys.length;
+            },
+            clearGalleryPickerSelection() {
+                this.galleryPickerSelectedKeys = [];
+                this.galleryPickerSelectedItems = {};
+                this.galleryPickerAnchorKey = null;
+            },
+            isGalleryPickerSelected(key) {
+                return this.galleryPickerSelectedKeys.includes(key);
+            },
+            readGalleryPickerItemFromEl(el) {
+                return {
+                    wp_attachment_id: Number(el?.dataset?.pickerWp || 0),
+                    seo_media_id: Number(el?.dataset?.pickerSeo || 0),
+                    url: String(el?.dataset?.pickerUrl || ''),
+                    alt: String(el?.dataset?.pickerAlt || ''),
+                    slug: String(el?.dataset?.pickerSlug || ''),
+                };
+            },
+            visibleGalleryPickerElements() {
+                return Array.from(document.querySelectorAll('.seo-article-media-modal__item[data-picker-key]'));
+            },
+            toggleGalleryPickerItem(event, key, el) {
+                if (this.mediaModalMode !== 'gallery' || !key) {
+                    return;
+                }
+
+                const shiftKey = event?.shiftKey === true;
+                if (shiftKey && this.galleryPickerAnchorKey) {
+                    const nodes = this.visibleGalleryPickerElements();
+                    const keys = nodes.map((node) => node.dataset.pickerKey);
+                    const fromIndex = keys.indexOf(this.galleryPickerAnchorKey);
+                    const toIndex = keys.indexOf(key);
+                    if (fromIndex !== -1 && toIndex !== -1) {
+                        const start = Math.min(fromIndex, toIndex);
+                        const end = Math.max(fromIndex, toIndex);
+                        for (let i = start; i <= end; i += 1) {
+                            const node = nodes[i];
+                            const itemKey = keys[i];
+                            if (!itemKey) {
+                                continue;
+                            }
+                            this.galleryPickerSelectedItems[itemKey] = this.readGalleryPickerItemFromEl(node);
+                            if (!this.galleryPickerSelectedKeys.includes(itemKey)) {
+                                this.galleryPickerSelectedKeys.push(itemKey);
+                            }
+                        }
+                        this.galleryPickerAnchorKey = key;
+                        return;
+                    }
+                }
+
+                if (this.isGalleryPickerSelected(key)) {
+                    this.galleryPickerSelectedKeys = this.galleryPickerSelectedKeys.filter((item) => item !== key);
+                    delete this.galleryPickerSelectedItems[key];
+                } else {
+                    this.galleryPickerSelectedKeys.push(key);
+                    this.galleryPickerSelectedItems[key] = this.readGalleryPickerItemFromEl(el);
+                }
+                this.galleryPickerAnchorKey = key;
+            },
+            confirmGalleryPickerSelection() {
+                if (this.galleryPickerSelectedCount === 0) {
+                    return;
+                }
+
+                const items = this.galleryPickerSelectedKeys
+                    .map((key) => this.galleryPickerSelectedItems[key])
+                    .filter((item) => item && String(item.url || '').trim() !== '');
+
+                if (items.length === 0) {
+                    return;
+                }
+
+                $wire.confirmGallerySelectionFromPicker({ items }).then(() => {
+                    this.clearGalleryPickerSelection();
+                });
+            },
             openArticleMediaModal(mode, blockId = null) {
+                this.clearGalleryPickerSelection();
                 this.mediaModalMode = mode;
                 this.mediaModalOpen = true;
                 this.pickerLoading = true;
@@ -16,6 +99,7 @@
                 }
             },
             closeArticleMediaModal() {
+                this.clearGalleryPickerSelection();
                 $wire.closeMediaPicker();
             },
         }"
@@ -41,16 +125,54 @@
                 $wire.persistArticleLocal(detail.html ?? '');
             }
         "
+        x-on:article-editor-shortcut.window="
+            const action = $event.detail?.action;
+            if (action === 'save') {
+                $wire.requestSaveArticle();
+            } else if (action === 'sync') {
+                @if ($record->wp_post_id)
+                    $wire.requestSyncToWordPress();
+                @endif
+            } else if (action === 'preview') {
+                const url = @js($this->getArticlePreviewUrl());
+                if (url) {
+                    window.open(url, '_blank', 'noopener');
+                }
+            } else if (action === 'toggle-seo') {
+                window.dispatchEvent(new CustomEvent('article-editor-toggle-seo-fields'));
+            }
+        "
         x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
         @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
+        x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [])"
         x-on:seo-analyze-draft.window="$wire.analyzeSeoDraft($event.detail.html)"
+        x-on:seo-rewrite-outline.window="
+            const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            $wire.rewriteOutlineFromWorkflow(
+                detail.mode ?? 'title',
+                detail.title ?? '',
+                detail.html ?? '',
+            ).then((result) => {
+                window.dispatchEvent(new CustomEvent('seo-outline-rewritten', { detail: result || {} }));
+            });
+        "
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
         x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"
         @article-faq-extract-debug-cleared.window="window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'))"
         x-on:extract-article-faqs-with-context.window="$wire.extractFaqsFromSelection($event.detail.html ?? '', $event.detail.articleHtml ?? '')"
         x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
-        x-on:generate-article-image.window="$wire.generateArticleImageFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
+        x-on:generate-article-image.window="$wire.generateArticleImageFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '', $event.detail.target ?? 'editor', $event.detail.loaiSanPhamCategoryArticleId ?? 0, $event.detail.loaiSanPhamCustom ?? '')"
+        x-on:preview-generate-article-image-prompt.window="
+            $wire.previewGenerateArticleImagePrompt(
+                $event.detail.userBrief ?? '',
+                $event.detail.target ?? 'editor',
+                $event.detail.loaiSanPhamCategoryArticleId ?? 0,
+                $event.detail.loaiSanPhamCustom ?? ''
+            ).then((result) => {
+                window.dispatchEvent(new CustomEvent('article-generate-image-prompt-preview', { detail: result ?? {} }));
+            });
+        "
         x-on:generate-article-video.window="$wire.generateArticleVideoFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '')"
         x-on:check-faq-question.window="
             $wire.checkFaqQuestionDuplicate($event.detail.question, $event.detail.faqId).then((result) => {
@@ -125,6 +247,8 @@
                             </button>
                         @endif
                     </div>
+
+                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-fields-collapsible')
                 </div>
 
                 <script type="application/json" id="seo-article-initial-html">@json($editorHtml)</script>
@@ -154,207 +278,29 @@
                 <div wire:ignore id="seo-article-faq-root" class="w-full mt-4"></div>
             </div>
 
-            {{-- Sidebar: widgets thường hoặc Chat AI (mở từ nút tròn góc màn hình) --}}
+            {{-- Cột phải: preview + sidebar giữa + xuất bản --}}
             <aside
                 class="wp-article-edit-sidebar"
                 x-data="{ aiChatOpen: false }"
                 x-on:seo-article-ai-chat-open.window="aiChatOpen = true"
                 x-on:seo-article-ai-chat-close.window="aiChatOpen = false"
             >
-                <div x-show="!aiChatOpen" x-cloak class="space-y-4">
-                <div wire:ignore id="seo-article-links-root"></div>
-
-                {{-- Xuất bản --}}
-                <div class="wp-postbox">
-                    <div class="wp-postbox-header">
-                        <h2>Xuất bản</h2>
+                <div class="wp-article-edit-rail">
+                    <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-rail-top">
+                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-snippet-sidebar')
                     </div>
-                    <div class="wp-postbox-inside space-y-3 text-sm">
-                        <div class="flex justify-end">
-                            <a
-                                href="{{ $this->getArticlePreviewUrl() }}"
-                                target="_blank"
-                                rel="noopener"
-                                class="inline-flex items-center rounded border border-sky-600 px-3 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:border-sky-500 dark:text-sky-300 dark:hover:bg-sky-950/50"
-                            >
-                                Xem trước
-                            </a>
-                        </div>
 
-                        <div class="space-y-3 border-y border-gray-200 py-3 dark:border-gray-700">
-                            @if ($record->wp_post_id)
-                                <div class="text-xs">
-                                    <span class="text-gray-500 dark:text-gray-400">WP ID:</span>
-                                    <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
-                                </div>
-                            @endif
-                            <div class="text-xs">
-                                <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
-                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getStatusLabelForPublishBox() }}</strong>
-                                <button
-                                    type="button"
-                                    wire:click="startStatusEdit"
-                                    class="ml-1 text-sky-600 hover:underline"
-                                >
-                                    Chỉnh sửa
-                                </button>
-                                @if ($editingStatus)
-                                    <div class="mt-2 flex items-center gap-2">
-                                        <select
-                                            wire:model.live="articleStatus"
-                                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
-                                        >
-                                            <option value="draft">Bản nháp</option>
-                                            <option value="published">Đã xuất bản</option>
-                                            <option value="scheduled">Đã lên lịch</option>
-                                            <option value="private">Riêng tư</option>
-                                        </select>
-                                        <button type="button" wire:click="applyStatusEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                                        <button type="button" wire:click="cancelStatusEdit" class="text-sky-600 hover:underline">Hủy</button>
-                                    </div>
-                                @endif
-                            </div>
+                    <div
+                        class="wp-article-edit-rail-center"
+                        x-bind:class="{ 'is-chat': aiChatOpen }"
+                    >
+                        <div class="wp-article-edit-sidebar-window">
+                            <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-sidebar-scroll space-y-4">
+                                <div wire:ignore id="seo-article-links-root" style="margin: 0;"></div>
 
-                            <div class="text-xs">
-                                <span class="text-gray-500 dark:text-gray-400">Hiển thị:</span>
-                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getVisibilityLabel() }}</strong>
-                                <button
-                                    type="button"
-                                    wire:click="startVisibilityEdit"
-                                    class="ml-1 text-sky-600 hover:underline"
-                                >
-                                    Chỉnh sửa
-                                </button>
-                                @if ($editingVisibility)
-                                    <div class="mt-2 flex items-center gap-2">
-                                        <select
-                                            wire:model.live="visibility"
-                                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
-                                        >
-                                            <option value="public">Công khai</option>
-                                            <option value="private">Riêng tư</option>
-                                        </select>
-                                        <button type="button" wire:click="applyVisibilityEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                                        <button type="button" wire:click="cancelVisibilityEdit" class="text-sky-600 hover:underline">Hủy</button>
-                                    </div>
-                                @endif
-                            </div>
+                                <div wire:ignore id="seo-article-domain-widgets-root" style="margin: 0;"></div>
 
-                            <div class="text-xs">
-                                <span class="text-gray-500 dark:text-gray-400">Bài lên lịch:</span>
-                                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getPublishWhenLabel() }}</strong>
-                                <button
-                                    type="button"
-                                    wire:click="startPublishAtEdit"
-                                    class="ml-1 text-sky-600 hover:underline"
-                                >
-                                    Chỉnh sửa
-                                </button>
-                                @if ($editingPublishAt)
-                                    <div
-                                        class="mt-2 space-y-2"
-                                        x-data="{
-                                            day: @entangle('publishDay').live,
-                                            month: @entangle('publishMonth').live,
-                                            year: @entangle('publishYear').live,
-                                            hour: @entangle('publishHour').live,
-                                            minute: @entangle('publishMinute').live,
-                                            iso: '',
-                                            init() {
-                                                this.rebuildIso();
-                                                this.$watch('day', () => this.rebuildIso());
-                                                this.$watch('month', () => this.rebuildIso());
-                                                this.$watch('year', () => this.rebuildIso());
-                                                this.$watch('hour', () => this.rebuildIso());
-                                                this.$watch('minute', () => this.rebuildIso());
-                                            },
-                                            pad(v) {
-                                                const n = Number(v || 0);
-                                                if (Number.isNaN(n)) return '00';
-                                                return String(n).padStart(2, '0');
-                                            },
-                                            rebuildIso() {
-                                                const y = String(this.year || '').padStart(4, '0');
-                                                const m = this.pad(this.month);
-                                                const d = this.pad(this.day);
-                                                const h = this.pad(this.hour);
-                                                const i = this.pad(this.minute);
-                                                this.iso = `${y}-${m}-${d}T${h}:${i}`;
-                                            },
-                                            applyIso() {
-                                                if (!this.iso || !this.iso.includes('T')) return;
-                                                const [datePart, timePart] = this.iso.split('T');
-                                                const [y, m, d] = datePart.split('-');
-                                                const [h, i] = timePart.split(':');
-                                                this.year = y || this.year;
-                                                this.month = m || this.month;
-                                                this.day = d || this.day;
-                                                this.hour = h || this.hour;
-                                                this.minute = i || this.minute;
-                                            }
-                                        }"
-                                    >
-                                        <input
-                                            x-model="iso"
-                                            x-on:change="applyIso()"
-                                            type="datetime-local"
-                                            step="60"
-                                            class="seo-publish-datetime-input rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1.5 px-2"
-                                        />
-                                    </div>
-                                    <div class="mt-1 flex items-center gap-2">
-                                        <button type="button" wire:click="applyPublishAtEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                                        <button type="button" wire:click="cancelPublishAtEdit" class="text-sky-600 hover:underline">Hủy</button>
-                                    </div>
-                                @endif
-                            </div>
-                        </div>
-
-                        <p class="text-xs text-gray-500 dark:text-gray-400">
-                            Nháp editor lưu cục bộ trong trình duyệt. «Lưu» ghi vào hệ thống SEO; «Đồng bộ» đẩy lên WordPress.
-                        </p>
-                        <div class="seo-article-actions flex flex-col gap-2 pt-2">
-                            <button
-                                type="button"
-                                wire:click="requestSaveArticle"
-                                wire:loading.attr="disabled"
-                                wire:target="requestSaveArticle,persistArticleLocal"
-                                class="seo-wp-btn-primary w-full"
-                            >
-                                <span wire:loading.remove wire:target="requestSaveArticle,persistArticleLocal">
-                                    {{ $articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật' }}
-                                </span>
-                                <span wire:loading wire:target="requestSaveArticle,persistArticleLocal">Đang lưu…</span>
-                            </button>
-                            <button
-                                type="button"
-                                wire:click="requestSyncToWordPress"
-                                wire:loading.attr="disabled"
-                                wire:target="requestSyncToWordPress,syncArticleToWordPress"
-                                class="seo-wp-btn-secondary w-full"
-                                @if (! $record->wp_post_id) disabled title="Chưa liên kết WordPress" @endif
-                            >
-                                <span wire:loading.remove wire:target="requestSyncToWordPress,syncArticleToWordPress">Đồng bộ WordPress</span>
-                                <span wire:loading wire:target="requestSyncToWordPress,syncArticleToWordPress">Đang đồng bộ…</span>
-                            </button>
-                            @if ($record->wp_post_id)
-                                @php($wpPermalink = $this->getArticlePermalink())
-                                @if ($wpPermalink !== '')
-                                    <a
-                                        href="{{ $wpPermalink }}"
-                                        target="_blank"
-                                        rel="noopener"
-                                        class="seo-wp-btn-outline w-full text-center"
-                                    >
-                                        Xem trên WordPress
-                                    </a>
-                                @endif
-                            @endif
-                        </div>
-                    </div>
-                </div>
-
-                @if (! $this->supportsProductGallery())
+                                @if (! $this->supportsProductGallery())
                     {{-- Ảnh đại diện --}}
                     <div class="wp-postbox">
                         <div class="wp-postbox-header">
@@ -473,6 +419,15 @@
                                         </div>
                                     @endforeach
                                 </div>
+                            @else
+                                <button
+                                    type="button"
+                                    class="wp-product-gallery-generate mt-2"
+                                    title="Tạo ảnh AI cho album sản phẩm"
+                                    x-on:click="window.dispatchEvent(new CustomEvent('seo-open-generate-image-modal', { detail: { target: 'product-gallery' } }))"
+                                >
+                                    Tạo ảnh
+                                </button>
                             @endif
                             <button
                                 type="button"
@@ -481,6 +436,14 @@
                                 title="Thêm ảnh từ thư viện WordPress"
                             >
                                 Thêm ảnh thư viện sản phẩm
+                            </button>
+                            <button
+                                type="button"
+                                class="wp-product-gallery-distribute mt-2"
+                                title="Chèn ảnh album vào các section chưa có hình"
+                                x-on:click="window.dispatchEvent(new CustomEvent('seo-editor-distribute-product-gallery'))"
+                            >
+                                Rải ảnh vào các section
                             </button>
                             <p class="mt-1 text-xs text-gray-500">
                                 @if (count($productGallery) > 0)
@@ -503,15 +466,22 @@
                     </div>
                 @endif
 
-                </div>
+                            </div>
 
-                <div
-                    x-show="aiChatOpen"
-                    x-cloak
-                    wire:ignore
-                    id="seo-article-ai-chat-root"
-                    class="wp-sidebar-ai-chat"
-                ></div>
+                            <div
+                                x-show="aiChatOpen"
+                                x-cloak
+                                wire:ignore
+                                id="seo-article-ai-chat-root"
+                                class="wp-sidebar-ai-chat wp-article-edit-sidebar-scroll wp-article-edit-sidebar-scroll--chat"
+                            ></div>
+                        </div>
+                    </div>
+
+                    <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-rail-bottom">
+                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-sidebar')
+                    </div>
+                </div>
             </aside>
         </div>
 
@@ -544,6 +514,7 @@
                         type="button"
                         wire:click="setMediaPickerTab('article')"
                         class="seo-article-media-modal__tab {{ $mediaPickerTab === 'article' ? 'is-active' : '' }}"
+                        x-on:click="clearGalleryPickerSelection()"
                     >
                         Trong bài
                     </button>
@@ -551,6 +522,7 @@
                         type="button"
                         wire:click="setMediaPickerTab('original')"
                         class="seo-article-media-modal__tab {{ $mediaPickerTab === 'original' ? 'is-active' : '' }}"
+                        x-on:click="clearGalleryPickerSelection()"
                     >
                         Gốc (WP)
                     </button>
@@ -558,6 +530,7 @@
                         type="button"
                         wire:click="setMediaPickerTab('local')"
                         class="seo-article-media-modal__tab {{ $mediaPickerTab === 'local' ? 'is-active' : '' }}"
+                        x-on:click="clearGalleryPickerSelection()"
                     >
                         Nội bộ (Laravel)
                     </button>
@@ -585,6 +558,14 @@
                     </button>
                 </div>
 
+                <p
+                    x-show="mediaModalMode === 'gallery'"
+                    x-cloak
+                    class="seo-article-media-modal__hint"
+                >
+                    Click / Shift+click để chọn nhiều ảnh, rồi bấm <strong>Thêm vào album</strong> ở thanh bên dưới.
+                </p>
+
                 @if ($mediaPickerError)
                     <p class="seo-article-media-modal__error">{{ $mediaPickerError }}</p>
                 @endif
@@ -607,25 +588,17 @@
                             <p class="seo-article-media-modal__empty">
                                 {{ $mediaPickerTab === 'article' ? 'Chưa có ảnh trong nội dung bài viết.' : 'Không có ảnh trong thư viện.' }}
                             </p>
-                        @elseif (! empty($mediaPickerImages))
+                        @endif
+
+                        @if (! empty($mediaPickerImages))
                             <div class="seo-article-media-modal__grid">
                                 @foreach ($mediaPickerImages as $image)
-                                    <button
-                                        type="button"
-                                        class="seo-article-media-modal__item"
-                                        wire:click="selectMediaFromPicker({{ (int) ($image['wp_attachment_id'] ?? ($mediaPickerTab === 'original' ? ($image['id'] ?? 0) : 0)) }}, @js($image['url'] ?? ''), @js($image['alt'] ?? ''), @js($image['slug'] ?? ''), {{ (int) ($image['seo_media_id'] ?? ($mediaPickerTab === 'local' ? ($image['id'] ?? 0) : 0)) }})"
-                                        wire:key="picker-media-{{ $mediaPickerTab }}-{{ $mediaPickerPage }}-{{ $image['id'] }}"
-                                    >
-                                        <img
-                                            src="{{ $image['url'] }}"
-                                            alt="{{ $image['alt'] ?? $image['slug'] }}"
-                                            loading="lazy"
-                                            class="seo-article-media-modal__thumb"
-                                        />
-                                        @if (filled($image['slug'] ?? ''))
-                                            <span class="seo-article-media-modal__slug">{{ $image['slug'] }}</span>
-                                        @endif
-                                    </button>
+                                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.media-picker-item', [
+                                        'image' => $image,
+                                        'mediaPickerTab' => $mediaPickerTab,
+                                        'mediaPickerPage' => $mediaPickerPage,
+                                        'mediaPickerMode' => $mediaPickerMode,
+                                    ])
                                 @endforeach
                             </div>
                         @endif
@@ -653,6 +626,38 @@
                         </button>
                     </div>
                 @endif
+
+                <div
+                    x-show="mediaModalMode === 'gallery'"
+                    x-cloak
+                    class="seo-article-media-modal__select-bar"
+                >
+                    <div class="seo-article-media-modal__select-bar-left">
+                        <span>
+                            Đã chọn: <strong x-text="galleryPickerSelectedCount">0</strong>
+                        </span>
+                        <button
+                            type="button"
+                            class="seo-article-media-modal__select-bar-clear"
+                            x-on:click="clearGalleryPickerSelection()"
+                            x-show="galleryPickerSelectedCount > 0"
+                            x-cloak
+                        >
+                            Bỏ chọn
+                        </button>
+                    </div>
+                    <button
+                        type="button"
+                        class="seo-article-media-modal__select-bar-submit"
+                        x-on:click="confirmGalleryPickerSelection()"
+                        x-bind:disabled="galleryPickerSelectedCount === 0"
+                        wire:loading.attr="disabled"
+                        wire:target="confirmGallerySelectionFromPicker"
+                    >
+                        <span wire:loading.remove wire:target="confirmGallerySelectionFromPicker">Thêm vào album</span>
+                        <span wire:loading wire:target="confirmGallerySelectionFromPicker">Đang thêm…</span>
+                    </button>
+                </div>
             </div>
         </div>
     </div>

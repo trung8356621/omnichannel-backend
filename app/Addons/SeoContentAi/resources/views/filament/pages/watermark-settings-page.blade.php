@@ -2,19 +2,26 @@
     <div class="space-y-6">
         <div class="fi-section rounded-xl bg-white shadow-sm ring-1 ring-gray-950/5 dark:bg-gray-900 dark:ring-white/10 p-4">
             <div class="flex flex-wrap items-center gap-3">
-                <label class="text-sm font-semibold text-gray-700 dark:text-gray-300" for="wm-auto-site">
-                    Domain:
-                </label>
-                <select
-                    id="wm-auto-site"
-                    wire:model.live="siteId"
-                    class="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
-                >
-                    <option value="">-- Select domain --</option>
-                    @foreach ($this->sites as $site)
-                        <option value="{{ $site->id }}">{{ $site->domain }}</option>
-                    @endforeach
-                </select>
+                @unless ($this->hasLockedGlobalSite())
+                    <label class="text-sm font-semibold text-gray-700 dark:text-gray-300" for="wm-auto-site">
+                        Domain:
+                    </label>
+                    <select
+                        id="wm-auto-site"
+                        wire:model.live="siteId"
+                        class="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
+                    >
+                        <option value="">-- Select domain --</option>
+                        @foreach ($this->sites as $site)
+                            <option value="{{ $site->id }}">{{ $site->domain }}</option>
+                        @endforeach
+                    </select>
+                @else
+                    <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Domain:</span>
+                    <span class="text-sm rounded-lg border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white px-3 py-2">
+                        {{ $this->currentSiteDomain() ?? ('Site #' . (int) ($siteId ?? 0)) }}
+                    </span>
+                @endunless
             </div>
             <p class="mt-2 text-xs text-gray-500">
                 Use "Watermark designer" to edit the drag-and-drop canvas; this page manages automatic upload rules and batch processing.

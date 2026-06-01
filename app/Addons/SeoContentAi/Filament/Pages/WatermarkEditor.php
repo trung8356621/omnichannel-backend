@@ -43,7 +43,10 @@ class WatermarkEditor extends Page
 
     public function mount(): void
     {
-        if ($this->siteId === null) {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        if ($globalSiteId !== null) {
+            $this->siteId = $globalSiteId;
+        } elseif ($this->siteId === null) {
             $firstSite = $this->resolveSitesQuery()->first();
             $this->siteId = $firstSite instanceof Site ? (int) $firstSite->id : null;
         }
@@ -51,6 +54,11 @@ class WatermarkEditor extends Page
 
     public function updatedSiteId(): void
     {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        if ($globalSiteId !== null) {
+            $this->siteId = $globalSiteId;
+        }
+
         $this->imageUrl = null;
         $this->imageId = null;
     }
@@ -138,6 +146,22 @@ class WatermarkEditor extends Page
     public function getSitesProperty(): Collection
     {
         return $this->resolveSitesQuery()->get();
+    }
+
+    public function hasLockedGlobalSite(): bool
+    {
+        return SeoAccessControl::hasGlobalSiteScope();
+    }
+
+    public function currentSiteDomain(): ?string
+    {
+        if ($this->siteId === null || $this->siteId <= 0) {
+            return null;
+        }
+
+        $site = $this->sites->firstWhere('id', (int) $this->siteId);
+
+        return $site instanceof Site ? (string) $site->domain : null;
     }
 
     private function resolveSitesQuery()

@@ -10,6 +10,8 @@ use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
+use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\PromptVariableSync;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\ApiConnection;
@@ -114,13 +116,14 @@ class PromptResource extends Resource
                                                 'video' => 'Video (manual URL)',
                                             ])
                                             ->default('default')
-                                            ->inline(),
+                                            ->inline()
+                                            ->live(),
                                         Forms\Components\Toggle::make('is_active')
                                             ->label(__('seo-content-ai::filament.prompt.active'))
                                             ->default(true),
                                     ]),
                                 Forms\Components\Section::make(__('seo-content-ai::filament.prompt.variables'))
-                                    ->description('Auto-sync from {{variable_name}} in Markdown on save. Default runtime variables ({{input}}, {{loai_san_pham}}, {{PARENT_RESULT}}, ...) do not need declaration.')
+                                    ->description('Auto-sync from {{variable_name}} in Markdown. Runtime mặc định: {{input}}, {{loai_san_pham}}, {{tone}}, {{site_cta}}, {{keyword_density}}, {{article_length}}, ... — không cần khai báo.')
                                     ->schema([
                                         Forms\Components\Repeater::make('variables')
                                             ->label('')
@@ -141,34 +144,99 @@ class PromptResource extends Resource
                             ])
                             ->columnSpan(4),
 
-                        Forms\Components\Section::make(__('seo-content-ai::filament.prompt.content_markdown'))
-                            ->description('Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
+                        Forms\Components\Group::make()
+                            ->columnSpan(8)
                             ->schema([
-                                Forms\Components\MarkdownEditor::make('markdown_content')
-                                    ->label('')
-                                    ->required()
-                                    ->columnSpanFull()
-                                    ->minHeight('440px')
-                                    ->toolbarButtons([
-                                        'bold',
-                                        'italic',
-                                        'bulletList',
-                                        'orderedList',
-                                        'blockquote',
-                                        'link',
-                                        'undo',
-                                        'redo',
-                                    ])
-                                    ->placeholder(
-                                        "# Role\nYou are an expert...\n\n"
-                                        . "# Context\nSystem...\n\n"
-                                        . "# Task: Main image\nCapture product image...\n\n"
-                                        . "# Sub-task: Side shot\n..."
-                                    ),
-                            ])
-                            ->columnSpan(8),
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.content_markdown'))
+                                    ->description('Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
+                                    ->schema([
+                                        Forms\Components\MarkdownEditor::make('markdown_content')
+                                            ->label('')
+                                            ->required()
+                                            ->columnSpanFull()
+                                            ->minHeight('440px')
+                                            ->toolbarButtons([
+                                                'bold',
+                                                'italic',
+                                                'bulletList',
+                                                'orderedList',
+                                                'blockquote',
+                                                'link',
+                                                'undo',
+                                                'redo',
+                                            ])
+                                            ->placeholder(
+                                                "# Role\nYou are an expert...\n\n"
+                                                . "# Context\nSystem...\n\n"
+                                                . "# Task: Main image\nCapture product image...\n\n"
+                                                . "# Sub-task: Side shot\n..."
+                                            ),
+                                    ]),
+                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.post_processing.title'))
+                                    ->description(__('seo-content-ai::filament.prompt.post_processing.description'))
+                                    ->visible(fn (Get $get): bool => $get('tools') === 'image')
+                                    ->schema(self::postProcessingFormSchema()),
+                            ]),
                     ]),
             ]);
+    }
+
+    /**
+     * @return array<int, Forms\Components\Component>
+     */
+    public static function postProcessingFormSchema(): array
+    {
+        return [
+            Forms\Components\View::make('seo-content-ai::filament.forms.prompt-post-processing-styles'),
+            Forms\Components\Fieldset::make(__('seo-content-ai::filament.prompt.post_processing.quick_split'))
+                ->schema([
+                    Forms\Components\Toggle::make('settings.post_processing.split_enabled')
+                        ->label(__('seo-content-ai::filament.prompt.post_processing.split_enable'))
+                        ->inline(false),
+                    Forms\Components\Grid::make(2)
+                        ->schema([
+                            Forms\Components\TextInput::make('settings.post_processing.split_rows')
+                                ->label(__('seo-content-ai::filament.media_tools.split_rows'))
+                                ->numeric()
+                                ->minValue(1)
+                                ->maxValue(12)
+                                ->default(3)
+                                ->required(),
+                            Forms\Components\TextInput::make('settings.post_processing.split_columns')
+                                ->label(__('seo-content-ai::filament.media_tools.split_columns'))
+                                ->numeric()
+                                ->minValue(1)
+                                ->maxValue(12)
+                                ->default(2)
+                                ->required(),
+                        ]),
+                    Forms\Components\Placeholder::make('split_hint')
+                        ->label('')
+                        ->content(__('seo-content-ai::filament.prompt.post_processing.split_hint')),
+                ]),
+            Forms\Components\Fieldset::make(__('seo-content-ai::filament.prompt.post_processing.quick_resize'))
+                ->schema([
+                    Forms\Components\Toggle::make('settings.post_processing.resize_enabled')
+                        ->label(__('seo-content-ai::filament.prompt.post_processing.resize_enable'))
+                        ->inline(false),
+                    Forms\Components\Grid::make(2)
+                        ->schema([
+                            Forms\Components\TextInput::make('settings.post_processing.resize_width')
+                                ->label(__('seo-content-ai::filament.media_tools.width'))
+                                ->numeric()
+                                ->minValue(1)
+                                ->placeholder('px'),
+                            Forms\Components\TextInput::make('settings.post_processing.resize_height')
+                                ->label(__('seo-content-ai::filament.media_tools.height'))
+                                ->numeric()
+                                ->minValue(1)
+                                ->placeholder('px'),
+                        ]),
+                    Forms\Components\Placeholder::make('resize_hint')
+                        ->label('')
+                        ->content(__('seo-content-ai::filament.prompt.post_processing.resize_hint')),
+                ]),
+        ];
     }
 
     /**
@@ -309,6 +377,7 @@ class PromptResource extends Resource
 
         return $names
             ->reject(static fn (string $name): bool => PromptLoaiSanPhamVariable::isLoaiSanPhamName($name)
+                || PromptSiteContextVariable::isName($name)
                 || strtoupper($name) === 'PARENT_RESULT')
             ->map(static function (string $name) use ($declared, $defaults): array {
                 $row = $declared->firstWhere('name', $name);
@@ -335,7 +404,9 @@ class PromptResource extends Resource
             ->filter(static function (array $row): bool {
                 $name = trim((string) ($row['name'] ?? ''));
 
-                return $name !== '' && ! PromptLoaiSanPhamVariable::isLoaiSanPhamName($name);
+                return $name !== ''
+                    && ! PromptLoaiSanPhamVariable::isLoaiSanPhamName($name)
+                    && ! PromptSiteContextVariable::isName($name);
             })
             ->values()
             ->all();
@@ -354,8 +425,15 @@ class PromptResource extends Resource
             'post_excerpt' => 'Excerpt',
             'site_domain' => 'Website domain',
             'site_short_description' => 'Website short description (domain)',
-            'site_cta' => 'Website CTA / contact (domain)',
-            'site_links' => 'Link list (keyword -> URL, domain)',
+            'site_cta' => 'Website CTA / contact (domain) — includes [phone], [website], … placeholders for AI',
+            'site_links' => 'Link list (deprecated — luôn rỗng; dùng đồng bộ keyword + gợi ý editor)',
+            'tone' => 'Giọng văn (domain override, fallback SEO → Tùy chỉnh → Prompt)',
+            'article_length' => 'Độ dài bài theo post_type hiện tại (số chữ, settings)',
+            'article_length_product' => 'Độ dài bài — product (mặc định 1000)',
+            'article_length_default' => 'Độ dài bài — các loại khác (mặc định 2000)',
+            'keyword_density' => 'Mật độ từ khóa theo post_type hiện tại',
+            'keyword_density_product' => 'Mật độ từ khóa — product',
+            'keyword_density_default' => 'Mật độ từ khóa — các loại khác',
             'loai_san_pham' => 'Product category (product_cat) - default runtime variable from domain -> product_cat',
         ];
     }
@@ -367,9 +445,10 @@ class PromptResource extends Resource
      */
     public static function defaultRuntimeVariableNames(): array
     {
-        return [
+        return array_values(array_unique([
             PromptLoaiSanPhamVariable::NAME,
-        ];
+            ...PromptSiteContextVariable::names(),
+        ]));
     }
 
     /**

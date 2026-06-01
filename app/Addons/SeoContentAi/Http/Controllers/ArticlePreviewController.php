@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleFaqHtmlRenderer;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
@@ -29,8 +30,7 @@ class ArticlePreviewController extends Controller
         return view('seo-content-ai::articles.preview', [
             'article' => $article,
             'contentHtml' => $contentHtml,
-            'focusKeyword' => $article->keywords->firstWhere('is_main', true)?->keyword
-                ?? $article->keywords->first()?->keyword,
+            'focusKeyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
             'permalink' => app(WordPressArticleContentService::class)->resolvePermalink($article),
             'editUrl' => ArticleResource::panelUrl('edit', ['record' => $article]),
         ]);

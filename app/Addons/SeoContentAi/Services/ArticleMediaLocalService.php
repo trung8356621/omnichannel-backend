@@ -126,6 +126,7 @@ final class ArticleMediaLocalService
             return $this->resolveProductAlbum($article);
         }
 
+        $article->unsetRelation('articleMetas');
         $album = $this->resolveProductAlbum($article);
         foreach ($album as $item) {
             if ((int) ($item['id'] ?? 0) === $attachmentId || (string) ($item['url'] ?? '') === $url) {
@@ -139,6 +140,33 @@ final class ArticleMediaLocalService
         ];
 
         return $this->saveProductAlbumLocal($article, $album);
+    }
+
+    public function resolveLocalRefIdFromImageUrl(int $siteId, string $url): int
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return 0;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path) || ! str_contains($path, '/storage/uploads/seo_media/')) {
+            return 0;
+        }
+
+        $relative = ltrim(str_replace('/storage/', '', $path), '/');
+        if ($relative === '') {
+            return 0;
+        }
+
+        $query = SeoMedia::query()->where('path', $relative);
+        if ($siteId > 0) {
+            $query->where('site_id', $siteId);
+        }
+
+        $media = $query->first();
+
+        return $media !== null ? (int) $media->id : 0;
     }
 
     /**

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ExternalLink, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Wand2 } from 'lucide-react';
+import { ExternalLink, Link2, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
 import { t } from '../utils/i18n';
@@ -239,7 +239,8 @@ function ImageRow({
     onPatch,
     onSlugChange,
     onFocusBlock,
-    onQuickFix,
+    onQuickFixSlug,
+    onQuickFixAltTitle,
     canQuickFix = false,
     onNotify,
 }) {
@@ -444,17 +445,33 @@ function ImageRow({
                             type="button"
                             className="seo-article-images-quick-fix-btn"
                             disabled={busy || excluded || !canQuickFix}
-                            onClick={() => onQuickFix?.(row)}
+                            onClick={() => onQuickFixSlug?.(row)}
                             title={
                                 excluded
                                     ? t('image_except_quick_fix_hint')
                                     : canQuickFix
-                                      ? t('image_quick_fix_hint')
+                                      ? t('image_quick_fix_slug_hint')
                                       : t('image_quick_fix_missing_keyword')
                             }
                         >
-                            <Wand2 size={14} />
-                            {t('quick_fix')}
+                            <Link2 size={14} />
+                            {t('fix_slug')}
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-article-images-quick-fix-btn"
+                            disabled={busy || excluded || !canQuickFix}
+                            onClick={() => onQuickFixAltTitle?.(row)}
+                            title={
+                                excluded
+                                    ? t('image_except_quick_fix_hint')
+                                    : canQuickFix
+                                      ? t('image_quick_fix_alt_title_hint')
+                                      : t('image_quick_fix_missing_keyword')
+                            }
+                        >
+                            <Type size={14} />
+                            {t('fix_alt_title')}
                         </button>
                         <button
                             type="button"
@@ -512,8 +529,10 @@ export default function ArticleImagesTab({
     onPatchImage,
     onSlugChange,
     onFocusBlock,
-    onQuickFixAll,
-    onQuickFixOne,
+    onQuickFixSlugAll,
+    onQuickFixSlugOne,
+    onQuickFixAltTitleAll,
+    onQuickFixAltTitleOne,
     onNotify,
 }) {
     const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
@@ -577,6 +596,7 @@ export default function ArticleImagesTab({
                               caption: String(row?.caption || '').trim(),
                               align: String(row?.align || 'none').trim(),
                               originLabel: String(row?.originLabel || row?.origin_label || '').trim(),
+                              excludeQuickFix: Boolean(row?.excludeQuickFix ?? row?.exclude_quick_fix),
                           };
                       })
                       .filter(Boolean)
@@ -700,20 +720,36 @@ export default function ArticleImagesTab({
                         </details>
                     ) : null}
                 </div>
-                <button
-                    type="button"
-                    className="seo-images-quick-fix-btn"
-                    disabled={!canQuickFix}
-                    title={
-                        canQuickFix
-                            ? t('images_tab_quick_fix_all_hint')
-                            : t('image_quick_fix_missing_keyword')
-                    }
-                    onClick={() => onQuickFixAll?.(mergedImages)}
-                >
-                    <Wand2 size={16} />
-                    {t('quick_fix_all')}
-                </button>
+                <div className="seo-images-tab-toolbar-actions">
+                    <button
+                        type="button"
+                        className="seo-images-quick-fix-btn"
+                        disabled={!canQuickFix}
+                        title={
+                            canQuickFix
+                                ? t('images_tab_quick_fix_slug_all_hint')
+                                : t('image_quick_fix_missing_keyword')
+                        }
+                        onClick={() => onQuickFixSlugAll?.(mergedImages)}
+                    >
+                        <Link2 size={16} />
+                        {t('fix_slug_all')}
+                    </button>
+                    <button
+                        type="button"
+                        className="seo-images-quick-fix-btn"
+                        disabled={!canQuickFix}
+                        title={
+                            canQuickFix
+                                ? t('images_tab_quick_fix_alt_title_all_hint')
+                                : t('image_quick_fix_missing_keyword')
+                        }
+                        onClick={() => onQuickFixAltTitleAll?.(mergedImages)}
+                    >
+                        <Type size={16} />
+                        {t('fix_alt_title_all')}
+                    </button>
+                </div>
             </div>
             <ul className="seo-article-images-list">
                 {aiJobs.map((job) => (
@@ -734,7 +770,8 @@ export default function ArticleImagesTab({
                         onPatch={onPatchImage}
                         onSlugChange={onSlugChange}
                         onFocusBlock={onFocusBlock}
-                        onQuickFix={onQuickFixOne}
+                        onQuickFixSlug={onQuickFixSlugOne}
+                        onQuickFixAltTitle={onQuickFixAltTitleOne}
                         canQuickFix={canQuickFix}
                         onNotify={onNotify}
                     />

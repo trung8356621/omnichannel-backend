@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import SeoSelect from './SeoSelect';
 import { OVERLAY_EXPORT_MAX, resolveBestVariantKey } from './overlayRatioPresets';
 
 /**
@@ -118,18 +119,28 @@ export default function WatermarkOverlayPreviewPanel({ variants = [], sampleImag
                 <div className="wm-overlay-preview__controls">
                     <label>
                         <span>Xem</span>
-                        <select value={viewMode} onChange={(e) => setViewMode(e.target.value)}>
-                            <option value="composite">Ghép lên ảnh mẫu</option>
-                            <option value="overlay">Chỉ overlay (nền caro)</option>
-                        </select>
+                        <SeoSelect
+                            value={viewMode}
+                            onChange={(e) => setViewMode(e.target.value)}
+                            size="compact"
+                            options={[
+                                { value: 'composite', label: 'Ghép lên ảnh mẫu' },
+                                { value: 'overlay', label: 'Chỉ overlay (nền caro)' },
+                            ]}
+                        />
                     </label>
                     <label>
                         <span>Thu phóng</span>
-                        <select value={zoom} onChange={(e) => setZoom(e.target.value)}>
-                            <option value="fit">Vừa khung</option>
-                            <option value="50">50% kích thước thật</option>
-                            <option value="100">100% (1:1 pixel)</option>
-                        </select>
+                        <SeoSelect
+                            value={zoom}
+                            onChange={(e) => setZoom(e.target.value)}
+                            size="compact"
+                            options={[
+                                { value: 'fit', label: 'Vừa khung' },
+                                { value: '50', label: '50% kích thước thật' },
+                                { value: '100', label: '100% (1:1 pixel)' },
+                            ]}
+                        />
                     </label>
                 </div>
             </div>

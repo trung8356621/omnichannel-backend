@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
 use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -20,6 +21,7 @@ final class TaskTestInputResolver
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly SeoMainDomainService $mainDomain,
+        private readonly SeoPromptSettingsService $promptSettings,
     ) {}
 
     /**
@@ -86,7 +88,17 @@ final class TaskTestInputResolver
 
         $variables = $this->baseVariables($postTitle, $focusKeyword, (int) $article->id);
         $article->loadMissing('site');
-        $variables = array_merge($variables, $this->sitePromptContext->promptVariablesForSite($article->site));
+        $postType = ArticlePostTypeResolver::resolve($article);
+        $promptVars = $this->promptSettings->promptVariables($postType);
+        $variables = array_merge(
+            $variables,
+            $promptVars,
+            $this->sitePromptContext->promptVariablesForSite($article->site),
+        );
+        $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
+            $article->site,
+            $promptVars['tone'] ?? '',
+        );
 
         return new TaskTestContext(
             article: $article,
@@ -116,7 +128,17 @@ final class TaskTestInputResolver
         }
 
         $variables = $this->baseVariables($postTitle, $focusKeyword, null);
-        $variables = array_merge($variables, $this->sitePromptContext->promptVariablesForSite($this->mainDomain->resolveMainSite()));
+        $mainSite = $this->mainDomain->resolveMainSite();
+        $promptVars = $this->promptSettings->promptVariables('article');
+        $variables = array_merge(
+            $variables,
+            $promptVars,
+            $this->sitePromptContext->promptVariablesForSite($mainSite),
+        );
+        $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
+            $mainSite,
+            $promptVars['tone'] ?? '',
+        );
 
         if ($title === '' && $keyword === '') {
             throw new \InvalidArgumentException('Chọn bài viết hoặc nhập tiêu đề / từ khóa để chạy thử.');

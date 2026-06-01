@@ -20,6 +20,8 @@ final class TaskWorkflowTestRunner
         private readonly WorkflowParserService $workflowParser,
         private readonly WorkflowKeywordResearchService $keywordResearch,
         private readonly SeoFaqPersistenceService $faqPersistence,
+        private readonly WorkflowTagExtractorService $tagExtractor,
+        private readonly WordPressCommentReviewService $commentReviewPublisher,
     ) {}
 
     /**
@@ -187,7 +189,7 @@ final class TaskWorkflowTestRunner
         }
 
         if ($type === 'action') {
-            return $this->executeActionNode($node, $context, $state);
+            return $this->executeActionNode($node, $context, $state, $edges);
         }
 
         if ($type === 'prompt') {
@@ -221,7 +223,7 @@ final class TaskWorkflowTestRunner
 
                 if ($output !== '') {
                     $state->lastPromptOutput = $output;
-                    $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($output);
+                    $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($prompt, $output, $state);
                     $this->refreshWorkflowSeoScore($state, $output);
                 }
 
@@ -273,6 +275,75 @@ final class TaskWorkflowTestRunner
         $title = (string) ($node['title'] ?? 'filter');
         $filterType = (string) ($node['data']['filterType'] ?? 'custom');
         $inputData = trim($this->resolveInputForNode($nodeId, $edges, $state));
+        $filterTag = trim((string) ($node['data']['filterTag'] ?? ''));
+        $tagKey = trim((string) ($node['data']['tagKey'] ?? ($filterTag === '__custom__'
+            ? ($node['data']['customTag'] ?? '')
+            : $filterTag)));
+
+        if ($filterType === 'extract_segment') {
+            if ($inputData === '') {
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'filter',
+                    'title' => $title,
+                    'filter_type' => $filterType,
+                    'status' => 'failed',
+                    'message' => 'Không có dữ liệu đầu vào để bóc tách.',
+                ];
+            }
+
+            if ($tagKey === '') {
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'filter',
+                    'title' => $title,
+                    'filter_type' => $filterType,
+                    'status' => 'failed',
+                    'message' => 'Chưa cấu hình tên bộ lọc cần bóc tách.',
+                ];
+            }
+
+            $extract = $this->tagExtractor->extractSegment($inputData, $tagKey);
+            $normalizedTag = strtoupper(preg_replace('/[^A-Z0-9]+/i', '_', $tagKey) ?? '');
+            $normalizedTag = trim($normalizedTag, '_');
+            if ($normalizedTag === '') {
+                $normalizedTag = 'UNKNOWN_TAG';
+            }
+
+            if (! $extract['matched']) {
+                $state->meta['workflow_warnings'][] = sprintf('Không tìm thấy segment cho tag "%s".', $tagKey);
+                $state->nodeOutputs[$nodeId] = ['out_main' => ''];
+                $state->meta['extracted_segments'][$normalizedTag] = '';
+
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'filter',
+                    'title' => $title,
+                    'filter_type' => $filterType,
+                    'status' => 'completed',
+                    'message' => sprintf('Không tìm thấy segment [%s], trả về rỗng.', $normalizedTag),
+                    'parsed' => ['tag' => $normalizedTag, 'content' => ''],
+                    'output' => '',
+                    'outputs' => ['out_main' => ''],
+                ];
+            }
+
+            $segmentContent = trim((string) ($extract['content'] ?? ''));
+            $state->meta['extracted_segments'][$normalizedTag] = $segmentContent;
+            $state->nodeOutputs[$nodeId] = ['out_main' => $segmentContent];
+
+            return [
+                'node_id' => $nodeId,
+                'type' => 'filter',
+                'title' => $title,
+                'filter_type' => $filterType,
+                'status' => 'completed',
+                'message' => sprintf('Đã bóc tách segment [%s].', $normalizedTag),
+                'parsed' => ['tag' => $normalizedTag, 'content' => $segmentContent],
+                'output' => $segmentContent,
+                'outputs' => ['out_main' => $segmentContent],
+            ];
+        }
 
         if ($filterType === 'custom') {
             return [
@@ -386,24 +457,21 @@ final class TaskWorkflowTestRunner
      * @param  array<string, mixed>  $node
      * @return array<string, mixed>
      */
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     */
     private function executeActionNode(
         array $node,
         TaskTestContext $context,
         WorkflowExecutionState $state,
+        array $edges,
     ): array {
         $nodeId = (string) ($node['id'] ?? '');
         $title = (string) ($node['title'] ?? 'action');
         $actionType = (string) ($node['data']['actionType'] ?? 'create_article');
 
         if ($actionType === 'post_comment_review') {
-            return [
-                'node_id' => $nodeId,
-                'type' => 'action',
-                'title' => $title,
-                'action_type' => $actionType,
-                'status' => 'skipped',
-                'message' => 'Đăng bình luận/review WordPress chưa thực thi trong chạy thử quy trình.',
-            ];
+            return $this->executePostCommentReviewAction($node, $context, $state, $edges);
         }
 
         if ($actionType === 'save_vocabulary_research') {
@@ -477,6 +545,64 @@ final class TaskWorkflowTestRunner
                 ? 'Hành động hoàn tất (không có meta/từ khóa để lưu).'
                 : implode(' ', $messages),
             'output' => json_encode($state->meta, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     * @param  list<array<string, mixed>>  $edges
+     * @return array<string, mixed>
+     */
+    private function executePostCommentReviewAction(
+        array $node,
+        TaskTestContext $context,
+        WorkflowExecutionState $state,
+        array $edges,
+    ): array {
+        $nodeId = (string) ($node['id'] ?? '');
+        $title = (string) ($node['title'] ?? 'action');
+        $actionType = 'post_comment_review';
+
+        $article = $state->article ?? $context->article;
+        if (! $article instanceof SeoArticle) {
+            return [
+                'node_id' => $nodeId,
+                'type' => 'action',
+                'title' => $title,
+                'action_type' => $actionType,
+                'status' => 'failed',
+                'message' => 'Không có bài viết đích để đăng review/bình luận.',
+            ];
+        }
+
+        $input = $this->resolveInputForNode($nodeId, $edges, $state);
+        if ($input === '') {
+            $input = trim((string) ($state->lastPromptOutput ?? ''));
+        }
+
+        if ($input === '') {
+            return [
+                'node_id' => $nodeId,
+                'type' => 'action',
+                'title' => $title,
+                'action_type' => $actionType,
+                'status' => 'failed',
+                'article_id' => $article->id,
+                'message' => 'Không có kết quả AI để đăng review/bình luận.',
+            ];
+        }
+
+        $result = $this->commentReviewPublisher->publishFromAiOutput($article->fresh() ?? $article, $input);
+
+        return [
+            'node_id' => $nodeId,
+            'type' => 'action',
+            'title' => $title,
+            'action_type' => $actionType,
+            'status' => ($result['success'] ?? false) ? 'completed' : 'failed',
+            'article_id' => $article->id,
+            'message' => (string) ($result['message'] ?? ''),
+            'created_count' => (int) ($result['created_count'] ?? 0),
         ];
     }
 
@@ -857,9 +983,25 @@ final class TaskWorkflowTestRunner
     /**
      * @return array<string, string>
      */
-    private function buildPromptNodeOutputs(string $output): array
+    private function buildPromptNodeOutputs(SeoPrompt $prompt, string $output, WorkflowExecutionState $state): array
     {
-        return ['out_main' => $output];
+        $outputs = ['out_main' => $output];
+
+        $detectedTags = $this->tagExtractor->detectTagsFromPromptTemplate((string) ($prompt->markdown_content ?? ''));
+        foreach ($detectedTags as $tag) {
+            $tagId = trim((string) ($tag['id'] ?? ''));
+            $tagKey = trim((string) ($tag['key'] ?? ''));
+            if ($tagId === '' || $tagKey === '') {
+                continue;
+            }
+
+            $extract = $this->tagExtractor->extractSegment($output, $tagKey);
+            $segment = trim((string) ($extract['content'] ?? ''));
+            $outputs['out_' . $tagId] = $segment;
+            $state->meta['extracted_segments'][$tagKey] = $segment;
+        }
+
+        return $outputs;
     }
 
     /**

@@ -15,6 +15,9 @@ use Illuminate\Support\Facades\Http;
  */
 final class GeminiMediaGenerationService
 {
+    /** Per-model HTTP budget — must stay below GenerateMediaJob queue timeout. */
+    private const HTTP_TIMEOUT_SECONDS = 120;
+
     public function __construct(
         private readonly PromptMediaStorageService $promptMediaStorage,
     ) {}
@@ -40,6 +43,11 @@ final class GeminiMediaGenerationService
                 if (! $this->isRetryable($exception->getMessage())) {
                     throw $exception;
                 }
+            } catch (\Throwable $exception) {
+                $lastError = new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+                if (! $this->isRetryable($exception->getMessage())) {
+                    throw $lastError;
+                }
             }
         }
 
@@ -58,18 +66,15 @@ final class GeminiMediaGenerationService
             rawurlencode($model),
         );
 
-        $response = Http::timeout(300)
-            ->acceptJson()
-            ->withQueryParameters(['key' => $connection->api_key])
-            ->post($url, [
-                'instances' => [
-                    ['prompt' => $prompt],
-                ],
-                'parameters' => [
-                    'sampleCount' => 1,
-                    'aspectRatio' => '4:5',
-                ],
-            ]);
+        $response = $this->geminiHttpClient($connection)->post($url, [
+            'instances' => [
+                ['prompt' => $prompt],
+            ],
+            'parameters' => [
+                'sampleCount' => 1,
+                'aspectRatio' => '4:5',
+            ],
+        ]);
 
         if (! $response->successful()) {
             $message = $response->json('error.message') ?? $response->body();
@@ -121,21 +126,18 @@ final class GeminiMediaGenerationService
             rawurlencode($model),
         );
 
-        $response = Http::timeout(300)
-            ->acceptJson()
-            ->withQueryParameters(['key' => $connection->api_key])
-            ->post($url, [
-                'generationConfig' => [
-                    'responseModalities' => ['IMAGE', 'TEXT'],
-                ],
-                'contents' => [
-                    [
-                        'parts' => [
-                            ['text' => $prompt],
-                        ],
+        $response = $this->geminiHttpClient($connection)->post($url, [
+            'generationConfig' => [
+                'responseModalities' => ['IMAGE', 'TEXT'],
+            ],
+            'contents' => [
+                [
+                    'parts' => [
+                        ['text' => $prompt],
                     ],
                 ],
-            ]);
+            ],
+        ]);
 
         if (! $response->successful()) {
             $message = $response->json('error.message') ?? $response->body();
@@ -218,6 +220,14 @@ final class GeminiMediaGenerationService
         return $prompt;
     }
 
+    private function geminiHttpClient(ApiConnection $connection): \Illuminate\Http\Client\PendingRequest
+    {
+        return Http::timeout(self::HTTP_TIMEOUT_SECONDS)
+            ->connectTimeout(30)
+            ->acceptJson()
+            ->withQueryParameters(['key' => $connection->api_key]);
+    }
+
     private function isRetryable(string $message): bool
     {
         $lower = strtolower($message);
@@ -228,7 +238,12 @@ final class GeminiMediaGenerationService
             || str_contains($lower, '429')
             || str_contains($lower, '503')
             || str_contains($lower, 'high demand')
-            || str_contains($lower, 'resource exhausted');
+            || str_contains($lower, 'resource exhausted')
+            || str_contains($lower, 'timed out')
+            || str_contains($lower, 'timeout')
+            || str_contains($lower, 'curl error 28')
+            || str_contains($lower, 'connection')
+            || str_contains($lower, 'could not resolve');
     }
 
     private function truncate(string $message): string

@@ -21,6 +21,29 @@ final class SeoPromptSettingsService
 
     public const KEY_FEATURED_SNIPPET_MAX_COLUMNS = 'featured_snippet_max_columns';
 
+    /** Nội dung chèn vào prompt qua {{tone}}. */
+    public const KEY_TONE_TEXT = 'tone_text';
+
+    /** Độ dài bài (chữ) — product: {{article_length_product}}, còn lại: {{article_length_default}}; runtime: {{article_length}}. */
+    public const KEY_ARTICLE_LENGTH_PRODUCT = 'article_length_product';
+
+    public const KEY_ARTICLE_LENGTH_DEFAULT = 'article_length_default';
+
+    /** Mật độ từ khóa — product: {{keyword_density_product}}, còn lại: {{keyword_density_default}}; runtime: {{keyword_density}}. */
+    public const KEY_KEYWORD_DENSITY_PRODUCT = 'keyword_density_product';
+
+    public const KEY_KEYWORD_DENSITY_DEFAULT = 'keyword_density_default';
+
+    private const DEFAULT_TONE_TEXT = 'Viết bằng giọng văn chuyên nghiệp, rõ ràng, phù hợp đối tượng đọc tại Việt Nam.';
+
+    private const DEFAULT_ARTICLE_LENGTH_PRODUCT = '1000';
+
+    private const DEFAULT_ARTICLE_LENGTH_DEFAULT = '2000';
+
+    private const DEFAULT_KEYWORD_DENSITY_PRODUCT = 'Mật độ từ khóa tự nhiên; ưu tiên mô tả sản phẩm, thông số và lợi ích, tránh nhồi nhét.';
+
+    private const DEFAULT_KEYWORD_DENSITY_DEFAULT = 'Mật độ từ khóa chính tự nhiên (khoảng 0,8–1,2%), phân bổ ở tiêu đề, đoạn mở, các heading H2/H3 và thân bài.';
+
     /** @var list<string> */
     private const DEFAULT_TONES = [
         'Chuyên nghiệp',
@@ -70,6 +93,26 @@ final class SeoPromptSettingsService
 
         return [
             self::KEY_TONE_OF_VOICE => $tones !== [] ? $tones : self::DEFAULT_TONES,
+            self::KEY_TONE_TEXT => $this->normalizeText(
+                $data[self::KEY_TONE_TEXT] ?? null,
+                self::DEFAULT_TONE_TEXT,
+            ),
+            self::KEY_ARTICLE_LENGTH_PRODUCT => $this->normalizeText(
+                $data[self::KEY_ARTICLE_LENGTH_PRODUCT] ?? null,
+                self::DEFAULT_ARTICLE_LENGTH_PRODUCT,
+            ),
+            self::KEY_ARTICLE_LENGTH_DEFAULT => $this->normalizeText(
+                $data[self::KEY_ARTICLE_LENGTH_DEFAULT] ?? null,
+                self::DEFAULT_ARTICLE_LENGTH_DEFAULT,
+            ),
+            self::KEY_KEYWORD_DENSITY_PRODUCT => $this->normalizeText(
+                $data[self::KEY_KEYWORD_DENSITY_PRODUCT] ?? null,
+                self::DEFAULT_KEYWORD_DENSITY_PRODUCT,
+            ),
+            self::KEY_KEYWORD_DENSITY_DEFAULT => $this->normalizeText(
+                $data[self::KEY_KEYWORD_DENSITY_DEFAULT] ?? null,
+                self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
+            ),
             self::KEY_FEATURED_SNIPPET_MIN_ROWS => $this->intInRange(
                 $data[self::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? null,
                 1,
@@ -92,11 +135,62 @@ final class SeoPromptSettingsService
     }
 
     /**
+     * Biến global cho prompt (SEO → Tùy chỉnh → Prompt).
+     *
+     * @return array<string, string>
+     */
+    public function promptVariables(?string $postType = null): array
+    {
+        $settings = $this->getSettings();
+        $isProduct = self::isProductPostType($postType);
+
+        return [
+            'tone' => $settings[self::KEY_TONE_TEXT],
+            'article_length' => $isProduct
+                ? $settings[self::KEY_ARTICLE_LENGTH_PRODUCT]
+                : $settings[self::KEY_ARTICLE_LENGTH_DEFAULT],
+            'keyword_density' => $isProduct
+                ? $settings[self::KEY_KEYWORD_DENSITY_PRODUCT]
+                : $settings[self::KEY_KEYWORD_DENSITY_DEFAULT],
+            'article_length_product' => $settings[self::KEY_ARTICLE_LENGTH_PRODUCT],
+            'article_length_default' => $settings[self::KEY_ARTICLE_LENGTH_DEFAULT],
+            'keyword_density_product' => $settings[self::KEY_KEYWORD_DENSITY_PRODUCT],
+            'keyword_density_default' => $settings[self::KEY_KEYWORD_DENSITY_DEFAULT],
+        ];
+    }
+
+    public static function isProductPostType(?string $postType): bool
+    {
+        return trim((string) $postType) === 'product';
+    }
+
+    /**
      * @return list<string>
      */
     public function getToneOfVoiceOptions(): array
     {
         return $this->getSettings()[self::KEY_TONE_OF_VOICE];
+    }
+
+    /**
+     * Options cho Select giọng văn domain (SEO → Tùy chỉnh → Prompt → Tone of voice).
+     *
+     * @return array<string, string>
+     */
+    public function toneOfVoiceSelectOptions(?string $includeStoredValue = null): array
+    {
+        $options = [];
+
+        foreach ($this->getToneOfVoiceOptions() as $tone) {
+            $options[$tone] = $tone;
+        }
+
+        $stored = trim((string) $includeStoredValue);
+        if ($stored !== '' && ! isset($options[$stored])) {
+            $options[$stored] = $stored;
+        }
+
+        return $options;
     }
 
     /**
@@ -148,6 +242,26 @@ final class SeoPromptSettingsService
 
         WpOption::set(self::OPTION_KEY, [
             self::KEY_TONE_OF_VOICE => $tones !== [] ? $tones : self::DEFAULT_TONES,
+            self::KEY_TONE_TEXT => $this->normalizeText(
+                $settings[self::KEY_TONE_TEXT] ?? null,
+                self::DEFAULT_TONE_TEXT,
+            ),
+            self::KEY_ARTICLE_LENGTH_PRODUCT => $this->normalizeText(
+                $settings[self::KEY_ARTICLE_LENGTH_PRODUCT] ?? null,
+                self::DEFAULT_ARTICLE_LENGTH_PRODUCT,
+            ),
+            self::KEY_ARTICLE_LENGTH_DEFAULT => $this->normalizeText(
+                $settings[self::KEY_ARTICLE_LENGTH_DEFAULT] ?? null,
+                self::DEFAULT_ARTICLE_LENGTH_DEFAULT,
+            ),
+            self::KEY_KEYWORD_DENSITY_PRODUCT => $this->normalizeText(
+                $settings[self::KEY_KEYWORD_DENSITY_PRODUCT] ?? null,
+                self::DEFAULT_KEYWORD_DENSITY_PRODUCT,
+            ),
+            self::KEY_KEYWORD_DENSITY_DEFAULT => $this->normalizeText(
+                $settings[self::KEY_KEYWORD_DENSITY_DEFAULT] ?? null,
+                self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
+            ),
             self::KEY_FEATURED_SNIPPET_MIN_ROWS => $this->intInRange(
                 $settings[self::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? null,
                 1,
@@ -171,10 +285,22 @@ final class SeoPromptSettingsService
     {
         return [
             self::KEY_TONE_OF_VOICE => self::DEFAULT_TONES,
+            self::KEY_TONE_TEXT => self::DEFAULT_TONE_TEXT,
+            self::KEY_ARTICLE_LENGTH_PRODUCT => self::DEFAULT_ARTICLE_LENGTH_PRODUCT,
+            self::KEY_ARTICLE_LENGTH_DEFAULT => self::DEFAULT_ARTICLE_LENGTH_DEFAULT,
+            self::KEY_KEYWORD_DENSITY_PRODUCT => self::DEFAULT_KEYWORD_DENSITY_PRODUCT,
+            self::KEY_KEYWORD_DENSITY_DEFAULT => self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
             self::KEY_FEATURED_SNIPPET_MIN_ROWS => 10,
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => 2,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => 5,
         ];
+    }
+
+    private function normalizeText(mixed $value, string $default): string
+    {
+        $text = trim((string) ($value ?? ''));
+
+        return $text !== '' ? $text : $default;
     }
 
     /**

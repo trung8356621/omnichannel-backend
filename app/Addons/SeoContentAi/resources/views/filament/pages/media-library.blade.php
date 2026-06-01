@@ -4,7 +4,11 @@
         'app/Addons/SeoContentAi/resources/js/media-library-actions.js',
     ])
 
-    <div class="seo-media-library" x-data="seoMediaLibraryActions">
+    <div
+        class="seo-media-library"
+        x-data="seoMediaLibraryActions"
+        data-selection-scope="{{ $activeTab }}|{{ (int) ($siteId ?? 0) }}|{{ (int) $page }}|{{ (string) ($filterMonth ?? '') }}|{{ (string) ($filterSearch ?? '') }}"
+    >
         <div class="seo-media-library-tabs-bar">
             <button
                 type="button"
@@ -24,15 +28,24 @@
 
         <div class="seo-media-library-filters-card">
             <div class="seo-media-library-filters">
-                <div class="seo-media-library-field">
-                    <label class="seo-media-library-label" for="media-library-site">Domain</label>
-                    <select id="media-library-site" wire:model.live="siteId" class="seo-media-library-select">
-                        <option value="">-- Select domain --</option>
-                        @foreach ($this->sites as $site)
-                            <option value="{{ $site->id }}">{{ $site->domain }}</option>
-                        @endforeach
-                    </select>
-                </div>
+                @unless ($this->hasLockedGlobalSite())
+                    <div class="seo-media-library-field">
+                        <label class="seo-media-library-label" for="media-library-site">Domain</label>
+                        <x-seo-content-ai::seo-select id="media-library-site" wire:model.live="siteId" size="inline">
+                            <option value="">-- Select domain --</option>
+                            @foreach ($this->sites as $site)
+                                <option value="{{ $site->id }}">{{ $site->domain }}</option>
+                            @endforeach
+                        </x-seo-content-ai::seo-select>
+                    </div>
+                @else
+                    <div class="seo-media-library-field">
+                        <label class="seo-media-library-label">Domain</label>
+                        <div class="seo-media-library-select">
+                            {{ $this->currentSiteDomain() ?? ('Site #' . (int) ($siteId ?? 0)) }}
+                        </div>
+                    </div>
+                @endunless
 
                 <div class="seo-media-library-field seo-media-library-field-search">
                     <label class="seo-media-library-label" for="media-library-search">Search</label>
@@ -77,23 +90,22 @@
             <div class="seo-media-library-resize-bar">
                 <div class="seo-media-library-resize-bar__left">
                     <span class="seo-media-library-resize-bar__label">
-                        Selected: <strong>{{ count($selectedKeys) }}</strong>
+                        {{ __('seo-content-ai::filament.media_tools.selected') }}:
+                        <strong x-text="selectedCount">0</strong>
                     </span>
-                    @if (count($selectedKeys) > 0)
-                        <button
-                            type="button"
-                            class="seo-media-library-resize-bar__link"
-                            wire:click="clearImageSelection"
-                            wire:loading.attr="disabled"
-                            wire:target="resizeSelectedImages"
-                        >
-                            Clear selection
-                        </button>
-                    @endif
+                    <button
+                        type="button"
+                        class="seo-media-library-resize-bar__link"
+                        x-on:click="clearSelection()"
+                        x-show="selectedCount > 0"
+                        x-cloak
+                    >
+                        {{ __('seo-content-ai::filament.media_tools.clear_selection') }}
+                    </button>
                 </div>
                 <div class="seo-media-library-resize-bar__controls">
                     <label class="seo-media-library-resize-field">
-                        <span>Width</span>
+                        <span>{{ __('seo-content-ai::filament.media_tools.width') }}</span>
                         <input
                             type="number"
                             min="1"
@@ -106,7 +118,7 @@
                     </label>
                     <span class="seo-media-library-resize-times">×</span>
                     <label class="seo-media-library-resize-field">
-                        <span>Height</span>
+                        <span>{{ __('seo-content-ai::filament.media_tools.height') }}</span>
                         <input
                             type="number"
                             min="1"
@@ -120,13 +132,13 @@
                     <button
                         type="button"
                         class="seo-media-library-resize-submit"
-                        wire:click="resizeSelectedImages"
+                        @click="runResizeSelected($wire)"
                         wire:loading.attr="disabled"
-                        wire:target="resizeSelectedImages,deleteSelectedImages"
-                        @disabled(count($selectedKeys) === 0)
+                        wire:target="resizeSelectedImagesFromClient,deleteSelectedImagesFromClient"
+                        x-bind:disabled="selectedCount === 0"
                     >
-                        <span wire:loading.remove wire:target="resizeSelectedImages">Resize images</span>
-                        <span wire:loading wire:target="resizeSelectedImages">Resizing...</span>
+                        <span wire:loading.remove wire:target="resizeSelectedImagesFromClient">{{ __('seo-content-ai::filament.media_tools.resize_images') }}</span>
+                        <span wire:loading wire:target="resizeSelectedImagesFromClient">{{ __('seo-content-ai::filament.media_tools.resizing') }}</span>
                     </button>
                     <button
                         type="button"
@@ -134,7 +146,7 @@
                         title="Download selected images"
                         aria-label="Download selected images"
                         @click="downloadSelected()"
-                        @disabled(count($selectedKeys) === 0)
+                        x-bind:disabled="selectedCount === 0"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 1 0-1.09-1.03l-2.955 3.129V2.75Z"/>
@@ -147,17 +159,16 @@
                         class="seo-media-library-bar-icon-btn seo-media-library-bar-action-btn is-danger"
                         title="Delete selected images"
                         aria-label="Delete selected images"
-                        wire:click="deleteSelectedImages"
+                        @click="if (selectedCount > 0 && window.confirm(`Delete ${selectedCount} selected images? This action cannot be undone.`)) { runDeleteSelected($wire) }"
                         wire:loading.attr="disabled"
-                        wire:target="deleteSelectedImages"
-                        wire:confirm="Delete {{ count($selectedKeys) }} selected images? This action cannot be undone."
-                        @disabled(count($selectedKeys) === 0)
+                        wire:target="deleteSelectedImagesFromClient"
+                        x-bind:disabled="selectedCount === 0"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>
                         </svg>
-                        <span wire:loading.remove wire:target="deleteSelectedImages">Delete</span>
-                        <span wire:loading wire:target="deleteSelectedImages">…</span>
+                        <span wire:loading.remove wire:target="deleteSelectedImagesFromClient">Delete</span>
+                        <span wire:loading wire:target="deleteSelectedImagesFromClient">…</span>
                     </button>
                 </div>
                 <p class="seo-media-library-resize-hint">
@@ -239,8 +250,10 @@
                         }
                     @endphp
                     <article
-                        class="seo-media-library-card{{ $this->isImageSelected($editKey) ? ' is-selected' : '' }}"
+                        class="seo-media-library-card"
+                        x-bind:class="{ 'is-selected': isSelected(@js($editKey)) }"
                         wire:key="media-{{ $itemKind }}-{{ $image['id'] }}"
+                        data-select-key="{{ $editKey }}"
                         data-image-url="{{ $image['url'] }}"
                         data-image-slug="{{ $image['slug'] ?? 'image' }}"
                         data-download-name="{{ $downloadName }}"
@@ -252,7 +265,7 @@
                                 title="Click select · Shift+click range · Double-click preview"
                                 x-on:click="
                                     clearTimeout($el._selectTimer);
-                                    $el._selectTimer = setTimeout(() => $wire.handleImageSelectClick(@js($editKey), $event.shiftKey), 220);
+                                    $el._selectTimer = setTimeout(() => toggleCardSelection(@js($editKey), $event.shiftKey), 220);
                                 "
                                 x-on:dblclick.prevent="
                                     clearTimeout($el._selectTimer);
@@ -285,8 +298,7 @@
                                     class="seo-media-library-card-icon-btn is-danger"
                                     title="Delete image"
                                     aria-label="Delete image"
-                                    wire:click.stop="deleteLibraryImage(@js($editKey))"
-                                    wire:confirm="Delete this image? This action cannot be undone."
+                                    @click.stop="deleteCard(@js($editKey), $wire)"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                         <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 4.5a.75.75 0 1 0 1.5-.06l-.3-4.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 4.5a.75.75 0 1 0 1.5.06l.3-4.5Z" clip-rule="evenodd"/>

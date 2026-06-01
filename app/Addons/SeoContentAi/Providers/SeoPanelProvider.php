@@ -5,11 +5,14 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\RegistersAddonDatabase;
+use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
+use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -34,6 +37,14 @@ use Livewire\Livewire;
 class SeoPanelProvider extends PanelProvider
 {
     use RegistersAddonDatabase;
+
+    public function register(): void
+    {
+        parent::register();
+
+        // Shared persistTarget for usingTargetMedia() across PromptRunner / GeminiMediaGenerationService.
+        $this->app->singleton(PromptMediaStorageService::class);
+    }
 
     public function boot(): void
     {
@@ -161,6 +172,8 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.articles.seo-preview');
                 Route::get('/articles/{article}/preview', ArticlePreviewController::class)
                     ->name('seo.articles.preview');
+                Route::get('/wp-plugin/download/{version}', [PluginUpdateController::class, 'downloadForPanel'])
+                    ->name('seo.wp-plugin.download');
             });
     }
 
@@ -183,6 +196,9 @@ class SeoPanelProvider extends PanelProvider
             )
             ->pages([
                 Pages\Dashboard::class,
+            ])
+            ->widgets([
+                WordPressPluginWidget::class,
             ])
             ->middleware([
                 EncryptCookies::class,

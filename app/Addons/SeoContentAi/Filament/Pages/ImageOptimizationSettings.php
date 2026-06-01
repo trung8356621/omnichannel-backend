@@ -37,7 +37,10 @@ class ImageOptimizationSettings extends Page
 
     public function mount(): void
     {
-        if ($this->siteId === null || $this->siteId === '') {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        if ($globalSiteId !== null) {
+            $this->siteId = $globalSiteId;
+        } elseif ($this->siteId === null || $this->siteId === '') {
             $firstSite = $this->resolveSitesQuery()->first();
             $this->siteId = $firstSite instanceof Site ? (int) $firstSite->id : null;
         } else {
@@ -49,6 +52,14 @@ class ImageOptimizationSettings extends Page
 
     public function updatedSiteId(mixed $value): void
     {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        if ($globalSiteId !== null) {
+            $this->siteId = $globalSiteId;
+            $this->loadSettings();
+
+            return;
+        }
+
         if ($value === null || $value === '') {
             $this->siteId = null;
         } else {
@@ -122,6 +133,22 @@ class ImageOptimizationSettings extends Page
     public function getSitesProperty(): Collection
     {
         return $this->resolveSitesQuery()->get();
+    }
+
+    public function hasLockedGlobalSite(): bool
+    {
+        return SeoAccessControl::hasGlobalSiteScope();
+    }
+
+    public function currentSiteDomain(): ?string
+    {
+        if ($this->siteId === null || $this->siteId === '') {
+            return null;
+        }
+
+        $site = $this->sites->firstWhere('id', (int) $this->siteId);
+
+        return $site instanceof Site ? (string) $site->domain : null;
     }
 
     private function normalizedSiteId(): ?int

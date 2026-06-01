@@ -18,6 +18,8 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_CREATE_IMAGE = 'create_image_prompt_id';
 
+    public const KEY_CREATE_PRODUCT_GALLERY_IMAGE = 'create_product_gallery_image_prompt_id';
+
     public const KEY_CREATE_VIDEO = 'create_video_prompt_id';
 
     public const KEY_RENEW_FAQ_PROMPT_ID = 'renew_faq_prompt_id';
@@ -54,6 +56,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($data[self::KEY_EDIT_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($data[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($data[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
@@ -98,6 +101,14 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_CREATE_IMAGE];
     }
 
+    public function getCreateProductGalleryImagePromptId(): ?int
+    {
+        $settings = $this->getSettings();
+
+        return $settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE]
+            ?? $settings[self::KEY_CREATE_IMAGE];
+    }
+
     public function getCreateVideoPromptId(): ?int
     {
         return $this->getSettings()[self::KEY_CREATE_VIDEO];
@@ -139,6 +150,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($settings[self::KEY_EDIT_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($settings[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($settings[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
@@ -162,6 +174,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_EDIT_ARTICLE => null,
             self::KEY_POST_REVIEW => null,
             self::KEY_CREATE_IMAGE => null,
+            self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => null,
             self::KEY_CREATE_VIDEO => null,
             self::KEY_RENEW_FAQ_PROMPT_ID => null,
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => null,

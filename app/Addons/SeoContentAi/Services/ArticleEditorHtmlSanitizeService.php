@@ -9,7 +9,7 @@ use DOMElement;
 use DOMNode;
 
 /**
- * Gỡ markup tạm của editor (đánh dấu link khi duyệt sidebar) trước lưu / đồng bộ WP.
+ * Gỡ markup tạm của editor (highlight gợi ý, đánh dấu link sidebar, TipTap mark) trước lưu / đồng bộ WP.
  */
 final class ArticleEditorHtmlSanitizeService
 {
@@ -65,10 +65,6 @@ final class ArticleEditorHtmlSanitizeService
         }
 
         foreach ($marks as $mark) {
-            if (! $this->elementHasTransientClass($mark)) {
-                continue;
-            }
-
             $this->unwrapNode($mark);
         }
     }

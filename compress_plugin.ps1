@@ -129,13 +129,14 @@ $zipStream.Dispose()
 
 # 5. Overwrite/Update info.json data on Laravel Update Server
 $infoJsonPath = Join-Path $laravelTargetDir "info.json"
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 if (Test-Path $infoJsonPath) {
     Write-Host "Syncing updates to info.json..." -ForegroundColor Cyan
-    $info = Get-Content -Path $infoJsonPath -Raw | ConvertFrom-Json
+    $infoJsonRaw = [System.IO.File]::ReadAllText($infoJsonPath, $utf8NoBom)
+    $info = $infoJsonRaw | ConvertFrom-Json
     $info.version = $version
     $info.last_updated = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
     $json = $info | ConvertTo-Json -Depth 10
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($infoJsonPath, $json, $utf8NoBom)
     Write-Host "Successfully synced info.json to version $version!" -ForegroundColor Green
 } else {

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 
 final class MediaLibraryArticleResolver
 {
@@ -96,21 +97,7 @@ final class MediaLibraryArticleResolver
 
             $kind = (string) ($image['kind'] ?? '');
             if ($kind === 'local' || $kind === 'generated') {
-                $articleId = isset($image['article_id']) ? (int) $image['article_id'] : null;
-                if (($articleId === null || $articleId <= 0) && $kind === 'local') {
-                    $media = \App\Addons\SeoContentAi\Models\SeoMedia::query()
-                        ->where('site_id', $siteId)
-                        ->whereKey((int) ($image['seo_media_id'] ?? $image['id'] ?? 0))
-                        ->value('article_id');
-                    $articleId = $media !== null ? (int) $media : null;
-                }
-                if (($articleId === null || $articleId <= 0) && $kind === 'generated') {
-                    $articleId = \App\Addons\SeoContentAi\Models\SeoMedia::query()
-                        ->where('site_id', $siteId)
-                        ->whereKey((int) ($image['seo_media_id'] ?? $image['id'] ?? 0))
-                        ->value('article_id');
-                    $articleId = $articleId !== null ? (int) $articleId : null;
-                }
+                $articleId = $this->resolveLocalArticleId($siteId, $image);
             } else {
                 $wpId = (int) ($image['wp_attachment_id'] ?? $image['id'] ?? 0);
                 if ($wpId > 0 && isset($map[$wpId])) {
@@ -125,5 +112,28 @@ final class MediaLibraryArticleResolver
         }
 
         return $images;
+    }
+
+    /**
+     * @param  array<string, mixed>  $image
+     */
+    private function resolveLocalArticleId(int $siteId, array $image): ?int
+    {
+        $articleId = isset($image['article_id']) ? (int) $image['article_id'] : null;
+        if ($articleId !== null && $articleId > 0) {
+            return $articleId;
+        }
+
+        $mediaId = (int) ($image['seo_media_id'] ?? $image['id'] ?? 0);
+        if ($mediaId <= 0) {
+            return null;
+        }
+
+        $media = SeoMedia::query()
+            ->where('site_id', $siteId)
+            ->whereKey($mediaId)
+            ->first();
+
+        return $media?->firstArticleId();
     }
 }
