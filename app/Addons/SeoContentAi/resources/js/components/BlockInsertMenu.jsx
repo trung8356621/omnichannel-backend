@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
+import { ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
 import { t } from '../utils/i18n';
 
 /**
@@ -8,8 +8,12 @@ import { t } from '../utils/i18n';
  * @param {() => void} onToggle
  * @param {() => void} [onMoveUp]
  * @param {() => void} [onMoveDown]
+ * @param {() => void} [onMovePrevSection]
+ * @param {() => void} [onMoveNextSection]
  * @param {boolean} [canMoveUp]
  * @param {boolean} [canMoveDown]
+ * @param {boolean} [canMovePrevSection]
+ * @param {boolean} [canMoveNextSection]
  */
 export function BlockInsertBar({
     position,
@@ -17,11 +21,29 @@ export function BlockInsertBar({
     onToggle,
     onMoveUp,
     onMoveDown,
+    onMovePrevSection,
+    onMoveNextSection,
     canMoveUp = false,
     canMoveDown = false,
+    canMovePrevSection = false,
+    canMoveNextSection = false,
 }) {
     return (
         <div className={`seo-block-insert-bar seo-block-insert-bar--${position}`}>
+            <button
+                type="button"
+                className="seo-block-insert-btn seo-block-move-btn"
+                disabled={!canMovePrevSection}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onMovePrevSection?.();
+                }}
+                title="Move block to previous section"
+                aria-label="Move block to previous section"
+            >
+                <ChevronsUp size={16} strokeWidth={2.5} />
+            </button>
             <button
                 type="button"
                 className="seo-block-insert-btn seo-block-move-btn"
@@ -63,6 +85,20 @@ export function BlockInsertBar({
                 aria-label="Move block down"
             >
                 <ChevronDown size={16} strokeWidth={2.5} />
+            </button>
+            <button
+                type="button"
+                className="seo-block-insert-btn seo-block-move-btn"
+                disabled={!canMoveNextSection}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onMoveNextSection?.();
+                }}
+                title="Move block to next section"
+                aria-label="Move block to next section"
+            >
+                <ChevronsDown size={16} strokeWidth={2.5} />
             </button>
         </div>
     );
@@ -134,7 +170,7 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
  * Box chọn / tạo / tải nhanh ảnh cho block ảnh trống.
  *
  * @param {() => void} onOpenMediaLibrary
- * @param {(prompt: string) => void} onGenerateRequest
+ * @param {(prompt: string, mediaKind?: 'image'|'video') => void} onGenerateRequest
  * @param {(url: string) => void|Promise<void>} [onImportFromUrl]
  * @param {boolean} [importLoading]
  */
@@ -147,6 +183,7 @@ export function ImageBlockPickerBox({
     const [mode, setMode] = useState('actions');
     const [prompt, setPrompt] = useState('');
     const [importUrl, setImportUrl] = useState('');
+    const [generateKind, setGenerateKind] = useState('image');
 
     if (mode === 'import') {
         return (
@@ -186,6 +223,22 @@ export function ImageBlockPickerBox({
         return (
             <div className="seo-image-block-picker seo-image-block-picker--generate">
                 <p className="seo-image-block-picker__title">{t('compose_placeholder')}</p>
+                <div className="seo-image-block-picker__actions">
+                    <button
+                        type="button"
+                        className={`seo-image-block-picker__choice ${generateKind === 'image' ? '' : 'is-secondary'}`}
+                        onClick={() => setGenerateKind('image')}
+                    >
+                        {t('image_block_label')}
+                    </button>
+                    <button
+                        type="button"
+                        className={`seo-image-block-picker__choice ${generateKind === 'video' ? '' : 'is-secondary'}`}
+                        onClick={() => setGenerateKind('video')}
+                    >
+                        {t('generate_video')}
+                    </button>
+                </div>
                 <textarea
                     className="seo-image-block-picker__textarea"
                     rows={4}
@@ -201,7 +254,7 @@ export function ImageBlockPickerBox({
                         type="button"
                         className="seo-image-block-picker__btn is-primary"
                         disabled={!prompt.trim()}
-                        onClick={() => onGenerateRequest(prompt.trim())}
+                        onClick={() => onGenerateRequest(prompt.trim(), generateKind)}
                     >
                         {t('submit_retry')}
                     </button>
@@ -222,10 +275,10 @@ export function ImageBlockPickerBox({
                     onOpenMediaLibrary(e);
                 }}
             >
-                {t('image_block_label')}
+                {t('image_block_label')}/{t('generate_video')}
             </button>
             <button type="button" className="seo-image-block-picker__choice is-secondary" onClick={() => setMode('generate')}>
-                {t('generate_image')}
+                {t('generate_image')}/{t('generate_video')}
             </button>
             <button
                 type="button"

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Models\Site;
 
 final class DomainLinkListEditorService
@@ -81,5 +83,52 @@ final class DomainLinkListEditorService
         }
 
         return $items;
+    }
+
+    /**
+     * Chỉ trả link domain khi cụm anchor có trong nội dung bài (giống gợi ý internal link).
+     *
+     * @return list<array{
+     *     text: string,
+     *     href: string,
+     *     target_url: string,
+     *     keyword_id: int|null,
+     *     article_count: int,
+     *     can_insert: bool,
+     * }>
+     */
+    public function forArticle(SeoArticle $article, ?string $contentHtml = null): array
+    {
+        $items = $this->forSite($article->site);
+        if ($items === []) {
+            return [];
+        }
+
+        $plainText = $this->plainTextFromHtml($contentHtml ?? (string) ($article->body ?? ''));
+        if ($plainText === '') {
+            return [];
+        }
+
+        $filtered = [];
+        foreach ($items as $item) {
+            if ($this->textContainsPhrase($plainText, (string) $item['text'])) {
+                $filtered[] = $item;
+            }
+        }
+
+        return $filtered;
+    }
+
+    private function plainTextFromHtml(string $html): string
+    {
+        $text = html_entity_decode(strip_tags($html), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/\s+/u', ' ', $text) ?? '';
+
+        return trim($text);
+    }
+
+    private function textContainsPhrase(string $text, string $phrase): bool
+    {
+        return KeywordPhraseMatcher::contains($text, $phrase);
     }
 }

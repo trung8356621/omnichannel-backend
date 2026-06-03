@@ -154,7 +154,7 @@ class SeoWatermarkService
 
     public function applyToAbsolutePath(string $absolutePath, SeoWatermarkSetting $setting): bool
     {
-        if ($setting->type === SeoWatermarkSetting::TYPE_NONE || ! is_file($absolutePath)) {
+        if (! is_file($absolutePath) || ! $setting->isConfiguredForApply()) {
             return false;
         }
 
@@ -274,7 +274,7 @@ class SeoWatermarkService
         $watermarkSetting = null;
         if ($applyWatermark) {
             $watermarkSetting = SeoWatermarkSetting::query()->where('site_id', $siteId)->first();
-            if ($watermarkSetting === null || $watermarkSetting->type === SeoWatermarkSetting::TYPE_NONE) {
+            if ($watermarkSetting === null || ! $watermarkSetting->isConfiguredForApply()) {
                 return [
                     'local_watermark' => 0,
                     'local_optimize' => 0,
@@ -283,7 +283,7 @@ class SeoWatermarkService
                     'wp_optimize' => 0,
                     'wp_skipped' => 0,
                     'wp_errors' => 0,
-                    'message' => 'Chưa cấu hình đóng dấu (text/logo). Lưu tại «Thiết kế đóng dấu» hoặc bỏ chọn Watermark để chỉ tối ưu.',
+                    'message' => 'Chưa cấu hình đóng dấu. Lưu tại SEO → Thư viện media → Thiết kế đóng dấu (overlay hoặc text/logo) hoặc bỏ chọn Watermark để chỉ tối ưu.',
                 ];
             }
         }
@@ -439,7 +439,7 @@ class SeoWatermarkService
         if (
             $setting === null
             || ! $setting->auto_watermark
-            || $setting->type === SeoWatermarkSetting::TYPE_NONE
+            || ! $setting->isConfiguredForApply()
             || ! filled($media->path)
         ) {
             return false;

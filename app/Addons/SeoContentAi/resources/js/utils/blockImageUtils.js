@@ -46,6 +46,18 @@ function parseSeoMediaIdFromImg(img) {
     return id > 0 ? id : null;
 }
 
+function parseWpAttachmentIdFromVideo(el) {
+    if (!el) return null;
+    const id = Number(el.getAttribute('data-id'));
+    return id > 0 ? id : null;
+}
+
+function parseSeoMediaIdFromVideo(el) {
+    if (!el) return null;
+    const id = Number(el.getAttribute('data-seo-media-id'));
+    return id > 0 ? id : null;
+}
+
 export function isAiPlaceholderLoadingSrc(src) {
     if (!src) {
         return false;
@@ -127,13 +139,66 @@ function parseImageFromImg(img, id) {
     };
 }
 
+function parseVideoFromFigure(fig, id) {
+    const video = fig.querySelector('video');
+    const src = video?.getAttribute('src');
+    if (!src) return null;
+
+    const isLocal = isLocalSeoMediaSrc(src ?? '');
+
+    return {
+        id,
+        src,
+        wpSrc: isLocal ? '' : resolveFullWordPressImageUrl(src ?? ''),
+        size: 'full',
+        slug: slugFromSrc(src),
+        alt: '',
+        title: '',
+        caption: '',
+        align: alignFromElement(fig) || alignFromElement(video),
+        width: null,
+        height: null,
+        wpImageClass: '',
+        mediaType: 'video',
+        wpAttachmentId: parseWpAttachmentIdFromVideo(fig) ?? parseWpAttachmentIdFromVideo(video),
+        seoMediaId: parseSeoMediaIdFromVideo(fig) ?? parseSeoMediaIdFromVideo(video),
+        isProcessing: false,
+    };
+}
+
+function parseVideoFromTag(video, id) {
+    const src = video?.getAttribute('src');
+    if (!src) return null;
+    const parent = video.closest('figure');
+    const isLocal = isLocalSeoMediaSrc(src ?? '');
+
+    return {
+        id,
+        src,
+        wpSrc: isLocal ? '' : resolveFullWordPressImageUrl(src ?? ''),
+        size: 'full',
+        slug: slugFromSrc(src),
+        alt: '',
+        title: '',
+        caption: '',
+        align: parent ? alignFromElement(parent) : alignFromElement(video),
+        width: null,
+        height: null,
+        wpImageClass: '',
+        mediaType: 'video',
+        wpAttachmentId: parseWpAttachmentIdFromVideo(parent) ?? parseWpAttachmentIdFromVideo(video),
+        seoMediaId: parseSeoMediaIdFromVideo(parent) ?? parseSeoMediaIdFromVideo(video),
+        isProcessing: false,
+    };
+}
+
 export function isWordPressImageElement(el) {
     if (!el || el.nodeType !== 1) return false;
     const tag = el.tagName.toLowerCase();
 
-    if (tag === 'img') return true;
-    if (tag === 'figure' && el.querySelector('img')) return true;
-    if (el.classList.contains('wp-block-image')) return true;
+    if (tag === 'img' || tag === 'video') return true;
+    if (tag === 'figure' && (el.querySelector('img') || el.querySelector('video'))) return true;
+    if (el.classList.contains('wp-block-image') || el.classList.contains('wp-block-video')) return true;
     if (el.classList.contains('wp-caption') && el.querySelector('img')) return true;
 
     return false;
@@ -180,12 +245,28 @@ export function extractImagesFromHtml(html) {
 
     doc.body.querySelectorAll('figure').forEach((fig) => {
         if (fig.querySelector('img')) registerFigure(fig);
+        if (fig.querySelector('video') && !consumed.has(fig)) {
+            const id = `img_${index++}`;
+            const data = parseVideoFromFigure(fig, id);
+            if (data) {
+                images.push(data);
+                consumed.add(fig);
+                fig.querySelectorAll('video').forEach((video) => consumed.add(video));
+            }
+        }
     });
 
     doc.body.querySelectorAll('img').forEach((img) => {
         if (consumed.has(img)) return;
         const id = `img_${index++}`;
         const data = parseImageFromImg(img, id);
+        if (data) images.push(data);
+    });
+
+    doc.body.querySelectorAll('video').forEach((video) => {
+        if (consumed.has(video)) return;
+        const id = `img_${index++}`;
+        const data = parseVideoFromTag(video, id);
         if (data) images.push(data);
     });
 
@@ -229,17 +310,36 @@ export function parseImageFromBlockContent(html) {
     const doc = parser.parseFromString(html, 'text/html');
     const fig = doc.body.querySelector('figure');
     if (fig) {
+        if (fig.querySelector('video')) {
+            return parseVideoFromFigure(fig, `img_${Date.now()}`);
+        }
         return parseImageFromFigure(fig, `img_${Date.now()}`);
     }
     const img = doc.body.querySelector('img');
     if (img) {
         return parseImageFromImg(img, `img_${Date.now()}`);
     }
+    const video = doc.body.querySelector('video');
+    if (video) {
+        return parseVideoFromTag(video, `img_${Date.now()}`);
+    }
 
     return null;
 }
 
 export function renderImageFigure(image) {
+    if (String(image?.mediaType ?? '').toLowerCase() === 'video') {
+        const alignClass = figureClassForAlign(image.align);
+        const figureClass = ['wp-block-video', alignClass].filter(Boolean).join(' ');
+        const attrs = [
+            image.wpAttachmentId ? ` data-id="${Math.round(image.wpAttachmentId)}"` : '',
+            image.seoMediaId ? ` data-seo-media-id="${Math.round(image.seoMediaId)}"` : '',
+        ]
+            .filter(Boolean)
+            .join('');
+        return `<figure class="${figureClass}"${attrs}><video controls src="${escapeAttr(image.src)}"></video></figure>`;
+    }
+
     const alignClass = figureClassForAlign(image.align);
     const isProcessing = Boolean(
         image.isProcessing || isAiPlaceholderLoadingSrc(image.src),
@@ -345,6 +445,23 @@ export function htmlToPlainText(html) {
     return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
+function isMeaningfulHtml(html) {
+    const source = String(html ?? '').trim();
+    if (!source) return false;
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const text = (doc.body.textContent || '').replace(/\u00a0/g, ' ').trim();
+    if (text) return true;
+
+    // Keep structural content that is not plain text.
+    return Boolean(
+        doc.body.querySelector(
+            'img,video,iframe,table,ul,ol,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,hr',
+        ),
+    );
+}
+
 const newBlockId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
 /**
@@ -372,7 +489,7 @@ export function normalizeBlocks(blocks) {
         const images = extractImagesFromHtml(block.content);
         const textHtml = stripImagesFromHtml(block.content);
 
-        if (textHtml) {
+        if (isMeaningfulHtml(textHtml)) {
             result.push({
                 ...block,
                 type: 'text',
@@ -392,7 +509,7 @@ export function normalizeBlocks(blocks) {
             });
         });
 
-        if (!textHtml && images.length === 0) {
+        if (!isMeaningfulHtml(textHtml) && images.length === 0) {
             result.push({ ...block, type: 'text' });
         }
     });

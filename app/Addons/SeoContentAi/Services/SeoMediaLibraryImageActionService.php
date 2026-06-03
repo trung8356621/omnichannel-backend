@@ -26,11 +26,15 @@ final class SeoMediaLibraryImageActionService
     public function applyWatermark(Site $site, array $imageRow): array
     {
         $setting = SeoWatermarkSetting::query()->where('site_id', $site->id)->first();
-        if ($setting === null || $setting->type === SeoWatermarkSetting::TYPE_NONE) {
+        if ($setting === null || ! $setting->isConfiguredForApply()) {
+            $domain = trim((string) ($site->domain ?? ''));
+
             return [
                 'success' => false,
                 'url' => (string) ($imageRow['url'] ?? ''),
-                'message' => 'Chưa cấu hình đóng dấu cho domain này.',
+                'message' => $domain !== ''
+                    ? "Chưa cấu hình đóng dấu cho domain «{$domain}». Vào SEO → Thư viện media → Thiết kế đóng dấu, chọn đúng domain, lưu thiết kế (overlay hoặc text/logo)."
+                    : 'Chưa cấu hình đóng dấu cho domain này. Vào SEO → Thư viện media → Thiết kế đóng dấu và lưu cấu hình.',
             ];
         }
 

@@ -15,7 +15,17 @@ final class SeoPromptSettingsService
 
     public const KEY_TONE_OF_VOICE = 'tone_of_voice';
 
+    /** @deprecated Dùng {@see KEY_FEATURED_SNIPPET_ROWS_MAX}; giữ để tương thích wp_options cũ. */
     public const KEY_FEATURED_SNIPPET_MIN_ROWS = 'featured_snippet_min_rows';
+
+    /** Ngưỡng dòng dữ liệu — trung bình (điểm một phần). */
+    public const KEY_FEATURED_SNIPPET_ROWS_MIN = 'featured_snippet_rows_min';
+
+    /** Ngưỡng dòng dữ liệu — tốt. */
+    public const KEY_FEATURED_SNIPPET_ROWS_RANGE = 'featured_snippet_rows_range';
+
+    /** Ngưỡng dòng dữ liệu — rất tốt (đủ 10 điểm). */
+    public const KEY_FEATURED_SNIPPET_ROWS_MAX = 'featured_snippet_rows_max';
 
     public const KEY_FEATURED_SNIPPET_MIN_COLUMNS = 'featured_snippet_min_columns';
 
@@ -113,12 +123,7 @@ final class SeoPromptSettingsService
                 $data[self::KEY_KEYWORD_DENSITY_DEFAULT] ?? null,
                 self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
             ),
-            self::KEY_FEATURED_SNIPPET_MIN_ROWS => $this->intInRange(
-                $data[self::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? null,
-                1,
-                50,
-                10,
-            ),
+            ...$this->normalizeFeaturedSnippetRowTiers($data),
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $this->intInRange(
                 $data[self::KEY_FEATURED_SNIPPET_MIN_COLUMNS] ?? null,
                 1,
@@ -194,27 +199,38 @@ final class SeoPromptSettingsService
     }
 
     /**
-     * @return array{min_rows: int, min_columns: int, max_columns: int}
+     * @return array{
+     *     rows_min: int,
+     *     rows_range: int,
+     *     rows_max: int,
+     *     min_rows: int,
+     *     min_columns: int,
+     *     max_columns: int,
+     * }
      */
     public function getFeaturedSnippetThresholds(): array
     {
         $settings = $this->getSettings();
         $minCols = $settings[self::KEY_FEATURED_SNIPPET_MIN_COLUMNS];
         $maxCols = max($minCols, $settings[self::KEY_FEATURED_SNIPPET_MAX_COLUMNS]);
+        $rowsMax = $settings[self::KEY_FEATURED_SNIPPET_ROWS_MAX];
 
         return [
-            'min_rows' => $settings[self::KEY_FEATURED_SNIPPET_MIN_ROWS],
+            'rows_min' => $settings[self::KEY_FEATURED_SNIPPET_ROWS_MIN],
+            'rows_range' => $settings[self::KEY_FEATURED_SNIPPET_ROWS_RANGE],
+            'rows_max' => $rowsMax,
+            'min_rows' => $rowsMax,
             'min_columns' => $minCols,
             'max_columns' => $maxCols,
         ];
     }
 
     /**
-     * Số hàng markdown được đếm (gồm header) tối thiểu để đạt chuẩn Featured Snippet.
+     * Số hàng markdown được đếm (gồm header) tối thiểu để đạt mức rất tốt Featured Snippet.
      */
     public function featuredSnippetMinMarkdownRowCount(): int
     {
-        return $this->getFeaturedSnippetThresholds()['min_rows'] + 1;
+        return $this->getFeaturedSnippetThresholds()['rows_max'] + 1;
     }
 
     /**
@@ -262,12 +278,7 @@ final class SeoPromptSettingsService
                 $settings[self::KEY_KEYWORD_DENSITY_DEFAULT] ?? null,
                 self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
             ),
-            self::KEY_FEATURED_SNIPPET_MIN_ROWS => $this->intInRange(
-                $settings[self::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? null,
-                1,
-                50,
-                10,
-            ),
+            ...$this->normalizeFeaturedSnippetRowTiers($settings),
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $minCols,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $maxCols,
         ], 'no');
@@ -290,9 +301,62 @@ final class SeoPromptSettingsService
             self::KEY_ARTICLE_LENGTH_DEFAULT => self::DEFAULT_ARTICLE_LENGTH_DEFAULT,
             self::KEY_KEYWORD_DENSITY_PRODUCT => self::DEFAULT_KEYWORD_DENSITY_PRODUCT,
             self::KEY_KEYWORD_DENSITY_DEFAULT => self::DEFAULT_KEYWORD_DENSITY_DEFAULT,
+            self::KEY_FEATURED_SNIPPET_ROWS_MIN => 6,
+            self::KEY_FEATURED_SNIPPET_ROWS_RANGE => 8,
+            self::KEY_FEATURED_SNIPPET_ROWS_MAX => 10,
             self::KEY_FEATURED_SNIPPET_MIN_ROWS => 10,
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => 2,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => 5,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array{
+     *     featured_snippet_rows_min: int,
+     *     featured_snippet_rows_range: int,
+     *     featured_snippet_rows_max: int,
+     *     featured_snippet_min_rows: int,
+     * }
+     */
+    private function normalizeFeaturedSnippetRowTiers(array $data): array
+    {
+        $rowsMax = $this->intInRange(
+            $data[self::KEY_FEATURED_SNIPPET_ROWS_MAX]
+                ?? $data[self::KEY_FEATURED_SNIPPET_MIN_ROWS]
+                ?? null,
+            1,
+            50,
+            10,
+        );
+        $rowsRange = $this->intInRange(
+            $data[self::KEY_FEATURED_SNIPPET_ROWS_RANGE] ?? null,
+            1,
+            50,
+            max(1, $rowsMax - 2),
+        );
+        $rowsMin = $this->intInRange(
+            $data[self::KEY_FEATURED_SNIPPET_ROWS_MIN] ?? null,
+            1,
+            50,
+            max(1, $rowsMax - 4),
+        );
+
+        if ($rowsMin > $rowsRange) {
+            $rowsMin = $rowsRange;
+        }
+        if ($rowsRange > $rowsMax) {
+            $rowsRange = $rowsMax;
+        }
+        if ($rowsMin > $rowsRange) {
+            $rowsMin = $rowsRange;
+        }
+
+        return [
+            self::KEY_FEATURED_SNIPPET_ROWS_MIN => $rowsMin,
+            self::KEY_FEATURED_SNIPPET_ROWS_RANGE => $rowsRange,
+            self::KEY_FEATURED_SNIPPET_ROWS_MAX => $rowsMax,
+            self::KEY_FEATURED_SNIPPET_MIN_ROWS => $rowsMax,
         ];
     }
 

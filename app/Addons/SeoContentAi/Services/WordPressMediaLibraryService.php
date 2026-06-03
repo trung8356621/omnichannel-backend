@@ -52,7 +52,6 @@ final class WordPressMediaLibraryService
             'page' => max(1, $page),
             'orderby' => 'date',
             'order' => 'desc',
-            'media_type' => 'image',
         ];
 
         if ($filterMonth !== '') {
@@ -116,6 +115,7 @@ final class WordPressMediaLibraryService
                     'wp_attachment_id' => $id,
                     'seo_media_id' => 0,
                     'url' => $url,
+                    'media_type' => $this->resolveWordPressMediaType($item),
                     'slug' => trim((string) ($item['slug'] ?? '')),
                     'title' => html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
                     'alt' => $alt,
@@ -203,6 +203,7 @@ final class WordPressMediaLibraryService
                 'wp_attachment_id' => $id,
                 'seo_media_id' => 0,
                 'url' => $url,
+                'media_type' => $this->resolveWordPressMediaType($item),
                 'slug' => trim((string) ($item['slug'] ?? '')),
                 'title' => html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
                 'alt' => $alt,
@@ -339,6 +340,24 @@ final class WordPressMediaLibraryService
             'page' => max(1, $page),
             'error' => $error,
         ];
+    }
+
+    /**
+     * @param array<string, mixed> $item
+     */
+    private function resolveWordPressMediaType(array $item): string
+    {
+        $mediaType = strtolower(trim((string) ($item['media_type'] ?? '')));
+        if ($mediaType !== '') {
+            return $mediaType === 'video' ? 'video' : 'image';
+        }
+
+        $mimeType = strtolower(trim((string) ($item['mime_type'] ?? '')));
+        if (str_starts_with($mimeType, 'video/')) {
+            return 'video';
+        }
+
+        return 'image';
     }
 
     private function requestDeleteAttachment(string $base, string $writeToken, int $attachmentId): \Illuminate\Http\Client\Response

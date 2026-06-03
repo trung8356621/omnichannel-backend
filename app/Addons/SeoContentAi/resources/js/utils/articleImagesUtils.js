@@ -244,21 +244,56 @@ export function imageSlugFromKeyword(keyword, index) {
 }
 
 /**
+ * URL gốc WordPress dùng khi đổi slug attachment (không dùng URL staging Laravel).
+ */
+export function resolveWpRenameOldUrl(row) {
+    const wpSrc = String(row?.wpSrc || row?.wp_url || '').trim();
+    if (wpSrc && !isLocalSeoMediaSrc(wpSrc)) {
+        return resolveFullWordPressImageUrl(wpSrc);
+    }
+
+    const src = String(row?.src || '').trim();
+    if (src && !isLocalSeoMediaSrc(src)) {
+        return resolveFullWordPressImageUrl(src);
+    }
+
+    return wpSrc || src;
+}
+
+function resolveLocalRenameSrc(row) {
+    const localSrc = String(row?.localSrc || row?.local_src || '').trim();
+    if (localSrc && isLocalSeoMediaSrc(localSrc)) {
+        return localSrc;
+    }
+
+    const src = String(row?.src || '').trim();
+    if (src && isLocalSeoMediaSrc(src)) {
+        return src;
+    }
+
+    return localSrc || '';
+}
+
+/**
  * Phân biệt ID WordPress vs seo_media (album local hay gán nhầm wp_attachment_id).
  */
 export function resolveImageRefIds(row) {
-    const src = String(row?.src || row?.localSrc || row?.local_src || '').trim();
-    const wpSrc = String(row?.wpSrc || row?.wp_url || '').trim();
-    const displaySrc = src || wpSrc;
-    const isLocal = displaySrc.includes('/storage/uploads/seo_media/');
+    const localSrc = resolveLocalRenameSrc(row);
+    const wpSrcRaw = String(row?.wpSrc || row?.wp_url || '').trim();
+    const src = String(row?.src || '').trim();
+    const displaySrc = (isLocalSeoMediaSrc(src) ? src : '') || localSrc || src || wpSrcRaw;
+    const isLocal = isLocalSeoMediaSrc(displaySrc) || localSrc !== '';
+    const hasWpUrl = wpSrcRaw !== '' && !isLocalSeoMediaSrc(wpSrcRaw);
 
     let wpAttachmentId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
     let seoMediaId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
 
     if (isLocal) {
-        if (seoMediaId <= 0 && wpAttachmentId > 0) {
+        if (seoMediaId <= 0 && wpAttachmentId > 0 && !hasWpUrl) {
             seoMediaId = wpAttachmentId;
             wpAttachmentId = 0;
+        } else if (seoMediaId > 0 && wpAttachmentId > 0 && seoMediaId === wpAttachmentId) {
+            seoMediaId = 0;
         }
     } else if (seoMediaId > 0 && wpAttachmentId <= 0) {
         wpAttachmentId = 0;
@@ -269,6 +304,8 @@ export function resolveImageRefIds(row) {
         seoMediaId: seoMediaId > 0 ? seoMediaId : 0,
         isLocal,
         src: displaySrc,
+        localSrc,
+        wpSrc: hasWpUrl ? resolveFullWordPressImageUrl(wpSrcRaw) : '',
     };
 }
 
@@ -295,49 +332,44 @@ export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
     const fromRow = Number(row?.quickFixIndex ?? 0);
     const slugIndex = fromRow > 0 ? fromRow : 0;
     const suggestedSlug = slugIndex > 0 ? imageSlugFromKeyword(phrase, slugIndex) : '';
-    const { wpAttachmentId, seoMediaId, isLocal, src } = resolveImageRefIds(row);
+    const { wpAttachmentId, seoMediaId, isLocal } = resolveImageRefIds(row);
+    const localFileSrc = resolveLocalRenameSrc(row);
     const oldSlug = String(row?.slug ?? '').trim();
+    const oldUrlForWp = resolveWpRenameOldUrl(row);
 
-    if (wpAttachmentId > 0 && suggestedSlug && suggestedSlug !== oldSlug) {
-        return {
-            patch: {},
-            wpRename: {
-                attachment_id: wpAttachmentId,
-                new_slug: suggestedSlug,
-                old_url: row?.src ?? src,
-                old_slug: oldSlug,
-            },
-            localRename: null,
+    if (!suggestedSlug || suggestedSlug === oldSlug) {
+        return { patch: {}, wpRename: null, localRename: null };
+    }
+
+    let wpRename = null;
+    let localRename = null;
+
+    if (wpAttachmentId > 0) {
+        wpRename = {
+            attachment_id: wpAttachmentId,
+            new_slug: suggestedSlug,
+            old_url: oldUrlForWp,
+            old_slug: oldSlug,
         };
     }
 
-    if (seoMediaId > 0 && suggestedSlug && suggestedSlug !== oldSlug) {
-        return {
-            patch: {},
-            wpRename: null,
-            localRename: {
-                seo_media_id: seoMediaId,
-                src: row?.src ?? src,
-                new_slug: suggestedSlug,
-                old_slug: oldSlug,
-            },
+    if (seoMediaId > 0) {
+        localRename = {
+            seo_media_id: seoMediaId,
+            src: localFileSrc || row?.src,
+            new_slug: suggestedSlug,
+            old_slug: oldSlug,
+        };
+    } else if (isLocal && localFileSrc) {
+        localRename = {
+            seo_media_id: null,
+            src: localFileSrc,
+            new_slug: suggestedSlug,
+            old_slug: oldSlug,
         };
     }
 
-    if (isLocal && src && suggestedSlug && suggestedSlug !== oldSlug) {
-        return {
-            patch: { slug: suggestedSlug },
-            wpRename: null,
-            localRename: {
-                seo_media_id: seoMediaId > 0 ? seoMediaId : null,
-                src,
-                new_slug: suggestedSlug,
-                old_slug: oldSlug,
-            },
-        };
-    }
-
-    if (suggestedSlug && suggestedSlug !== oldSlug) {
+    if (!wpRename && !localRename) {
         return {
             patch: { slug: suggestedSlug },
             wpRename: null,
@@ -345,7 +377,7 @@ export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
         };
     }
 
-    return { patch: {}, wpRename: null, localRename: null };
+    return { patch: {}, wpRename, localRename };
 }
 
 /**
@@ -414,24 +446,26 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
     const slug = imageSlugFromKeyword(phrase, slugIndex);
     const oldSlug = (row.slug || '').trim();
     const { wpAttachmentId, seoMediaId } = resolveImageRefIds(row);
+    const localFileSrc = resolveLocalRenameSrc(row);
+    const oldUrlForWp = resolveWpRenameOldUrl(row);
 
-    if (wpAttachmentId > 0) {
-        if (slug !== oldSlug) {
-            renameQueue.push({
-                attachment_id: wpAttachmentId,
-                new_slug: slug,
-                old_url: row.src,
-                old_slug: oldSlug,
-            });
-        }
-    } else if (slug !== oldSlug) {
+    if (wpAttachmentId > 0 && slug !== oldSlug) {
+        renameQueue.push({
+            attachment_id: wpAttachmentId,
+            new_slug: slug,
+            old_url: oldUrlForWp,
+            old_slug: oldSlug,
+        });
+    }
+
+    if (slug !== oldSlug && (seoMediaId > 0 || localFileSrc)) {
         const localKey =
-            seoMediaId > 0 ? `id:${seoMediaId}` : `src:${String(row.src || '').trim()}`;
+            seoMediaId > 0 ? `id:${seoMediaId}` : `src:${localFileSrc || String(row.src || '').trim()}`;
         if (!localRenameSeen.has(localKey)) {
             localRenameSeen.add(localKey);
             localRenameQueue.push({
                 seo_media_id: seoMediaId > 0 ? seoMediaId : row.seoMediaId ?? null,
-                src: row.src,
+                src: localFileSrc || row.src,
                 block_id: row.blockId,
                 new_slug: slug,
                 old_slug: oldSlug,

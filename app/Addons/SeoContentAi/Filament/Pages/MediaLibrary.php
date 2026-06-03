@@ -107,6 +107,23 @@ class MediaLibrary extends Page
         $this->loadImages();
     }
 
+    public function notifyLocalMediaUpload(string $status, string $title, string $body = ''): void
+    {
+        $notification = Notification::make()->title($title);
+
+        if ($body !== '') {
+            $notification->body($body);
+        }
+
+        if ($status === 'danger') {
+            $notification->danger()->send();
+
+            return;
+        }
+
+        $notification->success()->send();
+    }
+
     #[On('seo-magic-eraser-saved')]
     public function onMagicEraserSaved(string $url, ?int $imageId = null, bool $pendingWpSync = false): void
     {

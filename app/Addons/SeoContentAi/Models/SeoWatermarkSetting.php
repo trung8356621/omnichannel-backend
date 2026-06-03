@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Addons\SeoContentAi\Services\SeoWatermarkDesignApplicator;
 use App\Addons\SeoContentAi\Services\SeoWatermarkOverlayStorage;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Model;
@@ -60,6 +61,18 @@ class SeoWatermarkSetting extends Model
         }
 
         return Storage::disk('public')->url((string) $this->logo_path);
+    }
+
+    /**
+     * Có thể áp dụng đóng dấu: text/logo hoặc overlay đã lưu từ «Thiết kế đóng dấu».
+     */
+    public function isConfiguredForApply(): bool
+    {
+        if ($this->type !== self::TYPE_NONE) {
+            return true;
+        }
+
+        return app(SeoWatermarkDesignApplicator::class)->hasOverlay($this);
     }
 
     /**

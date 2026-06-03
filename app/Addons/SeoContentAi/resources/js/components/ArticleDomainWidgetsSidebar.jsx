@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Link2, Phone } from 'lucide-react';
 import { t } from '../utils/i18n';
 import {
@@ -8,6 +8,7 @@ import {
     isCtaPlainTextType,
 } from '../utils/ctaLinkFormat';
 import {
+    filterDomainLinksInArticleContent,
     filterSuggestedInternalLinks,
     normalizeHrefForCompare,
     normalizeLinkLabel,
@@ -18,7 +19,15 @@ import {
  * @typedef {{ type?: string, value?: string, label?: string, href?: string, can_insert?: boolean }} DomainCtaItem
  */
 
-function InsertableList({ items, variant, activeKey, onKeywordClick, onInsert, emptyText }) {
+function InsertableList({
+    items,
+    variant,
+    activeKey,
+    hiddenRowKeys,
+    onKeywordClick,
+    onInsert,
+    emptyText,
+}) {
     if (!items.length) {
         return <p className="wp-article-links-empty">{emptyText}</p>;
     }
@@ -46,8 +55,14 @@ function InsertableList({ items, variant, activeKey, onKeywordClick, onInsert, e
                         ? isCtaItemInsertable(item)
                         : item?.can_insert !== false && label !== '' && href !== '';
 
+                const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
+
                 return (
-                    <li key={itemKey} className="wp-article-links-keyword-row">
+                    <li
+                        key={itemKey}
+                        className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}`}
+                        aria-hidden={isRowHiding}
+                    >
                         <button
                             type="button"
                             className={`wp-article-links-keyword${isActive ? ' is-active' : ''} is-suggestion`}
@@ -87,7 +102,7 @@ function InsertableList({ items, variant, activeKey, onKeywordClick, onInsert, e
                                 onClick={(e) => {
                                     e.stopPropagation();
                                     if (insertable) {
-                                        onInsert(item);
+                                        onInsert(item, itemKey);
                                     }
                                 }}
                             >
@@ -128,19 +143,52 @@ function WidgetBox({ title, subtitle, collapsed, onToggle, children }) {
     );
 }
 
+const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks) => {
+    const inArticle = filterDomainLinksInArticleContent(allLinks, articlePlainText);
+
+    return filterSuggestedInternalLinks(inArticle, internalLinks).map((item) => ({
+        ...item,
+        can_insert: item.can_insert !== false,
+    }));
+};
+
 /**
- * @param {{ initialDomainLinkList?: DomainLinkItem[], initialDomainCtaList?: DomainCtaItem[] }} props
+ * @param {{ initialDomainLinkList?: DomainLinkItem[], initialDomainLinkCatalog?: DomainLinkItem[], initialDomainCtaList?: DomainCtaItem[] }} props
  */
 export default function ArticleDomainWidgetsSidebar({
     initialDomainLinkList = [],
+    initialDomainLinkCatalog = [],
     initialDomainCtaList = [],
 }) {
+    const allDomainLinksRef = useRef(
+        initialDomainLinkCatalog.length > 0 ? initialDomainLinkCatalog : initialDomainLinkList,
+    );
+    const [domainLinkCatalogCount, setDomainLinkCatalogCount] = useState(
+        initialDomainLinkCatalog.length > 0
+            ? initialDomainLinkCatalog.length
+            : initialDomainLinkList.length,
+    );
     const [domainLinks, setDomainLinks] = useState(initialDomainLinkList);
     const [domainCtas, setDomainCtas] = useState(initialDomainCtaList);
     const [domainLinkActiveKey, setDomainLinkActiveKey] = useState('');
     const [ctaActiveKey, setCtaActiveKey] = useState('');
     const [linksCollapsed, setLinksCollapsed] = useState(false);
     const [ctaCollapsed, setCtaCollapsed] = useState(false);
+    const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
+
+    const hideRow = (itemKey) => {
+        if (!itemKey) {
+            return;
+        }
+        setHiddenRowKeys((prev) => {
+            if (prev.has(itemKey)) {
+                return prev;
+            }
+            const next = new Set(prev);
+            next.add(itemKey);
+            return next;
+        });
+    };
 
     useEffect(() => {
         const onLinksUpdate = (event) => {
@@ -149,19 +197,37 @@ export default function ArticleDomainWidgetsSidebar({
                 : Array.isArray(event.detail?.extracted_links?.internal)
                   ? event.detail.extracted_links.internal
                   : [];
+            const articlePlainText = String(event.detail?.article_plain_text ?? '');
 
-            setDomainLinks((prev) =>
-                filterSuggestedInternalLinks(prev, internal).map((item) => ({
-                    ...item,
-                    can_insert: item.can_insert !== false,
-                })),
+            setDomainLinks(
+                applyDomainLinkFilters(allDomainLinksRef.current, articlePlainText, internal),
             );
         };
 
         const onSeoPayload = (event) => {
             const detail = event.detail ?? {};
-            if (Array.isArray(detail.domain_link_list)) {
-                setDomainLinks(detail.domain_link_list);
+            if (Array.isArray(detail.domain_link_list_catalog)) {
+                allDomainLinksRef.current = detail.domain_link_list_catalog;
+                setDomainLinkCatalogCount(detail.domain_link_list_catalog.length);
+            } else if (Array.isArray(detail.domain_link_list)) {
+                allDomainLinksRef.current = detail.domain_link_list;
+                setDomainLinkCatalogCount(detail.domain_link_list.length);
+            }
+            if (
+                Array.isArray(detail.domain_link_list_catalog) ||
+                Array.isArray(detail.domain_link_list)
+            ) {
+                const internal = Array.isArray(detail.extracted_links?.internal)
+                    ? detail.extracted_links.internal
+                    : [];
+                const articlePlainText = String(detail.article_plain_text ?? '');
+                setDomainLinks(
+                    applyDomainLinkFilters(
+                        allDomainLinksRef.current,
+                        articlePlainText,
+                        internal,
+                    ),
+                );
             }
             if (Array.isArray(detail.domain_cta_list)) {
                 setDomainCtas(
@@ -191,6 +257,7 @@ export default function ArticleDomainWidgetsSidebar({
                     return true;
                 }),
             );
+            setHiddenRowKeys(new Set());
         };
 
         window.addEventListener('seo-editor-links-updated', onLinksUpdate);
@@ -230,7 +297,9 @@ export default function ArticleDomainWidgetsSidebar({
         );
     };
 
-    const insertDomainLink = (item) => {
+    const insertDomainLink = (item, itemKey) => {
+        hideRow(itemKey);
+
         const text = String(item?.text ?? '').trim();
         const href = String(item?.href ?? item?.target_url ?? '').trim();
         if (!text || !href) {
@@ -281,7 +350,12 @@ export default function ArticleDomainWidgetsSidebar({
                     items={domainLinks}
                     variant="domain-link"
                     activeKey={domainLinkActiveKey}
-                    emptyText={t('domain_link_widget_empty')}
+                    hiddenRowKeys={hiddenRowKeys}
+                    emptyText={
+                        domainLinkCatalogCount > 0
+                            ? t('domain_link_widget_empty_in_article')
+                            : t('domain_link_widget_empty')
+                    }
                     onKeywordClick={(item, _index, itemKey) => scrollToItem(item, itemKey, 'domain-link')}
                     onInsert={insertDomainLink}
                 />

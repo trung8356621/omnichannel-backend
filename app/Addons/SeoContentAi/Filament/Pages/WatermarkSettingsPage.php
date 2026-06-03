@@ -217,10 +217,17 @@ class WatermarkSettingsPage extends Page implements HasForms
             }
         }
 
+        $type = (string) ($formData['type'] ?? 'none');
+        if ($type === 'none' && $existing instanceof SeoWatermarkSetting && $existing->isConfiguredForApply()) {
+            $type = $existing->type !== SeoWatermarkSetting::TYPE_NONE
+                ? (string) $existing->type
+                : SeoWatermarkSetting::TYPE_TEXT;
+        }
+
         SeoWatermarkSetting::query()->updateOrCreate(
             ['site_id' => $this->siteId],
             [
-                'type' => (string) ($formData['type'] ?? 'none'),
+                'type' => $type,
                 'auto_watermark' => (bool) ($formData['auto_watermark'] ?? false),
                 'text_content' => $formData['text_content'] ?? null,
                 'text_color' => (string) ($formData['text_color'] ?? '#ffffff'),

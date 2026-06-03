@@ -69,10 +69,10 @@ final class VirtualCommentService
             ];
 
             if ($isProduct) {
-                $explicit = isset($item['rating']) && is_numeric($item['rating'])
-                    ? (int) $item['rating']
-                    : null;
-                $row['rating'] = $this->ratingAssigner->resolve($explicit, $index);
+                $row['rating'] = $this->ratingAssigner->resolve(
+                    $this->resolveExplicitRating($item),
+                    $index,
+                );
             }
 
             $normalized[] = $row;
@@ -121,13 +121,15 @@ final class VirtualCommentService
             return [];
         }
 
+        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
+
         $result = [];
-        foreach ($decoded as $row) {
+        foreach (array_values($decoded) as $index => $row) {
             if (! is_array($row)) {
                 continue;
             }
 
-            $content = trim((string) ($row['content'] ?? ''));
+            $content = trim((string) ($row['content'] ?? $row['comment'] ?? ''));
             if ($content === '') {
                 continue;
             }
@@ -137,15 +139,130 @@ final class VirtualCommentService
                 $date = now()->format('Y-m-d H:i:s');
             }
 
-            $result[] = [
+            $entry = [
                 'author' => trim((string) ($row['author'] ?? 'Khách mua hàng')) ?: 'Khách mua hàng',
                 'content' => $content,
                 'date' => $date,
-                'rating' => isset($row['rating']) ? (int) $row['rating'] : null,
             ];
+
+            if ($isProduct) {
+                $entry['rating'] = $this->ratingAssigner->resolve(
+                    $this->resolveExplicitRating($row),
+                    $index,
+                );
+            } elseif (isset($row['rating']) && is_numeric($row['rating'])) {
+                $entry['rating'] = max(1, min(5, (int) $row['rating']));
+            }
+
+            $result[] = $entry;
         }
 
         return array_values($result);
+    }
+
+    /**
+     * @return list<array{author: string, content: string, rating?: int, date: string}>
+     */
+    public function getFromWordPress(SeoArticle $article): array
+    {
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return [];
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return [];
+        }
+
+        $site->loadMissing('metas');
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return [];
+        }
+
+        $base = $this->contentService->getPermalinkBase($site);
+        if ($base === '') {
+            return [];
+        }
+
+        $url = $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpPostId . '/comment-reviews';
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken($readToken)
+                ->get($url);
+        } catch (Throwable) {
+            return [];
+        }
+
+        if (! $response->successful()) {
+            return [];
+        }
+
+        $body = $response->json();
+        if (! is_array($body)) {
+            return [];
+        }
+
+        $items = $body['items'] ?? null;
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
+        $result = [];
+        foreach (array_values($items) as $index => $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $content = trim((string) ($row['content'] ?? $row['comment'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+
+            $date = trim((string) ($row['date'] ?? ''));
+            if ($date === '') {
+                $date = now()->format('Y-m-d H:i:s');
+            }
+
+            $entry = [
+                'author' => trim((string) ($row['author'] ?? 'Khách mua hàng')) ?: 'Khách mua hàng',
+                'content' => $content,
+                'date' => $date,
+            ];
+
+            if ($isProduct) {
+                $entry['rating'] = $this->ratingAssigner->resolve(
+                    $this->resolveExplicitRating($row),
+                    $index,
+                );
+            } elseif (isset($row['rating']) && is_numeric($row['rating'])) {
+                $entry['rating'] = max(1, min(5, (int) $row['rating']));
+            }
+
+            $result[] = $entry;
+        }
+
+        return array_values($result);
+    }
+
+    /**
+     * Ưu tiên dữ liệu local; fallback qua WordPress nếu local chưa có.
+     *
+     * @return list<array{author: string, content: string, rating?: int, date: string}>
+     */
+    public function getForEditor(SeoArticle $article): array
+    {
+        $local = $this->getFromArticle($article);
+        if ($local !== []) {
+            return $local;
+        }
+
+        return $this->getFromWordPress($article);
     }
 
     /**
@@ -197,14 +314,16 @@ final class VirtualCommentService
         }
 
         $payloadComments = array_values(array_map(
-            static function (array $row): array {
+            function (array $row) use ($isProduct): array {
                 $normalized = [
                     'author' => (string) ($row['author'] ?? 'Khách mua hàng'),
                     'content' => (string) ($row['content'] ?? ''),
                     'date' => (string) ($row['date'] ?? ''),
                 ];
 
-                if (isset($row['rating']) && is_numeric($row['rating'])) {
+                if ($isProduct) {
+                    $normalized['rating'] = max(1, min(5, (int) ($row['rating'] ?? 5)));
+                } elseif (isset($row['rating']) && is_numeric($row['rating'])) {
                     $normalized['rating'] = max(1, min(5, (int) $row['rating']));
                 }
 
@@ -322,6 +441,20 @@ final class VirtualCommentService
         sort($dates);
 
         return $dates;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveExplicitRating(array $item): ?int
+    {
+        foreach (['rating', 'star_ranking', 'stars', 'star'] as $key) {
+            if (isset($item[$key]) && is_numeric($item[$key])) {
+                return max(1, min(5, (int) $item[$key]));
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleLink;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
@@ -662,11 +663,7 @@ class SeoAnalyzerService
 
     private function containsKeyword(string $text, string $keyword): bool
     {
-        if (trim($keyword) === '' || trim($text) === '') {
-            return false;
-        }
-
-        return mb_stripos($text, $keyword) !== false;
+        return KeywordPhraseMatcher::contains($text, $keyword);
     }
 
     /**
@@ -760,21 +757,18 @@ class SeoAnalyzerService
 
     private function calculateKeywordDensity(string $html, string $keyword): float
     {
-        $text = mb_strtolower(trim(strip_tags($html)));
-        $keyword = mb_strtolower(trim($keyword));
-
-        if ($text === '' || $keyword === '') {
+        $plainText = trim(strip_tags($html));
+        if ($plainText === '' || trim($keyword) === '') {
             return 0.0;
         }
 
-        $totalWords = $this->countWords($text);
+        $totalWords = $this->countWords($plainText);
         if ($totalWords === 0) {
             return 0.0;
         }
 
-        preg_match_all('/\b' . preg_quote($keyword, '/') . '\b/u', $text, $hits);
-        $occurrence = count($hits[0] ?? []);
-        $keywordWordCount = max(1, $this->countWords($keyword));
+        $occurrence = KeywordPhraseMatcher::countOccurrences($plainText, $keyword);
+        $keywordWordCount = max(1, KeywordPhraseMatcher::countWords($keyword));
 
         return (($occurrence * $keywordWordCount) / $totalWords) * 100;
     }

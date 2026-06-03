@@ -25,6 +25,7 @@
                     url: String(el?.dataset?.pickerUrl || ''),
                     alt: String(el?.dataset?.pickerAlt || ''),
                     slug: String(el?.dataset?.pickerSlug || ''),
+                    media_type: String(el?.dataset?.pickerMediaType || 'image'),
                 };
             },
             visibleGalleryPickerElements() {
@@ -101,6 +102,67 @@
             closeArticleMediaModal() {
                 this.clearGalleryPickerSelection();
                 $wire.closeMediaPicker();
+            },
+            localMediaUploading: false,
+            openLocalMediaUploadPicker() {
+                if (this.localMediaUploading) {
+                    return;
+                }
+                this.$refs.localMediaFileInput?.click();
+            },
+            async onLocalMediaFilesSelected(event) {
+                const input = event?.target;
+                const files = input?.files;
+                if (!files?.length || this.localMediaUploading) {
+                    return;
+                }
+
+                if ($wire.mediaPickerTab !== 'local') {
+                    await $wire.setMediaPickerTab('local');
+                }
+
+                this.localMediaUploading = true;
+                this.pickerLoading = true;
+
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+                const i18n = picker.i18n || {};
+
+                try {
+                    const uploadFn = window.seoUploadLocalMediaFiles;
+                    if (typeof uploadFn !== 'function') {
+                        throw new Error('Upload chưa sẵn sàng — tải lại trang.');
+                    }
+
+                    const uploaded = await uploadFn(files, {
+                        articleId: picker.articleId ?? null,
+                        siteId: picker.siteId ?? null,
+                        source: 'library',
+                    });
+
+                    await $wire.reloadMediaPickerImages();
+
+                    const count = uploaded?.length ?? 0;
+                    const titleMany = String(i18n.upload_success_many || '');
+                    $wire.handleEditorNotify({
+                        title: count === 1
+                            ? (i18n.upload_success_one || 'Đã upload ảnh')
+                            : titleMany.replace(':count', String(count)),
+                        body: i18n.upload_success_body || '',
+                        status: 'success',
+                    });
+                } catch (error) {
+                    $wire.handleEditorNotify({
+                        title: i18n.upload_failed || 'Upload thất bại',
+                        body: error?.message ?? (i18n.upload_failed_body || ''),
+                        status: 'danger',
+                    });
+                } finally {
+                    this.localMediaUploading = false;
+                    this.pickerLoading = false;
+                    if (input) {
+                        input.value = '';
+                    }
+                }
             },
         }"
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
@@ -261,6 +323,7 @@
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
+                    window.__SEO_ARTICLE_MEDIA_PICKER__ = @json($this->getArticleMediaPickerPayload());
                 </script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
@@ -502,7 +565,7 @@
             <div class="seo-article-media-modal__panel">
                 <div class="seo-article-media-modal__header">
                     <h2 id="seo-article-media-modal-title" class="seo-article-media-modal__title">
-                        <span x-text="mediaModalMode === 'gallery' ? 'Chọn ảnh cho album sản phẩm' : (mediaModalMode === 'editor-block' ? 'Chọn ảnh từ thư viện' : 'Chọn ảnh đại diện')"></span>
+                        <span x-text="mediaModalMode === 'gallery' ? 'Chọn media cho album sản phẩm' : (mediaModalMode === 'editor-block' ? 'Chọn image/video từ thư viện' : 'Chọn ảnh đại diện')"></span>
                     </h2>
                     <button type="button" class="seo-article-media-modal__close" x-on:click="closeArticleMediaModal()" aria-label="Đóng">
                         ×
@@ -549,6 +612,25 @@
                         autocomplete="off"
                         x-on:keydown.escape="closeArticleMediaModal()"
                     />
+                    <input
+                        type="file"
+                        x-ref="localMediaFileInput"
+                        class="seo-article-media-modal__upload-input"
+                        accept="image/jpeg,image/png,image/gif,image/webp"
+                        multiple
+                        x-on:change="onLocalMediaFilesSelected($event)"
+                    />
+                    <button
+                        type="button"
+                        class="seo-article-media-modal__upload"
+                        x-show="$wire.mediaPickerTab === 'local'"
+                        x-cloak
+                        x-on:click="openLocalMediaUploadPicker()"
+                        x-bind:disabled="localMediaUploading"
+                    >
+                        <span x-show="!localMediaUploading">{{ __('seo-content-ai::filament.media_tools.upload') }}</span>
+                        <span x-show="localMediaUploading" x-cloak>{{ __('seo-content-ai::filament.media_tools.uploading') }}</span>
+                    </button>
                     <button
                         type="button"
                         wire:click="reloadMediaPickerImages"
@@ -563,7 +645,7 @@
                     x-cloak
                     class="seo-article-media-modal__hint"
                 >
-                    Click / Shift+click để chọn nhiều ảnh, rồi bấm <strong>Thêm vào album</strong> ở thanh bên dưới.
+                    Click / Shift+click để chọn nhiều media, rồi bấm <strong>Thêm vào album</strong> ở thanh bên dưới.
                 </p>
 
                 @if ($mediaPickerError)
@@ -586,7 +668,7 @@
                     <div x-show="!pickerLoading" x-cloak>
                         @if (empty($mediaPickerImages) && ! $mediaPickerError)
                             <p class="seo-article-media-modal__empty">
-                                {{ $mediaPickerTab === 'article' ? 'Chưa có ảnh trong nội dung bài viết.' : 'Không có ảnh trong thư viện.' }}
+                                {{ $mediaPickerTab === 'article' ? 'Chưa có media trong nội dung bài viết.' : 'Không có media trong thư viện.' }}
                             </p>
                         @endif
 

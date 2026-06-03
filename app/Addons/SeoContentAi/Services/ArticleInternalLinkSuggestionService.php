@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 
 final class ArticleInternalLinkSuggestionService
 {
@@ -236,11 +237,7 @@ final class ArticleInternalLinkSuggestionService
 
     private function textContainsPhrase(string $text, string $phrase): bool
     {
-        if ($phrase === '' || $text === '') {
-            return false;
-        }
-
-        return mb_stripos($text, $phrase) !== false;
+        return KeywordPhraseMatcher::contains($text, $phrase);
     }
 
     /**

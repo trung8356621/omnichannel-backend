@@ -159,6 +159,7 @@ class SeoMediaLibraryService
     {
         $createdAt = $media->created_at;
         $source = (string) $media->source;
+        $mediaType = $this->resolveMediaType($media);
         $kind = str_starts_with($source, 'ai_') ? 'generated' : 'local';
         $alt = filled($media->alt_text) ? (string) $media->alt_text : (string) $media->slug;
 
@@ -170,6 +171,7 @@ class SeoMediaLibraryService
             'wp_attachment_id' => $media->wp_attachment_id !== null ? (int) $media->wp_attachment_id : null,
             'slug' => (string) $media->slug,
             'url' => $media->publicUrl(),
+            'media_type' => $mediaType,
             'title' => '',
             'alt' => $alt,
             'source' => $source,
@@ -177,5 +179,20 @@ class SeoMediaLibraryService
             'created_at' => $createdAt?->toIso8601String(),
             'sort_at' => $createdAt?->timestamp ?? 0,
         ];
+    }
+
+    private function resolveMediaType(SeoMedia $media): string
+    {
+        $source = strtolower(trim((string) $media->source));
+        if ($source === 'ai_video_prompt') {
+            return 'video';
+        }
+
+        $filename = strtolower(trim((string) $media->filename));
+        $ext = pathinfo($filename, PATHINFO_EXTENSION);
+
+        return in_array($ext, ['mp4', 'mov', 'm4v', 'webm', 'ogv', 'avi', 'mpeg', 'mpg'], true)
+            ? 'video'
+            : 'image';
     }
 }

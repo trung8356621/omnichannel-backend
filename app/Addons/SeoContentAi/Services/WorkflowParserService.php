@@ -11,6 +11,14 @@ use Illuminate\Support\Str;
 
 class WorkflowParserService
 {
+    private const SNIPPET_TIER_NONE = 'none';
+
+    private const SNIPPET_TIER_AVERAGE = 'average';
+
+    private const SNIPPET_TIER_GOOD = 'good';
+
+    private const SNIPPET_TIER_EXCELLENT = 'excellent';
+
     public function __construct(
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly SeoOverviewSettingsService $overviewSettings,
@@ -672,6 +680,21 @@ class WorkflowParserService
                 continue;
             }
 
+            if ($this->isFaqMarkdownSectionTerminatorLine($trimmed)) {
+                if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
+                    $faqs[] = [
+                        'question' => $currentQuestion,
+                        'answer' => trim(implode("\n", $answerLines)),
+                    ];
+                }
+
+                $inFaqSection = false;
+                $faqSectionLevel = null;
+                $currentQuestion = null;
+                $answerLines = [];
+                continue;
+            }
+
             if ($this->isFaqMarkdownBulletQuestion($trimmed)) {
                 if ($currentQuestion !== null && $this->faqHasAnswer($answerLines)) {
                     $faqs[] = [
@@ -1215,48 +1238,18 @@ class WorkflowParserService
     }
 
     /**
-     * Kiểm tra bài viết có chứa bảng Markdown đạt chuẩn Featured Snippet không.
-     * Ngưỡng đọc từ cài đặt prompt (số dòng dữ liệu, cột min/max).
+     * Kiểm tra bài viết có bảng Featured Snippet mức rất tốt (đủ ngưỡng rows_max).
      */
     public function hasFeaturedSnippetTable(string $markdown): bool
     {
         $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
-        $minRowCount = $this->promptSettings->featuredSnippetMinMarkdownRowCount();
-        $minCols = $thresholds['min_columns'];
-        $maxCols = $thresholds['max_columns'];
+        $metrics = $this->bestMarkdownTableMetrics(
+            $markdown,
+            $thresholds['min_columns'],
+            $thresholds['max_columns'],
+        );
 
-        $lines = explode("\n", $markdown);
-        $inTable = false;
-        $rowCount = 0;
-        $colCount = 0;
-
-        foreach ($lines as $line) {
-            $line = trim($line);
-
-            if (preg_match('/\|.*\|/', $line)) {
-                if (! $inTable) {
-                    $inTable = true;
-                    $rowCount = 0;
-                    $cols = array_filter(explode('|', trim($line, '|')), static fn ($c): bool => trim((string) $c) !== '');
-                    $colCount = count($cols);
-                }
-
-                if (! preg_match('/^\|?[\s\-\:]+\|/', $line)) {
-                    $rowCount++;
-                }
-            } elseif ($inTable) {
-                if ($rowCount >= $minRowCount && $colCount >= $minCols && $colCount <= $maxCols) {
-                    return true;
-                }
-                $inTable = false;
-            }
-        }
-
-        if ($inTable && $rowCount >= $minRowCount && $colCount >= $minCols && $colCount <= $maxCols) {
-            return true;
-        }
-
-        return false;
+        return $metrics !== null && $metrics['data_rows'] >= $thresholds['rows_max'];
     }
 
     /**
@@ -1264,36 +1257,111 @@ class WorkflowParserService
      */
     public function hasFeaturedSnippetTableFromHtml(string $html): bool
     {
-        $html = trim($html);
-        if ($html === '' || preg_match('/<table\b/i', $html) !== 1) {
-            return false;
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+        $metrics = $this->bestHtmlTableMetrics(
+            $html,
+            $thresholds['min_columns'],
+            $thresholds['max_columns'],
+        );
+
+        return $metrics !== null && $metrics['data_rows'] >= $thresholds['rows_max'];
+    }
+
+    /**
+     * Chấm Featured Snippet theo 4 mức (không có / trung bình / tốt / rất tốt).
+     *
+     * @return array{tier: string, passed: bool, points: int, message: string, data_rows?: int}
+     */
+    public function resolveFeaturedSnippetTableScore(string $markdown, ?string $sourceContent = null): array
+    {
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+        $html = $sourceContent;
+        if ($html === null && preg_match('/<[a-z][\s\S]*>/i', $markdown) === 1) {
+            $html = $markdown;
         }
 
+        $metrics = $this->findBestFeaturedSnippetTableMetrics($markdown, $html);
+        $columnLabel = sprintf('%d–%d cột', $thresholds['min_columns'], $thresholds['max_columns']);
+        $tierThresholdLabel = sprintf(
+            '%d / %d / %d dòng (trung bình / tốt / rất tốt)',
+            $thresholds['rows_min'],
+            $thresholds['rows_range'],
+            $thresholds['rows_max'],
+        );
+
+        if ($metrics === null) {
+            return [
+                'tier' => self::SNIPPET_TIER_NONE,
+                'passed' => false,
+                'points' => 0,
+                'message' => 'Không có bảng hoặc cột không hợp lệ (' . $columnLabel . '). Ngưỡng: ' . $tierThresholdLabel,
+            ];
+        }
+
+        $dataRows = $metrics['data_rows'];
+        $tier = $this->featuredSnippetTierFromDataRows($dataRows, $thresholds);
+        $tierLabel = $this->featuredSnippetTierLabel($tier);
+        $points = $this->featuredSnippetPointsForTier($tier);
+
+        if ($tier === self::SNIPPET_TIER_NONE) {
+            return [
+                'tier' => $tier,
+                'passed' => false,
+                'points' => 0,
+                'data_rows' => $dataRows,
+                'message' => sprintf(
+                    'Không đạt — bảng có %d dòng dữ liệu (cần ≥ %d cho trung bình). %s, %s.',
+                    $dataRows,
+                    $thresholds['rows_min'],
+                    $columnLabel,
+                    $tierThresholdLabel,
+                ),
+            ];
+        }
+
+        return [
+            'tier' => $tier,
+            'passed' => $tier === self::SNIPPET_TIER_EXCELLENT,
+            'points' => $points,
+            'data_rows' => $dataRows,
+            'message' => sprintf(
+                '%s — %d dòng dữ liệu, %s (%s)',
+                $tierLabel,
+                $dataRows,
+                $columnLabel,
+                $tierThresholdLabel,
+            ),
+        ];
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    public function findBestFeaturedSnippetTableMetrics(string $markdown, ?string $html = null): ?array
+    {
         $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
-        $minDataRows = $thresholds['min_rows'];
         $minCols = $thresholds['min_columns'];
         $maxCols = $thresholds['max_columns'];
+        $best = null;
 
-        $dom = new DOMDocument();
-        libxml_use_internal_errors(true);
-        $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div id="omi-snippet-root">' . $html . '</div>',
-            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
-        );
-        libxml_clear_errors();
-
-        $root = $dom->getElementById('omi-snippet-root');
-        if (! $root instanceof DOMElement) {
-            return false;
-        }
-
-        foreach ($root->getElementsByTagName('table') as $table) {
-            if ($table instanceof DOMElement && $this->htmlTableMeetsFeaturedSnippetThresholds($table, $minDataRows, $minCols, $maxCols)) {
-                return true;
+        if ($html !== null && trim($html) !== '') {
+            $htmlBest = $this->bestHtmlTableMetrics($html, $minCols, $maxCols);
+            if ($htmlBest !== null) {
+                $best = $htmlBest;
             }
         }
 
-        return false;
+        $markdownSource = $markdown;
+        if (preg_match('/<[a-z][\s\S]*>/i', $markdown) === 1) {
+            $markdownSource = $this->htmlFragmentToMarkdown($markdown);
+        }
+
+        $markdownBest = $this->bestMarkdownTableMetrics($markdownSource, $minCols, $maxCols);
+        if ($markdownBest !== null && ($best === null || $markdownBest['data_rows'] > $best['data_rows'])) {
+            $best = $markdownBest;
+        }
+
+        return $best;
     }
 
     /**
@@ -1344,31 +1412,14 @@ class WorkflowParserService
             ];
         }
 
-        $snippet = $this->promptSettings->getFeaturedSnippetThresholds();
-        $snippetLabel = sprintf(
-            '>= %d dòng dữ liệu, %d–%d cột',
-            $snippet['min_rows'],
-            $snippet['min_columns'],
-            $snippet['max_columns'],
-        );
-
-        $hasTable = $this->hasFeaturedSnippetTable($markdown)
-            || ($sourceContent !== null && $this->hasFeaturedSnippetTableFromHtml($sourceContent));
-
-        if ($hasTable) {
-            $score += 10;
-            $details['table'] = [
-                'passed' => true,
-                'points' => 10,
-                'message' => 'Có bảng dữ liệu chuẩn Featured Snippet (' . $snippetLabel . ')',
-            ];
-        } else {
-            $details['table'] = [
-                'passed' => false,
-                'points' => 0,
-                'message' => 'Không tìm thấy bảng hoặc bảng chưa đạt (' . $snippetLabel . ')',
-            ];
-        }
+        $tableScore = $this->resolveFeaturedSnippetTableScore($markdown, $sourceContent);
+        $score += $tableScore['points'];
+        $details['table'] = [
+            'passed' => $tableScore['passed'],
+            'points' => $tableScore['points'],
+            'message' => $tableScore['message'],
+            'tier' => $tableScore['tier'],
+        ];
 
         return [
             'total_score' => $score,
@@ -1561,7 +1612,8 @@ class WorkflowParserService
 
         $plain = trim(str_replace(['**', '*'], '', $line));
 
-        return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1;
+        return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1
+            || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?\s*$/u', $plain) === 1;
     }
 
     private function normalizeFaqQuestionLine(string $line): string
@@ -1590,11 +1642,25 @@ class WorkflowParserService
             $content = trim($matches[1]);
         }
 
+        $content = preg_replace('/^\*{1,2}\s*(trả\s*lời|tra\s*loi|answer)\s*\*{1,2}\s*:\s*/iu', '', $content) ?? $content;
         $content = preg_replace('/^\*(?:Trả lời bởi|Tra loi boi)[^*]*\*:\s*/iu', '', $content) ?? $content;
         $content = preg_replace('/^\*([^*]+?)\*:\s*/u', '', $content) ?? $content;
         $content = str_replace(['**', '*'], '', $content);
 
         return trim($content);
+    }
+
+    private function isFaqMarkdownSectionTerminatorLine(string $line): bool
+    {
+        $plain = mb_strtolower(trim(str_replace(['**', '*'], '', $line)));
+        if ($plain === '' || $plain === '---') {
+            return false;
+        }
+
+        return preg_match(
+            '/^(thông\s*tin\s*liên\s*hệ|thong\s*tin\s*lien\s*he|liên\s*hệ|lien\s*he|contact|kết\s*luận|ket\s*luan)\b/iu',
+            $plain,
+        ) === 1;
     }
 
     private function stripHeadingLabelPrefixes(string $text): string
@@ -2095,12 +2161,14 @@ class WorkflowParserService
         return $text !== '';
     }
 
-    private function htmlTableMeetsFeaturedSnippetThresholds(
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function htmlTableFeaturedSnippetMetrics(
         DOMElement $table,
-        int $minDataRows,
         int $minCols,
         int $maxCols,
-    ): bool {
+    ): ?array {
         $rowColCounts = [];
         $headerRowCount = 0;
         $hasFirstColumnDescriptor = true;
@@ -2142,18 +2210,168 @@ class WorkflowParserService
         }
 
         if ($rowColCounts === []) {
-            return false;
+            return null;
         }
 
         $colCount = max($rowColCounts);
         if (! $this->featuredSnippetColumnCountPasses($colCount, $minCols, $maxCols, $hasFirstColumnDescriptor)) {
-            return false;
+            return null;
         }
 
         $dataRowCount = count($rowColCounts) - ($headerRowCount > 0 ? 1 : 0);
-        $dataRowCount = max(0, $dataRowCount);
 
-        return $dataRowCount >= $minDataRows;
+        return [
+            'data_rows' => max(0, $dataRowCount),
+            'columns' => $colCount,
+        ];
+    }
+
+    private function htmlTableMeetsFeaturedSnippetThresholds(
+        DOMElement $table,
+        int $minDataRows,
+        int $minCols,
+        int $maxCols,
+    ): bool {
+        $metrics = $this->htmlTableFeaturedSnippetMetrics($table, $minCols, $maxCols);
+
+        return $metrics !== null && $metrics['data_rows'] >= $minDataRows;
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function bestHtmlTableMetrics(string $html, int $minCols, int $maxCols): ?array
+    {
+        $html = trim($html);
+        if ($html === '' || preg_match('/<table\b/i', $html) !== 1) {
+            return null;
+        }
+
+        $dom = new DOMDocument();
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            '<?xml encoding="utf-8" ?><div id="omi-snippet-root">' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $root = $dom->getElementById('omi-snippet-root');
+        if (! $root instanceof DOMElement) {
+            return null;
+        }
+
+        $best = null;
+        foreach ($root->getElementsByTagName('table') as $table) {
+            if (! $table instanceof DOMElement) {
+                continue;
+            }
+
+            $metrics = $this->htmlTableFeaturedSnippetMetrics($table, $minCols, $maxCols);
+            if ($metrics === null) {
+                continue;
+            }
+
+            if ($best === null || $metrics['data_rows'] > $best['data_rows']) {
+                $best = $metrics;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function bestMarkdownTableMetrics(string $markdown, int $minCols, int $maxCols): ?array
+    {
+        $lines = explode("\n", $markdown);
+        $inTable = false;
+        $rowCount = 0;
+        $colCount = 0;
+        $best = null;
+
+        $flush = function () use (&$inTable, &$rowCount, &$colCount, &$best, $minCols, $maxCols): void {
+            if (! $inTable) {
+                return;
+            }
+
+            $dataRows = max(0, $rowCount - 1);
+            if ($colCount >= $minCols && $colCount <= $maxCols) {
+                if ($best === null || $dataRows > $best['data_rows']) {
+                    $best = [
+                        'data_rows' => $dataRows,
+                        'columns' => $colCount,
+                    ];
+                }
+            }
+
+            $inTable = false;
+        };
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+
+            if (preg_match('/\|.*\|/', $line)) {
+                if (! $inTable) {
+                    $inTable = true;
+                    $rowCount = 0;
+                    $cols = array_filter(explode('|', trim($line, '|')), static fn ($c): bool => trim((string) $c) !== '');
+                    $colCount = count($cols);
+                }
+
+                if (! preg_match('/^\|?[\s\-\:]+\|/', $line)) {
+                    $rowCount++;
+                }
+            } elseif ($inTable) {
+                $flush();
+            }
+        }
+
+        if ($inTable) {
+            $flush();
+        }
+
+        return $best;
+    }
+
+    /**
+     * @param  array{rows_min: int, rows_range: int, rows_max: int}  $thresholds
+     */
+    private function featuredSnippetTierFromDataRows(int $dataRows, array $thresholds): string
+    {
+        if ($dataRows >= $thresholds['rows_max']) {
+            return self::SNIPPET_TIER_EXCELLENT;
+        }
+
+        if ($dataRows >= $thresholds['rows_range']) {
+            return self::SNIPPET_TIER_GOOD;
+        }
+
+        if ($dataRows >= $thresholds['rows_min']) {
+            return self::SNIPPET_TIER_AVERAGE;
+        }
+
+        return self::SNIPPET_TIER_NONE;
+    }
+
+    private function featuredSnippetTierLabel(string $tier): string
+    {
+        return match ($tier) {
+            self::SNIPPET_TIER_EXCELLENT => 'Rất tốt',
+            self::SNIPPET_TIER_GOOD => 'Tốt',
+            self::SNIPPET_TIER_AVERAGE => 'Trung bình',
+            default => 'Không có',
+        };
+    }
+
+    private function featuredSnippetPointsForTier(string $tier): int
+    {
+        return match ($tier) {
+            self::SNIPPET_TIER_EXCELLENT => 10,
+            self::SNIPPET_TIER_GOOD => 6,
+            self::SNIPPET_TIER_AVERAGE => 3,
+            default => 0,
+        };
     }
 
     /**

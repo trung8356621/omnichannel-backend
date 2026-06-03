@@ -73,7 +73,20 @@ final class ArticleContentFaqService
         }
 
         $faqs = $this->workflowParser->parseFaqsFromContent($markdown);
+        if ($faqs === [] && $this->hasExplicitFaqSignals($markdown)) {
+            // Fallback for markdown imports that do not contain an explicit FAQ section heading.
+            $faqs = $this->workflowParser->parseFaqsFromContent($markdown, true);
+        }
+        $faqs = $this->normalizeFaqRowsForEditor($faqs);
+
         $cleaned = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
+        if (
+            $faqs !== []
+            && ! str_contains($cleaned, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)
+            && ! str_contains($cleaned, 'omi-faq-placeholder')
+        ) {
+            $cleaned = rtrim($cleaned) . "\n\n" . WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+        }
         $converted = $this->markdownHtml->convertWithMetadata($cleaned);
         $html = $this->ensureEditorPlaceholderMarkup($converted['html']);
         $h1FromHtml = $this->extractLeadingH1FromHtml($html);
@@ -94,6 +107,51 @@ final class ArticleContentFaqService
             'h1_title' => filled($h1Title) ? trim((string) $h1Title) : null,
             'faqs' => $faqs,
         ];
+    }
+
+    /**
+     * @param  list<array{question: string, answer: string}>  $faqs
+     * @return list<array{question: string, answer: string}>
+     */
+    private function normalizeFaqRowsForEditor(array $faqs): array
+    {
+        $rows = [];
+
+        foreach ($faqs as $faq) {
+            if (! is_array($faq)) {
+                continue;
+            }
+
+            $question = trim((string) ($faq['question'] ?? ''));
+            $answer = trim((string) ($faq['answer'] ?? ''));
+            if ($question === '' || $answer === '') {
+                continue;
+            }
+
+            if (preg_match('/<[a-z][\s\S]*>/i', $answer) !== 1) {
+                $answer = $this->markdownHtml->toHtml($answer);
+            }
+
+            $rows[] = [
+                'question' => $question,
+                'answer' => $answer,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function hasExplicitFaqSignals(string $content): bool
+    {
+        $raw = trim($content);
+        if ($raw === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/(\bfaq\b|câu\s*hỏi|cau\s*hoi|hỏi\s*đáp|hoi\s*dap|^\s*(?:q|q\d+|câu\s*hỏi\s*\d*)\s*[:\?\-]|^\s*(?:a|a\d+|trả\s*lời|tra\s*loi)\s*[:\-])/imu',
+            $raw,
+        ) === 1;
     }
 
     /**

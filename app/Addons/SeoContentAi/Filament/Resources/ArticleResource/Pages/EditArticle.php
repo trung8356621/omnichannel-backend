@@ -129,12 +129,15 @@ class EditArticle extends EditRecord
 
     public string $editorHtml = '';
 
+    public ?int $reviewsCountForEditor = null;
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
         $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
         $this->importFaqsFromWordPressOnLoad();
+        $this->syncReviewedStatusFromExistingReviews();
     }
 
     public function updatedArticleSlug($value): void
@@ -653,6 +656,7 @@ class EditArticle extends EditRecord
                     'wp_attachment_id' => $wpId > 0 ? $wpId : null,
                     'seo_media_id' => $seoId > 0 ? $seoId : null,
                     'url' => $src,
+                    'media_type' => (string) ($row['media_type'] ?? 'image'),
                     'alt' => trim((string) ($row['alt'] ?? '')),
                     'slug' => trim((string) ($row['slug'] ?? '')),
                 ];
@@ -735,6 +739,7 @@ class EditArticle extends EditRecord
         string $alt = '',
         string $slug = '',
         int $seoMediaId = 0,
+        string $mediaType = 'image',
     ): void {
         $url = WordPressImageUrl::toFullSize(trim($url));
         if ($url === '') {
@@ -748,6 +753,7 @@ class EditArticle extends EditRecord
 
         $seoMediaId = max(0, $seoMediaId);
         $wpAttachmentId = max(0, $wpAttachmentId);
+        $mediaType = strtolower(trim($mediaType)) === 'video' ? 'video' : 'image';
         $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
 
         if ($this->mediaPickerMode === 'editor-block') {
@@ -769,6 +775,7 @@ class EditArticle extends EditRecord
                 blockId: $blockId,
                 attachmentId: $wpAttachmentId,
                 seoMediaId: $seoMediaId,
+                mediaType: $mediaType,
                 url: $url,
                 alt: trim($alt),
                 slug: trim($slug),
@@ -791,6 +798,15 @@ class EditArticle extends EditRecord
         }
 
         if ($this->mediaPickerMode === 'gallery') {
+            return;
+        }
+
+        if ($mediaType !== 'image') {
+            Notification::make()
+                ->title('Featured image only supports image files')
+                ->warning()
+                ->send();
+
             return;
         }
 
@@ -870,6 +886,12 @@ class EditArticle extends EditRecord
 
             $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
             $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? 0));
+            $mediaType = strtolower(trim((string) ($item['media_type'] ?? $item['mediaType'] ?? 'image')));
+            if ($mediaType !== '' && $mediaType !== 'image') {
+                $skipped++;
+
+                continue;
+            }
             $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
 
             if ($localRefId <= 0) {
@@ -1252,6 +1274,17 @@ class EditArticle extends EditRecord
         return count(app(VirtualCommentService::class)->getFromArticle($this->record));
     }
 
+    public function getReviewsCountForEditor(): int
+    {
+        if ($this->reviewsCountForEditor !== null) {
+            return max(0, (int) $this->reviewsCountForEditor);
+        }
+
+        $this->reviewsCountForEditor = count($this->getVirtualReviewsPayload());
+
+        return $this->reviewsCountForEditor;
+    }
+
     public function canGenerateQuickPostReviews(): bool
     {
         return app(SeoCreateArticleSettingsService::class)->getPostReviewTaskId() !== null;
@@ -1259,7 +1292,7 @@ class EditArticle extends EditRecord
 
     public function shouldShowQuickCreateReviewsButton(): bool
     {
-        return $this->canGenerateQuickPostReviews() && $this->getVirtualCommentsCount() === 0;
+        return $this->canGenerateQuickPostReviews() && $this->getReviewsCountForEditor() === 0;
     }
 
     public function generateQuickPostReviews(): void
@@ -1274,7 +1307,7 @@ class EditArticle extends EditRecord
             return;
         }
 
-        if ($this->getVirtualCommentsCount() > 0) {
+        if ($this->getReviewsCountForEditor() > 0) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
                 ->body(__('seo-content-ai::filament.article_list.quick_create_reviews_already_exists'))
@@ -1395,6 +1428,8 @@ class EditArticle extends EditRecord
     {
         $this->record->refresh();
         $reviews = $this->getVirtualReviewsPayload();
+        $this->reviewsCountForEditor = count($reviews);
+        $this->syncReviewedStatusFromExistingReviews($reviews);
         $this->dispatch('virtual-reviews-updated', reviews: $reviews);
 
         return $reviews;
@@ -1436,7 +1471,28 @@ class EditArticle extends EditRecord
      */
     public function getVirtualReviewsPayload(): array
     {
-        return app(VirtualCommentService::class)->getFromArticle($this->record);
+        return app(VirtualCommentService::class)->getForEditor($this->record);
+    }
+
+    /**
+     * @param  list<array{author: string, content: string, rating?: int|null, date: string}>|null  $reviews
+     */
+    private function syncReviewedStatusFromExistingReviews(?array $reviews = null): void
+    {
+        $rows = $reviews ?? $this->getVirtualReviewsPayload();
+        if (count($rows) <= 0) {
+            return;
+        }
+
+        if ((bool) $this->record->is_reviewed) {
+            return;
+        }
+
+        $this->record->update([
+            'is_reviewed' => true,
+            'reviewed_at' => $this->record->reviewed_at ?? now(),
+        ]);
+        $this->record->refresh();
     }
 
     public function approveArticle(): void
@@ -1749,6 +1805,13 @@ class EditArticle extends EditRecord
             ->send();
     }
 
+    public function submitMarkdownImportFromSidebar(string $markdown = ''): void
+    {
+        abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
+
+        $this->importMarkdownDebug($markdown);
+    }
+
     /**
      * @param  array<string, mixed>|null  $debug
      */
@@ -1829,6 +1892,26 @@ class EditArticle extends EditRecord
             'can_sync_wp' => filled($this->record->wp_post_id),
             'ai_debug' => $this->getEditorAiDebugPayload(),
             'supplemental_images' => $this->getEditorSupplementalImagesPayload(),
+        ];
+    }
+
+    /**
+     * Cấu hình JS cho modal chọn ảnh (upload thư viện nội bộ).
+     *
+     * @return array{articleId: int, siteId: int, i18n: array<string, string>}
+     */
+    public function getArticleMediaPickerPayload(): array
+    {
+        return [
+            'articleId' => (int) $this->record->id,
+            'siteId' => (int) $this->record->site_id,
+            'i18n' => [
+                'upload_success_one' => __('seo-content-ai::filament.media_tools.upload_success_one'),
+                'upload_success_many' => __('seo-content-ai::filament.media_tools.upload_success_many'),
+                'upload_success_body' => __('seo-content-ai::filament.media_tools.upload_success_body'),
+                'upload_failed' => __('seo-content-ai::filament.media_tools.upload_failed'),
+                'upload_failed_body' => __('seo-content-ai::filament.media_tools.upload_failed_body'),
+            ],
         ];
     }
 

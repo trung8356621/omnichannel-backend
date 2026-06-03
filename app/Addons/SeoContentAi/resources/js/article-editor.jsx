@@ -8,6 +8,7 @@ import ArticleDomainWidgetsSidebar from './components/ArticleDomainWidgetsSideba
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
+import './utils/seoLocalMediaUpload';
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
 function normalizeLivewireEventDetail(payload) {
@@ -216,6 +217,7 @@ if (rootElement) {
         createRoot(domainWidgetsRoot).render(
             <ArticleDomainWidgetsSidebar
                 initialDomainLinkList={initialSeo?.domain_link_list ?? []}
+                initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
                 initialDomainCtaList={initialSeo?.domain_cta_list ?? []}
             />,
         );

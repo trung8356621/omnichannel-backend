@@ -79,7 +79,9 @@ function ContentBonusRow({ item, faqCount }) {
     const maxPoints = typeof item.max_points === 'number' ? item.max_points : 10;
     const toneClass = passed
         ? 'seo-content-bonus-row--pass'
-        : 'seo-content-bonus-row--fail';
+        : points > 0
+          ? 'seo-content-bonus-row--partial'
+          : 'seo-content-bonus-row--fail';
     const isFeaturedSnippet = item.key === 'featured_snippet';
 
     return (

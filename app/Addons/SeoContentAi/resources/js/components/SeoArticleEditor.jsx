@@ -78,7 +78,7 @@ import {
     stripEditorTransientMarkup,
 } from '../utils/articleEditorTransientMarkup';
 import FaqAccordionPreview from './FaqAccordionPreview';
-import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle } from 'lucide-react';
+import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle, Search } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
     getSelectionTextFromEditor,
@@ -204,6 +204,23 @@ const buildEditorSections = (blocks) => {
     }
 
     return sections;
+};
+
+const countKeywordInSectionBlocks = (section, blockById, needle) => {
+    if (!needle || !section?.blockIds?.length) {
+        return 0;
+    }
+
+    let total = 0;
+    for (const blockId of section.blockIds) {
+        const block = blockById.get(blockId);
+        if (!block || block.type === 'image' || !block.content) {
+            continue;
+        }
+        total += countPlainTextInHtml(block.content, needle);
+    }
+
+    return total;
 };
 
 const buildSectionStats = (editorSections, blockById) => {
@@ -640,6 +657,49 @@ const replaceTextInHtmlContent = (html, findText, replaceText) => {
     };
 };
 
+const parseVideoMediaFromHtml = (html) => {
+    const source = String(html ?? '').trim();
+    if (!source) {
+        return null;
+    }
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const figure = doc.body.querySelector('figure.wp-block-video, figure');
+    const video = doc.body.querySelector('video');
+    if (!video) {
+        return null;
+    }
+    const src = String(video.getAttribute('src') ?? '').trim();
+    if (!src) {
+        return null;
+    }
+
+    const className = String(figure?.getAttribute('class') ?? '');
+    let align = 'none';
+    if (className.includes('alignfull')) align = 'full';
+    else if (className.includes('alignright')) align = 'right';
+    else if (className.includes('aligncenter')) align = 'center';
+    else if (className.includes('alignleft')) align = 'left';
+
+    const wpAttachmentId = Number(figure?.getAttribute('data-id') ?? video.getAttribute('data-id') ?? 0);
+    const seoMediaId = Number(
+        figure?.getAttribute('data-seo-media-id') ?? video.getAttribute('data-seo-media-id') ?? 0,
+    );
+    const slug = slugFromUrl(src);
+
+    return {
+        src,
+        alt: '',
+        title: '',
+        slug: slug || undefined,
+        align,
+        mediaType: 'video',
+        wpAttachmentId: wpAttachmentId > 0 ? wpAttachmentId : undefined,
+        seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+        wpSrc: src,
+    };
+};
+
 const parseHtmlToBlocks = (html) => {
     if (!html) return [];
     const blocks = [];
@@ -660,13 +720,13 @@ const parseHtmlToBlocks = (html) => {
                 const tempDiv = document.createElement('div');
                 tempDiv.appendChild(node.cloneNode(true));
                 const content = tempDiv.innerHTML.trim();
-                const image = parseImageFromBlockContent(content);
+                const image = parseImageFromBlockContent(content) ?? parseVideoMediaFromHtml(content);
                 chunks.push({
                     id: newBlockId('image'),
                     type: 'image',
                     isWp: false,
                     prefix: '',
-                    content: image ? renderImageFigure(image) : content,
+                    content: image && image.mediaType !== 'video' ? renderImageFigure(image) : content,
                     suffix: '',
                     image: image ?? undefined,
                 });
@@ -712,6 +772,20 @@ const parseHtmlToBlocks = (html) => {
     return normalizeBlocks(blocks);
 };
 
+const hasMeaningfulExportHtml = (html) => {
+    const source = String(html ?? '').trim();
+    if (!source) return false;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const text = (doc.body.textContent || '').replace(/\u00a0/g, ' ').trim();
+    if (text) return true;
+    return Boolean(
+        doc.body.querySelector(
+            'img,video,iframe,table,ul,ol,li,blockquote,pre,code,h1,h2,h3,h4,h5,h6,hr',
+        ),
+    );
+};
+
 const exportBlocksToHtml = (blocks) =>
     blocks
         .map((b) => {
@@ -721,7 +795,11 @@ const exportBlocksToHtml = (blocks) =>
             } else {
                 part = b.content;
             }
-            return typeof part === 'string' ? stripEditorTransientMarkup(part) : part;
+            if (typeof part !== 'string') {
+                return part;
+            }
+            const cleaned = stripEditorTransientMarkup(part);
+            return hasMeaningfulExportHtml(cleaned) ? cleaned : '';
         })
         .filter(Boolean)
         .join('\n\n');
@@ -1218,6 +1296,7 @@ export default function SeoArticleEditor({
     postImagesRef.current = postImages;
     const [quickReplaceFind, setQuickReplaceFind] = useState('');
     const [quickReplaceValue, setQuickReplaceValue] = useState('');
+    const [editorSearchMatchCount, setEditorSearchMatchCount] = useState(null);
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     const pendingQuickFixKeywordRef = useRef('');
     const generateImageTargetRef = useRef('editor');
@@ -1402,11 +1481,13 @@ export default function SeoArticleEditor({
             suggestedInternal,
             enrichedLinks.internal ?? [],
         );
+        const articlePlainText = htmlToPlainText(exportBlocksToHtml(blocksRef.current));
         window.dispatchEvent(
             new CustomEvent('seo-editor-links-updated', {
                 detail: {
                     links: enrichedLinks,
                     suggested_internal: filteredSuggested,
+                    article_plain_text: articlePlainText,
                 },
             }),
         );
@@ -2333,14 +2414,16 @@ export default function SeoArticleEditor({
                 patchSupplementalImageRow(enrichedRow, outcome.patch);
             }
 
-            if (outcome?.wpRename) {
+            const hasWpRename = Boolean(outcome?.wpRename);
+            const hasLocalRename = Boolean(outcome?.localRename);
+
+            if (hasWpRename) {
                 if (!confirmSlugRename({ count: 1, isQuickFix: true })) {
                     return;
                 }
                 pendingQuickFixKeywordRef.current = keyword;
                 requestWordPressRenames([outcome.wpRename]);
                 patchSupplementalImageRow(row, { slug: outcome.wpRename.new_slug });
-                return;
             }
 
             if (outcome?.localRename) {
@@ -3021,7 +3104,7 @@ export default function SeoArticleEditor({
 
     useEffect(() => {
         publishExtractedLinks(extractedLinks, suggestedInternalLinks);
-    }, [extractedLinks, suggestedInternalLinks, publishExtractedLinks]);
+    }, [extractedLinks, suggestedInternalLinks, blocks, publishExtractedLinks]);
 
     useEffect(() => {
         const onScrollToLink = (event) => {
@@ -3471,6 +3554,25 @@ export default function SeoArticleEditor({
         return list[list.length - 1].id;
     }, []);
 
+    const findImageBlockByMediaId = useCallback((mediaId) => {
+        const id = Number(mediaId ?? 0);
+        if (id <= 0) {
+            return null;
+        }
+
+        return (
+            blocksRef.current.find((block) => {
+                if (block?.type !== 'image') {
+                    return false;
+                }
+
+                const blockMediaId = Number(block?.image?.seoMediaId ?? block?.image?.seo_media_id ?? 0);
+
+                return blockMediaId === id;
+            }) ?? null
+        );
+    }, []);
+
     const placeProcessingImagePlaceholder = useCallback(
         (refBlockId, imageUrl, imagePatch = {}) => {
             const url = (imageUrl ?? '').trim();
@@ -3485,6 +3587,47 @@ export default function SeoArticleEditor({
             commitActiveBlock();
 
             const kw = String(window.__SEO_MAIN_KEYWORD__ ?? '').trim();
+            const patchMediaId = Number(imagePatch?.seoMediaId ?? imagePatch?.seo_media_id ?? 0);
+            const existingPlaceholder = blocksRef.current.find((block) => {
+                if (block?.type !== 'image') {
+                    return false;
+                }
+                const current = block?.image ?? parseImageFromBlockContent(block?.content ?? '');
+                if (!current?.src) {
+                    return false;
+                }
+                const currentMediaId = Number(current?.seoMediaId ?? current?.seo_media_id ?? 0);
+                if (patchMediaId > 0 && currentMediaId === patchMediaId) {
+                    return true;
+                }
+                return Boolean(current?.isProcessing) && String(current.src).trim() === url;
+            });
+            if (existingPlaceholder) {
+                const baseImage = existingPlaceholder.image ?? parseImageFromBlockContent(existingPlaceholder.content) ?? {};
+                const nextImage = {
+                    ...baseImage,
+                    ...imagePatch,
+                    src: url,
+                    alt: kw || baseImage.alt || '',
+                    title: kw || baseImage.title || '',
+                };
+                const nextHtml = renderImageFigure(nextImage);
+                updateBlocksWithoutHistory((prev) =>
+                    prev.map((block) =>
+                        block.id === existingPlaceholder.id
+                            ? {
+                                  ...block,
+                                  type: 'image',
+                                  content: nextHtml,
+                                  image: nextImage,
+                                  pendingImagePrompt: undefined,
+                              }
+                            : block,
+                    ),
+                );
+                return existingPlaceholder.id;
+            }
+
             const image = {
                 src: url,
                 alt: kw,
@@ -3595,6 +3738,63 @@ export default function SeoArticleEditor({
             });
         },
         [commitActiveBlock],
+    );
+
+    const moveBlockToSection = useCallback(
+        (blockId, direction) => {
+            if (tempMergeRef.current) {
+                return;
+            }
+            const id = String(blockId ?? '').trim();
+            if (!id) {
+                return;
+            }
+
+            const currentSectionIndex = editorSections.findIndex((section) => section.blockIds.includes(id));
+            if (currentSectionIndex < 0) {
+                return;
+            }
+
+            const targetSectionIndex =
+                direction === 'prev' ? currentSectionIndex - 1 : currentSectionIndex + 1;
+            if (targetSectionIndex < 0 || targetSectionIndex >= editorSections.length) {
+                return;
+            }
+
+            const targetSection = editorSections[targetSectionIndex];
+            const targetIds = (targetSection?.blockIds ?? []).filter((candidateId) => candidateId !== id);
+            commitActiveBlock();
+            setInsertMenu(null);
+
+            setBlocks((prev) => {
+                const fromIndex = prev.findIndex((block) => block.id === id);
+                if (fromIndex < 0) {
+                    return prev;
+                }
+
+                const moving = prev[fromIndex];
+                const next = [...prev];
+                next.splice(fromIndex, 1);
+
+                let insertAt = next.length;
+                if (direction === 'prev') {
+                    const lastTargetId = targetIds[targetIds.length - 1];
+                    const lastIndex = lastTargetId ? next.findIndex((block) => block.id === lastTargetId) : -1;
+                    insertAt = lastIndex >= 0 ? lastIndex + 1 : 0;
+                } else {
+                    const firstTargetId = targetIds[0];
+                    const firstIndex = firstTargetId ? next.findIndex((block) => block.id === firstTargetId) : -1;
+                    insertAt = firstIndex >= 0 ? firstIndex : next.length;
+                }
+
+                next.splice(insertAt, 0, moving);
+                return normalizeBlocks(next);
+            });
+
+            setActiveBlockId(id);
+            setGlobalEditor(null);
+        },
+        [commitActiveBlock, editorSections],
     );
 
     const startTempMerge = useCallback(
@@ -3788,7 +3988,23 @@ export default function SeoArticleEditor({
         const onImageGenerateRequest = (event) => {
             const blockId = event.detail?.blockId;
             const prompt = (event.detail?.prompt ?? '').trim();
+            const mediaKind = String(event.detail?.mediaKind ?? 'image').toLowerCase() === 'video' ? 'video' : 'image';
             if (!blockId || !prompt) {
+                return;
+            }
+
+            if (mediaKind === 'video') {
+                window.dispatchEvent(
+                    new CustomEvent('generate-article-video', {
+                        detail: {
+                            selectionText: '',
+                            selectionHtml: '',
+                            userBrief: prompt,
+                            activeBlockId: blockId,
+                            articleId,
+                        },
+                    }),
+                );
                 return;
             }
 
@@ -3808,12 +4024,38 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-image-generate-request', onImageGenerateRequest);
 
         const onEditorBlockImageSelected = (event) => {
-            const blockId = event.detail?.blockId;
+            const blockId = String(event.detail?.blockId ?? '').trim();
             const rawUrl = (event.detail?.url ?? '').trim();
             const attachmentId = Number(event.detail?.attachmentId ?? 0);
+            const mediaType = String(event.detail?.mediaType ?? event.detail?.media_type ?? 'image').toLowerCase();
             if (!blockId || !rawUrl) return;
 
             const url = resolveFullWordPressImageUrl(rawUrl);
+            if (mediaType === 'video') {
+                const video = {
+                    src: url,
+                    alt: '',
+                    title: '',
+                    slug: (event.detail?.slug ?? '').trim() || slugFromUrl(url) || undefined,
+                    align: 'none',
+                    mediaType: 'video',
+                    wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
+                    seoMediaId: Number(event.detail?.seoMediaId ?? event.detail?.id ?? 0) || undefined,
+                    wpSrc: url,
+                };
+                const safeUrl = url
+                    .replace(/&/g, '&amp;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;')
+                    .replace(/</g, '&lt;');
+                updateBlockContent(
+                    blockId,
+                    `<figure class="wp-block-video"><video controls src="${safeUrl}"></video></figure>`,
+                    video,
+                );
+                return;
+            }
+
             const slug = (event.detail?.slug ?? '').trim() || slugFromUrl(url);
             const kw = String(window.__SEO_MAIN_KEYWORD__ ?? '').trim();
             const alt = kw || (event.detail?.alt ?? '').trim();
@@ -3873,7 +4115,23 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            if (status === 'processing' && mediaId > 0) {
+            const isProcessingStatus = status === 'processing' || status === 'pending';
+
+            if (mediaId > 0 && isProcessingStatus) {
+                const existingBlock = findImageBlockByMediaId(mediaId);
+                if (existingBlock) {
+                    if (!pendingAiMediaRef.current.has(mediaId)) {
+                        pendingAiMediaRef.current.set(mediaId, {
+                            blockId: existingBlock.id,
+                            mediaType: 'image',
+                        });
+                    }
+                    startMediaStatusPolling(mediaId, 'image');
+                    return;
+                }
+            }
+
+            if (isProcessingStatus && mediaId > 0) {
                 if (pendingAiMediaRef.current.has(mediaId)) {
                     // Đảm bảo luôn có polling kể cả khi event "processing" đến lặp/khôi phục.
                     const pending = pendingAiMediaRef.current.get(mediaId);
@@ -3918,11 +4176,50 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            if (status === 'completed' && mediaId > 0 && applyCompletedMediaToPlaceholder(mediaId, 'image', url)) {
+            if (status === 'completed' && mediaId > 0 && url) {
+                if (applyCompletedMediaToPlaceholder(mediaId, 'image', url)) {
+                    return;
+                }
+
+                const existingBlock = findImageBlockByMediaId(mediaId);
+                if (existingBlock) {
+                    patchImageInBlocks(
+                        existingBlock.id,
+                        {
+                            src: url,
+                            title: '',
+                            alt: '',
+                            isProcessing: false,
+                        },
+                        true,
+                    );
+                    pendingAiMediaRef.current.delete(mediaId);
+                    setImagesReloadKey((k) => k + 1);
+                    return;
+                }
+
+                const insertedId = placeProcessingImagePlaceholder(refBlockId, url, {
+                    seoMediaId: mediaId,
+                    isProcessing: false,
+                });
+                if (insertedId) {
+                    pendingAiMediaRef.current.set(mediaId, {
+                        blockId: insertedId,
+                        mediaType: 'image',
+                    });
+                }
+
                 return;
             }
 
-            placeProcessingImagePlaceholder(refBlockId, url);
+            if (status === 'failed') {
+                return;
+            }
+
+            // Legacy: đồng bộ URL ngay, không có mediaId (tránh chèn trùng khi đã có job processing).
+            if (url && mediaId <= 0) {
+                placeProcessingImagePlaceholder(refBlockId, url);
+            }
         };
 
         const onArticleAiVideoGenerated = (event) => {
@@ -3990,7 +4287,17 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            insertVideoAfterBlock(refBlockId, url);
+            if (status === 'failed') {
+                return;
+            }
+
+            if (status === 'completed' || status === 'processing' || status === 'pending') {
+                return;
+            }
+
+            if (url) {
+                insertVideoAfterBlock(refBlockId, url);
+            }
         };
 
         window.addEventListener('article-ai-image-generated', onArticleAiImageGenerated);
@@ -4022,6 +4329,8 @@ export default function SeoArticleEditor({
         globalEditor,
         applyCompletedMediaToPlaceholder,
         applyCompletedMediaToProductGallery,
+        findImageBlockByMediaId,
+        patchImageInBlocks,
         placeProcessingImagePlaceholder,
         resolveAiRefBlockId,
         updateBlockContent,
@@ -4238,14 +4547,73 @@ export default function SeoArticleEditor({
         };
     }, []);
 
+    const applyEditorSectionSearch = useCallback(
+        (options = {}) => {
+            const { silent = false } = options;
+            const needle = String(quickReplaceFind ?? '').trim();
+
+            if (!needle) {
+                setCollapsedSectionIds({});
+                setEditorSearchMatchCount(null);
+                return;
+            }
+
+            if (tempMergeRef.current) {
+                clearTempMerge();
+            }
+            commitActiveBlock();
+
+            const nextCollapsed = {};
+            let totalMatches = 0;
+            let sectionsWithMatches = 0;
+
+            for (const section of editorSections) {
+                const sectionCount = countKeywordInSectionBlocks(section, blockById, needle);
+                totalMatches += sectionCount;
+                if (sectionCount > 0) {
+                    sectionsWithMatches += 1;
+                } else {
+                    nextCollapsed[section.id] = true;
+                }
+            }
+
+            setCollapsedSectionIds(nextCollapsed);
+            setEditorSearchMatchCount(totalMatches);
+
+            if (silent) {
+                return;
+            }
+
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title:
+                            totalMatches > 0
+                                ? t('editor_search_found_title')
+                                : t('editor_search_not_found_title'),
+                        body:
+                            totalMatches > 0
+                                ? t('editor_search_found_body', {
+                                      count: totalMatches,
+                                      sections: sectionsWithMatches,
+                                  })
+                                : t('editor_search_not_found_body'),
+                        status: totalMatches > 0 ? 'success' : 'warning',
+                    },
+                }),
+            );
+        },
+        [quickReplaceFind, editorSections, blockById, clearTempMerge, commitActiveBlock],
+    );
+
     const applyQuickReplaceAllSections = useCallback(() => {
         const needle = String(quickReplaceFind ?? '').trim();
         if (!needle) {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Missing search text',
-                        body: 'Enter text in "Find" before replace.',
+                        title: t('editor_search_missing_title'),
+                        body: t('editor_search_missing_body'),
                         status: 'warning',
                     },
                 }),
@@ -4282,6 +4650,8 @@ export default function SeoArticleEditor({
             }),
         );
 
+        setEditorSearchMatchCount(totalReplacements > 0 ? totalReplacements : 0);
+
         window.dispatchEvent(
             new CustomEvent('seo-article-editor-notify', {
                 detail: {
@@ -4295,6 +4665,27 @@ export default function SeoArticleEditor({
             }),
         );
     }, [quickReplaceFind, quickReplaceValue, clearTempMerge, commitActiveBlock]);
+
+    const handleEditorSearchAction = useCallback(() => {
+        const replaceValue = String(quickReplaceValue ?? '').trim();
+        if (replaceValue !== '') {
+            applyQuickReplaceAllSections();
+            return;
+        }
+
+        applyEditorSectionSearch();
+    }, [applyEditorSectionSearch, applyQuickReplaceAllSections, quickReplaceValue]);
+
+    const { debounced: debouncedEditorSectionSearch } = useDebouncedCallback(() => {
+        if (String(quickReplaceValue ?? '').trim() !== '') {
+            return;
+        }
+        applyEditorSectionSearch({ silent: true });
+    }, 350);
+
+    useEffect(() => {
+        debouncedEditorSectionSearch();
+    }, [quickReplaceFind, quickReplaceValue, debouncedEditorSectionSearch]);
 
     return (
         <div className="seo-article-editor-root">
@@ -4370,27 +4761,61 @@ export default function SeoArticleEditor({
                                 {t('editor_total_words')}: {totalWordCount}
                             </div>
                             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-                                <input
-                                    type="text"
-                                    value={quickReplaceFind}
-                                    onChange={(event) => setQuickReplaceFind(event.target.value)}
-                                    placeholder={t('editor_find')}
-                                    className="h-8 w-40 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
-                                />
+                                <div className="seo-editor-search-group">
+                                    <input
+                                        type="text"
+                                        value={quickReplaceFind}
+                                        onChange={(event) => setQuickReplaceFind(event.target.value)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                                event.preventDefault();
+                                                handleEditorSearchAction();
+                                            }
+                                        }}
+                                        placeholder={t('editor_find')}
+                                        className="seo-editor-search-input"
+                                        aria-label={t('editor_find')}
+                                    />
+                                    {quickReplaceFind.trim() !== '' && editorSearchMatchCount != null ? (
+                                        <span
+                                            className={
+                                                'seo-editor-search-count' +
+                                                (editorSearchMatchCount > 0
+                                                    ? ' is-found'
+                                                    : ' is-empty')
+                                            }
+                                            title={t('editor_search_count_title')}
+                                        >
+                                            {editorSearchMatchCount}
+                                        </span>
+                                    ) : null}
+                                    <button
+                                        type="button"
+                                        onClick={handleEditorSearchAction}
+                                        className="seo-editor-search-btn"
+                                        title={
+                                            String(quickReplaceValue ?? '').trim() !== ''
+                                                ? t('editor_replace_all')
+                                                : t('editor_search_sections')
+                                        }
+                                        aria-label={t('editor_search_sections')}
+                                    >
+                                        <Search size={15} />
+                                    </button>
+                                </div>
                                 <input
                                     type="text"
                                     value={quickReplaceValue}
                                     onChange={(event) => setQuickReplaceValue(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            handleEditorSearchAction();
+                                        }
+                                    }}
                                     placeholder={t('editor_replace')}
-                                    className="h-8 w-40 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
+                                    className="h-8 w-36 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
                                 />
-                                <button
-                                    type="button"
-                                    onClick={applyQuickReplaceAllSections}
-                                    className="inline-flex h-8 items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-2.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-                                >
-                                    Quick Replace
-                                </button>
                                 <button
                                     type="button"
                                     onClick={addSection}
@@ -4530,6 +4955,10 @@ export default function SeoArticleEditor({
                                                     const canMoveDown = blockIndex < blocks.length - 1;
                                                     const handleMoveUp = () => moveBlock(block.id, 'up');
                                                     const handleMoveDown = () => moveBlock(block.id, 'down');
+                                                    const canMovePrevSection = sectionIndex > 0;
+                                                    const canMoveNextSection = sectionIndex < editorSections.length - 1;
+                                                    const handleMovePrevSection = () => moveBlockToSection(block.id, 'prev');
+                                                    const handleMoveNextSection = () => moveBlockToSection(block.id, 'next');
 
                                                     return (
                                                         <div
@@ -4548,8 +4977,12 @@ export default function SeoArticleEditor({
                                                                         onToggle={() => toggleInsertMenu(block.id, 'before')}
                                                                         canMoveUp={canMoveUp}
                                                                         canMoveDown={canMoveDown}
+                                                                        canMovePrevSection={canMovePrevSection}
+                                                                        canMoveNextSection={canMoveNextSection}
                                                                         onMoveUp={handleMoveUp}
                                                                         onMoveDown={handleMoveDown}
+                                                                        onMovePrevSection={handleMovePrevSection}
+                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'before' ? (
@@ -4620,8 +5053,12 @@ export default function SeoArticleEditor({
                                                                         onToggle={() => toggleInsertMenu(block.id, 'after')}
                                                                         canMoveUp={canMoveUp}
                                                                         canMoveDown={canMoveDown}
+                                                                        canMovePrevSection={canMovePrevSection}
+                                                                        canMoveNextSection={canMoveNextSection}
                                                                         onMoveUp={handleMoveUp}
                                                                         onMoveDown={handleMoveDown}
+                                                                        onMovePrevSection={handleMovePrevSection}
+                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'after' ? (

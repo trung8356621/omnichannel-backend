@@ -531,6 +531,53 @@ HTML;
         $this->assertStringContainsString('Câu hỏi thật', $faqs[0]['question']);
     }
 
+    public function test_featured_snippet_tiered_scoring(): void
+    {
+        $parser = $this->parser();
+
+        $buildTable = static function (int $dataRows): string {
+            $rows = "| H1 | H2 |\n| --- | --- |\n";
+            for ($i = 1; $i <= $dataRows; $i++) {
+                $rows .= "| a{$i} | b{$i} |\n";
+            }
+
+            return $rows;
+        };
+
+        $none = $parser->resolveFeaturedSnippetTableScore($buildTable(4));
+        $this->assertSame(0, $none['points']);
+        $this->assertSame('none', $none['tier']);
+
+        $average = $parser->resolveFeaturedSnippetTableScore($buildTable(6));
+        $this->assertSame(3, $average['points']);
+        $this->assertSame('average', $average['tier']);
+
+        $good = $parser->resolveFeaturedSnippetTableScore($buildTable(8));
+        $this->assertSame(6, $good['points']);
+        $this->assertSame('good', $good['tier']);
+
+        $excellent = $parser->resolveFeaturedSnippetTableScore($buildTable(10));
+        $this->assertSame(10, $excellent['points']);
+        $this->assertTrue($excellent['passed']);
+        $this->assertSame('excellent', $excellent['tier']);
+    }
+
+    public function test_calculate_seo_score_featured_snippet_partial_points(): void
+    {
+        $parser = $this->parser();
+
+        $tableRows = "| H1 | H2 |\n| --- | --- |\n";
+        for ($i = 1; $i <= 8; $i++) {
+            $tableRows .= "| a{$i} | b{$i} |\n";
+        }
+
+        $score = $parser->calculateSeoScore($tableRows, []);
+
+        $this->assertSame(6, $score['checklist']['table']['points']);
+        $this->assertFalse($score['checklist']['table']['passed']);
+        $this->assertSame('good', $score['checklist']['table']['tier']);
+    }
+
     public function test_strip_panel_faqs_keeps_xem_them_in_body(): void
     {
         $parser = $this->parser();

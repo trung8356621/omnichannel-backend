@@ -27,6 +27,14 @@
         </div>
 
         <div class="seo-media-library-filters-card">
+            <input
+                type="file"
+                x-ref="localMediaUploadInput"
+                class="seo-media-library-upload-input"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                multiple
+                x-on:change="onLocalMediaUploadChange($event)"
+            />
             <div class="seo-media-library-filters">
                 @unless ($this->hasLockedGlobalSite())
                     <div class="seo-media-library-field">
@@ -82,6 +90,25 @@
                             </button>
                         @endif
                     </div>
+                </div>
+
+                <div
+                    class="seo-media-library-field seo-media-library-field-upload"
+                    x-show="['local', 'generated'].includes($wire.activeTab)"
+                    x-cloak
+                >
+                    <label class="seo-media-library-label">{{ __('seo-content-ai::filament.media_tools.upload') }}</label>
+                    <button
+                        type="button"
+                        class="seo-media-library-upload-btn"
+                        x-on:click="openLocalMediaUploadPicker()"
+                        x-bind:disabled="localMediaUploading || !$wire.siteId"
+                        wire:loading.attr="disabled"
+                        wire:target="loadImages"
+                    >
+                        <span x-show="!localMediaUploading">{{ __('seo-content-ai::filament.media_tools.upload') }}</span>
+                        <span x-show="localMediaUploading" x-cloak>{{ __('seo-content-ai::filament.media_tools.uploading') }}</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -237,6 +264,13 @@
                 @foreach ($images as $image)
                     @php
                         $itemKind = (string) ($image['kind'] ?? 'local');
+                        $url = (string) ($image['url'] ?? '');
+                        $ext = strtolower(pathinfo(parse_url($url, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
+                        $mediaTypeRaw = strtolower(trim((string) ($image['media_type'] ?? 'image')));
+                        $videoExts = ['mp4', 'webm', 'mov', 'm4v', 'ogg', 'ogv', 'avi', 'mpeg', 'mpg'];
+                        $mediaType = $mediaTypeRaw === 'video' || in_array($ext, $videoExts, true) ? 'video' : 'image';
+                        $imageForPreview = $image;
+                        $imageForPreview['media_type'] = $mediaType;
                         $editKey = $itemKind . '-' . $image['id'];
                         $wpAttachmentId = (int) ($image['wp_attachment_id'] ?? 0);
                         $seoMediaId = (int) ($image['seo_media_id'] ?? 0);
@@ -269,16 +303,20 @@
                                 "
                                 x-on:dblclick.prevent="
                                     clearTimeout($el._selectTimer);
-                                    $wire.openImagePreview(@js($image));
+                                    $wire.openImagePreview(@js($imageForPreview));
                                 "
                             >
-                                <img
-                                    src="{{ $image['url'] }}"
-                                    alt="{{ $image['alt'] ?: $image['slug'] }}"
-                                    class="seo-media-library-thumb"
-                                    loading="lazy"
-                                    onerror="this.src='https://placehold.co/400x400?text=No+Image'"
-                                />
+                                @if ($mediaType === 'video')
+                                    <span class="seo-media-library-thumb seo-media-library-thumb--video" aria-hidden="true">▶</span>
+                                @else
+                                    <img
+                                        src="{{ $image['url'] }}"
+                                        alt="{{ $image['alt'] ?: $image['slug'] }}"
+                                        class="seo-media-library-thumb"
+                                        loading="lazy"
+                                        onerror="this.src='https://placehold.co/400x400?text=No+Image'"
+                                    />
+                                @endif
                             </button>
                             <div class="seo-media-library-card-actions">
                                 <button
@@ -405,16 +443,19 @@
             wire:click="closeImagePreview"
             wire:keydown.escape.window="closeImagePreview"
         >
+            @php
+                $previewMediaType = strtolower(trim((string) ($previewImage['media_type'] ?? 'image'))) === 'video' ? 'video' : 'image';
+            @endphp
             <div
                 class="seo-media-preview-modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Preview image"
+                aria-label="{{ $previewMediaType === 'video' ? 'Preview video' : 'Preview image' }}"
                 wire:click.stop
             >
                 <div class="seo-media-preview-modal__head">
                     <div>
-                        <h3 class="seo-media-preview-modal__title">{{ $previewImage['slug'] ?? 'Image' }}</h3>
+                        <h3 class="seo-media-preview-modal__title">{{ $previewImage['slug'] ?? ($previewMediaType === 'video' ? 'Video' : 'Image') }}</h3>
                         @if (! empty($previewImage['article_id']) && ! empty($previewImage['article_edit_url']))
                             <a
                                 href="{{ $previewImage['article_edit_url'] }}"
@@ -432,13 +473,22 @@
                 </div>
 
                 <div class="seo-media-preview-modal__body">
-                    <img
-                        src="{{ $previewImage['url'] }}"
-                        alt=""
-                        class="seo-media-preview-modal__img"
-                        wire:loading.class="is-loading"
-                        wire:target="previewApplyWatermark,previewOptimize,previewRestore"
-                    />
+                    @if ($previewMediaType === 'video')
+                        <video
+                            src="{{ $previewImage['url'] }}"
+                            controls
+                            preload="metadata"
+                            class="seo-media-preview-modal__video"
+                        ></video>
+                    @else
+                        <img
+                            src="{{ $previewImage['url'] }}"
+                            alt=""
+                            class="seo-media-preview-modal__img"
+                            wire:loading.class="is-loading"
+                            wire:target="previewApplyWatermark,previewOptimize,previewRestore"
+                        />
+                    @endif
                 </div>
 
                 @if ($previewMessage)
@@ -456,7 +506,7 @@
                                 || ($previewImage['kind'] ?? '') === 'wordpress'
                             );
                     @endphp
-                    @if ($canEditImage)
+                    @if ($canEditImage && $previewMediaType === 'image')
                         <button
                             type="button"
                             class="seo-media-preview-btn is-edit"
@@ -468,7 +518,7 @@
                             <span wire:loading wire:target="openImageEditor">Preparing...</span>
                         </button>
                     @endif
-                    @if ($previewCanSyncToWp)
+                    @if ($previewCanSyncToWp && $previewMediaType === 'image')
                         <button
                             type="button"
                             class="seo-media-preview-btn is-sync-wp"
@@ -480,7 +530,7 @@
                             <span wire:loading wire:target="previewSyncToWordPress">Syncing...</span>
                         </button>
                     @endif
-                    @if ($previewCanRestore)
+                    @if ($previewCanRestore && $previewMediaType === 'image')
                         <button
                             type="button"
                             class="seo-media-preview-btn is-restore"
@@ -513,7 +563,7 @@
                             ? \App\Addons\SeoContentAi\Filament\Pages\MediaImageEditor::urlForMedia($splitterSeoMediaId, 'splitter')
                             : null;
                     @endphp
-                    @if ($splitterUrl)
+                    @if ($splitterUrl && $previewMediaType === 'image')
                         <a
                             href="{{ $splitterUrl }}"
                             class="seo-media-preview-btn"
@@ -523,7 +573,7 @@
                             Split grid
                         </a>
                     @endif
-                    @if ($previewCanOptimize)
+                    @if ($previewCanOptimize && $previewMediaType === 'image')
                         <button
                             type="button"
                             class="seo-media-preview-btn"

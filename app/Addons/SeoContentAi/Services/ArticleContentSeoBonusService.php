@@ -171,10 +171,12 @@ final class ArticleContentSeoBonusService
             }
         }
 
+        $displayPoints = min(max(0, $points), self::MAX_POINTS_PER_ITEM);
+
         return [
             'key' => $key,
             'label' => $label,
-            'points' => $passed ? self::MAX_POINTS_PER_ITEM : $points,
+            'points' => $displayPoints,
             'max_points' => self::MAX_POINTS_PER_ITEM,
             'passed' => $passed,
             'message' => $message,

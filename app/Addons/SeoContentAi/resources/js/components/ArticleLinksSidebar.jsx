@@ -63,7 +63,7 @@ function occurrenceCount(item) {
 }
 
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function }} props
  */
 function KeywordList({
     items,
@@ -72,6 +72,7 @@ function KeywordList({
     target,
     variant = 'default',
     hideTitle = false,
+    hiddenRowKeys,
     onKeywordClick,
     onInsertSuggestion,
     onCopyKeyword,
@@ -108,8 +109,14 @@ function KeywordList({
                                 ? t('links_find_keyword', { label })
                                 : t('links_find_link', { label });
 
+                    const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
+
                     return (
-                        <li key={itemKey} className="wp-article-links-keyword-row">
+                        <li
+                            key={itemKey}
+                            className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}`}
+                            aria-hidden={isRowHiding}
+                        >
                             <button
                                 type="button"
                                 className={`wp-article-links-keyword${isActive ? ' is-active' : ''}${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
@@ -138,7 +145,7 @@ function KeywordList({
                                     onClick={(e) => {
                                         e.stopPropagation();
                                         if (insertable) {
-                                            onInsertSuggestion(item, index);
+                                            onInsertSuggestion(item, index, itemKey);
                                         }
                                     }}
                                 >
@@ -172,6 +179,7 @@ function InternalLinksSection({
     internal,
     suggestedInternal,
     activeKey,
+    hiddenRowKeys,
     onKeywordClick,
     onSuggestionClick,
     onInsertSuggestion,
@@ -216,6 +224,7 @@ function InternalLinksSection({
                     target="editor"
                     variant="suggestion"
                     hideTitle
+                    hiddenRowKeys={hiddenRowKeys}
                     onKeywordClick={onSuggestionClick}
                     onInsertSuggestion={onInsertSuggestion}
                     onCopyKeyword={onCopyKeyword}
@@ -231,6 +240,21 @@ export default function ArticleLinksSidebar() {
     const [activeKey, setActiveKey] = useState('');
     const [cycleByKey, setCycleByKey] = useState({});
     const [collapsed, setCollapsed] = useState(false);
+    const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
+
+    const hideSuggestionRow = (itemKey) => {
+        if (!itemKey) {
+            return;
+        }
+        setHiddenRowKeys((prev) => {
+            if (prev.has(itemKey)) {
+                return prev;
+            }
+            const next = new Set(prev);
+            next.add(itemKey);
+            return next;
+        });
+    };
 
     useEffect(() => {
         const onLinksUpdate = (event) => {
@@ -244,6 +268,7 @@ export default function ArticleLinksSidebar() {
                 external: Array.isArray(payload.external) ? payload.external : [],
             }));
             setCycleByKey({});
+            setHiddenRowKeys(new Set());
 
             const internal = Array.isArray(payload.internal) ? payload.internal : [];
             setSuggestedInternal((prevSuggested) => {
@@ -378,7 +403,9 @@ export default function ArticleLinksSidebar() {
         );
     };
 
-    const insertSuggestedLink = (item) => {
+    const insertSuggestedLink = (item, _index, itemKey) => {
+        hideSuggestionRow(itemKey);
+
         const text = String(item?.text ?? '').trim();
         const href = String(item?.href ?? item?.target_url ?? '').trim();
         if (!text || !href) {
@@ -432,6 +459,7 @@ export default function ArticleLinksSidebar() {
                         internal={internal}
                         suggestedInternal={suggestedInternal}
                         activeKey={activeKey}
+                        hiddenRowKeys={hiddenRowKeys}
                         onKeywordClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'internal', index, itemKey)
                         }

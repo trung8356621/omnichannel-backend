@@ -188,10 +188,6 @@ function parseUploadError(response, data) {
  * @param {{ articleId?: number|null, siteId?: number|null, source?: string }} options
  */
 export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = null, source = 'clipboard' } = {}) {
-    if (activeClipboardUpload) {
-        return activeClipboardUpload;
-    }
-
     const run = async () => {
         const formData = new FormData();
         formData.append('image', file);
@@ -227,6 +223,14 @@ export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = 
 
         return data;
     };
+
+    if (source !== 'clipboard') {
+        return run();
+    }
+
+    if (activeClipboardUpload) {
+        return activeClipboardUpload;
+    }
 
     activeClipboardUpload = run().finally(() => {
         activeClipboardUpload = null;

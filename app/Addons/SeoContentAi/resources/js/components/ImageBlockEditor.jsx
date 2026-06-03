@@ -17,6 +17,64 @@ const ALIGN_OPTIONS = [
 ];
 const IMAGE_BLOCK_CLIPBOARD_KEY = '__SEO_IMAGE_BLOCK_CLIPBOARD__';
 
+function isVideoMedia(image) {
+    if (!image?.src) return false;
+    const kind = String(image.mediaType ?? image.media_type ?? '').toLowerCase();
+    if (kind === 'video') return true;
+    const src = String(image.src).toLowerCase();
+    return /\.(mp4|webm|mov|m4v|ogv|ogg|avi|mpeg|mpg)(\?.*)?$/.test(src);
+}
+
+function renderVideoFigure(video) {
+    const align = String(video?.align ?? 'none').trim();
+    const alignClass = align && align !== 'none' ? ` ${align === 'full' ? 'alignfull' : `align${align}`}` : '';
+    const safeUrl = String(video?.src ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;');
+    const attrs = [
+        video?.wpAttachmentId ? ` data-id="${Math.round(Number(video.wpAttachmentId))}"` : '',
+        video?.seoMediaId ? ` data-seo-media-id="${Math.round(Number(video.seoMediaId))}"` : '',
+    ].join('');
+    return `<figure class="wp-block-video${alignClass}"${attrs}><video controls src="${safeUrl}"></video></figure>`;
+}
+
+function parseVideoFromBlockContent(html) {
+    const source = String(html ?? '').trim();
+    if (!source) return null;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const figure = doc.body.querySelector('figure.wp-block-video, figure');
+    const video = doc.body.querySelector('video');
+    if (!video) return null;
+    const src = String(video.getAttribute('src') ?? '').trim();
+    if (!src) return null;
+
+    const className = String(figure?.getAttribute('class') ?? '');
+    let align = 'none';
+    if (className.includes('alignfull')) align = 'full';
+    else if (className.includes('alignright')) align = 'right';
+    else if (className.includes('aligncenter')) align = 'center';
+    else if (className.includes('alignleft')) align = 'left';
+
+    const wpAttachmentId = Number(figure?.getAttribute('data-id') ?? video.getAttribute('data-id') ?? 0);
+    const seoMediaId = Number(
+        figure?.getAttribute('data-seo-media-id') ?? video.getAttribute('data-seo-media-id') ?? 0,
+    );
+
+    return {
+        src,
+        alt: '',
+        title: '',
+        align,
+        mediaType: 'video',
+        wpAttachmentId: wpAttachmentId > 0 ? wpAttachmentId : undefined,
+        seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+        wpSrc: src,
+    };
+}
+
 function ImageMetaFormPortal({ anchorRef, image, onSave, onCancel }) {
     const panelRef = useRef(null);
     const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -132,13 +190,14 @@ export default function ImageBlockEditor({
 
     const image = useMemo(() => {
         if (block.image) return block.image;
-        return parseImageFromBlockContent(block.content);
+        return parseImageFromBlockContent(block.content) ?? parseVideoFromBlockContent(block.content);
     }, [block.image, block.content]);
+    const isVideo = isVideoMedia(image);
 
-    const figureHtml = image ? renderImageFigure(image) : block.content;
+    const figureHtml = image ? (isVideo ? renderVideoFigure(image) : renderImageFigure(image)) : block.content;
 
     const commitImage = (nextImage) => {
-        onUpdate(renderImageFigure(nextImage), nextImage);
+        onUpdate(isVideoMedia(nextImage) ? renderVideoFigure(nextImage) : renderImageFigure(nextImage), nextImage);
     };
 
     const resetImageToPicker = useCallback(() => {
@@ -504,7 +563,7 @@ export default function ImageBlockEditor({
                                 Livewire.dispatch('open-editor-block-media-picker', { blockId });
                             }
                         }}
-                        onGenerateRequest={(prompt) => {
+                        onGenerateRequest={(prompt, mediaKind = 'image') => {
                             const now = Date.now();
                             if (now - generatePromptAtRef.current < 3000) {
                                 return;
@@ -512,7 +571,7 @@ export default function ImageBlockEditor({
                             generatePromptAtRef.current = now;
                             window.dispatchEvent(
                                 new CustomEvent('seo-editor-image-generate-request', {
-                                    detail: { blockId: block.id, prompt },
+                                    detail: { blockId: block.id, prompt, mediaKind },
                                 }),
                             );
                         }}
@@ -576,6 +635,7 @@ export default function ImageBlockEditor({
                             className={`seo-image-toolbar-btn ${editingMeta ? 'is-active' : ''}`}
                             title={t('edit_image_meta')}
                             aria-pressed={editingMeta}
+                            disabled={isVideo}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={(e) => {
                                 e.stopPropagation();
@@ -588,12 +648,13 @@ export default function ImageBlockEditor({
                             type="button"
                             className="seo-image-toolbar-btn"
                             title={t('replace_image')}
+                            disabled={isVideo}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={resetImageToPicker}
                         >
                             <RefreshCcw size={18} strokeWidth={1.75} />
                         </button>
-                        {supportsProductGallery ? (
+                        {supportsProductGallery && !isVideo ? (
                             <button
                                 type="button"
                                 className="seo-image-toolbar-btn"
@@ -620,7 +681,7 @@ export default function ImageBlockEditor({
                 </div>
             </div>
 
-            {editingMeta ? (
+            {editingMeta && !isVideo ? (
                 <ImageMetaFormPortal
                     anchorRef={toolbarRef}
                     image={image}

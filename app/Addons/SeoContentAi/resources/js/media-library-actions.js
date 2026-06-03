@@ -1,3 +1,5 @@
+import { uploadLocalMediaFiles } from './utils/seoLocalMediaUpload';
+
 const MEDIA_LIBRARY_REMOVE_MS = 280;
 
 function registerSeoMediaLibraryActions() {
@@ -7,6 +9,7 @@ function registerSeoMediaLibraryActions() {
         selectedCount: 0,
         selectionAnchorKey: null,
         selectionStorageScope: '',
+        localMediaUploading: false,
         init() {
             this.selectionStorageScope = this.resolveSelectionStorageScope();
             this.restoreSelectionFromStorage();
@@ -302,6 +305,64 @@ function registerSeoMediaLibraryActions() {
                     this.downloadCard(card);
                 }, index * 350);
             });
+        },
+        openLocalMediaUploadPicker() {
+            if (this.localMediaUploading) {
+                return;
+            }
+
+            this.$refs.localMediaUploadInput?.click();
+        },
+        async onLocalMediaUploadChange(event) {
+            const input = event?.target;
+            const files = input?.files;
+
+            if (!files?.length || this.localMediaUploading) {
+                return;
+            }
+
+            const siteId = Number(this.$wire?.siteId ?? 0);
+            if (!siteId) {
+                if (typeof this.$wire?.notifyLocalMediaUpload === 'function') {
+                    await this.$wire.notifyLocalMediaUpload('danger', 'Chưa chọn domain', 'Hãy chọn domain trước khi upload ảnh.');
+                }
+                if (input) {
+                    input.value = '';
+                }
+
+                return;
+            }
+
+            this.localMediaUploading = true;
+
+            try {
+                const uploaded = await uploadLocalMediaFiles(files, { siteId, source: 'library' });
+                const count = uploaded.length;
+
+                if (typeof this.$wire?.notifyLocalMediaUpload === 'function') {
+                    await this.$wire.notifyLocalMediaUpload(
+                        'success',
+                        count === 1 ? 'Đã upload ảnh' : `Đã upload ${count} ảnh`,
+                        count === 1 ? 'Ảnh đã được thêm vào thư viện nội bộ (Laravel).' : 'Các ảnh đã được thêm vào thư viện nội bộ (Laravel).',
+                    );
+                }
+
+                if (typeof this.$wire?.loadImages === 'function') {
+                    await this.$wire.loadImages();
+                } else if (typeof Livewire !== 'undefined') {
+                    Livewire.dispatch('seo-media-library-refresh');
+                }
+            } catch (error) {
+                const message = error?.message ?? 'Không thể upload ảnh.';
+                if (typeof this.$wire?.notifyLocalMediaUpload === 'function') {
+                    await this.$wire.notifyLocalMediaUpload('danger', 'Upload thất bại', message);
+                }
+            } finally {
+                this.localMediaUploading = false;
+                if (input) {
+                    input.value = '';
+                }
+            }
         },
     }));
 }
