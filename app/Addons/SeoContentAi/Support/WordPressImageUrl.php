@@ -76,4 +76,41 @@ final class WordPressImageUrl
 
         return pathinfo($filename, PATHINFO_FILENAME) ?: '';
     }
+
+    /**
+     * URL nhỏ hơn cho lưới chọn ảnh (giữ nguyên nếu đã là biến thể -WxH).
+     */
+    public static function toPreviewSize(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || self::isLocalSeoMediaSrc($url) || self::isScaledVariant($url)) {
+            return $url;
+        }
+
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        if ($path === '') {
+            return $url;
+        }
+
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        if ($extension === '') {
+            return $url;
+        }
+
+        $basePath = substr($path, 0, -strlen($extension) - 1);
+        $previewPath = $basePath . '-300x300.' . $extension;
+
+        $parts = parse_url($url);
+        if (! is_array($parts) || empty($parts['host'])) {
+            return $previewPath;
+        }
+
+        $scheme = isset($parts['scheme']) ? $parts['scheme'] . '://' : '';
+        $host = (string) ($parts['host'] ?? '');
+        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
+        $query = isset($parts['query']) ? '?' . $parts['query'] : '';
+        $fragment = isset($parts['fragment']) ? '#' . $parts['fragment'] : '';
+
+        return $scheme . $host . $port . $previewPath . $query . $fragment;
+    }
 }

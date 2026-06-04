@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -325,6 +326,10 @@ class SyncDomainContentService
 
         $permalink = trim((string) ($item['permalink'] ?? ''));
         if ($permalink !== '') {
+            $article->loadMissing('site');
+            if ($article->site instanceof Site) {
+                $permalink = app(WordPressPermalinkBuilder::class)->resolveFromSyncItem($article->site, $item);
+            }
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_permalink'],
                 ['meta_value' => $permalink],

@@ -87,6 +87,17 @@ final class SeoAccessControl
         return self::globalSiteId() !== null;
     }
 
+    public static function setGlobalSiteId(?int $siteId): void
+    {
+        if ($siteId === null || $siteId <= 0) {
+            session()->forget('seo_global_site_id');
+
+            return;
+        }
+
+        session(['seo_global_site_id' => $siteId]);
+    }
+
     public static function normalizeRole(string $role): string
     {
         $role = strtolower(trim($role));

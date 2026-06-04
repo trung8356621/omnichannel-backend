@@ -65,6 +65,10 @@ export function ctaDisplayLabel(item) {
  * @returns {boolean}
  */
 export function isCtaItemInsertable(item) {
+    if (item?.is_blank === true && String(item?.type ?? '').trim() !== '') {
+        return true;
+    }
+
     const label = ctaDisplayLabel(item);
     if (!label) {
         return false;

@@ -69,6 +69,27 @@
 
     @once
         <style>
+                /* Cột thao tác: 2 hàng × 3 nút */
+                .fi-resource-articles .fi-ta-actions-header-cell {
+                    width: auto !important;
+                    min-width: 5.75rem;
+                }
+
+                .fi-resource-articles .fi-ta-actions-cell > div {
+                    white-space: normal;
+                    padding-top: 0.5rem;
+                    padding-bottom: 0.5rem;
+                }
+
+                .fi-resource-articles .fi-ta-actions-cell .fi-ta-actions {
+                    display: grid !important;
+                    grid-template-columns: repeat(3, 2rem);
+                    gap: 0.125rem 0.25rem;
+                    justify-content: start;
+                    align-items: center;
+                    width: max-content;
+                }
+
                 .article-seo-modal {
                     position: fixed;
                     inset: 0;

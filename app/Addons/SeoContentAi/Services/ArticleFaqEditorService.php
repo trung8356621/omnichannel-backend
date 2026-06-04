@@ -8,7 +8,6 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoFaq;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
-use Illuminate\Support\Str;
 
 final class ArticleFaqEditorService
 {
@@ -16,6 +15,7 @@ final class ArticleFaqEditorService
         private readonly SeoFaqPersistenceService $faqPersistence,
         private readonly PromptRunnerService $promptRunner,
         private readonly SeoCreateArticleSettingsService $workflowSettings,
+        private readonly ArticleFaqPromptVariablesService $faqPromptVariables,
     ) {
     }
 
@@ -120,16 +120,10 @@ final class ArticleFaqEditorService
             throw new \InvalidArgumentException('Prompt làm mới FAQ không tồn tại hoặc đã tắt.');
         }
 
-        $article->loadMissing('site');
-        $bodyPlain = trim(strip_tags((string) ($article->body ?? '')));
-
-        $variables = [
+        $variables = $this->faqPromptVariables->buildForArticle($article, [
             'faq_question' => $currentQuestion,
             'faq_answer' => $currentAnswer,
-            'post_title' => (string) ($article->title ?? ''),
-            'post_content' => Str::limit($bodyPlain, 3000),
-            'site_domain' => (string) ($article->site?->domain ?? ''),
-        ];
+        ]);
 
         try {
             $result = $this->promptRunner->run($prompt, $variables);

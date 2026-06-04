@@ -156,6 +156,108 @@ final class SiteDomainPromptContextService
     }
 
     /**
+     * Thêm các loại CTA còn thiếu vào cấu hình domain dưới dạng "biến trắng" (value rỗng),
+     * để người dùng điền sau. Giữ nguyên các CTA đã có. Trả về danh sách type vừa thêm.
+     *
+     * @param  list<string>  $types
+     * @return list<string>
+     */
+    public function addBlankCtaTypes(Site|int $site, array $types): array
+    {
+        $types = array_values(array_unique(array_filter(array_map(
+            static fn ($type): string => mb_strtolower(trim((string) $type), 'UTF-8'),
+            $types,
+        ))));
+
+        if ($types === []) {
+            return [];
+        }
+
+        $site = $site instanceof Site ? $site : Site::query()->find((int) $site);
+        if ($site === null) {
+            return [];
+        }
+
+        $payload = $this->getForSite($site);
+
+        $existing = [];
+        foreach ($payload['cta'] as $row) {
+            $existing[mb_strtolower(trim((string) ($row['type'] ?? '')), 'UTF-8')] = true;
+        }
+
+        $added = [];
+        foreach ($types as $type) {
+            if ($type === '' || isset($existing[$type])) {
+                continue;
+            }
+            $payload['cta'][] = ['type' => $type, 'value' => ''];
+            $existing[$type] = true;
+            $added[] = $type;
+        }
+
+        if ($added === []) {
+            return [];
+        }
+
+        $this->writePayload($site, $payload);
+
+        return $added;
+    }
+
+    /**
+     * Ghi payload xuống meta domain, GIỮ LẠI cả CTA có value rỗng (biến trắng để điền sau).
+     *
+     * @param  array{
+     *     tone?: string,
+     *     short_description?: string,
+     *     cta_intro?: string,
+     *     cta?: list<array{type?: string, value?: string}>,
+     *     links?: list<array{keyword?: string, link?: string}>,
+     * }  $payload
+     */
+    private function writePayload(Site $site, array $payload): void
+    {
+        $cta = [];
+        foreach ($payload['cta'] ?? [] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $type = trim((string) ($row['type'] ?? ''));
+            $value = trim((string) ($row['value'] ?? ''));
+            if ($type === '' && $value === '') {
+                continue;
+            }
+            $cta[] = ['type' => $type, 'value' => $value];
+        }
+
+        $links = [];
+        foreach ($payload['links'] ?? [] as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $keyword = trim((string) ($row['keyword'] ?? ''));
+            $link = trim((string) ($row['link'] ?? ''));
+            if ($keyword === '' && $link === '') {
+                continue;
+            }
+            $links[] = ['keyword' => $keyword, 'link' => $link];
+        }
+
+        $json = json_encode([
+            'tone' => trim((string) ($payload['tone'] ?? '')),
+            'short_description' => trim((string) ($payload['short_description'] ?? '')),
+            'cta_intro' => trim((string) ($payload['cta_intro'] ?? '')),
+            'cta' => $cta,
+            'links' => $links,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+        $site->metas()->updateOrCreate(
+            ['meta_key' => self::META_KEY],
+            ['meta_value' => $json],
+        );
+    }
+
+    /**
      * @return array<string, string> Biến gợi ý cho prompt (site_domain, site_short_description, site_cta)
      */
     public function promptVariablesForSite(?Site $site): array

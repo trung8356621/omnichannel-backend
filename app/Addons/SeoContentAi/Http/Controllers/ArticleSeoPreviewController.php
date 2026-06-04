@@ -17,7 +17,9 @@ class ArticleSeoPreviewController extends Controller
     {
         abort_unless($this->canViewArticle($article), 403);
 
-        $score = $article->seo_score !== null ? (int) round((float) $article->seo_score) : null;
+        $score = $article->countsTowardSeoScore() && $article->seo_score !== null
+            ? (int) round((float) $article->seo_score)
+            : null;
 
         return response()->json([
             'article' => [

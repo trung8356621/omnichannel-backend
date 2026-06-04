@@ -12,6 +12,7 @@ export default defineConfig({
                 'resources/js/app.js',
                 'app/Addons/SeoContentAi/resources/js/task-builder.jsx',
                 'app/Addons/SeoContentAi/resources/js/article-editor.jsx',
+                'app/Addons/SeoContentAi/resources/css/article-edit-page.css',
                 'app/Addons/SeoContentAi/resources/js/article-seo-preview.jsx',
                 'app/Addons/SeoContentAi/resources/css/media-library.css',
                 'app/Addons/SeoContentAi/resources/css/image-splitter.css',

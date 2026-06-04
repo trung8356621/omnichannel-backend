@@ -52,15 +52,23 @@ final class PromptTestPublishService
         $this->syncFocusKeyword($article, $variables, $markdown);
 
         $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
-        if ($import['faqs'] !== []) {
-            app(SeoFaqPersistenceService::class)->persistForArticle($article, $import['faqs']);
+
+        $cta = app(ArticleCtaPlaceholderService::class)->applyForPublish(
+            (int) $article->site_id > 0 ? (int) $article->site_id : null,
+            $import['html'],
+            $import['faqs'],
+        );
+        $html = $cta['html'];
+        $faqs = $cta['faqs'];
+
+        if ($faqs !== []) {
+            app(SeoFaqPersistenceService::class)->persistForArticle($article, $faqs);
         }
 
         $h1Title = trim((string) ($import['h1_title'] ?? ''));
         $title = $h1Title !== ''
             ? $h1Title
             : $this->resolveTitle($variables, $markdown, $article);
-        $html = $import['html'];
         $this->persistMetaDescription($article, $import['meta_description']);
         if ($h1Title !== '') {
             $article->articleMetas()->updateOrCreate(
@@ -68,7 +76,6 @@ final class PromptTestPublishService
                 ['meta_value' => $h1Title],
             );
         }
-        $faqs = $import['faqs'];
 
         $article->update([
             'title' => $title,

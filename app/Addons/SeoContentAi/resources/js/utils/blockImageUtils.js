@@ -445,7 +445,7 @@ export function htmlToPlainText(html) {
     return (doc.body.textContent || '').replace(/\s+/g, ' ').trim();
 }
 
-function isMeaningfulHtml(html) {
+export function isMeaningfulHtml(html) {
     const source = String(html ?? '').trim();
     if (!source) return false;
 
@@ -467,6 +467,27 @@ const newBlockId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString
 /**
  * Tách ảnh nhúng trong block text thành block ảnh riêng (WordPress-style).
  */
+import { cleanBlockHtmlForEditorDisplay } from './editorHtmlUtils';
+
+export function pruneEmptyTextBlocks(blocks) {
+    if (!Array.isArray(blocks)) {
+        return [];
+    }
+
+    return blocks.filter((block) => {
+        if (!block || block.type === 'image' || block.isWp) {
+            return Boolean(block);
+        }
+
+        const content =
+            typeof block.content === 'string'
+                ? cleanBlockHtmlForEditorDisplay(block.content)
+                : '';
+
+        return isMeaningfulHtml(content);
+    });
+}
+
 export function normalizeBlocks(blocks) {
     const result = [];
 
@@ -487,7 +508,7 @@ export function normalizeBlocks(blocks) {
         }
 
         const images = extractImagesFromHtml(block.content);
-        const textHtml = stripImagesFromHtml(block.content);
+        const textHtml = cleanBlockHtmlForEditorDisplay(stripImagesFromHtml(block.content));
 
         if (isMeaningfulHtml(textHtml)) {
             result.push({
@@ -509,10 +530,7 @@ export function normalizeBlocks(blocks) {
             });
         });
 
-        if (!isMeaningfulHtml(textHtml) && images.length === 0) {
-            result.push({ ...block, type: 'text' });
-        }
     });
 
-    return result.length ? result : blocks;
+    return pruneEmptyTextBlocks(result);
 }

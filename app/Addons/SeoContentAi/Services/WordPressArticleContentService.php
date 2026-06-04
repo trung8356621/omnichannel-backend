@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -14,6 +15,10 @@ use Throwable;
 
 class WordPressArticleContentService
 {
+    public function __construct(
+        private readonly WordPressPermalinkBuilder $permalinkBuilder,
+    ) {}
+
     public function resolveEditorHtml(SeoArticle $article): string
     {
         $body = trim((string) ($article->body ?? ''));
@@ -69,12 +74,56 @@ class WordPressArticleContentService
     {
         $cached = trim((string) $this->getMeta($article, 'wp_permalink', ''));
         if ($cached !== '') {
-            return $cached;
+            return $this->permalinkBuilder->resolve($article, $cached, $this->resolveSlug($article));
         }
 
         $remote = $this->fetchFromWordPress($article);
+        $remotePermalink = trim((string) ($remote['permalink'] ?? ''));
 
-        return trim((string) ($remote['permalink'] ?? ''));
+        return $this->permalinkBuilder->resolve($article, $remotePermalink, $this->resolveSlug($article));
+    }
+
+    /**
+     * Sau khi đẩy slug lên WordPress: fetch lại slug + permalink thật (WP có thể chuẩn hóa slug / đổi URL).
+     *
+     * @return array{success: bool, slug: string, permalink: string}
+     */
+    public function refreshSlugAndPermalinkFromWordPress(SeoArticle $article): array
+    {
+        $post = $this->fetchFromWordPress($article, importFaqs: false);
+        if ($post === []) {
+            $article->refresh();
+
+            return [
+                'success' => false,
+                'slug' => $this->resolveSlug($article),
+                'permalink' => $this->resolvePermalink($article),
+            ];
+        }
+
+        $slug = trim((string) ($post['slug'] ?? ''));
+        $permalink = trim((string) ($post['permalink'] ?? ''));
+
+        if ($slug !== '' && $slug !== trim((string) ($article->slug ?? ''))) {
+            $article->update(['slug' => $slug]);
+        }
+
+        $article->refresh();
+
+        if ($slug === '') {
+            $slug = $this->resolveSlug($article);
+        }
+        if ($permalink === '') {
+            $permalink = $this->resolvePermalink($article);
+        } else {
+            $permalink = $this->permalinkBuilder->resolve($article, $permalink, $slug);
+        }
+
+        return [
+            'success' => true,
+            'slug' => $slug,
+            'permalink' => $permalink,
+        ];
     }
 
     public function resolveFeaturedImageUrl(SeoArticle $article): ?string
@@ -295,9 +344,17 @@ class WordPressArticleContentService
         }
 
         if (filled($post['permalink'] ?? null)) {
+            $slugForLink = filled($post['slug'] ?? null)
+                ? trim((string) $post['slug'])
+                : trim((string) ($article->slug ?? ''));
+            $permalink = $this->permalinkBuilder->resolve(
+                $article,
+                (string) $post['permalink'],
+                $slugForLink !== '' ? $slugForLink : null,
+            );
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_permalink'],
-                ['meta_value' => (string) $post['permalink']],
+                ['meta_value' => $permalink],
             );
         }
 

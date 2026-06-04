@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoTask;
@@ -124,6 +125,68 @@ final class CreateArticlesFromTaskService
     }
 
     /**
+     * @return array{success: bool, article_id: ?int, message: string}
+     */
+    public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
+    {
+        $taskId = $this->settings->getPublishArticleTaskId();
+        if ($taskId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Tùy chỉnh để chọn task.',
+            );
+        }
+
+        $task = SeoTask::query()->find($taskId);
+        if ($task === null) {
+            throw new \InvalidArgumentException('Quy trình tạo bài viết (#' . $taskId . ') không tồn tại.');
+        }
+
+        if (! $task->is_active) {
+            throw new \InvalidArgumentException('Quy trình «' . $task->name . '» đang tắt.');
+        }
+
+        $resolvedSiteId = (int) ($context->siteId ?? $siteId);
+        $this->assertSiteAccessible($resolvedSiteId);
+        $this->syncDomainLinkListKeywords($resolvedSiteId);
+
+        $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? ''));
+        if ($keyword === '') {
+            return [
+                'success' => false,
+                'article_id' => null,
+                'message' => 'Thiếu từ khóa / tiêu đề.',
+            ];
+        }
+
+        try {
+            $steps = $this->workflowRunner->run($task, $context);
+            $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
+            if ($stepFailed) {
+                return [
+                    'success' => false,
+                    'article_id' => $context->article?->id,
+                    'message' => 'Quy trình có bước lỗi.',
+                ];
+            }
+
+            $article = $this->resolveArticleFromWorkflow($context, $steps, $resolvedSiteId, $keyword, $context->variables);
+            $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
+
+            return [
+                'success' => true,
+                'article_id' => (int) $article->id,
+                'message' => 'Đã chạy quy trình và tạo/cập nhật bài.',
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'article_id' => $context->article?->id,
+                'message' => $exception->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * @param  array<string, string>  $variables
      * @param  list<array<string, mixed>>  $steps
      */
@@ -147,6 +210,10 @@ final class CreateArticlesFromTaskService
             return $context->article;
         }
 
+        if ($context->postType !== null && $context->postType !== '') {
+            $variables['_project_post_type'] = $context->postType;
+        }
+
         return $this->createDraftArticle($siteId, $keyword, $variables, $steps);
     }
 
@@ -161,10 +228,14 @@ final class CreateArticlesFromTaskService
             $title = $keyword;
         }
 
+        $postType = SeoProjectTask::normalizePostType(
+            (string) ($variables['_project_post_type'] ?? 'article'),
+        );
+
         $article = SeoArticle::query()->create([
             'site_id' => $siteId,
             'user_id' => auth()->id(),
-            'type' => 'article',
+            'type' => $postType,
             'title' => $title,
             'slug' => null,
             'status' => 'draft',

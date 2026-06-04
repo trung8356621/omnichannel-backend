@@ -4,7 +4,12 @@ import {
     parseImageFromBlockContent,
     renderImageFigure,
 } from './blockImageUtils';
-import { resolveArticleImageSrc, resolveFullWordPressImageUrl, isLocalSeoMediaSrc } from './wordpressImageUrl';
+import {
+    isLocalSeoMediaSrc,
+    resolveArticleImageSrc,
+    resolveFullWordPressImageUrl,
+    toPreviewImageUrl,
+} from './wordpressImageUrl';
 
 export function slugFromUrl(src) {
     if (!src) return '';
@@ -830,6 +835,113 @@ export function buildPostImagesIndex(blocks) {
         caption: row.caption,
         align: row.align,
     }));
+}
+
+/**
+ * Cùng logic tab Hình ảnh (blocks + supplemental) → payload modal «Trong bài».
+ *
+ * @returns {Array<{picker_key:string,id:number,wp_attachment_id:number,seo_media_id:number,url:string,thumb_url:string,slug:string,alt:string,media_type:string}>}
+ */
+export function buildMergedEditorImagesForPicker(blocks, supplementalImages = []) {
+    const normalizeSrc = (value) => {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        try {
+            return new URL(raw, window.location.origin).pathname.toLowerCase();
+        } catch {
+            return raw.split('?')[0].toLowerCase();
+        }
+    };
+
+    const mergeRow = (current, next) => ({
+        ...current,
+        ...next,
+        blockId: String(next?.blockId || '').trim() || String(current?.blockId || '').trim(),
+        wpAttachmentId:
+            Number(next?.wpAttachmentId ?? 0) > 0
+                ? Number(next.wpAttachmentId)
+                : Number(current?.wpAttachmentId ?? 0) || null,
+        seoMediaId:
+            Number(next?.seoMediaId ?? 0) > 0
+                ? Number(next.seoMediaId)
+                : Number(current?.seoMediaId ?? 0) || null,
+        src: String(next?.src || '').trim() || String(current?.src || '').trim(),
+        wpSrc: String(next?.wpSrc || '').trim() || String(current?.wpSrc || '').trim(),
+        localSrc: String(next?.localSrc || '').trim() || String(current?.localSrc || '').trim(),
+        slug: String(next?.slug || '').trim() || String(current?.slug || '').trim(),
+        alt: String(next?.alt || '').trim() || String(current?.alt || '').trim(),
+    });
+
+    const normalizedRows = [
+        ...(Array.isArray(supplementalImages)
+            ? supplementalImages
+                  .map((row, index) => {
+                      const src = String(row?.src || '').trim();
+                      if (!src) return null;
+
+                      return {
+                          key: row?.key || `extra-${index}-${src}`,
+                          blockId: String(row?.blockId || row?.block_id || '').trim(),
+                          wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0) || null,
+                          seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0) || null,
+                          src,
+                          wpSrc: String(row?.wpSrc || row?.wp_url || '').trim(),
+                          localSrc: String(row?.localSrc || row?.local_src || '').trim(),
+                          slug: String(row?.slug || '').trim(),
+                          alt: String(row?.alt || '').trim(),
+                      };
+                  })
+                  .filter(Boolean)
+            : []),
+        ...collectImagesFromBlocks(blocks),
+    ];
+
+    const merged = [];
+    normalizedRows.forEach((row) => {
+        const srcKey = normalizeSrc(row?.src);
+        const wpId = Number(row?.wpAttachmentId ?? 0);
+        const seoId = Number(row?.seoMediaId ?? 0);
+
+        const index = merged.findIndex((existing) => {
+            const eWp = Number(existing?.wpAttachmentId ?? 0);
+            const eSeo = Number(existing?.seoMediaId ?? 0);
+            const eSrc = normalizeSrc(existing?.src);
+
+            if (wpId > 0 && eWp > 0 && wpId === eWp) return true;
+            if (seoId > 0 && eSeo > 0 && seoId === eSeo) return true;
+            if (srcKey !== '' && eSrc !== '' && srcKey === eSrc) return true;
+
+            return false;
+        });
+
+        if (index < 0) {
+            merged.push(row);
+            return;
+        }
+
+        merged[index] = mergeRow(merged[index], row);
+    });
+
+    return merged.map((row, index) => {
+        const url = resolveArticleImageSrc(row);
+        const wpId = Number(row?.wpAttachmentId ?? 0);
+        const seoId = Number(row?.seoMediaId ?? 0);
+        const slug = String(row?.slug || '').trim() || slugFromUrl(url);
+        const alt = String(row?.alt || '').trim() || slug;
+        const pickerKey = `article-${seoId > 0 ? 'seo-' + seoId : 'wp-' + wpId}-${index}-${url}`;
+
+        return {
+            picker_key: pickerKey,
+            id: wpId > 0 ? wpId : seoId > 0 ? seoId : index + 1,
+            wp_attachment_id: wpId,
+            seo_media_id: seoId,
+            url,
+            thumb_url: toPreviewImageUrl(url),
+            slug,
+            alt,
+            media_type: 'image',
+        };
+    });
 }
 
 export { extractImagesFromHtml };

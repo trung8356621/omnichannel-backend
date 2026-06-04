@@ -95,6 +95,7 @@ final class WordPressMediaLibraryService
 
                 $id = (int) ($item['id'] ?? 0);
                 $url = trim((string) ($item['source_url'] ?? ''));
+                $thumbUrl = $this->resolveWordPressThumbnailUrl($item, $url);
                 if ($id <= 0 || $url === '') {
                     continue;
                 }
@@ -115,6 +116,7 @@ final class WordPressMediaLibraryService
                     'wp_attachment_id' => $id,
                     'seo_media_id' => 0,
                     'url' => $url,
+                    'thumb_url' => $thumbUrl,
                     'media_type' => $this->resolveWordPressMediaType($item),
                     'slug' => trim((string) ($item['slug'] ?? '')),
                     'title' => html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
@@ -331,6 +333,26 @@ final class WordPressMediaLibraryService
     /**
      * @return array{images: list<array<string, mixed>>, total: int, total_pages: int, page: int, error: string|null}
      */
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveWordPressThumbnailUrl(array $item, string $fallback): string
+    {
+        $sizes = $item['media_details']['sizes'] ?? null;
+        if (! is_array($sizes)) {
+            return \App\Addons\SeoContentAi\Support\WordPressImageUrl::toPreviewSize($fallback);
+        }
+
+        foreach (['medium', 'woocommerce_thumbnail', 'thumbnail', 'medium_large', 'large'] as $size) {
+            $candidate = $sizes[$size]['source_url'] ?? null;
+            if (is_string($candidate) && trim($candidate) !== '') {
+                return trim($candidate);
+            }
+        }
+
+        return \App\Addons\SeoContentAi\Support\WordPressImageUrl::toPreviewSize($fallback);
+    }
+
     private function emptyResult(int $page, ?string $error): array
     {
         return [

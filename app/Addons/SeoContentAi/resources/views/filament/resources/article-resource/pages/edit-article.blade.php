@@ -1,9 +1,24 @@
-<x-filament-panels::page>
+@push('styles')
+    @vite('app/Addons/SeoContentAi/resources/css/article-edit-page.css')
+@endpush
+
+<x-filament-panels::page @class(['seo-article-edit-page'])>
     <div
         x-data="{
-            mediaModalOpen: @entangle('mediaPickerOpen').live,
+            mediaModalOpen: false,
             mediaModalMode: 'featured',
-            pickerLoading: @entangle('mediaPickerLoading').live,
+            pickerLoading: false,
+            pickerSearching: false,
+            pickerSearchQuery: '',
+            pickerTab: @js($mediaPickerTab),
+            pickerImages: [],
+            pickerCatalog: [],
+            pickerPage: 1,
+            pickerTotalPages: 1,
+            pickerPerPage: 24,
+            pickerError: null,
+            _pickerSearchTimer: null,
+            pickerSuppressLoadingOverlay: false,
             galleryPickerSelectedKeys: [],
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
@@ -87,21 +102,327 @@
                     this.clearGalleryPickerSelection();
                 });
             },
+            pickerSearchPlaceholder() {
+                if (this.pickerTab === 'article') {
+                    return 'Tìm slug, alt trong bài…';
+                }
+                if (this.pickerTab === 'local') {
+                    return 'Tìm slug, alt, tên file (Laravel)…';
+                }
+
+                return 'Tìm slug, alt, caption (WP search)…';
+            },
+            schedulePickerSearch() {
+                this.pickerSearching = true;
+                clearTimeout(this._pickerSearchTimer);
+                this._pickerSearchTimer = setTimeout(() => this.runPickerSearch(), 400);
+            },
+            pickerSiteId() {
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+
+                return Number(picker.siteId || 0);
+            },
+            isPickerCacheableTab(tab) {
+                const cacheApi = window.__seoArticleMediaPickerCache;
+
+                if (cacheApi?.isCacheableTab) {
+                    return cacheApi.isCacheableTab(tab);
+                }
+
+                return tab === 'original' || tab === 'local';
+            },
+            applyPickerPayload(detail) {
+                if (!detail || typeof detail !== 'object') {
+                    return;
+                }
+
+                this.pickerTab = detail.tab ?? this.pickerTab;
+                this.pickerPage = Number(detail.page || 1);
+                this.pickerTotalPages = Number(detail.totalPages || 1);
+                this.pickerError = detail.error ? String(detail.error) : null;
+                if (Array.isArray(detail.catalog) && detail.catalog.length) {
+                    this.pickerCatalog = detail.catalog;
+                } else if (this.pickerTab === 'article') {
+                    this.pickerCatalog = Array.isArray(detail.images) ? detail.images : [];
+                }
+                this.pickerImages = Array.isArray(detail.images) ? detail.images : [];
+            },
+            tryHydratePickerFromCache(tab, page) {
+                if (!this.isPickerCacheableTab(tab)) {
+                    return false;
+                }
+
+                if (this.pickerSearchQuery.trim() !== '') {
+                    return false;
+                }
+
+                const siteId = this.pickerSiteId();
+                if (siteId <= 0) {
+                    return false;
+                }
+
+                const cacheApi = window.__seoArticleMediaPickerCache;
+                if (!cacheApi?.read) {
+                    return false;
+                }
+
+                const cached = cacheApi.read(siteId, tab, page);
+                if (!cached) {
+                    return false;
+                }
+
+                this.applyPickerPayload(cached);
+                this.pickerLoading = false;
+                this.pickerSearching = false;
+
+                return true;
+            },
+            persistPickerCacheFromFetch(detail) {
+                if (this.pickerSearchQuery.trim() !== '') {
+                    return;
+                }
+
+                const tab = detail?.tab ?? this.pickerTab;
+                if (!this.isPickerCacheableTab(tab)) {
+                    return;
+                }
+
+                const siteId = this.pickerSiteId();
+                if (siteId <= 0) {
+                    return;
+                }
+
+                const cacheApi = window.__seoArticleMediaPickerCache;
+                if (!cacheApi?.write) {
+                    return;
+                }
+
+                cacheApi.write(siteId, tab, Number(detail?.page || this.pickerPage || 1), detail);
+            },
+            applyPickerView() {
+                const q = this.pickerSearchQuery.trim().toLowerCase();
+                let rows = Array.isArray(this.pickerCatalog) ? [...this.pickerCatalog] : [];
+                if (q !== '') {
+                    rows = rows.filter((row) => {
+                        const haystack = [row.slug, row.alt, row.url]
+                            .filter((part) => part)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(q);
+                    });
+                }
+
+                const perPage = this.pickerPerPage;
+                const totalPages = Math.max(1, Math.ceil(rows.length / perPage) || 1);
+                this.pickerTotalPages = totalPages;
+                if (this.pickerPage > totalPages) {
+                    this.pickerPage = totalPages;
+                }
+                if (this.pickerPage < 1) {
+                    this.pickerPage = 1;
+                }
+
+                const offset = (this.pickerPage - 1) * perPage;
+                this.pickerImages = rows.slice(offset, offset + perPage);
+            },
+            loadArticleTabFromEditor() {
+                return new Promise((resolve) => {
+                    this.pickerLoading = true;
+                    this.pickerSearching = false;
+                    const timeout = setTimeout(() => {
+                        cleanup();
+                        this.pickerCatalog = [];
+                        this.pickerImages = [];
+                        this.pickerLoading = false;
+                        resolve([]);
+                    }, 8000);
+                    const onCatalog = (event) => {
+                        cleanup();
+                        const images = Array.isArray(event.detail?.images) ? event.detail.images : [];
+                        this.pickerCatalog = images;
+                        this.pickerTab = 'article';
+                        this.pickerPage = 1;
+                        this.pickerError = null;
+                        this.applyPickerView();
+                        this.pickerLoading = false;
+                        this.pickerSearching = false;
+                        resolve(images);
+                    };
+                    const cleanup = () => {
+                        clearTimeout(timeout);
+                        window.removeEventListener('seo-editor-images-catalog', onCatalog);
+                    };
+
+                    window.addEventListener('seo-editor-images-catalog', onCatalog);
+                    window.dispatchEvent(new CustomEvent('seo-request-editor-images-catalog'));
+                });
+            },
+            async runPickerSearch() {
+                if (this.pickerTab === 'article') {
+                    this.pickerPage = 1;
+                    this.applyPickerView();
+                    this.pickerSearching = false;
+
+                    return;
+                }
+
+                this.pickerSuppressLoadingOverlay = false;
+                this.pickerSaveCacheAfterLoad = false;
+
+                try {
+                    await $wire.searchMediaPicker(this.pickerSearchQuery);
+                } catch (error) {
+                    this.pickerSearching = false;
+                }
+            },
+            async switchPickerTab(tab) {
+                if (this.pickerTab === tab) {
+                    return;
+                }
+
+                this.pickerTab = tab;
+                this.pickerSearchQuery = '';
+                this.pickerCatalog = [];
+                this.pickerImages = [];
+                this.pickerPage = 1;
+                this.pickerSearching = false;
+                this.clearGalleryPickerSelection();
+
+                if (tab === 'article') {
+                    await this.loadArticleTabFromEditor();
+
+                    return;
+                }
+
+                const hydrated = this.tryHydratePickerFromCache(tab, 1);
+                this.pickerSuppressLoadingOverlay = hydrated;
+                if (!hydrated) {
+                    this.pickerLoading = true;
+                }
+
+                await $wire.setMediaPickerTab(tab);
+            },
+            pickerPrevPage() {
+                if (this.pickerPage <= 1) {
+                    return;
+                }
+
+                if (this.pickerTab === 'article') {
+                    this.pickerPage -= 1;
+                    this.applyPickerView();
+
+                    return;
+                }
+
+                const prevPage = this.pickerPage - 1;
+                if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, prevPage)) {
+                    this.pickerSuppressLoadingOverlay = true;
+                    $wire.goToMediaPickerPage(prevPage);
+
+                    return;
+                }
+
+                this.pickerSuppressLoadingOverlay = false;
+                this.pickerLoading = true;
+                $wire.mediaPickerPreviousPage();
+            },
+            pickerNextPage() {
+                if (this.pickerPage >= this.pickerTotalPages) {
+                    return;
+                }
+
+                if (this.pickerTab === 'article') {
+                    this.pickerPage += 1;
+                    this.applyPickerView();
+
+                    return;
+                }
+
+                const nextPage = this.pickerPage + 1;
+                if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, nextPage)) {
+                    this.pickerSuppressLoadingOverlay = true;
+                    $wire.goToMediaPickerPage(nextPage);
+
+                    return;
+                }
+
+                this.pickerSuppressLoadingOverlay = false;
+                this.pickerLoading = true;
+                $wire.mediaPickerNextPage();
+            },
+            reloadPickerImages() {
+                if (this.pickerTab === 'article') {
+                    this.loadArticleTabFromEditor();
+
+                    return;
+                }
+
+                this.pickerSuppressLoadingOverlay = false;
+                this.pickerLoading = true;
+                $wire.reloadMediaPickerImages();
+            },
             openArticleMediaModal(mode, blockId = null) {
                 this.clearGalleryPickerSelection();
                 this.mediaModalMode = mode;
                 this.mediaModalOpen = true;
+                this.pickerSearchQuery = '';
+                this.pickerCatalog = [];
+                this.pickerImages = [];
                 this.pickerLoading = true;
+                this.pickerSearching = false;
+
                 if (mode === 'editor-block') {
-                    $wire.prepareMediaPicker('editor-block', blockId);
-                } else {
-                    this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
-                    $wire.prepareMediaPicker(mode);
+                    this.pickerTab = 'article';
+                    $wire.armEditorBlockMediaPicker(blockId ?? '');
+                    this.loadArticleTabFromEditor();
+
+                    return;
                 }
+
+                this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
+                const hydrated = this.tryHydratePickerFromCache('original', 1);
+                this.pickerSuppressLoadingOverlay = hydrated;
+                if (hydrated) {
+                    this.pickerLoading = false;
+                }
+
+                $wire.prepareMediaPicker(mode);
             },
             closeArticleMediaModal() {
                 this.clearGalleryPickerSelection();
+                this.mediaModalOpen = false;
+                this.pickerImages = [];
+                this.pickerCatalog = [];
+                this.pickerSearchQuery = '';
+                this.pickerError = null;
+                this.pickerLoading = false;
+                this.pickerSearching = false;
                 $wire.closeMediaPicker();
+            },
+            selectPickerImage(image) {
+                if (!image || !String(image.url || '').trim()) {
+                    return;
+                }
+
+                if (this.mediaModalMode === 'gallery') {
+                    return;
+                }
+
+                $wire
+                    .selectMediaFromPicker(
+                        Number(image.wp_attachment_id || 0),
+                        String(image.url || ''),
+                        String(image.alt || ''),
+                        String(image.slug || ''),
+                        Number(image.seo_media_id || 0),
+                        String(image.media_type || 'image'),
+                    )
+                    .then(() => {
+                        if (this.mediaModalMode === 'editor-block') {
+                            this.closeArticleMediaModal();
+                        }
+                    });
             },
             localMediaUploading: false,
             openLocalMediaUploadPicker() {
@@ -117,8 +438,8 @@
                     return;
                 }
 
-                if ($wire.mediaPickerTab !== 'local') {
-                    await $wire.setMediaPickerTab('local');
+                if (this.pickerTab !== 'local') {
+                    await this.switchPickerTab('local');
                 }
 
                 this.localMediaUploading = true;
@@ -171,7 +492,22 @@
             const payload = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
             $wire.handleEditorNotify(payload);
         "
-        x-on:open-article-media-modal.window="mediaModalMode = $wire.mediaPickerMode || 'featured'"
+        x-on:open-article-media-modal.window="
+            mediaModalMode = $wire.mediaPickerMode || 'featured';
+            mediaModalOpen = true;
+        "
+        x-on:article-media-picker-loading.window="
+            if (!pickerSuppressLoadingOverlay) {
+                pickerLoading = true;
+            }
+        "
+        x-on:article-media-picker-loaded.window="
+            pickerSuppressLoadingOverlay = false;
+            applyPickerPayload($event.detail);
+            pickerLoading = false;
+            pickerSearching = false;
+            persistPickerCacheFromFetch($event.detail);
+        "
         x-on:flush-article-faqs.window="
             setTimeout(() => {
                 if ($wire.pendingEditorCollectTarget) {
@@ -183,10 +519,13 @@
             const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
             if (detail.target === 'sync') {
                 $wire.syncArticleToWordPress(detail.html ?? '');
+            } else if (detail.target === 'generate-faq') {
+                $wire.generateArticleFaqs(detail.html ?? '');
             } else {
                 $wire.persistArticleLocal(detail.html ?? '');
             }
         "
+        x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
         x-on:article-editor-shortcut.window="
             const action = $event.detail?.action;
             if (action === 'save') {
@@ -247,7 +586,7 @@
                 }));
             });
         "
-        class="wp-article-edit -mx-4 max-w-none"
+        class="wp-article-edit seo-article-edit-content max-w-none"
     >
         <div wire:ignore id="seo-article-ai-launcher-root"></div>
 
@@ -271,24 +610,31 @@
                         class="wp-title-input"
                     />
 
-                    <div class="wp-permalink mt-3 text-sm text-gray-600 dark:text-gray-400">
+                    <div
+                        class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400"
+                        wire:key="article-permalink-{{ md5($articleSlug . '|' . $this->getArticlePermalink()) }}"
+                    >
                         <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
                         @if ($editingSlug)
                             <span class="text-gray-500">{{ $this->getPermalinkBase() }}/</span>
                             <input
                                 type="text"
                                 wire:model.live.debounce.250ms="articleSlug"
-                                class="inline-block w-auto max-w-[200px] rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
+                                wire:keydown.enter.prevent="confirmArticleSlug"
+                                class="inline-block min-w-[12rem] max-w-full flex-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
                             />
                             @if ($this->getPermalinkSuffix() !== '')
                                 <span class="text-gray-500">{{ $this->getPermalinkSuffix() }}</span>
                             @endif
                             <button
                                 type="button"
-                                wire:click="$set('editingSlug', false)"
-                                class="ml-2 text-primary-600 hover:underline text-xs"
+                                wire:click="confirmArticleSlug"
+                                wire:loading.attr="disabled"
+                                wire:target="confirmArticleSlug"
+                                class="ml-2 text-primary-600 hover:underline text-xs disabled:opacity-50"
                             >
-                                OK
+                                <span wire:loading.remove wire:target="confirmArticleSlug">OK</span>
+                                <span wire:loading wire:target="confirmArticleSlug">…</span>
                             </button>
                         @else
                             @php($previewPermalink = $this->getDisplayPermalink())
@@ -320,6 +666,7 @@
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
                 <script type="application/json" id="seo-article-meta">@json($this->getEditorMetaPayload())</script>
                 <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
+                <script type="application/json" id="seo-article-faq-config">@json(['can_generate_faq' => $this->canGenerateArticleFaqs()])</script>
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
@@ -551,6 +898,7 @@
         <div
             x-show="mediaModalOpen"
             x-cloak
+            wire:ignore
             class="seo-article-media-modal"
             role="dialog"
             aria-modal="true"
@@ -575,43 +923,48 @@
                 <div class="seo-article-media-modal__tabs">
                     <button
                         type="button"
-                        wire:click="setMediaPickerTab('article')"
-                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'article' ? 'is-active' : '' }}"
-                        x-on:click="clearGalleryPickerSelection()"
+                        class="seo-article-media-modal__tab"
+                        x-bind:class="{ 'is-active': pickerTab === 'article' }"
+                        x-on:click="switchPickerTab('article')"
                     >
                         Trong bài
                     </button>
                     <button
                         type="button"
-                        wire:click="setMediaPickerTab('original')"
-                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'original' ? 'is-active' : '' }}"
-                        x-on:click="clearGalleryPickerSelection()"
+                        class="seo-article-media-modal__tab"
+                        x-bind:class="{ 'is-active': pickerTab === 'original' }"
+                        x-on:click="switchPickerTab('original')"
                     >
                         Gốc (WP)
                     </button>
                     <button
                         type="button"
-                        wire:click="setMediaPickerTab('local')"
-                        class="seo-article-media-modal__tab {{ $mediaPickerTab === 'local' ? 'is-active' : '' }}"
-                        x-on:click="clearGalleryPickerSelection()"
+                        class="seo-article-media-modal__tab"
+                        x-bind:class="{ 'is-active': pickerTab === 'local' }"
+                        x-on:click="switchPickerTab('local')"
                     >
                         Nội bộ (Laravel)
                     </button>
                 </div>
 
                 <div class="seo-article-media-modal__toolbar">
-                    <input
-                        type="search"
-                        wire:model.live.debounce.400ms="mediaPickerSearch"
-                        class="seo-article-media-modal__search"
-                        placeholder="{{ match ($mediaPickerTab) {
-                            'article' => 'Tìm slug, alt trong bài…',
-                            'local' => 'Tìm slug, alt, tên file (Laravel)…',
-                            default => 'Tìm slug, alt, caption (WP search)…',
-                        } }}"
-                        autocomplete="off"
-                        x-on:keydown.escape="closeArticleMediaModal()"
-                    />
+                    <div class="seo-article-media-modal__search-wrap">
+                        <input
+                            type="search"
+                            x-model="pickerSearchQuery"
+                            x-on:input="schedulePickerSearch()"
+                            class="seo-article-media-modal__search"
+                            x-bind:placeholder="pickerSearchPlaceholder()"
+                            autocomplete="off"
+                            x-on:keydown.escape="closeArticleMediaModal()"
+                        />
+                        <span
+                            x-show="pickerSearching"
+                            x-cloak
+                            class="seo-article-media-modal__search-spinner"
+                            aria-hidden="true"
+                        ></span>
+                    </div>
                     <input
                         type="file"
                         x-ref="localMediaFileInput"
@@ -623,7 +976,7 @@
                     <button
                         type="button"
                         class="seo-article-media-modal__upload"
-                        x-show="$wire.mediaPickerTab === 'local'"
+                        x-show="pickerTab === 'local'"
                         x-cloak
                         x-on:click="openLocalMediaUploadPicker()"
                         x-bind:disabled="localMediaUploading"
@@ -633,8 +986,8 @@
                     </button>
                     <button
                         type="button"
-                        wire:click="reloadMediaPickerImages"
                         class="seo-article-media-modal__reload"
+                        x-on:click="reloadPickerImages()"
                     >
                         Reload
                     </button>
@@ -648,13 +1001,16 @@
                     Click / Shift+click để chọn nhiều media, rồi bấm <strong>Thêm vào album</strong> ở thanh bên dưới.
                 </p>
 
-                @if ($mediaPickerError)
-                    <p class="seo-article-media-modal__error">{{ $mediaPickerError }}</p>
-                @endif
+                <p
+                    x-show="pickerError"
+                    x-cloak
+                    class="seo-article-media-modal__error"
+                    x-text="pickerError"
+                ></p>
 
                 <div class="seo-article-media-modal__body">
                     <div
-                        x-show="pickerLoading"
+                        x-show="pickerLoading && pickerImages.length === 0"
                         x-cloak
                         class="seo-article-media-modal__skeleton-grid"
                         aria-busy="true"
@@ -665,49 +1021,97 @@
                         @endfor
                     </div>
 
-                    <div x-show="!pickerLoading" x-cloak>
-                        @if (empty($mediaPickerImages) && ! $mediaPickerError)
-                            <p class="seo-article-media-modal__empty">
-                                {{ $mediaPickerTab === 'article' ? 'Chưa có media trong nội dung bài viết.' : 'Không có media trong thư viện.' }}
-                            </p>
-                        @endif
-
-                        @if (! empty($mediaPickerImages))
-                            <div class="seo-article-media-modal__grid">
-                                @foreach ($mediaPickerImages as $image)
-                                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.media-picker-item', [
-                                        'image' => $image,
-                                        'mediaPickerTab' => $mediaPickerTab,
-                                        'mediaPickerPage' => $mediaPickerPage,
-                                        'mediaPickerMode' => $mediaPickerMode,
-                                    ])
-                                @endforeach
+                    <div
+                        class="seo-article-media-modal__results"
+                        x-show="!pickerLoading || pickerImages.length > 0"
+                        x-cloak
+                        x-bind:class="{ 'is-busy': pickerSearching || (pickerLoading && pickerImages.length > 0) }"
+                    >
+                        <div
+                            x-show="pickerSearching || (pickerLoading && pickerImages.length > 0)"
+                            x-cloak
+                            class="seo-article-media-modal__overlay"
+                            aria-busy="true"
+                            aria-live="polite"
+                        >
+                            <div class="seo-article-media-modal__skeleton-grid">
+                                @for ($i = 0; $i < 12; $i++)
+                                    <div class="seo-article-media-modal__skeleton"></div>
+                                @endfor
                             </div>
-                        @endif
+                            <p class="seo-article-media-modal__overlay-label">Đang tìm ảnh…</p>
+                        </div>
+
+                        <p
+                            x-show="!pickerSearching && !pickerLoading && pickerImages.length === 0 && !pickerError"
+                            class="seo-article-media-modal__empty"
+                            x-text="pickerTab === 'article'
+                                ? 'Chưa có media trong nội dung bài viết.'
+                                : 'Không có media trong thư viện.'"
+                        ></p>
+
+                        <div class="seo-article-media-modal__grid" x-show="pickerImages.length > 0">
+                            <template x-for="image in pickerImages" :key="image.picker_key">
+                                <button
+                                    type="button"
+                                    class="seo-article-media-modal__item"
+                                    x-bind:data-picker-key="image.picker_key"
+                                    x-bind:data-picker-wp="image.wp_attachment_id"
+                                    x-bind:data-picker-seo="image.seo_media_id"
+                                    x-bind:data-picker-url="image.url"
+                                    x-bind:data-picker-alt="image.alt"
+                                    x-bind:data-picker-slug="image.slug"
+                                    x-bind:data-picker-media-type="image.media_type"
+                                    x-bind:class="{ 'is-selected': mediaModalMode === 'gallery' && isGalleryPickerSelected(image.picker_key) }"
+                                    x-on:click="mediaModalMode === 'gallery'
+                                        ? toggleGalleryPickerItem($event, image.picker_key, $el)
+                                        : selectPickerImage(image)"
+                                >
+                                    <span
+                                        class="seo-article-media-modal__thumb seo-article-media-modal__thumb--video"
+                                        x-show="image.media_type === 'video'"
+                                        aria-hidden="true"
+                                    >▶</span>
+                                    <img
+                                        x-show="image.media_type !== 'video'"
+                                        class="seo-article-media-modal__thumb"
+                                        x-bind:src="image.thumb_url || image.url"
+                                        x-bind:alt="image.alt || image.slug || ''"
+                                        loading="lazy"
+                                        decoding="async"
+                                        width="300"
+                                        height="300"
+                                    />
+                                    <span
+                                        class="seo-article-media-modal__slug"
+                                        x-show="image.slug"
+                                        x-text="image.slug"
+                                    ></span>
+                                </button>
+                            </template>
+                        </div>
                     </div>
                 </div>
 
-                @if ($mediaPickerTotalPages > 1)
-                    <div class="seo-article-media-modal__pagination">
-                        <button
-                            type="button"
-                            class="seo-article-media-modal__page-btn"
-                            wire:click="mediaPickerPreviousPage"
-                            @disabled($mediaPickerPage <= 1)
-                        >
-                            Trang trước
-                        </button>
-                        <span>{{ $mediaPickerPage }} / {{ $mediaPickerTotalPages }}</span>
-                        <button
-                            type="button"
-                            class="seo-article-media-modal__page-btn"
-                            wire:click="mediaPickerNextPage"
-                            @disabled($mediaPickerPage >= $mediaPickerTotalPages)
-                        >
-                            Trang sau
-                        </button>
-                    </div>
-                @endif
+                <div class="seo-article-media-modal__pagination" x-show="pickerTotalPages > 1" x-cloak>
+                    <button
+                        type="button"
+                        class="seo-article-media-modal__page-btn"
+                        x-on:click="pickerPrevPage()"
+                        x-bind:disabled="pickerPage <= 1 || pickerSearching || pickerLoading"
+                    >
+                        Trang trước
+                    </button>
+                    <span x-text="pickerPage + ' / ' + pickerTotalPages"></span>
+                    <button
+                        type="button"
+                        class="seo-article-media-modal__page-btn"
+                        x-on:click="pickerNextPage()"
+                        x-bind:disabled="pickerPage >= pickerTotalPages || pickerSearching || pickerLoading"
+                    >
+                        Trang sau
+                    </button>
+                </div>
 
                 <div
                     x-show="mediaModalMode === 'gallery'"

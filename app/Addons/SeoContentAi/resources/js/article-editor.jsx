@@ -9,6 +9,17 @@ import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
 import './utils/seoLocalMediaUpload';
+import {
+    readArticleMediaPickerCache,
+    writeArticleMediaPickerCache,
+    isArticleMediaPickerCacheableTab,
+} from './utils/articleMediaPickerCache';
+
+window.__seoArticleMediaPickerCache = {
+    read: readArticleMediaPickerCache,
+    write: writeArticleMediaPickerCache,
+    isCacheableTab: isArticleMediaPickerCacheableTab,
+};
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
 function normalizeLivewireEventDetail(payload) {
@@ -237,6 +248,17 @@ if (rootElement) {
     if (faqRoot) {
         let initialFaqs = [];
         let initialExtractDebug = null;
+        let canGenerateFaq = false;
+        try {
+            const configEl = document.getElementById('seo-article-faq-config');
+            const rawConfig = configEl?.textContent?.trim();
+            if (rawConfig) {
+                const config = JSON.parse(rawConfig);
+                canGenerateFaq = Boolean(config?.can_generate_faq);
+            }
+        } catch (e) {
+            console.warn('Invalid article FAQ config JSON', e);
+        }
         try {
             const faqsEl = document.getElementById('seo-article-initial-faqs');
             const rawFaqs = faqsEl?.textContent?.trim();
@@ -261,6 +283,7 @@ if (rootElement) {
                 articleId={articleId}
                 initialFaqs={initialFaqs}
                 initialExtractDebug={initialExtractDebug}
+                canGenerateFaq={canGenerateFaq}
             />,
         );
     }

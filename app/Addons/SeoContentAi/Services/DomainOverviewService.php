@@ -68,7 +68,7 @@ final class DomainOverviewService
      */
     public function getScoreDistribution(int $siteId): array
     {
-        $base = SeoArticle::query()->where('site_id', $siteId);
+        $base = SeoArticle::query()->where('site_id', $siteId)->countsTowardSeoScore();
         $total = (clone $base)->count();
         $scored = (clone $base)->whereNotNull('seo_score')->count();
 
@@ -168,7 +168,10 @@ final class DomainOverviewService
      */
     public function getScoringStatistics(int $siteId): array
     {
-        $base = SeoArticle::query()->where('site_id', $siteId)->whereNotNull('seo_score');
+        $base = SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->countsTowardSeoScore()
+            ->whereNotNull('seo_score');
         $scored = (clone $base)->count();
 
         if ($scored === 0) {

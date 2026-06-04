@@ -14,6 +14,82 @@ use Throwable;
 final class WordPressArticleSyncService
 {
     /**
+     * Cập nhật slug lên WordPress ngay khi sửa permalink trên editor (không cần đồng bộ full).
+     *
+     * @return array{success: bool, message: string}
+     */
+    public function syncSlugForArticle(SeoArticle $article, string $slug): array
+    {
+        $slug = trim($slug);
+        if ($slug === '') {
+            return [
+                'success' => false,
+                'message' => 'Slug không hợp lệ.',
+            ];
+        }
+
+        $context = $this->resolveEditorSyncContext($article);
+        if (! ($context['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($context['message'] ?? 'Không thể đồng bộ slug lên WordPress.'),
+            ];
+        }
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken((string) $context['write_token'])
+                ->post((string) $context['url'], [
+                    'slug' => $slug,
+                ]);
+
+            if (! $response->successful()) {
+                $message = WordPressRestResponseParser::formatHttpErrorMessage(
+                    $response->status(),
+                    $response,
+                );
+
+                Log::warning('WordPress slug sync failed', [
+                    'article_id' => $article->id,
+                    'wp_post_id' => $context['wp_post_id'] ?? null,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $message,
+                ];
+            }
+
+            $decoded = $response->json();
+            if (! is_array($decoded) || ! ($decoded['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($decoded['message'] ?? 'WordPress từ chối cập nhật slug.'),
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => (string) ($decoded['message'] ?? 'Đã cập nhật slug trên WordPress.'),
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress slug sync exception', [
+                'article_id' => $article->id,
+                'wp_post_id' => $context['wp_post_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Đẩy tiêu đề, slug, trạng thái, nội dung và FAQ lên WordPress (nút «Đồng bộ»).
      *
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
@@ -22,13 +98,17 @@ final class WordPressArticleSyncService
      */
     public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
     {
-        $wpPostId = (int) ($article->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
+        $context = $this->resolveEditorSyncContext($article);
+        if (! ($context['success'] ?? false)) {
             return [
                 'success' => false,
-                'message' => 'Bài chưa liên kết WordPress (thiếu wp_post_id). Chạy đồng bộ domain trước.',
+                'message' => (string) ($context['message'] ?? 'Không thể đồng bộ lên WordPress.'),
             ];
         }
+
+        $writeToken = (string) $context['write_token'];
+        $url = (string) $context['url'];
+        $wpPostId = (int) ($context['wp_post_id'] ?? 0);
 
         $article->loadMissing('site');
         $site = $article->site;
@@ -39,28 +119,11 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $site->loadMissing('metas');
-        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
-        if ($writeToken === '') {
-            return [
-                'success' => false,
-                'message' => 'Thiếu Migration/Write token trên domain.',
-            ];
-        }
-
-        $url = app(WordPressArticleContentService::class)->buildEditorSyncUrl($site, $article);
-        if ($url === '') {
-            return [
-                'success' => false,
-                'message' => 'Không xác định được URL WordPress.',
-            ];
-        }
-
         $postContent = trim((string) ($article->body ?? ''));
         $localMediaSyncErrors = [];
         $syncedLocalMediaIds = [];
         if ($postContent !== '') {
-            $postContent = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($postContent);
+            $postContent = app(ArticleEditorHtmlSanitizeService::class)->prepareHtmlForWordPressSync($postContent);
             $postContent = app(ArticleCtaPlaceholderService::class)->replaceInHtml($postContent, $site);
             $postContent = app(WorkflowParserService::class)->removeFaqAndAppendShortcodeFromContent($postContent);
             $postContent = app(ArticlePostContentFaqPlaceholder::class)->normalizeForWordPress($postContent);
@@ -89,6 +152,7 @@ final class WordPressArticleSyncService
         }
 
         $faqs = $article->resolveFaqs();
+        $faqs = $this->sanitizeFaqsForWordPress($faqs);
         $faqs = app(ArticleCtaPlaceholderService::class)->replaceInFaqs($faqs, $site);
         $faqExtractDebug = null;
 
@@ -230,6 +294,53 @@ final class WordPressArticleSyncService
         }
     }
 
+    /**
+     * @return array{success: bool, message?: string, url?: string, write_token?: string, wp_post_id?: int}
+     */
+    private function resolveEditorSyncContext(SeoArticle $article): array
+    {
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Bài chưa liên kết WordPress (thiếu wp_post_id). Chạy đồng bộ domain trước.',
+            ];
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return [
+                'success' => false,
+                'message' => 'Không tìm thấy tên miền của bài viết.',
+            ];
+        }
+
+        $site->loadMissing('metas');
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return [
+                'success' => false,
+                'message' => 'Thiếu Migration/Write token trên domain.',
+            ];
+        }
+
+        $url = app(WordPressArticleContentService::class)->buildEditorSyncUrl($site, $article);
+        if ($url === '') {
+            return [
+                'success' => false,
+                'message' => 'Không xác định được URL WordPress.',
+            ];
+        }
+
+        return [
+            'success' => true,
+            'url' => $url,
+            'write_token' => $writeToken,
+            'wp_post_id' => $wpPostId,
+        ];
+    }
+
     private function mapStatusForWordPress(string $status): string
     {
         return match ($status) {
@@ -291,6 +402,23 @@ final class WordPressArticleSyncService
             'meta_description' => $metaDescription,
             'focus_keyword' => $focusKeyword,
         ];
+    }
+
+    /**
+     * @param  list<array{question: string, answer: string, more?: string|null}>  $faqs
+     * @return list<array{question: string, answer: string, more?: string|null}>
+     */
+    private function sanitizeFaqsForWordPress(array $faqs): array
+    {
+        $sanitizer = app(ArticleEditorHtmlSanitizeService::class);
+
+        return array_map(static function (array $faq) use ($sanitizer): array {
+            if (isset($faq['answer']) && is_string($faq['answer'])) {
+                $faq['answer'] = $sanitizer->prepareHtmlForWordPressSync($faq['answer']);
+            }
+
+            return $faq;
+        }, $faqs);
     }
 
 }

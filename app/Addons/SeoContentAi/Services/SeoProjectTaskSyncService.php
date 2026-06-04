@@ -24,12 +24,12 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null}>  $tasksData
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null, post_type?: string|null}>  $tasksData
      */
     public function assertWithinMonthlyLimit(Carbon|string $month, array $tasksData): void
     {
         $carbonMonth = $this->normalizeMonth($month);
-        $count = count($this->sanitizeTasksData($tasksData));
+        $count = count($this->sanitizeTasksData($tasksData, null));
         $max = $carbonMonth->daysInMonth;
 
         if ($count > $max) {
@@ -43,11 +43,11 @@ final class SeoProjectTaskSyncService
     /**
      * Đồng bộ danh sách task: xóa cũ, tạo mới, gán target_date tuần tự (ngày 1..n trong tháng).
      *
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null}>  $tasksData
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null, post_type?: string|null}>  $tasksData
      */
     public function sync(SeoProject $project, array $tasksData): void
     {
-        $sanitized = $this->sanitizeTasksData($tasksData);
+        $sanitized = $this->sanitizeTasksData($tasksData, $project->site_id !== null ? (int) $project->site_id : null);
         $carbonMonth = $project->monthCarbon();
 
         $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
@@ -59,6 +59,7 @@ final class SeoProjectTaskSyncService
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
                     'type' => $task['type'],
+                    'post_type' => $task['post_type'] ?? null,
                     'source_content' => $task['source_content'],
                     'description' => $task['description'] ?? null,
                     'target_date' => $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
@@ -76,7 +77,7 @@ final class SeoProjectTaskSyncService
      * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string|null, description?: string|null}>  $tasksData
      * @return list<array{type: string, site_id: int, source_content: string, description: ?string}>
      */
-    public function sanitizeTasksData(array $tasksData): array
+    public function sanitizeTasksData(array $tasksData, ?int $defaultSiteId = null): array
     {
         $out = [];
         $allowedSiteIds = $this->allowedSiteIds();
@@ -92,9 +93,14 @@ final class SeoProjectTaskSyncService
             }
 
             $siteId = (int) ($row['site_id'] ?? 0);
+            if ($siteId <= 0) {
+                $siteId = (int) ($defaultSiteId ?? 0);
+            }
+
             if ($siteId <= 0 || ! in_array($siteId, $allowedSiteIds, true)) {
                 throw ValidationException::withMessages([
-                    'tasks_data' => 'Mỗi hạng mục bài viết phải chọn tên miền hợp lệ.',
+                    'site_id' => __('seo-content-ai::filament.projects.domain_required'),
+                    'tasks_data' => __('seo-content-ai::filament.projects.domain_required'),
                 ]);
             }
 
@@ -108,11 +114,13 @@ final class SeoProjectTaskSyncService
                 'type' => $type,
                 'source_content' => $content,
                 'description' => null,
+                'post_type' => null,
             ];
 
             if ($type === SeoProjectTask::TYPE_NEW_KEYWORD) {
                 $description = trim((string) ($row['description'] ?? ''));
                 $item['description'] = $description !== '' ? $description : null;
+                $item['post_type'] = SeoProjectTask::normalizePostType($row['post_type'] ?? null);
             }
 
             $out[] = $item;
@@ -122,7 +130,7 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @return list<array{type: string, site_id: int, source_content: string, description: ?string}>
+     * @return list<array{type: string, site_id: int, source_content: string, description: ?string, post_type: ?string}>
      */
     public function tasksDataFromProject(SeoProject $project): array
     {
@@ -135,6 +143,9 @@ final class SeoProjectTaskSyncService
                 'type' => $task->type,
                 'source_content' => $task->source_content,
                 'description' => $task->description,
+                'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                    ? SeoProjectTask::normalizePostType($task->post_type)
+                    : null,
             ])
             ->all();
     }

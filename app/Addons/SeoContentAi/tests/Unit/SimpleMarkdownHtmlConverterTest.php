@@ -81,6 +81,29 @@ MD);
         $this->assertStringContainsString('<i>Trả lời bởi Mr. Nam:</i>', $html);
     }
 
+    public function test_hash_star_only_line_is_not_h1(): void
+    {
+        $markdown = <<<'MD'
+# *
+
+# Tiêu đề thật
+
+Đoạn nội dung.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Tiêu đề thật', $prepared['h1_title']);
+        $this->assertStringContainsString('# *', $prepared['markdown']);
+    }
+
+    public function test_hash_star_prefix_strips_for_h1(): void
+    {
+        $prepared = $this->converter()->prepareImport("# * Tiêu đề có dấu sao\n\nNội dung.");
+
+        $this->assertSame('Tiêu đề có dấu sao', $prepared['h1_title']);
+    }
+
     public function test_converts_markdown_table_and_horizontal_rule(): void
     {
         $html = $this->converter()->toHtml(<<<'MD'

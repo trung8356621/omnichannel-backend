@@ -101,15 +101,17 @@ final class ArticlePostImagesService
 
         $mapped = [];
         foreach ($rows as $index => $row) {
-            $url = $this->resolvePickerDisplayUrl($row);
-            if ($url === '') {
+            $fullUrl = $this->resolvePickerFullUrl($row);
+            if ($fullUrl === '') {
                 continue;
             }
+
+            $thumbUrl = $this->resolvePickerThumbUrl($row, $fullUrl);
 
             $wpId = (int) ($row['wp_attachment_id'] ?? 0);
             $seoMediaId = $wpId > 0 ? (int) ($seoMediaByWpId[$wpId] ?? 0) : 0;
             if ($seoMediaId <= 0) {
-                $seoMediaId = $this->resolveSeoMediaIdFromSrc($article, $url, $seoMediaByWpId);
+                $seoMediaId = $this->resolveSeoMediaIdFromSrc($article, $fullUrl, $seoMediaByWpId);
             }
 
             $slug = trim((string) ($row['slug'] ?? ''));
@@ -120,7 +122,8 @@ final class ArticlePostImagesService
                 'seo_media_id' => $seoMediaId > 0 ? $seoMediaId : null,
                 'wp_attachment_id' => $wpId > 0 ? $wpId : null,
                 'slug' => $slug,
-                'url' => $url,
+                'url' => $fullUrl,
+                'thumb_url' => $thumbUrl,
                 'alt' => $alt !== '' ? $alt : $slug,
                 'sort_at' => $index,
             ];
@@ -531,7 +534,7 @@ final class ArticlePostImagesService
     /**
      * @param  array<string, mixed>  $row
      */
-    private function resolvePickerDisplayUrl(array $row): string
+    private function resolvePickerFullUrl(array $row): string
     {
         $local = trim((string) ($row['local_src'] ?? ''));
         if ($local !== '') {
@@ -546,6 +549,32 @@ final class ArticlePostImagesService
         $src = WordPressImageUrl::toFullSize(trim((string) ($row['src'] ?? '')));
 
         return $src !== '' && ! WordPressImageUrl::isLocalSeoMediaSrc($src) ? $src : ($local !== '' ? $local : $src);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     */
+    private function resolvePickerThumbUrl(array $row, string $fullUrl): string
+    {
+        $local = trim((string) ($row['local_src'] ?? ''));
+        if ($local !== '') {
+            return $local;
+        }
+
+        foreach ([
+            trim((string) ($row['wp_url'] ?? '')),
+            trim((string) ($row['src'] ?? '')),
+        ] as $candidate) {
+            if ($candidate === '' || WordPressImageUrl::isLocalSeoMediaSrc($candidate)) {
+                continue;
+            }
+
+            if (WordPressImageUrl::isScaledVariant($candidate)) {
+                return $candidate;
+            }
+        }
+
+        return WordPressImageUrl::toPreviewSize($fullUrl);
     }
 
     /**
@@ -653,7 +682,7 @@ final class ArticlePostImagesService
                 continue;
             }
 
-            $url = $this->resolvePickerDisplayUrl($row);
+            $url = $this->resolvePickerFullUrl($row);
             if ($url !== '') {
                 $this->resolveSeoMediaIdFromSrc($article, $url, $byWpId);
             }

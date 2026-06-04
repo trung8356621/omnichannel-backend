@@ -14,7 +14,7 @@ final class DomainCtaEditorService
     ) {}
 
     /**
-     * @return list<array{type: string, value: string, label: string, href: string, can_insert: bool}>
+     * @return list<array{type: string, value: string, label: string, href: string, can_insert: bool, is_blank?: bool}>
      */
     public function forSite(Site|int|null $site): array
     {
@@ -30,9 +30,23 @@ final class DomainCtaEditorService
         $items = [];
 
         foreach ($this->promptContext->getForSite($site)['cta'] ?? [] as $row) {
-            $type = trim((string) ($row['type'] ?? ''));
+            $type = mb_strtolower(trim((string) ($row['type'] ?? '')));
             $value = trim((string) ($row['value'] ?? ''));
-            if ($type === '' || $value === '') {
+            if ($type === '') {
+                continue;
+            }
+
+            if ($value === '') {
+                $items[] = [
+                    'type' => $type,
+                    'value' => '',
+                    'label' => "[{$type}]",
+                    'href' => '',
+                    'plain_text' => true,
+                    'can_insert' => true,
+                    'is_blank' => true,
+                ];
+
                 continue;
             }
 
@@ -46,6 +60,7 @@ final class DomainCtaEditorService
                 'href' => $href,
                 'plain_text' => $plainText,
                 'can_insert' => true,
+                'is_blank' => false,
             ];
         }
 

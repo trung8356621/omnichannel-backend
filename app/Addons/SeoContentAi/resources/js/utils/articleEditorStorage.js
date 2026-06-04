@@ -1,3 +1,6 @@
+import { cleanBlockHtmlForEditorDisplay, stripEmptyParagraphsFromHtml } from './editorHtmlUtils';
+import { pruneEmptyTextBlocks } from './blockImageUtils';
+
 const draftKey = (articleId) => `seo_article_draft_${articleId}`;
 const historyKey = (articleId) => `seo_article_history_${articleId}`;
 const outlineKey = (articleId) => `seo_article_outline_${articleId}`;
@@ -88,13 +91,65 @@ function setItemWithPrune(key, value, label, fallbackValue = null) {
     return false;
 }
 
+function sanitizeEditorBlock(block) {
+    if (!block || typeof block !== 'object') {
+        return block;
+    }
+
+    if (block.type === 'image' || block.isWp || typeof block.content !== 'string') {
+        return block;
+    }
+
+    return {
+        ...block,
+        content: cleanBlockHtmlForEditorDisplay(block.content),
+    };
+}
+
+export function sanitizeBlocksForEditor(blocks) {
+    if (!Array.isArray(blocks)) {
+        return blocks;
+    }
+
+    return pruneEmptyTextBlocks(blocks.map(sanitizeEditorBlock));
+}
+
+function sanitizeDraftPayload(data) {
+    if (!data || typeof data !== 'object') {
+        return data;
+    }
+
+    const out = { ...data };
+
+    if (Array.isArray(out.blocks)) {
+        out.blocks = sanitizeBlocksForEditor(out.blocks);
+    }
+
+    if (typeof out.html === 'string' && out.html.trim()) {
+        out.html = stripEmptyParagraphsFromHtml(out.html);
+    }
+
+    return out;
+}
+
+function sanitizeHistorySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object' || !Array.isArray(snapshot.blocks)) {
+        return snapshot;
+    }
+
+    return {
+        ...snapshot,
+        blocks: sanitizeBlocksForEditor(snapshot.blocks),
+    };
+}
+
 export function loadDraft(articleId) {
     if (!articleId) return null;
     try {
         const raw = localStorage.getItem(draftKey(articleId));
         if (!raw) return null;
         const data = JSON.parse(raw);
-        return data && typeof data === 'object' ? data : null;
+        return data && typeof data === 'object' ? sanitizeDraftPayload(data) : null;
     } catch {
         return null;
     }
@@ -103,12 +158,13 @@ export function loadDraft(articleId) {
 export function saveDraft(articleId, payload) {
     if (!articleId) return;
     const updatedAt = Date.now();
+    const cleaned = sanitizeDraftPayload(payload ?? {});
     const fullPayload = {
-        ...payload,
+        ...cleaned,
         updatedAt,
     };
     const fallbackPayload = {
-        html: typeof payload?.html === 'string' ? payload.html : '',
+        html: typeof cleaned?.html === 'string' ? cleaned.html : '',
         updatedAt,
     };
 
@@ -130,10 +186,10 @@ export function loadHistory(articleId) {
         const raw = localStorage.getItem(historyKey(articleId));
         if (!raw) return { past: [], future: [] };
         const data = JSON.parse(raw);
-        return {
-            past: Array.isArray(data?.past) ? data.past : [],
-            future: Array.isArray(data?.future) ? data.future : [],
-        };
+        const past = Array.isArray(data?.past) ? data.past.map(sanitizeHistorySnapshot) : [];
+        const future = Array.isArray(data?.future) ? data.future.map(sanitizeHistorySnapshot) : [];
+
+        return { past, future };
     } catch {
         return { past: [], future: [] };
     }

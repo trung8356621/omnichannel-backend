@@ -141,7 +141,7 @@ final class SeoOverviewSettingsService
                 continue;
             }
 
-            $lower = mb_strtolower($label);
+            $lower = mb_strtolower($label, 'UTF-8');
             if (in_array($lower, $keywords, true)) {
                 continue;
             }

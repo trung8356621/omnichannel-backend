@@ -30,12 +30,29 @@ class SeoArticle extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'blocks'       => 'array',
-        'seo_score'    => 'decimal:2',
-        'is_reviewed'  => 'boolean',
-        'reviewed_at'  => 'datetime',
-        'published_at' => 'datetime',
+        'blocks'          => 'array',
+        'seo_score'       => 'decimal:2',
+        'skip_seo_score'  => 'boolean',
+        'is_reviewed'     => 'boolean',
+        'reviewed_at'     => 'datetime',
+        'published_at'    => 'datetime',
     ];
+
+    public function countsTowardSeoScore(): bool
+    {
+        return ! (bool) ($this->skip_seo_score ?? false);
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Builder<static>  $query
+     * @return \Illuminate\Database\Eloquent\Builder<static>
+     */
+    public function scopeCountsTowardSeoScore($query)
+    {
+        return $query->where(function ($sub): void {
+            $sub->where('skip_seo_score', false)->orWhereNull('skip_seo_score');
+        });
+    }
 
     public function user(): BelongsTo
     {

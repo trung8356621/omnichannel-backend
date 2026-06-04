@@ -45,10 +45,15 @@ final class ArticleEditorSeoPayloadService
             $analysis['content_bonus'] = $contentBonus;
         }
 
+        $skipSeoScore = ! $article->countsTowardSeoScore();
+
         return [
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
             'article_type' => (string) ($article->type ?? 'post'),
-            'score' => $article->seo_score !== null ? (int) round((float) $article->seo_score) : null,
+            'skip_seo_score' => $skipSeoScore,
+            'score' => $skipSeoScore || $article->seo_score === null
+                ? null
+                : (int) round((float) $article->seo_score),
             'analysis' => is_array($analysis) ? $analysis : null,
             'content_bonus' => $contentBonus,
             'extracted_links' => $extractedLinks,

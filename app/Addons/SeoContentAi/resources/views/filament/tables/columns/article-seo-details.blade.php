@@ -10,7 +10,11 @@
     <div class="article-seo-cell__box">
         
 
-        @if ($seo['score'] !== null)
+        @if (! empty($seo['score_skipped']))
+            <span class="article-seo-score article-seo-score--skipped" title="{{ __('seo-content-ai::filament.article_list.seo_score_skipped_label') }}">
+                {{ __('seo-content-ai::filament.article_list.seo_score_skipped_label') }}
+            </span>
+        @elseif ($seo['score'] !== null)
             <span class="article-seo-score article-seo-score--{{ $seo['score_tone'] }}">
                 {{ $seo['score'] }} / 100
             </span>
@@ -159,6 +163,12 @@
             color: rgb(107 114 128);
         }
 
+        .article-seo-score--skipped {
+            background: rgb(254 243 199);
+            color: rgb(146 64 14);
+            border: 1px dashed rgb(245 158 11);
+        }
+
         .dark .article-seo-score--success {
             background: rgba(22, 163, 74, 0.2);
             color: rgb(134 239 172);
@@ -177,6 +187,12 @@
         .dark .article-seo-score--muted {
             background: rgb(31 41 55);
             color: rgb(156 163 175);
+        }
+
+        .dark .article-seo-score--skipped {
+            background: rgba(245, 158, 11, 0.15);
+            color: rgb(252 211 77);
+            border-color: rgb(180 83 9);
         }
 
         .article-seo-line {

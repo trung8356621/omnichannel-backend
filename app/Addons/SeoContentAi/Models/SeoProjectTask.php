@@ -16,6 +16,14 @@ class SeoProjectTask extends Model
 
     public const TYPE_NEW_KEYWORD = 'new_keyword';
 
+    public const POST_TYPE_ARTICLE = 'article';
+
+    public const POST_TYPE_PRODUCT = 'product';
+
+    public const POST_TYPE_CATEGORY = 'category';
+
+    public const POST_TYPE_PRODUCT_CATEGORY = 'product_category';
+
     public const STATUS_PENDING = 'pending';
 
     public const STATUS_WRITING = 'writing';
@@ -56,6 +64,28 @@ class SeoProjectTask extends Model
             self::TYPE_NEW_KEYWORD => 'Viết mới (Từ khóa)',
             self::TYPE_REWRITE => 'Viết lại (Sửa bài lỗi)',
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function postTypeKeys(): array
+    {
+        return [
+            self::POST_TYPE_ARTICLE,
+            self::POST_TYPE_PRODUCT,
+            self::POST_TYPE_CATEGORY,
+            self::POST_TYPE_PRODUCT_CATEGORY,
+        ];
+    }
+
+    public static function normalizePostType(mixed $value): string
+    {
+        $normalized = trim((string) $value);
+
+        return in_array($normalized, self::postTypeKeys(), true)
+            ? $normalized
+            : self::POST_TYPE_ARTICLE;
     }
 
     /**

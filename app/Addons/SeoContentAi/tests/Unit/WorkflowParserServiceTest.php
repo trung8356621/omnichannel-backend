@@ -427,6 +427,45 @@ HTML;
         $this->assertStringNotContainsString('Anh Hoàng trả lời', $faqs[0]['answer']);
     }
 
+    public function test_faq_catch_keywords_are_case_insensitive(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['FAQ', 'Hỏi Đáp']),
+        );
+
+        $markdown = <<<'MD'
+## CHUYÊN GIA TƯ VẤN — HỎI ĐÁP THỰC TẾ
+
+**Câu hỏi 1: Giá bao nhiêu?**
+Trả lời về giá.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(1, $faqs);
+        $this->assertStringContainsString('Giá bao nhiêu', $faqs[0]['question']);
+    }
+
+    public function test_parse_faqs_does_not_treat_numbered_outline_bullets_as_faq(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+## Giới thiệu
+
+* **1. Khả năng tùy biến linh hoạt theo thương hiệu**
+Tự do lựa chọn kiểu dáng túi tote.
+
+* **2. Chất liệu bền bỉ và tính ứng dụng cao**
+Chống thấm, chịu lực tốt.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertSame([], $faqs);
+    }
+
     public function test_parse_faqs_matches_settings_keywords_with_number_and_emoji_heading(): void
     {
         $parser = new WorkflowParserService(

@@ -15,6 +15,7 @@ final class ArticleListSeoSummary
     /**
      * @return array{
      *     score: ?int,
+     *     score_skipped: bool,
      *     score_tone: string,
      *     keyword: ?string,
      *     schema: string,
@@ -37,7 +38,9 @@ final class ArticleListSeoSummary
         $internal = $article->internal_link_count;
         $external = $article->external_link_count;
 
-        $score = $article->seo_score !== null && $article->seo_score !== ''
+        $skipped = ! $article->countsTowardSeoScore();
+
+        $score = ! $skipped && $article->seo_score !== null && $article->seo_score !== ''
             ? (int) round((float) $article->seo_score)
             : null;
 
@@ -45,7 +48,8 @@ final class ArticleListSeoSummary
 
         return [
             'score' => $score,
-            'score_tone' => self::scoreTone($score),
+            'score_skipped' => $skipped,
+            'score_tone' => $skipped ? 'skipped' : self::scoreTone($score),
             'keyword' => $keyword,
             'schema' => self::schemaLabel($article),
             'links_total' => $internal + $external,

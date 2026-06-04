@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
+use App\Addons\SeoContentAi\Services\ArticleFaqGeneratorService;
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Services\ArticleFaqExtractDebugService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
@@ -26,6 +27,7 @@ use App\Addons\SeoContentAi\Services\VirtualCommentService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use Illuminate\Support\Facades\Cache;
 use App\Addons\SeoContentAi\Services\ArticleContentFaqService;
+use App\Addons\SeoContentAi\Services\ArticleCtaPlaceholderService;
 use App\Addons\SeoContentAi\Services\ArticleMarkdownToHtmlService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
@@ -117,6 +119,9 @@ class EditArticle extends EditRecord
 
     public bool $mediaPickerLoading = false;
 
+    /** @var list<array<string, mixed>>|null */
+    public ?array $mediaPickerArticleCatalog = null;
+
     /** @var 'original'|'local'|'article' */
     public string $mediaPickerTab = 'original';
 
@@ -134,6 +139,7 @@ class EditArticle extends EditRecord
     public function mount(int|string $record): void
     {
         parent::mount($record);
+        ArticleResource::syncGlobalSiteForArticle($this->record);
         $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
         $this->importFaqsFromWordPressOnLoad();
@@ -146,6 +152,59 @@ class EditArticle extends EditRecord
         if ($this->articleSlug !== $normalized) {
             $this->articleSlug = $normalized;
         }
+    }
+
+    public function confirmArticleSlug(): void
+    {
+        $slug = Str::slug($this->articleSlug);
+        if ($slug === '') {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.media_library.invalid_slug'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $previousSlug = trim((string) ($this->record->slug ?? ''));
+        $this->articleSlug = $slug;
+        $this->editingSlug = false;
+
+        if ($slug === $previousSlug) {
+            return;
+        }
+
+        $this->record->update(['slug' => $slug]);
+        $this->record->refresh();
+
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.slug_saved_local'))
+                ->body(__('seo-content-ai::filament.article_edit.slug_saved_local_no_wp'))
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        $result = app(WordPressArticleSyncService::class)->syncSlugForArticle($this->record->fresh(), $slug);
+        if ($result['success']) {
+            $this->refreshArticleSlugFromWordPressAfterSync();
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.slug_synced'))
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_edit.slug_sync_failed'))
+            ->body((string) ($result['message'] ?? ''))
+            ->warning()
+            ->send();
     }
 
     public function updatedFocusKeyword(): void
@@ -245,10 +304,15 @@ class EditArticle extends EditRecord
                 ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->icon('heroicon-o-folder-plus')
                 ->color('warning')
+                ->visible(fn (): bool => ! ArticleResource::articleIsInContentProject($this->record))
                 ->form([
                     Forms\Components\Select::make('project_id')
                         ->label(__('seo-content-ai::filament.article_list.content_project'))
-                        ->options(fn (): array => ArticleResource::contentProjectOptions())
+                        ->options(
+                            fn (): array => ArticleResource::contentProjectOptions(
+                                ArticleResource::resolveArticleSiteId($this->record),
+                            ),
+                        )
                         ->required()
                         ->searchable()
                         ->preload()
@@ -270,17 +334,15 @@ class EditArticle extends EditRecord
                         ->success()
                         ->send();
                 }),
-            Actions\Action::make('restoreFromWordPress')
-                ->label('Restore from WordPress')
-                ->icon('heroicon-o-arrow-path')
-                ->color('gray')
-                ->iconButton()
-                ->tooltip('Fetch original content from WordPress')
+            Actions\Action::make('fetchFromWordPress')
+                ->label(__('seo-content-ai::filament.article_list.fetch_from_wordpress'))
+                ->icon('heroicon-o-arrow-down-tray')
+                ->color('info')
                 ->visible(fn (): bool => (int) ($this->record->wp_post_id ?? 0) > 0)
                 ->requiresConfirmation()
-                ->modalHeading('Restore original WordPress article')
-                ->modalDescription('Replace editor content and clear FAQ panel with original WordPress content. Unsaved or unsynced SEO edits will be overwritten.')
-                ->modalSubmitActionLabel('Restore')
+                ->modalHeading(__('seo-content-ai::filament.article_list.fetch_from_wordpress_heading'))
+                ->modalDescription(__('seo-content-ai::filament.article_list.fetch_from_wordpress_description'))
+                ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.fetch_from_wordpress_submit'))
                 ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
             Actions\Action::make('debugImportMarkdown')
                 ->label('Debug import Markdown')
@@ -312,8 +374,8 @@ class EditArticle extends EditRecord
 
         if (! ($restore['restored'] ?? false) || ! filled($restore['editor_html'] ?? null)) {
             Notification::make()
-                ->title('Restore failed')
-                ->body((string) ($restore['message'] ?? 'Could not fetch content from WordPress.'))
+                ->title(__('seo-content-ai::filament.article_list.fetch_from_wordpress_failed'))
+                ->body((string) ($restore['message'] ?? __('seo-content-ai::filament.article_list.fetch_from_wordpress_failed_body')))
                 ->warning()
                 ->send();
 
@@ -343,8 +405,8 @@ class EditArticle extends EditRecord
         app(SeoAnalyzerService::class)->analyze($this->record->fresh());
 
         Notification::make()
-            ->title('Restored from WordPress')
-            ->body((string) ($restore['message'] ?? 'Editor content has been replaced with original WordPress version.'))
+            ->title(__('seo-content-ai::filament.article_list.fetch_from_wordpress_success'))
+            ->body((string) ($restore['message'] ?? __('seo-content-ai::filament.article_list.fetch_from_wordpress_success_body')))
             ->success()
             ->send();
     }
@@ -370,7 +432,10 @@ class EditArticle extends EditRecord
         if ($this->supportsProductGallery()) {
             $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
         }
-        $this->editorHtml = $service->resolveEditorHtml($this->record);
+        $this->editorHtml = app(ArticleCtaPlaceholderService::class)->highlightBlankPlaceholdersInHtml(
+            $service->resolveEditorHtml($this->record),
+            (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
+        );
         $this->hydrateSeoMetaState();
         $this->syncPublishDatePartsFromRecord();
     }
@@ -400,10 +465,15 @@ class EditArticle extends EditRecord
         return $this->isProduct() && ! $this->isTaxonomyArticle();
     }
 
-    #[On('open-editor-block-media-picker')]
-    public function openEditorBlockMediaPicker(string $blockId): void
+    public function armEditorBlockMediaPicker(string $blockId): void
     {
-        $this->prepareMediaPicker('editor-block', $blockId);
+        $blockId = trim($blockId);
+        if ($blockId === '') {
+            return;
+        }
+
+        $this->mediaPickerTargetBlockId = $blockId;
+        $this->mediaPickerMode = 'editor-block';
     }
 
     #[On('append-editor-image-to-product-gallery')]
@@ -532,7 +602,6 @@ class EditArticle extends EditRecord
                     ->warning()
                     ->send();
 
-                $this->mediaPickerOpen = false;
                 $this->dispatch('close-article-media-modal');
 
                 return;
@@ -540,6 +609,13 @@ class EditArticle extends EditRecord
 
             $this->mediaPickerTargetBlockId = $blockId;
             $this->mediaPickerMode = 'editor-block';
+            $this->mediaPickerTab = 'article';
+            $this->mediaPickerPage = 1;
+            $this->mediaPickerError = null;
+            $this->mediaPickerSearch = '';
+            $this->dispatch('open-article-media-modal');
+
+            return;
         } else {
             $this->mediaPickerTargetBlockId = null;
             $this->mediaPickerMode = $mode === 'gallery' ? 'gallery' : 'featured';
@@ -549,6 +625,8 @@ class EditArticle extends EditRecord
         $this->mediaPickerPage = 1;
         $this->mediaPickerError = null;
         $this->mediaPickerImages = [];
+        $this->mediaPickerArticleCatalog = null;
+        $this->mediaPickerSearch = '';
         $this->mediaPickerLoading = true;
         $this->mediaPickerOpen = true;
         $this->dispatch('open-article-media-modal');
@@ -567,21 +645,31 @@ class EditArticle extends EditRecord
 
         $this->mediaPickerTab = $tab;
         $this->mediaPickerPage = 1;
+        $this->mediaPickerSearch = '';
+
+        if ($tab === 'article') {
+            return;
+        }
+
+        $this->mediaPickerArticleCatalog = null;
+        $this->dispatch('article-media-picker-loading');
         $this->loadMediaPickerImages();
     }
 
     public function closeMediaPicker(): void
     {
-        $this->mediaPickerOpen = false;
-        $this->mediaPickerError = null;
-        $this->mediaPickerImages = [];
-        $this->mediaPickerLoading = false;
         $this->mediaPickerTargetBlockId = null;
     }
 
-    public function updatedMediaPickerSearch(): void
+    public function searchMediaPicker(string $query): void
     {
+        if ($this->mediaPickerTab === 'article') {
+            return;
+        }
+
+        $this->mediaPickerSearch = trim($query);
         $this->mediaPickerPage = 1;
+        $this->dispatch('article-media-picker-loading');
         $this->loadMediaPickerImages();
     }
 
@@ -591,8 +679,7 @@ class EditArticle extends EditRecord
             return;
         }
 
-        $this->mediaPickerPage--;
-        $this->loadMediaPickerImages();
+        $this->goToMediaPickerPage($this->mediaPickerPage - 1);
     }
 
     public function mediaPickerNextPage(): void
@@ -601,13 +688,13 @@ class EditArticle extends EditRecord
             return;
         }
 
-        $this->mediaPickerPage++;
-        $this->loadMediaPickerImages();
+        $this->goToMediaPickerPage($this->mediaPickerPage + 1);
     }
 
     public function loadMediaPickerImages(): void
     {
         $this->mediaPickerLoading = true;
+        $this->dispatch('article-media-picker-loading');
         $this->mediaPickerError = null;
 
         $this->record->loadMissing('site');
@@ -628,7 +715,7 @@ class EditArticle extends EditRecord
                 $this->record,
                 1,
                 null,
-                200,
+                96,
             );
             $postImages = is_array($postImagesResult['images'] ?? null) ? $postImagesResult['images'] : [];
             $supplementalImages = $this->getEditorSupplementalImagesPayload();
@@ -656,6 +743,7 @@ class EditArticle extends EditRecord
                     'wp_attachment_id' => $wpId > 0 ? $wpId : null,
                     'seo_media_id' => $seoId > 0 ? $seoId : null,
                     'url' => $src,
+                    'thumb_url' => trim((string) ($row['thumb_url'] ?? $src)),
                     'media_type' => (string) ($row['media_type'] ?? 'image'),
                     'alt' => trim((string) ($row['alt'] ?? '')),
                     'slug' => trim((string) ($row['slug'] ?? '')),
@@ -669,32 +757,15 @@ class EditArticle extends EditRecord
                 $append($row);
             }
 
-            if ($search !== '') {
-                $needle = mb_strtolower($search);
-                $merged = array_values(array_filter($merged, static function (array $row) use ($needle): bool {
-                    $haystack = mb_strtolower(implode(' ', array_filter([
-                        (string) ($row['slug'] ?? ''),
-                        (string) ($row['alt'] ?? ''),
-                        (string) ($row['url'] ?? ''),
-                    ])));
-
-                    return str_contains($haystack, $needle);
-                }));
-            }
-
-            $perPage = 48;
-            $total = count($merged);
-            $totalPages = max(1, (int) ceil($total / $perPage));
-            $page = min(max(1, $this->mediaPickerPage), $totalPages);
-            $offset = ($page - 1) * $perPage;
+            $this->mediaPickerArticleCatalog = $merged;
+            $this->applyArticleCatalogPickerPage();
 
             $result = [
-                'images' => array_slice($merged, $offset, $perPage),
-                'total_pages' => $totalPages,
-                'page' => $page,
+                'images' => $this->mediaPickerImages,
+                'total_pages' => $this->mediaPickerTotalPages,
+                'page' => $this->mediaPickerPage,
                 'error' => null,
             ];
-            $this->mediaPickerImages = $result['images'];
         } else {
             if ($this->mediaPickerTab === 'local') {
                 $library->assignRecentOrphanMediaToArticle($site, $articleId);
@@ -706,14 +777,14 @@ class EditArticle extends EditRecord
                     null,
                     $this->mediaPickerPage,
                     $search !== '' ? $search : null,
-                    48,
+                    24,
                     $articleId,
                 )
                 : app(WordPressMediaLibraryService::class)->fetch(
                     $site,
                     null,
                     $this->mediaPickerPage,
-                    48,
+                    24,
                     $search !== '' ? $search : null,
                 );
 
@@ -726,6 +797,101 @@ class EditArticle extends EditRecord
         $this->mediaPickerPage = max(1, (int) ($result['page'] ?? $this->mediaPickerPage));
         $this->mediaPickerError = filled($result['error'] ?? null) ? (string) $result['error'] : null;
         $this->mediaPickerLoading = false;
+        $this->broadcastMediaPickerToClient();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeMediaPickerImagesForClient(array $images): array
+    {
+        $tab = (string) $this->mediaPickerTab;
+
+        return array_values(array_map(function (array $image) use ($tab): array {
+            $wpId = (int) ($image['wp_attachment_id'] ?? ($tab === 'original' ? ($image['id'] ?? 0) : 0));
+            $seoId = (int) ($image['seo_media_id'] ?? ($tab === 'local' ? ($image['id'] ?? 0) : 0));
+            $url = trim((string) ($image['url'] ?? ''));
+            $thumbUrl = trim((string) ($image['thumb_url'] ?? $url));
+            $pickerKey = $tab . '-' . ($seoId > 0 ? 'seo-' . $seoId : 'wp-' . $wpId) . '-' . md5($url);
+
+            return [
+                'picker_key' => $pickerKey,
+                'id' => (int) ($image['id'] ?? ($wpId > 0 ? $wpId : ($seoId > 0 ? $seoId : 0))),
+                'wp_attachment_id' => $wpId,
+                'seo_media_id' => $seoId,
+                'url' => $url,
+                'thumb_url' => $thumbUrl !== '' ? $thumbUrl : $url,
+                'slug' => trim((string) ($image['slug'] ?? '')),
+                'alt' => trim((string) ($image['alt'] ?? '')),
+                'media_type' => strtolower(trim((string) ($image['media_type'] ?? 'image'))) === 'video' ? 'video' : 'image',
+            ];
+        }, $images));
+    }
+
+    private function broadcastMediaPickerToClient(): void
+    {
+        $catalog = $this->mediaPickerTab === 'article' && $this->mediaPickerArticleCatalog !== null
+            ? $this->normalizeMediaPickerImagesForClient($this->mediaPickerArticleCatalog)
+            : null;
+
+        $this->dispatch(
+            'article-media-picker-loaded',
+            images: $this->normalizeMediaPickerImagesForClient($this->mediaPickerImages),
+            catalog: $catalog,
+            page: $this->mediaPickerPage,
+            totalPages: $this->mediaPickerTotalPages,
+            error: $this->mediaPickerError,
+            tab: $this->mediaPickerTab,
+        );
+    }
+
+    private function applyArticleCatalogPickerPage(): void
+    {
+        $catalog = $this->mediaPickerArticleCatalog ?? [];
+        $search = trim($this->mediaPickerSearch);
+
+        if ($search !== '') {
+            $needle = mb_strtolower($search);
+            $catalog = array_values(array_filter($catalog, static function (array $row) use ($needle): bool {
+                $haystack = mb_strtolower(implode(' ', array_filter([
+                    (string) ($row['slug'] ?? ''),
+                    (string) ($row['alt'] ?? ''),
+                    (string) ($row['url'] ?? ''),
+                ])));
+
+                return str_contains($haystack, $needle);
+            }));
+        }
+
+        $perPage = 24;
+        $total = count($catalog);
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        $page = min(max(1, $this->mediaPickerPage), $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        $this->mediaPickerTotalPages = $totalPages;
+        $this->mediaPickerPage = $page;
+        $this->mediaPickerImages = array_slice($catalog, $offset, $perPage);
+    }
+
+    public function goToMediaPickerPage(int $page): void
+    {
+        $page = max(1, $page);
+        if ($page > $this->mediaPickerTotalPages) {
+            return;
+        }
+
+        $this->mediaPickerPage = $page;
+
+        if ($this->mediaPickerTab === 'article' && $this->mediaPickerArticleCatalog !== null) {
+            $this->applyArticleCatalogPickerPage();
+            $this->broadcastMediaPickerToClient();
+
+            return;
+        }
+
+        $this->dispatch('article-media-picker-loading');
+        $this->loadMediaPickerImages();
     }
 
     public function reloadMediaPickerImages(): void
@@ -782,8 +948,6 @@ class EditArticle extends EditRecord
             );
 
             $this->mediaPickerTargetBlockId = null;
-            $this->mediaPickerOpen = false;
-            $this->dispatch('close-article-media-modal');
 
             Notification::make()
                 ->title('Image selected for block')
@@ -1524,6 +1688,31 @@ class EditArticle extends EditRecord
     }
 
     /**
+     * Fetch slug + permalink mới từ WordPress sau khi đồng bộ slug.
+     */
+    private function refreshArticleSlugFromWordPressAfterSync(): void
+    {
+        $refresh = app(WordPressArticleContentService::class)
+            ->refreshSlugAndPermalinkFromWordPress($this->record->fresh());
+
+        if ($refresh['slug'] !== '') {
+            $this->articleSlug = (string) $refresh['slug'];
+        }
+
+        $this->record->refresh();
+        $this->record->loadMissing('articleMetas');
+
+        $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
+            $this->record,
+            trim((string) ($this->record->body ?? $this->editorHtml)),
+            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            $this->articleSlug !== '' ? $this->articleSlug : trim((string) ($this->record->slug ?? '')),
+            trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+        );
+        $this->dispatch('seo-analyze-result', result: $seoResult);
+    }
+
+    /**
      * Cập nhật editor + meta ảnh sau khi body đã được thay URL WordPress.
      */
     private function refreshEditorAfterWordPressSync(): void
@@ -1738,8 +1927,7 @@ class EditArticle extends EditRecord
         }
 
         $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
-        $html = $import['html'];
-        if ($html === '') {
+        if ($import['html'] === '') {
             Notification::make()
                 ->title('Không thể convert markdown')
                 ->body('Nội dung markdown không hợp lệ hoặc rỗng sau khi xử lý.')
@@ -1749,9 +1937,17 @@ class EditArticle extends EditRecord
             return;
         }
 
+        $siteId = (int) ($this->record->site_id ?? 0);
+        $cta = app(ArticleCtaPlaceholderService::class)->applyForPublish(
+            $siteId > 0 ? $siteId : null,
+            $import['html'],
+            $import['faqs'],
+        );
+        $html = $cta['html'];
+
         $faqCount = 0;
-        if ($import['faqs'] !== []) {
-            $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $import['faqs']);
+        if ($cta['faqs'] !== []) {
+            $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $cta['faqs']);
         }
 
         $h1Title = trim((string) ($import['h1_title'] ?? ''));
@@ -1797,6 +1993,21 @@ class EditArticle extends EditRecord
         if ($faqCount > 0) {
             $importBody .= sprintf(' Đã tách %d FAQ vào panel và chèn shortcode [omi_faq].', $faqCount);
         }
+
+        $addedBlankCta = $cta['added_blank_types'] ?? [];
+        if ($addedBlankCta !== []) {
+            $importBody .= ' CTA thiếu trên domain (đã thêm biến trắng): '
+                . implode(', ', array_map(static fn (string $t): string => "[{$t}]", $addedBlankCta))
+                . '.';
+        } elseif ($siteId > 0 && app(ArticleCtaPlaceholderService::class)->detectPlaceholderTypes($markdown) !== []) {
+            $importBody .= ' Đã thay placeholder CTA bằng giá trị domain (nếu có).';
+        }
+
+        $seoPayload = app(ArticleEditorSeoPayloadService::class)->forArticle($this->record->fresh());
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-editor-seo-payload-updated", { detail: %s }))',
+            json_encode($seoPayload, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ));
 
         Notification::make()
             ->title('Đã import markdown debug')
@@ -2468,6 +2679,67 @@ class EditArticle extends EditRecord
             question: $renewed['question'],
             answer: $renewed['answer'],
         );
+    }
+
+    public function canGenerateArticleFaqs(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getRenewFaqPromptId() !== null;
+    }
+
+    public function requestGenerateArticleFaqs(): void
+    {
+        if (! $this->canGenerateArticleFaqs()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.faq_generate_failed'))
+                ->body(__('seo-content-ai::filament.article_edit.faq_generate_no_prompt'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $this->pendingEditorCollectTarget = 'generate-faq';
+        $this->dispatch('flush-article-faqs');
+        $this->dispatch('article-faq-generate-started');
+    }
+
+    public function generateArticleFaqs(string $editorHtml = ''): void
+    {
+        try {
+            $result = app(ArticleFaqGeneratorService::class)->generate($this->record, $editorHtml);
+        } catch (\InvalidArgumentException $exception) {
+            $this->dispatch('article-faq-generate-finished');
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.faq_generate_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $html = (string) ($result['editor_html'] ?? '');
+        if ($html !== '') {
+            $this->editorHtml = $html;
+        }
+
+        $this->record->refresh();
+
+        $this->dispatch(
+            'article-faqs-extracted',
+            faqs: $result['faqs'] ?? [],
+            editorHtml: $html,
+        );
+        $this->dispatch('article-faq-generate-finished');
+
+        $count = (int) ($result['faq_count'] ?? 0);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_edit.faq_generate_success'))
+            ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
+            ->success()
+            ->send();
     }
 
     /**

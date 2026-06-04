@@ -113,8 +113,14 @@ export function BlockInsertTrigger(props) {
  * @param {() => void} onClose
  * @param {(type: 'text'|'image'|'faq') => void} onInsert
  * @param {boolean} [faqShortcodeDisabled]
+ * @param {boolean} [imageInsertDisabled]
  */
-export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = false }) {
+export function BlockInsertMenuBar({
+    onClose,
+    onInsert,
+    faqShortcodeDisabled = false,
+    imageInsertDisabled = false,
+}) {
     const ref = useRef(null);
 
     useEffect(() => {
@@ -136,14 +142,16 @@ export function BlockInsertMenuBar({ onClose, onInsert, faqShortcodeDisabled = f
                 <FileText size={18} strokeWidth={1.75} />
                 <span>Paragraph</span>
             </button>
-            <button
-                type="button"
-                className="seo-block-insert-menu__item"
-                onClick={() => onInsert('image')}
-            >
-                <ImageIcon size={18} strokeWidth={1.75} />
-                <span>{t('image_block_label')}</span>
-            </button>
+            {!imageInsertDisabled ? (
+                <button
+                    type="button"
+                    className="seo-block-insert-menu__item"
+                    onClick={() => onInsert('image')}
+                >
+                    <ImageIcon size={18} strokeWidth={1.75} />
+                    <span>{t('image_block_label')}</span>
+                </button>
+            ) : null}
             <button
                 type="button"
                 className={`seo-block-insert-menu__item${faqShortcodeDisabled ? ' is-disabled' : ''}`}

@@ -8,6 +8,7 @@ use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
@@ -172,6 +173,8 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.articles.seo-preview');
                 Route::get('/articles/{article}/preview', ArticlePreviewController::class)
                     ->name('seo.articles.preview');
+                Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
+                    ->name('seo.articles.wp-edit-redirect');
                 Route::get('/wp-plugin/download/{version}', [PluginUpdateController::class, 'downloadForPanel'])
                     ->name('seo.wp-plugin.download');
             });

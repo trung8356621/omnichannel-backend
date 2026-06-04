@@ -163,6 +163,8 @@ class SeoMediaLibraryService
         $kind = str_starts_with($source, 'ai_') ? 'generated' : 'local';
         $alt = filled($media->alt_text) ? (string) $media->alt_text : (string) $media->slug;
 
+        $publicUrl = $media->publicUrl();
+
         return [
             'kind' => $kind,
             'id' => (int) $media->id,
@@ -170,7 +172,8 @@ class SeoMediaLibraryService
             'article_id' => $media->firstArticleId(),
             'wp_attachment_id' => $media->wp_attachment_id !== null ? (int) $media->wp_attachment_id : null,
             'slug' => (string) $media->slug,
-            'url' => $media->publicUrl(),
+            'url' => $publicUrl,
+            'thumb_url' => $publicUrl,
             'media_type' => $mediaType,
             'title' => '',
             'alt' => $alt,

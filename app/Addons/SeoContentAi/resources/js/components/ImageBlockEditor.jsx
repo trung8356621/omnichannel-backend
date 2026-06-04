@@ -180,6 +180,7 @@ export default function ImageBlockEditor({
     articleId = null,
     siteId = null,
     supportsProductGallery = false,
+    imagesLocked = false,
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
     const [pasteUploading, setPasteUploading] = useState(false);
@@ -234,7 +235,7 @@ export default function ImageBlockEditor({
 
     const handleEmptyFramePaste = useCallback(
         (event) => {
-            if (pasteUploading) return false;
+            if (imagesLocked || pasteUploading) return false;
 
             const handled = processClipboardImagePaste(event, {
                 articleId,
@@ -524,6 +525,30 @@ export default function ImageBlockEditor({
 
     if (!image) {
         if (isActive) {
+            if (imagesLocked) {
+                return (
+                    <div
+                        className="block-image-active block-image-active--empty block-image-active--locked"
+                        onMouseDown={(e) => e.stopPropagation()}
+                    >
+                        <span className="block-editor-badge">{t('image_block_label')}</span>
+                        <button
+                            type="button"
+                            className="block-image-delete"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => canDeleteBlock && onDelete?.()}
+                            disabled={!canDeleteBlock}
+                            title={canDeleteBlock ? t('delete_image_block') : t('cannot_delete_last_block')}
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                        <p className="seo-image-block-paste-hint text-amber-700 dark:text-amber-200">
+                            {t('editor_intro_no_images')}
+                        </p>
+                    </div>
+                );
+            }
+
             return (
                 <div
                     ref={emptyFrameRef}
@@ -559,9 +584,6 @@ export default function ImageBlockEditor({
                                     detail: { blockId },
                                 }),
                             );
-                            if (typeof Livewire !== 'undefined') {
-                                Livewire.dispatch('open-editor-block-media-picker', { blockId });
-                            }
                         }}
                         onGenerateRequest={(prompt, mediaKind = 'image') => {
                             const now = Date.now();
@@ -585,17 +607,20 @@ export default function ImageBlockEditor({
         return (
             <div
                 className="seo-block-preview seo-block-image-empty-preview p-3 -mx-1 rounded border border-dashed border-gray-300 dark:border-slate-600 cursor-pointer text-center text-sm text-gray-500"
-                onClick={handlePreviewClick}
+                onClick={imagesLocked ? undefined : handlePreviewClick}
                 onKeyDown={(e) => {
+                    if (imagesLocked) {
+                        return;
+                    }
                     if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
                         onActivate();
                     }
                 }}
-                role="button"
-                tabIndex={0}
+                role={imagesLocked ? 'note' : 'button'}
+                tabIndex={imagesLocked ? -1 : 0}
             >
-                {t('image_block_click_to_choose')}
+                {imagesLocked ? t('editor_intro_no_images') : t('image_block_click_to_choose')}
             </div>
         );
     }

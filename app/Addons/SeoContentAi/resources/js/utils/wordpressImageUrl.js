@@ -84,6 +84,34 @@ export function supportsWordPressImageSizes(imageOrRow) {
     return src !== '' && !isLocalSeoMediaSrc(src);
 }
 
+/**
+ * URL nhỏ cho lưới chọn ảnh (giữ biến thể -WxH nếu đã có).
+ */
+export function toPreviewImageUrl(url) {
+    const value = String(url ?? '').trim();
+    if (!value || isLocalSeoMediaSrc(value)) {
+        return value;
+    }
+
+    if (isWordPressScaledImageUrl(value)) {
+        return value;
+    }
+
+    try {
+        const parsed = new URL(value, window.location.origin);
+        const match = parsed.pathname.match(/^(.*)\.([a-z0-9]+)$/i);
+        if (!match) {
+            return value;
+        }
+
+        parsed.pathname = `${match[1]}-300x300.${match[2]}`;
+
+        return parsed.href;
+    } catch {
+        return value.replace(/(\.[a-z0-9]+)(\?.*)?$/i, '-300x300$1$2');
+    }
+}
+
 export function resolveWordPressBaseUrl(imageOrRow) {
     if (!imageOrRow || typeof imageOrRow !== 'object') {
         return '';

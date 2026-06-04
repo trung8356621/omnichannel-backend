@@ -54,13 +54,14 @@ function InsertableList({
                     variant === 'cta'
                         ? isCtaItemInsertable(item)
                         : item?.can_insert !== false && label !== '' && href !== '';
+                const isCtaBlank = variant === 'cta' && item?.is_blank === true;
 
                 const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
 
                 return (
                     <li
                         key={itemKey}
-                        className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}`}
+                        className={`wp-article-links-keyword-row${isCtaBlank ? ' is-cta-blank' : ''}${isRowHiding ? ' is-row-hiding' : ''}`}
                         aria-hidden={isRowHiding}
                     >
                         <button
@@ -318,8 +319,29 @@ export default function ArticleDomainWidgetsSidebar({
     };
 
     const insertCta = (item) => {
-        const text = ctaDisplayLabel(item);
         const type = String(item?.type ?? '').toLowerCase();
+        if (!type) {
+            return;
+        }
+
+        if (item?.is_blank === true) {
+            const token = `[${type}]`;
+            window.dispatchEvent(
+                new CustomEvent('seo-editor-insert-cta-link', {
+                    detail: {
+                        text: token,
+                        href: '',
+                        type,
+                        is_placeholder: true,
+                        html: `<span class="seo-cta-blank-placeholder" data-cta-type="${type}">${token}</span>`,
+                    },
+                }),
+            );
+
+            return;
+        }
+
+        const text = ctaDisplayLabel(item);
         const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
         const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
         if (!text || (!href && !plainText)) {

@@ -22,6 +22,7 @@ final class TaskWorkflowTestRunner
         private readonly SeoFaqPersistenceService $faqPersistence,
         private readonly WorkflowTagExtractorService $tagExtractor,
         private readonly WordPressCommentReviewService $commentReviewPublisher,
+        private readonly PromptTestPublishService $promptPublisher,
     ) {}
 
     /**
@@ -36,7 +37,18 @@ final class TaskWorkflowTestRunner
         $steps = [];
 
         foreach ($ordered as $node) {
-            $steps[] = $this->executeNode($node, $context, $state, $edges);
+            try {
+                $steps[] = $this->executeNode($node, $context, $state, $edges);
+            } catch (\Throwable $exception) {
+                // Một node lỗi không được làm mất toàn bộ các bước đã chạy → ghi nhận bước «failed».
+                $steps[] = [
+                    'node_id' => (string) ($node['id'] ?? ''),
+                    'type' => (string) ($node['type'] ?? ''),
+                    'title' => (string) ($node['title'] ?? 'Bước'),
+                    'status' => 'failed',
+                    'message' => $exception->getMessage(),
+                ];
+            }
         }
 
         return $steps;
@@ -225,6 +237,19 @@ final class TaskWorkflowTestRunner
                     $state->lastPromptOutput = $output;
                     $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($prompt, $output, $state);
                     $this->refreshWorkflowSeoScore($state, $output);
+                }
+
+                if ($this->shouldMergeOutlineToSave($node) && trim($output) !== '') {
+                    // «Viết bài theo dàn ý»: output đã là bài hoàn chỉnh (H1 + body + meta + FAQ)
+                    //   → đẩy thẳng markdown bài viết cho action lưu vào body.
+                    // input (edge) là dàn ý gốc → giữ lại để lưu vào tab Dàn ý (seo_article_outline),
+                    //   KHÔNG để nội dung bài đè lên dàn ý.
+                    $state->meta['direct_publish_article_markdown'] = trim($output);
+
+                    $outlineSource = $this->cleanWorkflowOutlineMarkdown($input);
+                    if ($outlineSource !== '') {
+                        $state->meta['direct_publish_outline_markdown'] = $outlineSource;
+                    }
                 }
 
                 return [
@@ -468,7 +493,7 @@ final class TaskWorkflowTestRunner
     ): array {
         $nodeId = (string) ($node['id'] ?? '');
         $title = (string) ($node['title'] ?? 'action');
-        $actionType = (string) ($node['data']['actionType'] ?? 'create_article');
+        $actionType = (string) ($node['data']['actionType'] ?? 'save_article');
 
         if ($actionType === 'post_comment_review') {
             return $this->executePostCommentReviewAction($node, $context, $state, $edges);
@@ -480,7 +505,7 @@ final class TaskWorkflowTestRunner
 
         $article = $state->article ?? $context->article;
 
-        if ($actionType === 'create_article' && $article === null) {
+        if ($this->isArticlePersistAction($actionType) && $article === null) {
             $article = $this->createArticleFromContext($context);
             if ($article === null) {
                 return [
@@ -506,10 +531,60 @@ final class TaskWorkflowTestRunner
             ];
         }
 
+        $messages = [];
+        $articleMarkdown = trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
+
+        if ($articleMarkdown !== '') {
+            try {
+                $publish = $this->promptPublisher->publishArticle(
+                    $article,
+                    $articleMarkdown,
+                    $context->variables,
+                );
+            } catch (\Throwable $exception) {
+                // Không để lỗi đăng bài làm hỏng cả quy trình test → trả về bước «failed» có thông báo.
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'action',
+                    'title' => $title,
+                    'action_type' => $actionType,
+                    'status' => 'failed',
+                    'article_id' => $article->id,
+                    'message' => 'Lỗi khi lưu nội dung bài viết: ' . $exception->getMessage(),
+                ];
+            }
+
+            if (! ($publish['success'] ?? false)) {
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'action',
+                    'title' => $title,
+                    'action_type' => $actionType,
+                    'status' => 'failed',
+                    'article_id' => $article->id,
+                    'message' => (string) ($publish['message'] ?? 'Không thể lưu nội dung bài viết từ markdown.'),
+                ];
+            }
+
+            $article = $article->fresh() ?? $article;
+            $state->article = $article;
+            $messages[] = (string) ($publish['message'] ?? 'Đã lưu nội dung bài viết (tiêu đề + body + meta).');
+
+            // publishArticle ghi seo_article_outline = markdown bài viết. Với chế độ gộp dàn ý,
+            // tab «Dàn ý» phải giữ DÀN Ý gốc (không phải nội dung bài) → ghi đè lại bằng dàn ý.
+            $outlineMarkdown = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
+            if ($outlineMarkdown !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'seo_article_outline'],
+                    ['meta_value' => $outlineMarkdown],
+                );
+            }
+        }
+
         $savedKeys = $this->persistWorkflowMeta($article, $state);
-        $messages = $savedKeys === []
-            ? []
-            : ['Đã lưu meta: ' . implode(', ', $savedKeys)];
+        if ($savedKeys !== []) {
+            $messages[] = 'Đã lưu meta: ' . implode(', ', $savedKeys);
+        }
 
         if ($this->keywordResearch->shouldSyncKeywords($actionType, $state)) {
             try {
@@ -708,7 +783,10 @@ final class TaskWorkflowTestRunner
             $savedKeys[] = 'seo_article_keywords';
         }
 
-        if (filled($state->lastPromptOutput)) {
+        if (
+            filled($state->lastPromptOutput)
+            && trim((string) ($state->meta['direct_publish_article_markdown'] ?? '')) === ''
+        ) {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'seo_article_outline'],
                 ['meta_value' => $state->lastPromptOutput],
@@ -808,6 +886,15 @@ final class TaskWorkflowTestRunner
             return 'seo_scoring_details';
         }
 
+        if (! $article->countsTowardSeoScore()) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_scoring_details'],
+                ['meta_value' => json_encode($scoreData['checklist'] ?? [], JSON_UNESCAPED_UNICODE)],
+            );
+
+            return 'seo_scoring_details (skipped score)';
+        }
+
         $current = $article->seo_score !== null ? (float) $article->seo_score : 0.0;
 
         $article->update([
@@ -820,6 +907,58 @@ final class TaskWorkflowTestRunner
         );
 
         return 'seo_score (+' . $bonus . ')';
+    }
+
+    private function isArticlePersistAction(string $actionType): bool
+    {
+        return in_array($actionType, ['save_article', 'create_article', 'edit_article'], true);
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     */
+    private function shouldMergeOutlineToSave(array $node): bool
+    {
+        if (! (bool) ($node['data']['mergeOutlineToSave'] ?? false)) {
+            return false;
+        }
+
+        $promptId = $node['data']['promptId'] ?? null;
+        $prompt = $this->resolvePrompt($promptId);
+
+        return $prompt !== null && $this->promptSupportsMergeOutlineSave($prompt);
+    }
+
+    private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
+    {
+        $name = mb_strtolower(trim((string) $prompt->name));
+
+        if ($name === '') {
+            return false;
+        }
+
+        if (str_contains($name, 'theo dàn')) {
+            return true;
+        }
+
+        return str_contains($name, 'viết') && str_contains($name, 'dàn ý');
+    }
+
+    /**
+     * Làm sạch dàn ý gốc (đầu vào prompt viết bài) để lưu vào tab «Dàn ý»:
+     * bỏ các dòng đánh dấu tag [START_TASK_X] / [END_TASK_X] và gộp dòng trống thừa.
+     */
+    private function cleanWorkflowOutlineMarkdown(string $input): string
+    {
+        $input = trim($input);
+        if ($input === '') {
+            return '';
+        }
+
+        $input = (string) preg_replace('/^\s*\[(?:START|END)_[A-Z0-9_]+\]\s*$/mu', '', $input);
+        $input = (string) preg_replace("/\n{3,}/u", "\n\n", $input);
+
+        return trim($input);
     }
 
     private function createArticleFromContext(TaskTestContext $context): ?SeoArticle

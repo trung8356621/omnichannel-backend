@@ -17,6 +17,8 @@ final class TaskTestContext
         public readonly ?string $matchedBy,
         public readonly array $variables,
         public readonly string $summary,
+        public readonly ?int $siteId = null,
+        public readonly ?string $postType = null,
     ) {}
 
     /**

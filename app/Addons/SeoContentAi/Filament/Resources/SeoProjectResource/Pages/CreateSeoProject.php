@@ -21,17 +21,21 @@ class CreateSeoProject extends CreateRecord
      */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        $data = SeoProjectResource::normalizeProjectSiteId($data);
+
         if (! empty($data['month'])) {
             $data['month'] = Carbon::parse($data['month'])->startOfMonth()->format('Y-m-d');
             $data['name'] = SeoProject::defaultNameFromMonth($data['month']);
         }
 
         $tasksData = $data['tasks_data'] ?? [];
-        app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $tasksData);
+        $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : null;
+        $sanitized = app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData, $projectSiteId);
 
-        $data['total_tasks'] = count(
-            app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData),
-        );
+        app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $sanitized);
+
+        $data['total_tasks'] = count($sanitized);
+        $data['status'] = SeoProject::STATUS_MANUAL;
 
         unset($data['tasks_data']);
 
@@ -55,6 +59,9 @@ class CreateSeoProject extends CreateRecord
 
     protected function getRedirectUrl(): string
     {
-        return SeoProjectResource::getUrl('index');
+        /** @var SeoProject $record */
+        $record = $this->getRecord();
+
+        return SeoProjectResource::getUrl('edit', ['record' => $record]);
     }
 }

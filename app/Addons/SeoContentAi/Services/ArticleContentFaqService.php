@@ -73,10 +73,6 @@ final class ArticleContentFaqService
         }
 
         $faqs = $this->workflowParser->parseFaqsFromContent($markdown);
-        if ($faqs === [] && $this->hasExplicitFaqSignals($markdown)) {
-            // Fallback for markdown imports that do not contain an explicit FAQ section heading.
-            $faqs = $this->workflowParser->parseFaqsFromContent($markdown, true);
-        }
         $faqs = $this->normalizeFaqRowsForEditor($faqs);
 
         $cleaned = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
@@ -139,19 +135,6 @@ final class ArticleContentFaqService
         }
 
         return $rows;
-    }
-
-    private function hasExplicitFaqSignals(string $content): bool
-    {
-        $raw = trim($content);
-        if ($raw === '') {
-            return false;
-        }
-
-        return preg_match(
-            '/(\bfaq\b|câu\s*hỏi|cau\s*hoi|hỏi\s*đáp|hoi\s*dap|^\s*(?:q|q\d+|câu\s*hỏi\s*\d*)\s*[:\?\-]|^\s*(?:a|a\d+|trả\s*lời|tra\s*loi)\s*[:\-])/imu',
-            $raw,
-        ) === 1;
     }
 
     /**
@@ -228,6 +211,27 @@ final class ArticleContentFaqService
         return $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
     }
 
+    /**
+     * Gỡ FAQ inline trong HTML editor, chèn shortcode/placeholder cho panel FAQ.
+     */
+    public function injectFaqPlaceholderInEditorHtml(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return $this->workflowParser->faqPlaceholderHtml();
+        }
+
+        $stripped = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($html);
+        if (
+            ! str_contains($stripped, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)
+            && ! str_contains($stripped, 'omi-faq-placeholder')
+        ) {
+            $stripped = rtrim($stripped) . "\n\n" . WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        return $this->ensureEditorPlaceholderMarkup($stripped);
+    }
+
     private function ensureEditorPlaceholderMarkup(string $html): string
     {
         $token = WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
@@ -258,11 +262,17 @@ final class ArticleContentFaqService
             return;
         }
 
-        if ($import['faqs'] !== []) {
-            $this->faqEditor->saveFromEditor($article, $import['faqs']);
+        $cta = app(ArticleCtaPlaceholderService::class)->applyForPublish(
+            (int) $article->site_id > 0 ? (int) $article->site_id : null,
+            $import['html'],
+            $import['faqs'],
+        );
+
+        if ($cta['faqs'] !== []) {
+            $this->faqEditor->saveFromEditor($article, $cta['faqs']);
         }
 
         $this->persistMetaDescription($article, $import['meta_description']);
-        $this->persistArticleBodyHtml($article, $import['html']);
+        $this->persistArticleBodyHtml($article, $cta['html']);
     }
 }

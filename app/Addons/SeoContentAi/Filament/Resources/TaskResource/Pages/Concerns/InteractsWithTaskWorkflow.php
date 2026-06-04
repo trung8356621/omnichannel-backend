@@ -57,6 +57,7 @@ trait InteractsWithTaskWorkflow
                     'models' => AiModelCatalog::optionsForConnection($prompt->aiConnection),
                     'tasks' => $tasks,
                     'detected_tags' => $detectedTags,
+                    'supports_merge_outline_save' => $this->promptSupportsMergeOutlineSave($prompt),
                 ];
             })
             ->values()
@@ -100,4 +101,19 @@ trait InteractsWithTaskWorkflow
     }
 
     abstract protected function persistTaskFlow(string $taskName, array $flowData): void;
+
+    private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
+    {
+        $name = mb_strtolower(trim((string) $prompt->name));
+
+        if ($name === '') {
+            return false;
+        }
+
+        if (str_contains($name, 'theo dàn')) {
+            return true;
+        }
+
+        return str_contains($name, 'viết') && str_contains($name, 'dàn ý');
+    }
 }

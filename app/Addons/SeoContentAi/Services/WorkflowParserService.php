@@ -495,8 +495,6 @@ class WorkflowParserService
         $currentQuestion = null;
         $currentAnswerHtml = [];
 
-        $sectionKeywords = ['faq', 'câu hỏi thường gặp', 'cau hoi thuong gap', 'hỏi đáp', 'hoi dap', 'giải đáp', 'giai dap'];
-
         foreach ($root->childNodes as $node) {
             if (! $node instanceof \DOMElement) {
                 continue;
@@ -507,13 +505,7 @@ class WorkflowParserService
             $lowerText = mb_strtolower($text);
 
             if (in_array($tag, ['h2', 'h3'], true)) {
-                $isFaqHeading = false;
-                foreach ($sectionKeywords as $kw) {
-                    if (str_contains($lowerText, $kw)) {
-                        $isFaqHeading = true;
-                        break;
-                    }
-                }
+                $isFaqHeading = $this->isFaqSectionHeading('## ' . $text);
                 $isQuestionHeading = preg_match('/^(❓\s*)?(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $text) === 1;
 
                 if ($isFaqHeading) {
@@ -1144,15 +1136,7 @@ class WorkflowParserService
             return $this->removeFaqFromMarkdownAndAppendShortcode($html);
         }
 
-        $pattern = '/<h[23][^>]*>.*?((faq|câu hỏi thường gặp|cau hoi thuong gap|hỏi đáp|giải đáp).*?)<\/h[23]>.*$/is';
-        $cleanedHtml = preg_replace($pattern, '', $html);
-        $cleanedHtml = trim((string) $cleanedHtml);
-
-        if (! str_contains($cleanedHtml, self::FAQ_SHORTCODE_PLACEHOLDER)) {
-            $cleanedHtml .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
-        }
-
-        return $cleanedHtml;
+        return $this->stripFaqContentKeepHeadingHtml($this->preprocessHtmlForFaqExtraction($html), false);
     }
 
     private function removeFaqFromMarkdownAndAppendShortcode(string $markdown): string
@@ -1462,7 +1446,7 @@ class WorkflowParserService
             return '';
         }
 
-        $lower = mb_strtolower($text);
+        $lower = mb_strtolower($text, 'UTF-8');
         $lower = (string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', $lower);
 
         return trim((string) preg_replace('/\s+/u', ' ', $lower));
@@ -1471,7 +1455,7 @@ class WorkflowParserService
     private function normalizeForFaqAsciiMatch(string $text): string
     {
         $ascii = Str::ascii($text, 'vi');
-        $ascii = mb_strtolower(trim($ascii));
+        $ascii = mb_strtolower(trim($ascii), 'UTF-8');
         $ascii = (string) preg_replace('/[^a-z0-9]+/u', ' ', $ascii);
 
         return trim((string) preg_replace('/\s+/u', ' ', $ascii));
@@ -1485,24 +1469,34 @@ class WorkflowParserService
         }
 
         $lower = $this->normalizeForFaqMatch($text);
-        if ($this->headingMatchesFaqCatchKeywords($lower)) {
+        if ($this->headingMatchesFaqCatchKeywords($lower, $text)) {
             return true;
         }
 
         return $this->headingLooksLikeFaqSection($lower);
     }
 
-    private function headingMatchesFaqCatchKeywords(string $lowerHeading): bool
+    private function headingMatchesFaqCatchKeywords(string $lowerHeading, string $rawHeading = ''): bool
     {
-        if ($lowerHeading === '') {
+        if ($lowerHeading === '' && trim($rawHeading) === '') {
             return false;
         }
 
+        $rawHeading = trim($rawHeading) !== '' ? trim($rawHeading) : $lowerHeading;
         $asciiHeading = $this->normalizeForFaqAsciiMatch($lowerHeading);
 
         foreach ($this->overviewSettings->getFaqCatchKeywords() as $keyword) {
+            $keyword = trim($keyword);
+            if ($keyword === '') {
+                continue;
+            }
+
+            if (mb_stripos($rawHeading, $keyword, 0, 'UTF-8') !== false) {
+                return true;
+            }
+
             $normalizedKeyword = $this->normalizeForFaqMatch($keyword);
-            if ($normalizedKeyword !== '' && str_contains($lowerHeading, $normalizedKeyword)) {
+            if ($normalizedKeyword !== '' && $lowerHeading !== '' && str_contains($lowerHeading, $normalizedKeyword)) {
                 return true;
             }
 
@@ -1586,6 +1580,11 @@ class WorkflowParserService
             return false;
         }
 
+        $text = $this->faqItemHeadingText($line);
+        if ($this->looksLikeNumberedOutlineItem($text)) {
+            return false;
+        }
+
         if (preg_match('/^#{3,6}\s+/u', $line) === 1) {
             return true;
         }
@@ -1623,7 +1622,13 @@ class WorkflowParserService
 
     private function isFaqMarkdownBulletQuestion(string $line): bool
     {
-        return preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line)) === 1;
+        if (preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line), $matches) !== 1) {
+            return false;
+        }
+
+        $inner = trim(str_replace(['**', '*'], '', $matches[1]));
+
+        return ! $this->looksLikeNumberedOutlineItem($inner);
     }
 
     private function parseFaqMarkdownBulletQuestion(string $line): string
@@ -1632,7 +1637,24 @@ class WorkflowParserService
             return '';
         }
 
-        return trim(str_replace(['**', '*'], '', $matches[1]));
+        $inner = trim(str_replace(['**', '*'], '', $matches[1]));
+
+        return $this->looksLikeNumberedOutlineItem($inner) ? '' : $inner;
+    }
+
+    /** Mục dàn ý / từ vựng kiểu «1. …» hoặc «2) …» không có dấu ? — không phải câu hỏi FAQ. */
+    private function looksLikeNumberedOutlineItem(string $text): bool
+    {
+        $plain = trim(str_replace(['**', '*'], '', $text));
+        if ($plain === '') {
+            return false;
+        }
+
+        if (preg_match('/\?\s*$/u', $plain) === 1) {
+            return false;
+        }
+
+        return preg_match('/^\d+[\.\)]\s+\S+/u', $plain) === 1;
     }
 
     private function normalizeFaqMarkdownAnswerLine(string $line): string

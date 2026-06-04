@@ -12,6 +12,8 @@ use App\Models\Site;
  */
 final class ArticleCtaPlaceholderService
 {
+    public const BLANK_PLACEHOLDER_CLASS = 'seo-cta-blank-placeholder';
+
     /** @var array<string, string> */
     public const PLACEHOLDER_TYPES = [
         'phone' => 'Số điện thoại',
@@ -79,6 +81,162 @@ final class ArticleCtaPlaceholderService
         }
 
         return $values;
+    }
+
+    /**
+     * Tìm các placeholder CTA ([phone], [address], …) đang được dùng trong nội dung.
+     *
+     * @return list<string>
+     */
+    public function detectPlaceholderTypes(string ...$contents): array
+    {
+        $found = [];
+
+        foreach ($contents as $content) {
+            if ($content === '') {
+                continue;
+            }
+
+            foreach (array_keys(self::PLACEHOLDER_TYPES) as $type) {
+                if (isset($found[$type])) {
+                    continue;
+                }
+
+                if (preg_match('/\[' . preg_quote($type, '/') . '\]/iu', $content) === 1) {
+                    $found[$type] = true;
+                }
+            }
+        }
+
+        return array_keys($found);
+    }
+
+    /**
+     * Xử lý CTA khi đăng / convert bài:
+     *  - Placeholder có giá trị trên domain → thay bằng giá trị thật (link/text).
+     *  - Placeholder CHƯA có giá trị → tự thêm "biến trắng" vào CTA domain (để điền sau),
+     *    placeholder được giữ nguyên cho tới khi có giá trị.
+     *
+     * @param  list<array<string, mixed>>  $faqs
+     * @return array{html: string, faqs: list<array<string, mixed>>, added_blank_types: list<string>}
+     */
+    public function applyForPublish(Site|int|null $site, string $html, array $faqs = []): array
+    {
+        if ($site === null) {
+            return ['html' => $html, 'faqs' => $faqs, 'added_blank_types' => []];
+        }
+
+        $faqText = [];
+        foreach ($faqs as $faq) {
+            if (! is_array($faq)) {
+                continue;
+            }
+            foreach (['question', 'answer', 'more'] as $field) {
+                $faqText[] = (string) ($faq[$field] ?? '');
+            }
+        }
+
+        $usedTypes = $this->detectPlaceholderTypes($html, ...$faqText);
+
+        $added = [];
+        if ($usedTypes !== []) {
+            $values = $this->resolveValuesForSite($site);
+
+            $missing = [];
+            foreach ($usedTypes as $type) {
+                if (trim((string) ($values[$type] ?? '')) === '') {
+                    $missing[] = $type;
+                }
+            }
+
+            if ($missing !== []) {
+                $added = $this->promptContext->addBlankCtaTypes($site, $missing);
+            }
+        }
+
+        $html = $this->replaceInHtml($html, $site);
+        $faqs = $this->replaceInFaqs($faqs, $site);
+
+        return [
+            'html' => $this->highlightBlankPlaceholdersInHtml($html, $site),
+            'faqs' => $this->highlightBlankPlaceholdersInFaqs($faqs, $site),
+            'added_blank_types' => $added,
+        ];
+    }
+
+    /**
+     * Bọc [phone], [website], … chưa có giá trị domain bằng span đỏ trong editor.
+     */
+    public function highlightBlankPlaceholdersInHtml(string $html, Site|int|null $site): string
+    {
+        if (trim($html) === '' || $site === null) {
+            return $html;
+        }
+
+        $html = $this->stripBlankPlaceholderMarkup($html);
+        $values = $this->resolveValuesForSite($site);
+
+        foreach (array_keys(self::PLACEHOLDER_TYPES) as $type) {
+            if (trim((string) ($values[$type] ?? '')) !== '') {
+                continue;
+            }
+
+            $pattern = '/\[' . preg_quote($type, '/') . '\]/iu';
+            $replacement = sprintf(
+                '<span class="%s" data-cta-type="%s">[%s]</span>',
+                self::BLANK_PLACEHOLDER_CLASS,
+                htmlspecialchars($type, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+                htmlspecialchars($type, ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            );
+
+            $html = (string) preg_replace($pattern, $replacement, $html);
+        }
+
+        return $html;
+    }
+
+    /**
+     * Gỡ span highlight editor → giữ [type] thuần (lưu DB / đồng bộ WP).
+     */
+    public function stripBlankPlaceholderMarkup(string $html): string
+    {
+        if ($html === '' || ! str_contains($html, self::BLANK_PLACEHOLDER_CLASS)) {
+            return $html;
+        }
+
+        return (string) preg_replace(
+            '/<span\s+class="' . preg_quote(self::BLANK_PLACEHOLDER_CLASS, '/')
+            . '"[^>]*data-cta-type="([a-z_]+)"[^>]*>\[\1\]<\/span>/iu',
+            '[$1]',
+            $html,
+        );
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $faqs
+     * @return list<array<string, mixed>>
+     */
+    public function highlightBlankPlaceholdersInFaqs(array $faqs, Site|int|null $site): array
+    {
+        if ($faqs === [] || $site === null) {
+            return $faqs;
+        }
+
+        foreach ($faqs as $index => $faq) {
+            if (! is_array($faq)) {
+                continue;
+            }
+
+            foreach (['question', 'answer', 'more'] as $field) {
+                if (! isset($faq[$field]) || ! is_string($faq[$field])) {
+                    continue;
+                }
+
+                $faqs[$index][$field] = $this->highlightBlankPlaceholdersInHtml($faq[$field], $site);
+            }
+        }
+
+        return $faqs;
     }
 
     public function replaceInHtml(string $html, Site|int|null $site): string

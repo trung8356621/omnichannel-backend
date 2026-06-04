@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDebouncedCallback } from './useDebouncedCallback';
-import { loadHistory, saveHistory } from '../utils/articleEditorStorage';
+import { loadHistory, saveHistory, sanitizeBlocksForEditor } from '../utils/articleEditorStorage';
 
 const cloneBlocks = (blocks) => JSON.parse(JSON.stringify(blocks));
 
@@ -109,7 +109,7 @@ export function useArticleEditorHistory({
             if (!snapshot?.blocks) return;
             isRestoringRef.current = true;
             setActiveBlockId(null);
-            setBlocks(cloneBlocks(snapshot.blocks));
+            setBlocks(sanitizeBlocksForEditor(cloneBlocks(snapshot.blocks)));
             lastRecordedRef.current = JSON.stringify(snapshot.blocks);
         },
         [setBlocks, setActiveBlockId],

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Plus, Trash2, AlertCircle } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react';
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
@@ -169,7 +169,12 @@ function FaqExtractDebugBanner({ debug, onDismiss, onFixed }) {
     );
 }
 
-export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialExtractDebug = null }) {
+export default function ArticleFaqEditor({
+    articleId,
+    initialFaqs = [],
+    initialExtractDebug = null,
+    canGenerateFaq = false,
+}) {
     const [faqs, setFaqs] = useState(() => normalizeFaqRows(initialFaqs));
     const [extractDebug, setExtractDebug] = useState(
         initialExtractDebug && typeof initialExtractDebug === 'object' ? initialExtractDebug : null,
@@ -178,6 +183,7 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
     faqsRef.current = faqs;
     const skipBlurDuplicateCheckRef = useRef(false);
     const [renewingIndex, setRenewingIndex] = useState(null);
+    const [generatingAll, setGeneratingAll] = useState(false);
     const [saveStatus, setSaveStatus] = useState('saved');
 
     const flushFaqs = useCallback(() => {
@@ -348,6 +354,11 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         window.addEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
         window.addEventListener('flush-article-faqs', flushFaqs);
         window.addEventListener('article-faqs-save-finished', onFaqsSaveFinished);
+        const onGenerateStarted = () => setGeneratingAll(true);
+        const onGenerateFinished = () => setGeneratingAll(false);
+
+        window.addEventListener('article-faq-generate-started', onGenerateStarted);
+        window.addEventListener('article-faq-generate-finished', onGenerateFinished);
 
         return () => {
             window.removeEventListener('article-faq-renewed', onRenewed);
@@ -357,8 +368,18 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
             window.removeEventListener('article-faq-extract-debug-cleared', onExtractDebugCleared);
             window.removeEventListener('flush-article-faqs', flushFaqs);
             window.removeEventListener('article-faqs-save-finished', onFaqsSaveFinished);
+            window.removeEventListener('article-faq-generate-started', onGenerateStarted);
+            window.removeEventListener('article-faq-generate-finished', onGenerateFinished);
         };
     }, [debouncedSave, flushFaqs]);
+
+    const generateAllFaqs = () => {
+        if (!canGenerateFaq || generatingAll) {
+            return;
+        }
+        setGeneratingAll(true);
+        window.dispatchEvent(new CustomEvent('generate-article-faqs'));
+    };
 
     const addFaq = () => {
         persistRows([...faqs, newFaqRow(faqs.length + 1)]);
@@ -403,8 +424,20 @@ export default function ArticleFaqEditor({ articleId, initialFaqs = [], initialE
         <div className="seo-article-faq-panel wp-postbox">
             <div className="wp-postbox-header">
                 <h2>FAQ</h2>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
                     <span className="text-xs text-gray-500">{saveLabel}</span>
+                    {canGenerateFaq ? (
+                        <button
+                            type="button"
+                            className="seo-faq-btn-generate"
+                            disabled={generatingAll}
+                            onClick={generateAllFaqs}
+                            title={t('faq_generate_ai')}
+                        >
+                            <Sparkles size={14} className={generatingAll ? 'animate-pulse' : ''} />
+                            {generatingAll ? t('faq_generate_ai_loading') : t('faq_generate_ai')}
+                        </button>
+                    ) : null}
                     <button type="button" className="seo-faq-btn-add" onClick={addFaq}>
                         <Plus size={14} />
                         {t('faq_add_question')}

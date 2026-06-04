@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
@@ -25,8 +26,9 @@ use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -261,7 +263,7 @@ class ArticleResource extends Resource
                             return;
                         }
 
-                        $query->whereNotNull('seo_score');
+                        $query->countsTowardSeoScore()->whereNotNull('seo_score');
 
                         match ($band) {
                             'poor' => $query->where('seo_score', '<', 50),
@@ -399,69 +401,8 @@ class ArticleResource extends Resource
                 'lg' => 4,
             ])
             ->persistFiltersInSession()
-            ->actions([
-                Tables\Actions\Action::make('quick_view_wp')
-                    ->icon('heroicon-o-eye')
-                    ->iconButton()
-                    ->tooltip(__('seo-content-ai::filament.article_list.view_on_wordpress'))
-                    ->url(fn (SeoArticle $record): string => static::resolveWordPressPermalink($record) ?? '#')
-                    ->openUrlInNewTab()
-                    ->disabled(fn (SeoArticle $record): bool => blank(static::resolveWordPressPermalink($record))),
-                Tables\Actions\Action::make('approve_article')
-                    ->icon('heroicon-o-check-badge')
-                    ->iconButton()
-                    ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
-                    ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
-                        ? __('seo-content-ai::filament.article_list.already_reviewed')
-                        : __('seo-content-ai::filament.article_list.mark_reviewed'))
-                    ->requiresConfirmation()
-                    ->modalHeading(__('seo-content-ai::filament.article_list.review_article'))
-                    ->modalDescription(__('seo-content-ai::filament.article_list.review_article_description'))
-                    ->action(function (SeoArticle $record): void {
-                        $deletedCount = static::markArticleReviewed($record);
-
-                        Notification::make()
-                            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
-                            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
-                            ->success()
-                            ->send();
-                    }),
-                Tables\Actions\Action::make('assign_to_content_project')
-                    ->icon('heroicon-o-folder-plus')
-                    ->iconButton()
-                    ->color('warning')
-                    ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                    ->requiresConfirmation()
-                    ->form([
-                        Forms\Components\Select::make('project_id')
-                            ->label(__('seo-content-ai::filament.article_list.content_project'))
-                            ->options(fn (): array => static::contentProjectOptions())
-                            ->required()
-                            ->searchable()
-                            ->preload()
-                            ->native(false),
-                    ])
-                    ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                    ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
-                    ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
-                    ->action(function (SeoArticle $record, array $data): void {
-                        $projectId = (int) ($data['project_id'] ?? 0);
-                        $summary = static::assignArticlesToContentProject(
-                            Collection::make([$record]),
-                            $projectId,
-                        );
-
-                        Notification::make()
-                            ->title(__('seo-content-ai::filament.article_list.assign_completed'))
-                            ->body(static::buildAssignContentProjectBody($summary))
-                            ->success()
-                            ->send();
-                    }),
-                Tables\Actions\EditAction::make()
-                    ->iconButton(),
-                Tables\Actions\DeleteAction::make()
-                    ->iconButton(),
-            ])
+            ->actionsAlignment('start')
+            ->actions(static::getArticleTableRowActions())
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\BulkAction::make('approve_articles')
@@ -502,7 +443,16 @@ class ArticleResource extends Resource
                         ->form([
                             Forms\Components\Select::make('project_id')
                                 ->label(__('seo-content-ai::filament.article_list.content_project'))
-                                ->options(fn (): array => static::contentProjectOptions())
+                                ->options(
+                                    fn (Collection $records): array => static::contentProjectOptions(
+                                        static::resolveBulkArticlesSiteId($records),
+                                    ),
+                                )
+                                ->helperText(
+                                    fn (Collection $records): ?string => static::resolveBulkArticlesSiteId($records) === null
+                                        ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
+                                        : null,
+                                )
                                 ->required()
                                 ->searchable()
                                 ->preload()
@@ -528,20 +478,41 @@ class ArticleResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        $query = parent::getEloquentQuery()
-            ->with([
-                'keywords',
-                'user',
-                'site',
-                'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [
-                    'seo_focus_keyword',
-                    'seo_rank_math_score',
-                    'wp_post_images',
-                    'wp_featured_image_url',
-                    'wp_permalink',
-                ]),
-            ]);
+        return static::applyArticleAccessScopes(
+            parent::getEloquentQuery()->with(static::articleEagerLoads()),
+            includeGlobalSiteScope: true,
+        );
+    }
 
+    public static function getRecordRouteBindingEloquentQuery(): Builder
+    {
+        return static::applyArticleAccessScopes(
+            parent::getEloquentQuery()->with(static::articleEagerLoads()),
+            includeGlobalSiteScope: false,
+        );
+    }
+
+    /**
+     * @return array<int|string, mixed>
+     */
+    private static function articleEagerLoads(): array
+    {
+        return [
+            'keywords',
+            'user',
+            'site',
+            'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [
+                'seo_focus_keyword',
+                'seo_rank_math_score',
+                'wp_post_images',
+                'wp_featured_image_url',
+                'wp_permalink',
+            ]),
+        ];
+    }
+
+    public static function applyArticleAccessScopes(Builder $query, bool $includeGlobalSiteScope = true): Builder
+    {
         if (auth()->user()?->role !== 'admin') {
             $query->whereIn(
                 'site_id',
@@ -549,7 +520,7 @@ class ArticleResource extends Resource
             );
         }
 
-        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
+        if ($includeGlobalSiteScope && ($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
             $query->where('site_id', $globalSiteId);
         }
 
@@ -560,6 +531,20 @@ class ArticleResource extends Resource
         }
 
         return $query;
+    }
+
+    public static function syncGlobalSiteForArticle(SeoArticle $article): void
+    {
+        $siteId = (int) ($article->site_id ?? 0);
+        if ($siteId <= 0) {
+            return;
+        }
+
+        if (SeoAccessControl::globalSiteId() === $siteId) {
+            return;
+        }
+
+        SeoAccessControl::setGlobalSiteId($siteId);
     }
 
     private static function resolveThumbnailUrl(SeoArticle $record): ?string
@@ -600,8 +585,11 @@ class ArticleResource extends Resource
         $record->loadMissing('site', 'articleMetas');
 
         $cached = trim((string) ($record->articleMetas->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? ''));
-        if ($cached !== '') {
-            return $cached;
+        $slug = trim((string) ($record->slug ?? ''));
+
+        $resolved = app(WordPressPermalinkBuilder::class)->resolve($record, $cached, $slug !== '' ? $slug : null);
+        if ($resolved !== '') {
+            return $resolved;
         }
 
         $site = $record->site;
@@ -610,21 +598,107 @@ class ArticleResource extends Resource
         }
 
         $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
-        if ($base === '') {
+        if ($base === '' || $slug === '') {
             return null;
         }
 
-        $slug = trim((string) ($record->slug ?? ''));
-        if ($slug !== '') {
-            return rtrim($base, '/') . '/' . ltrim($slug, '/');
-        }
+        return rtrim($base, '/') . '/' . ltrim($slug, '/');
+    }
 
-        $wpId = (int) ($record->wp_post_id ?? 0);
-        if ($wpId > 0) {
-            return rtrim($base, '/') . '/?p=' . $wpId;
-        }
+    /**
+     * Hàng 1: xem WP · skip SEO · duyệt — Hàng 2: gán dự án · sửa · xóa (lưới 3 cột trên list).
+     *
+     * @return array<int, Tables\Actions\Action>
+     */
+    public static function getArticleTableRowActions(): array
+    {
+        return [
+            Tables\Actions\Action::make('quick_view_wp')
+                ->icon('heroicon-o-eye')
+                ->iconButton()
+                ->tooltip(__('seo-content-ai::filament.article_list.view_on_wordpress'))
+                ->url(fn (SeoArticle $record): string => static::resolveWordPressPermalink($record) ?? '#')
+                ->openUrlInNewTab()
+                ->disabled(fn (SeoArticle $record): bool => blank(static::resolveWordPressPermalink($record))),
+            Tables\Actions\Action::make('toggle_skip_seo_score')
+                ->icon('heroicon-o-forward')
+                ->iconButton()
+                ->color(fn (SeoArticle $record): string => (bool) $record->skip_seo_score ? 'warning' : 'gray')
+                ->tooltip(fn (SeoArticle $record): string => (bool) $record->skip_seo_score
+                    ? __('seo-content-ai::filament.article_list.unskip_seo_score')
+                    : __('seo-content-ai::filament.article_list.skip_seo_score'))
+                ->action(function (SeoArticle $record): void {
+                    $skipped = static::toggleSkipSeoScore($record);
 
-        return null;
+                    Notification::make()
+                        ->title(
+                            $skipped
+                                ? __('seo-content-ai::filament.article_list.seo_score_skipped_on')
+                                : __('seo-content-ai::filament.article_list.seo_score_skipped_off'),
+                        )
+                        ->success()
+                        ->send();
+                }),
+            Tables\Actions\Action::make('approve_article')
+                ->icon('heroicon-o-check-badge')
+                ->iconButton()
+                ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
+                ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
+                    ? __('seo-content-ai::filament.article_list.already_reviewed')
+                    : __('seo-content-ai::filament.article_list.mark_reviewed'))
+                ->requiresConfirmation()
+                ->modalHeading(__('seo-content-ai::filament.article_list.review_article'))
+                ->modalDescription(__('seo-content-ai::filament.article_list.review_article_description'))
+                ->action(function (SeoArticle $record): void {
+                    $deletedCount = static::markArticleReviewed($record);
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
+                        ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+                        ->success()
+                        ->send();
+                }),
+                Tables\Actions\Action::make('assign_to_content_project')
+                    ->icon('heroicon-o-folder-plus')
+                    ->iconButton()
+                    ->color('warning')
+                    ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                    ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
+                    ->requiresConfirmation()
+                    ->form([
+                        Forms\Components\Select::make('project_id')
+                            ->label(__('seo-content-ai::filament.article_list.content_project'))
+                            ->options(
+                                fn (SeoArticle $record): array => static::contentProjectOptions(
+                                    static::resolveArticleSiteId($record),
+                                ),
+                            )
+                            ->required()
+                            ->searchable()
+                            ->preload()
+                            ->native(false),
+                    ])
+                ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
+                ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                ->action(function (SeoArticle $record, array $data): void {
+                    $projectId = (int) ($data['project_id'] ?? 0);
+                    $summary = static::assignArticlesToContentProject(
+                        Collection::make([$record]),
+                        $projectId,
+                    );
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.article_list.assign_completed'))
+                        ->body(static::buildAssignContentProjectBody($summary))
+                        ->success()
+                        ->send();
+                }),
+            Tables\Actions\EditAction::make()
+                ->iconButton(),
+            Tables\Actions\DeleteAction::make()
+                ->iconButton(),
+        ];
     }
 
     public static function markArticleReviewed(SeoArticle $article): int
@@ -637,6 +711,23 @@ class ArticleResource extends Resource
         ])->save();
 
         return $deletedCount;
+    }
+
+    /**
+     * Bật/tắt bỏ qua chấm điểm SEO. Trả về true nếu sau thao tác bài đang được bỏ qua.
+     */
+    public static function toggleSkipSeoScore(SeoArticle $article): bool
+    {
+        $skip = ! (bool) $article->skip_seo_score;
+
+        $payload = ['skip_seo_score' => $skip];
+        if ($skip) {
+            $payload['seo_score'] = null;
+        }
+
+        $article->forceFill($payload)->save();
+
+        return $skip;
     }
 
     private static function deleteLocalMediaForArticle(SeoArticle $article): int
@@ -670,12 +761,39 @@ class ArticleResource extends Resource
         return count($mediaIds);
     }
 
+    public static function resolveArticleSiteId(SeoArticle $article): ?int
+    {
+        $siteId = (int) ($article->site_id ?? 0);
+
+        if ($siteId > 0) {
+            return $siteId;
+        }
+
+        return SeoAccessControl::globalSiteId();
+    }
+
+    /**
+     * @param  Collection<int, mixed>  $records
+     */
+    public static function resolveBulkArticlesSiteId(Collection $records): ?int
+    {
+        $siteIds = $records
+            ->filter(static fn (mixed $record): bool => $record instanceof SeoArticle)
+            ->map(static fn (SeoArticle $article): ?int => static::resolveArticleSiteId($article))
+            ->filter(static fn (?int $siteId): bool => $siteId !== null && $siteId > 0)
+            ->unique()
+            ->values();
+
+        return $siteIds->count() === 1 ? (int) $siteIds->first() : null;
+    }
+
     /**
      * @return array<int, string>
      */
-    public static function contentProjectOptions(): array
+    public static function contentProjectOptions(?int $siteId = null): array
     {
         $query = SeoProject::query()
+            ->with('site')
             ->orderByDesc('month')
             ->orderBy('id');
 
@@ -683,42 +801,104 @@ class ArticleResource extends Resource
             $query->where('user_id', auth()->id());
         }
 
+        if ($siteId === null || $siteId <= 0) {
+            return [];
+        }
+
+        $query->where('site_id', $siteId);
+
         return $query
             ->get()
             ->filter(function (SeoProject $project): bool {
                 return in_array((string) $project->status, [
                     SeoProject::STATUS_PENDING,
+                    SeoProject::STATUS_MANUAL,
                     SeoProject::STATUS_RUNNING,
                 ], true) && $project->maxTasksAllowed() > (int) ($project->total_tasks ?? 0);
             })
             ->mapWithKeys(function (SeoProject $project): array {
                 $remaining = max(0, $project->maxTasksAllowed() - (int) ($project->total_tasks ?? 0));
+                $domain = trim((string) ($project->site?->domain ?? ''));
 
                 return [
                     (int) $project->id => sprintf(
-                        '%s (%s, con %d)',
+                        '%s · %s (%s, còn %d)',
                         (string) $project->name,
+                        $domain !== '' ? $domain : '—',
                         $project->monthCarbon()->format('m/Y'),
-                        $remaining
+                        $remaining,
                     ),
                 ];
             })
             ->all();
     }
 
+    public static function resolveArticleProjectSourceContent(SeoArticle $article): string
+    {
+        $sourceContent = trim((string) ($article->title ?? ''));
+        if ($sourceContent === '') {
+            return 'Article #' . (int) $article->id;
+        }
+
+        return $sourceContent;
+    }
+
+    public static function articleAssignedContentProjectId(SeoArticle $article): ?int
+    {
+        $needle = mb_strtolower(trim(static::resolveArticleProjectSourceContent($article)));
+        $articleSiteId = static::resolveArticleSiteId($article) ?? 0;
+
+        $query = SeoProjectTask::query()
+            ->where('type', SeoProjectTask::TYPE_REWRITE)
+            ->whereRaw('LOWER(TRIM(source_content)) = ?', [$needle]);
+
+        if ($articleSiteId > 0) {
+            $query->where(function (Builder $builder) use ($articleSiteId): void {
+                $builder
+                    ->where('site_id', $articleSiteId)
+                    ->orWhereNull('site_id');
+            });
+        }
+
+        $projectId = $query->value('project_id');
+
+        return $projectId !== null ? (int) $projectId : null;
+    }
+
+    public static function articleIsInContentProject(SeoArticle $article): bool
+    {
+        return static::articleAssignedContentProjectId($article) !== null;
+    }
+
     /**
-     * @param  Collection<int, SeoArticle>  $records
-     * @return array{added:int, duplicate:int, overflow:int}
+     * @param  SupportCollection<int, SeoArticle>|Collection<int, SeoArticle>  $records
+     * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}
      */
-    public static function assignArticlesToContentProject(Collection $records, int $projectId): array
+    public static function assignArticlesToContentProject(SupportCollection $records, int $projectId): array
     {
         $project = SeoProject::query()->find($projectId);
         if (! $project instanceof SeoProject) {
-            return ['added' => 0, 'duplicate' => 0, 'overflow' => $records->count()];
+            return [
+                'added' => 0,
+                'duplicate' => 0,
+                'overflow' => $records->count(),
+                'domain_mismatch' => 0,
+                'already_in_project' => 0,
+            ];
         }
 
-        if (! in_array((string) $project->status, [SeoProject::STATUS_PENDING, SeoProject::STATUS_RUNNING], true)) {
-            return ['added' => 0, 'duplicate' => 0, 'overflow' => $records->count()];
+        if (! in_array((string) $project->status, [
+            SeoProject::STATUS_PENDING,
+            SeoProject::STATUS_MANUAL,
+            SeoProject::STATUS_RUNNING,
+        ], true)) {
+            return [
+                'added' => 0,
+                'duplicate' => 0,
+                'overflow' => $records->count(),
+                'domain_mismatch' => 0,
+                'already_in_project' => 0,
+            ];
         }
 
         $records = $records
@@ -728,8 +908,12 @@ class ArticleResource extends Resource
         $added = 0;
         $duplicate = 0;
         $overflow = 0;
+        $domainMismatch = 0;
+        $alreadyInProject = 0;
+        $projectSiteId = (int) ($project->site_id ?? 0);
+        $targetProjectId = (int) $project->id;
 
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, &$added, &$duplicate, &$overflow): void {
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
             $project->refresh();
             $max = $project->maxTasksAllowed();
             $currentTotal = (int) ($project->total_tasks ?? 0);
@@ -748,12 +932,27 @@ class ArticleResource extends Resource
                     continue;
                 }
 
-                $sourceContent = trim((string) ($record->title ?? ''));
-                if ($sourceContent === '') {
-                    $sourceContent = 'Article #' . (int) $record->id;
+                $assignedProjectId = static::articleAssignedContentProjectId($record);
+                if ($assignedProjectId !== null) {
+                    if ($assignedProjectId === $targetProjectId) {
+                        $duplicate++;
+                    } else {
+                        $alreadyInProject++;
+                    }
+
+                    continue;
                 }
 
-                $siteId = (int) ($record->site_id ?? 0);
+                $articleSiteId = static::resolveArticleSiteId($record) ?? 0;
+                if ($projectSiteId > 0 && $articleSiteId !== $projectSiteId) {
+                    $domainMismatch++;
+
+                    continue;
+                }
+
+                $sourceContent = static::resolveArticleProjectSourceContent($record);
+
+                $siteId = $projectSiteId > 0 ? $projectSiteId : $articleSiteId;
                 $key = $siteId . '|' . SeoProjectTask::TYPE_REWRITE . '|' . mb_strtolower($sourceContent);
                 if (isset($existingMap[$key])) {
                     $duplicate++;
@@ -783,11 +982,13 @@ class ArticleResource extends Resource
             'added' => $added,
             'duplicate' => $duplicate,
             'overflow' => $overflow,
+            'domain_mismatch' => $domainMismatch,
+            'already_in_project' => $alreadyInProject,
         ];
     }
 
     /**
-     * @param  array{added:int, duplicate:int, overflow:int}  $summary
+     * @param  array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project?:int}  $summary
      */
     public static function buildAssignContentProjectBody(array $summary): string
     {
@@ -795,6 +996,8 @@ class ArticleResource extends Resource
             'added' => (int) ($summary['added'] ?? 0),
             'duplicate' => (int) ($summary['duplicate'] ?? 0),
             'overflow' => (int) ($summary['overflow'] ?? 0),
+            'domain_mismatch' => (int) ($summary['domain_mismatch'] ?? 0),
+            'already_in_project' => (int) ($summary['already_in_project'] ?? 0),
         ]);
     }
 

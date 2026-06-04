@@ -38,6 +38,7 @@ import {
     applyQuickFixAltTitleToBlocks,
     applyQuickFixSlugToBlock,
     applyQuickFixSlugToBlocks,
+    buildMergedEditorImagesForPicker,
     collectImagesFromBlocks,
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
@@ -64,12 +65,21 @@ import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import { loadDraft, saveDraft } from '../utils/articleEditorStorage';
 import {
     htmlToPlainText,
+    isMeaningfulHtml,
     isWordPressImageElement,
     normalizeBlocks,
     parseImageFromBlockContent,
     renderImageFigure,
 } from '../utils/blockImageUtils';
-import { coalesceTiptapExportHtml, FAQ_SHORTCODE_HTML, flattenHtmlBodyNodes, isFaqPlaceholderHtml } from '../utils/editorHtmlUtils';
+import {
+    cleanBlockHtmlForEditorDisplay,
+    ensureTiptapHeadingCursorParagraph,
+    FAQ_SHORTCODE_HTML,
+    flattenHtmlBodyNodes,
+    isFaqPlaceholderHtml,
+    normalizeSectionHeadingBlockHtml,
+    persistBlockHtmlFromEditor,
+} from '../utils/editorHtmlUtils';
 import { resolveArticleImageSrc, resolveFullWordPressImageUrl, isLocalSeoMediaSrc, supportsWordPressImageSizes } from '../utils/wordpressImageUrl';
 import { applyWordPressImageSize } from '../utils/wordpressImageSize';
 import {
@@ -153,9 +163,12 @@ const extractSectionHeading = (block) => {
         return null;
     }
 
+    const normalized = normalizeSectionHeadingBlockHtml(block.content);
     const parser = new DOMParser();
-    const doc = parser.parseFromString(block.content, 'text/html');
-    const heading = doc.body.querySelector('h2');
+    const doc = parser.parseFromString(normalized, 'text/html');
+    const heading =
+        doc.body.querySelector(':scope > h2') ||
+        doc.body.querySelector('h2');
     if (!heading) {
         return null;
     }
@@ -164,6 +177,8 @@ const extractSectionHeading = (block) => {
 
     return text !== '' ? text : t('editor_section_untitled');
 };
+
+const INTRO_SECTION_ID = 'section-intro';
 
 const buildEditorSections = (blocks) => {
     if (!Array.isArray(blocks) || blocks.length === 0) {
@@ -204,6 +219,19 @@ const buildEditorSections = (blocks) => {
     }
 
     return sections;
+};
+
+const introSectionHasImageBlock = (blocks) => {
+    const intro = buildEditorSections(blocks).find((section) => section.isIntro);
+    if (!intro?.blockIds?.length) {
+        return false;
+    }
+
+    return intro.blockIds.some((blockId) => {
+        const block = blocks.find((item) => item.id === blockId);
+
+        return block?.type === 'image';
+    });
 };
 
 const countKeywordInSectionBlocks = (section, blockById, needle) => {
@@ -735,12 +763,17 @@ const parseHtmlToBlocks = (html) => {
 
             const tempDiv = document.createElement('div');
             tempDiv.appendChild(node.cloneNode(true));
+            const content = cleanBlockHtmlForEditorDisplay(tempDiv.innerHTML.trim());
+            if (!isMeaningfulHtml(content)) {
+                return;
+            }
+
             chunks.push({
                 id: newBlockId('classic'),
                 type: 'text',
                 isWp: false,
                 prefix: '',
-                content: tempDiv.innerHTML.trim(),
+                content,
                 suffix: '',
             });
         });
@@ -926,7 +959,7 @@ function ActiveBlockEditor({
     const pushHtml = useCallback(
         (html) => {
             if (suppressBlockUpdate || isHydratingRef.current) return;
-            onUpdate(coalesceTiptapExportHtml(sourceHtml, html));
+            onUpdate(persistBlockHtmlFromEditor(sourceHtml, html));
         },
         [suppressBlockUpdate, onUpdate, sourceHtml],
     );
@@ -962,7 +995,9 @@ function ActiveBlockEditor({
         if (!editor) return;
 
         isHydratingRef.current = true;
-        editor.commands.setContent(sourceHtml || '<p></p>', { emitUpdate: false });
+        editor.commands.setContent(ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>', {
+            emitUpdate: false,
+        });
         isHydratingRef.current = false;
     }, [editor, block.id, sourceHtml]);
 
@@ -1110,6 +1145,7 @@ function BlockEditor({
     siteId,
     supportsProductGallery = false,
     panelFaqs,
+    introImagesLocked = false,
 }) {
     const blockHtml = displayContent ?? block.content;
     const isFaqShortcodeBlock = block.type === 'text' && isFaqPlaceholderHtml(blockHtml);
@@ -1129,6 +1165,7 @@ function BlockEditor({
                 articleId={articleId}
                 siteId={siteId}
                 supportsProductGallery={supportsProductGallery}
+                imagesLocked={introImagesLocked}
             />
         );
     }
@@ -1525,6 +1562,23 @@ export default function SeoArticleEditor({
         return map;
     }, [editorSections]);
 
+    const isIntroBlockId = useCallback(
+        (blockId) => sectionByBlockId.get(String(blockId ?? '').trim()) === INTRO_SECTION_ID,
+        [sectionByBlockId],
+    );
+
+    const notifyIntroNoImages = useCallback(() => {
+        window.dispatchEvent(
+            new CustomEvent('seo-article-editor-notify', {
+                detail: {
+                    title: t('editor_intro'),
+                    body: t('editor_intro_no_images'),
+                    status: 'warning',
+                },
+            }),
+        );
+    }, []);
+
     const sectionStats = useMemo(
         () => buildSectionStats(editorSections, blockById),
         [editorSections, blockById],
@@ -1757,6 +1811,9 @@ export default function SeoArticleEditor({
         }
         let nextBlocks = enrichBlocksWithPostImages(parsed, postImagesRef.current);
         setBlocks(nextBlocks);
+        if (articleId && nextBlocks.length > 0) {
+            saveDraft(articleId, { blocks: nextBlocks, html: exportBlocksToHtml(nextBlocks) });
+        }
 
         setActiveBlockId(null);
         setGlobalEditor(null);
@@ -2616,6 +2673,12 @@ export default function SeoArticleEditor({
 
     const quickGenerateImageForSection = useCallback(
         (section) => {
+            if (section?.isIntro) {
+                notifyIntroNoImages();
+
+                return;
+            }
+
             const sectionBlocks = section.blockIds
                 .map((blockId) => blockById.get(blockId))
                 .filter(Boolean);
@@ -2648,7 +2711,7 @@ export default function SeoArticleEditor({
                 }),
             );
         },
-        [activeBlockId, articleTitle, blockById, focusKeyword],
+        [activeBlockId, articleTitle, blockById, focusKeyword, notifyIntroNoImages],
     );
 
     const scrollToFeaturedSnippetTable = useCallback(() => {
@@ -2959,7 +3022,7 @@ export default function SeoArticleEditor({
             const text = String(detail?.text ?? '').trim();
             const href = String(detail?.href ?? '').trim();
             const type = String(detail?.type ?? '').toLowerCase();
-            const plainText = isCtaPlainTextType(type);
+            const plainText = isCtaPlainTextType(type) || detail?.is_placeholder === true;
 
             if (!text || (!href && !plainText)) {
                 return;
@@ -3080,10 +3143,15 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            const placeholderHtml =
+                detail?.is_placeholder === true ? String(detail?.html ?? '').trim() : '';
             const safeText = text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const insertion = plainText
-                ? safeText
-                : `<a href="${href.replace(/"/g, '&quot;')}" class="${SEO_EDITOR_LINK_CLASS}">${safeText}</a>`;
+            const insertion =
+                placeholderHtml !== ''
+                    ? placeholderHtml
+                    : plainText
+                      ? safeText
+                      : `<a href="${href.replace(/"/g, '&quot;')}" class="${SEO_EDITOR_LINK_CLASS}">${safeText}</a>`;
             const base = String(targetBlock.content ?? '').trim();
             const nextHtml = base !== '' ? `${base} ${insertion}` : `<p>${insertion}</p>`;
 
@@ -3236,6 +3304,13 @@ export default function SeoArticleEditor({
         (refBlockId, position, type) => {
             if (tempMergeRef.current) return;
 
+            if (type === 'image' && isIntroBlockId(refBlockId)) {
+                setInsertMenu(null);
+                notifyIntroNoImages();
+
+                return;
+            }
+
             if (type === 'faq' && articleHasFaqShortcode(blocksRef.current)) {
                 setInsertMenu(null);
                 window.dispatchEvent(
@@ -3274,7 +3349,7 @@ export default function SeoArticleEditor({
             setActiveBlockId(newId);
             setGlobalEditor(null);
         },
-        [commitActiveBlock],
+        [commitActiveBlock, isIntroBlockId, notifyIntroNoImages],
     );
 
     const applyCompletedMediaToPlaceholder = useCallback((mediaId, mediaType, finalUrl) => {
@@ -3502,6 +3577,11 @@ export default function SeoArticleEditor({
             if (tempMergeRef.current) {
                 return '';
             }
+            if (isIntroBlockId(refBlockId)) {
+                notifyIntroNoImages();
+
+                return '';
+            }
 
             commitActiveBlock();
 
@@ -3524,6 +3604,13 @@ export default function SeoArticleEditor({
                     return prev;
                 }
                 const next = [...prev];
+                const anchor = next[index];
+                if (anchor?.type !== 'image' && anchor?.content) {
+                    next[index] = {
+                        ...anchor,
+                        content: normalizeSectionHeadingBlockHtml(anchor.content),
+                    };
+                }
                 next.splice(index + 1, 0, newBlock);
                 return normalizeBlocks(next);
             };
@@ -3539,7 +3626,7 @@ export default function SeoArticleEditor({
             setImagesReloadKey((k) => k + 1);
             return newBlock.id;
         },
-        [commitActiveBlock, updateBlocksWithoutHistory],
+        [commitActiveBlock, isIntroBlockId, notifyIntroNoImages, updateBlocksWithoutHistory],
     );
 
     const resolveAiRefBlockId = useCallback((blockId) => {
@@ -3581,6 +3668,11 @@ export default function SeoArticleEditor({
                 return '';
             }
             if (tempMergeRef.current) {
+                return '';
+            }
+            if (isIntroBlockId(refId)) {
+                notifyIntroNoImages();
+
                 return '';
             }
 
@@ -3663,7 +3755,14 @@ export default function SeoArticleEditor({
 
             return insertImageAfterBlock(refId, url, imagePatch);
         },
-        [commitActiveBlock, insertImageAfterBlock, resolveAiRefBlockId, updateBlocksWithoutHistory],
+        [
+            commitActiveBlock,
+            insertImageAfterBlock,
+            isIntroBlockId,
+            notifyIntroNoImages,
+            resolveAiRefBlockId,
+            updateBlocksWithoutHistory,
+        ],
     );
 
     const insertVideoAfterBlock = useCallback(
@@ -3734,10 +3833,16 @@ export default function SeoArticleEditor({
 
                 const next = [...prev];
                 [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+                if (introSectionHasImageBlock(next)) {
+                    notifyIntroNoImages();
+
+                    return prev;
+                }
+
                 return normalizeBlocks(next);
             });
         },
-        [commitActiveBlock],
+        [commitActiveBlock, notifyIntroNoImages],
     );
 
     const moveBlockToSection = useCallback(
@@ -3773,6 +3878,11 @@ export default function SeoArticleEditor({
                 }
 
                 const moving = prev[fromIndex];
+                if (targetSection?.isIntro && moving?.type === 'image') {
+                    notifyIntroNoImages();
+
+                    return prev;
+                }
                 const next = [...prev];
                 next.splice(fromIndex, 1);
 
@@ -3794,7 +3904,7 @@ export default function SeoArticleEditor({
             setActiveBlockId(id);
             setGlobalEditor(null);
         },
-        [commitActiveBlock, editorSections],
+        [commitActiveBlock, editorSections, notifyIntroNoImages],
     );
 
     const startTempMerge = useCallback(
@@ -3890,6 +4000,17 @@ export default function SeoArticleEditor({
 
         window.addEventListener('article-post-images-synced', onPostImagesSynced);
         window.addEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
+
+        const onRequestEditorImagesCatalog = () => {
+            const images = buildMergedEditorImagesForPicker(blocksRef.current, supplementalImages);
+            window.dispatchEvent(
+                new CustomEvent('seo-editor-images-catalog', {
+                    detail: { images, tab: 'article' },
+                }),
+            );
+        };
+
+        window.addEventListener('seo-request-editor-images-catalog', onRequestEditorImagesCatalog);
 
         const syncPanelFaqs = (event) => {
             const fromExtract = event.detail?.faqs;
@@ -3993,6 +4114,20 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            if (mediaKind === 'image' && sectionByBlockId.get(String(blockId)) === INTRO_SECTION_ID) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_intro'),
+                            body: t('editor_intro_no_images'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
             if (mediaKind === 'video') {
                 window.dispatchEvent(
                     new CustomEvent('generate-article-video', {
@@ -4029,6 +4164,20 @@ export default function SeoArticleEditor({
             const attachmentId = Number(event.detail?.attachmentId ?? 0);
             const mediaType = String(event.detail?.mediaType ?? event.detail?.media_type ?? 'image').toLowerCase();
             if (!blockId || !rawUrl) return;
+
+            if (mediaType !== 'video' && sectionByBlockId.get(blockId) === INTRO_SECTION_ID) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_intro'),
+                            body: t('editor_intro_no_images'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
 
             const url = resolveFullWordPressImageUrl(rawUrl);
             if (mediaType === 'video') {
@@ -4313,6 +4462,7 @@ export default function SeoArticleEditor({
             window.removeEventListener('article-faqs-extracted', applyEditorHtml);
             window.removeEventListener('article-post-images-synced', onPostImagesSynced);
             window.removeEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
+            window.removeEventListener('seo-request-editor-images-catalog', onRequestEditorImagesCatalog);
             window.removeEventListener('article-faqs-extracted', syncPanelFaqs);
             window.removeEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
             window.removeEventListener('seo-editor-analyze-result', handleAnalyzeResult);
@@ -4871,18 +5021,20 @@ export default function SeoArticleEditor({
                                                 </h3>
                                             </div>
                                             <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                                                <span
-                                                    className={
-                                                        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ' +
-                                                        (stats.imageCount === 0
-                                                            ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/60 dark:bg-red-900/40 dark:text-red-200'
-                                                            : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-slate-800/60 dark:text-gray-200')
-                                                    }
-                                                    title={t('editor_section_image_count')}
-                                                >
-                                                    <ImageIcon size={11} />
-                                                    <span>{stats.imageCount}</span>
-                                                </span>
+                                                {!section.isIntro ? (
+                                                    <span
+                                                        className={
+                                                            'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ' +
+                                                            (stats.imageCount === 0
+                                                                ? 'border-red-300 bg-red-50 text-red-700 dark:border-red-500/60 dark:bg-red-900/40 dark:text-red-200'
+                                                                : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-slate-800/60 dark:text-gray-200')
+                                                        }
+                                                        title={t('editor_section_image_count')}
+                                                    >
+                                                        <ImageIcon size={11} />
+                                                        <span>{stats.imageCount}</span>
+                                                    </span>
+                                                ) : null}
 
                                                 {stats.hasTable ? (
                                                     <span
@@ -4912,7 +5064,7 @@ export default function SeoArticleEditor({
                                                     <span>{stats.wordCount}</span>
                                                 </span>
 
-                                                {stats.imageCount === 0 ? (
+                                                {!section.isIntro && stats.imageCount === 0 ? (
                                                     <button
                                                         type="button"
                                                         onClick={() => quickGenerateImageForSection(section)}
@@ -4924,7 +5076,7 @@ export default function SeoArticleEditor({
                                                     </button>
                                                 ) : null}
 
-                                                {stats.hasEmptyImageSrc ? (
+                                                {!section.isIntro && stats.hasEmptyImageSrc ? (
                                                     <span
                                                         className="ml-2 inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[11px] font-medium text-rose-700 dark:border-rose-500/70 dark:bg-rose-900/30 dark:text-rose-200"
                                                         title={t('editor_section_has_empty_src')}
@@ -5064,6 +5216,7 @@ export default function SeoArticleEditor({
                                                                     insertMenu?.position === 'after' ? (
                                                                         <BlockInsertMenuBar
                                                                             faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
+                                                                            imageInsertDisabled={section.isIntro}
                                                                             onClose={() => setInsertMenu(null)}
                                                                             onInsert={(type) =>
                                                                                 insertBlockRelative(block.id, 'after', type)

@@ -62,12 +62,27 @@ function getPromptTags(promptId) {
   return Array.isArray(config?.detected_tags) ? config.detected_tags : [];
 }
 
+function isWriteFromOutlinePrompt(promptId) {
+  const config = getPromptConfig(promptId);
+  if (!config) {
+    return false;
+  }
+
+  if (config.supports_merge_outline_save === true) {
+    return true;
+  }
+
+  const name = String(config.name ?? '').toLowerCase();
+  return name.includes('theo dàn') || (name.includes('viết') && name.includes('dàn ý'));
+}
+
 function defaultPromptNodeData(promptId) {
   const config = getPromptConfig(promptId) ?? mockPrompts[0];
 
   return {
     promptId: config?.id ?? 'p1',
     aiModel: config?.defaultModel ?? '',
+    mergeOutlineToSave: false,
   };
 }
 
@@ -83,6 +98,39 @@ function normalizeArticleNodeData(data = {}) {
   return next;
 }
 
+const ARTICLE_SAVE_ACTION = 'save_article';
+
+function normalizeActionType(actionType) {
+  if (
+    actionType === 'create_article'
+    || actionType === 'edit_article'
+    || actionType == null
+    || actionType === ''
+  ) {
+    return ARTICLE_SAVE_ACTION;
+  }
+
+  return actionType;
+}
+
+function isArticleSaveAction(actionType) {
+  return normalizeActionType(actionType) === ARTICLE_SAVE_ACTION;
+}
+
+function actionTypeCanvasLabel(actionType) {
+  if (isArticleSaveAction(actionType)) {
+    return 'Tạo / cập nhật bài viết';
+  }
+  if (actionType === 'post_comment_review') {
+    return 'Post comment / review';
+  }
+  if (actionType === 'save_vocabulary_research') {
+    return 'Save vocabulary research';
+  }
+
+  return actionType || 'Action';
+}
+
 function migrateLegacyFlowNode(node) {
   if (node.type !== 'end') {
     return node;
@@ -93,7 +141,7 @@ function migrateLegacyFlowNode(node) {
     type: 'action',
     title: node.title === 'Save / End' ? 'Action' : node.title,
     data: {
-      actionType: node.data?.actionType ?? 'create_article',
+      actionType: normalizeActionType(node.data?.actionType),
       isTrigger: Boolean(node.data?.isTrigger),
     },
   };
@@ -108,11 +156,28 @@ function normalizeNodes(nodes) {
 
     if (next.type === 'prompt') {
       const config = getPromptConfig(next.data?.promptId);
+      const promptData = {
+        ...next.data,
+        aiModel: next.data?.aiModel || config?.defaultModel || '',
+        mergeOutlineToSave: Boolean(next.data?.mergeOutlineToSave),
+      };
+
+      if (!isWriteFromOutlinePrompt(promptData.promptId)) {
+        promptData.mergeOutlineToSave = false;
+      }
+
+      next = {
+        ...next,
+        data: promptData,
+      };
+    }
+
+    if (next.type === 'action') {
       next = {
         ...next,
         data: {
           ...next.data,
-          aiModel: next.data?.aiModel || config?.defaultModel || '',
+          actionType: normalizeActionType(next.data?.actionType),
         },
       };
     }
@@ -193,7 +258,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
     }
     else if (type === 'action') {
       title = 'Action';
-      data = { actionType: 'create_article', isTrigger: false };
+      data = { actionType: ARTICLE_SAVE_ACTION, isTrigger: false };
     }
     setNodes([...nodes, { id, type, title, x: 100, y: 100, data }]);
     setSelectedNodeId(id);
@@ -413,6 +478,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                       {node.data.aiModel ? (
                         <div className={`text-[10px] truncate mt-0.5 ${t.emptyHint}`}>{node.data.aiModel}</div>
                       ) : null}
+                      {node.data.mergeOutlineToSave && isWriteFromOutlinePrompt(node.data.promptId) ? (
+                        <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold mt-1 block">
+                          Gộp dàn ý → lưu bài
+                        </span>
+                      ) : null}
                     </>
                   )}
                   {node.type === 'filter' && (
@@ -440,13 +510,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                   {node.type === 'action' && (
                     <div className="flex flex-col">
                       <span className={`font-medium ${isDark ? 'text-slate-200' : 'text-gray-800'}`}>
-                        {node.data.actionType === 'edit_article'
-                          ? 'Edit article'
-                          : node.data.actionType === 'post_comment_review'
-                            ? 'Post comment / review'
-                            : node.data.actionType === 'save_vocabulary_research'
-                              ? 'Save vocabulary research'
-                              : 'Create new article'}
+                        {actionTypeCanvasLabel(node.data.actionType)}
                       </span>
                       {node.data.isTrigger ? (
                         <span className="flex items-center gap-1 text-[10px] text-amber-500 font-bold mt-1.5 bg-amber-100 dark:bg-amber-500/10 px-2 py-0.5 rounded w-max border border-amber-200 dark:border-amber-500/20">
@@ -583,12 +647,32 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                         updateNodeDataFields(selectedNode.id, {
                           promptId,
                           aiModel: config?.defaultModel ?? '',
+                          mergeOutlineToSave: isWriteFromOutlinePrompt(promptId)
+                            ? Boolean(selectedNode.data.mergeOutlineToSave)
+                            : false,
                         });
                       }}
                       className="w-full"
                       options={mockPrompts.map((p) => ({ value: p.id, label: p.name }))}
                     />
                   </div>
+                  {isWriteFromOutlinePrompt(selectedNode.data.promptId) ? (
+                    <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 p-3 rounded-lg">
+                      <label className="flex items-start gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-0.5 rounded border-emerald-400 text-emerald-600 focus:ring-emerald-500"
+                          checked={Boolean(selectedNode.data.mergeOutlineToSave)}
+                          onChange={(e) => updateNodeData(selectedNode.id, 'mergeOutlineToSave', e.target.checked)}
+                        />
+                        <span className="text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                          <b>Gộp dàn ý → lưu bài</b> — khi bật, kết quả bài viết hoàn chỉnh (tiêu đề + nội dung + meta)
+                          được đẩy thẳng vào hành động <b>Tạo / cập nhật bài viết</b>: convert Markdown → HTML body, lưu tiêu đề,
+                          meta description và FAQ. Không cần khối lọc dàn ý trung gian.
+                        </span>
+                      </label>
+                    </div>
+                  ) : null}
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Model AI</label>
                     <SeoSelect
@@ -764,12 +848,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                   <div>
                     <label className={`text-xs block mb-2 font-semibold ${t.label}`}>Thực thi Hành động</label>
                     <SeoSelect
-                      value={selectedNode.data.actionType || 'create_article'}
+                      value={normalizeActionType(selectedNode.data.actionType)}
                       onChange={(e) => updateNodeData(selectedNode.id, 'actionType', e.target.value)}
                       className="w-full"
                       options={[
-                        { value: 'create_article', label: 'Tạo bài viết mới' },
-                        { value: 'edit_article', label: 'Cập nhật / Sửa bài viết' },
+                        { value: ARTICLE_SAVE_ACTION, label: 'Tạo / cập nhật bài viết' },
                         { value: 'save_vocabulary_research', label: 'Lưu nghiên cứu từ vựng (Topic Cluster)' },
                         { value: 'post_comment_review', label: 'Đăng bình luận / review (WordPress)' },
                       ]}
@@ -789,13 +872,14 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                         từ khóa chính (parent) + từ khóa con theo nhóm ngữ nghĩa, đồng thời gắn pivot <code>article_keyword</code>.
                       </p>
                     </div>
-                  ) : (
+                  ) : isArticleSaveAction(selectedNode.data.actionType) ? (
                     <div className="bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 p-3 rounded-lg">
                       <p className="text-xs text-emerald-700 dark:text-emerald-400 leading-relaxed">
-                        💡 <b>Mẹo:</b> Hành động này có hỗ trợ cổng kết nối đầu ra (Output). Bạn có thể nối tiếp với các hành động khác (VD: Chia sẻ lên mạng xã hội) sau khi tạo bài viết xong.
+                        Chưa có bài trong luồng → tạo bài mới từ context (domain, tiêu đề, meta). Đã có bài → cập nhật meta vào bài hiện có.
+                        Có thể nối tiếp các hành động khác qua cổng Output.
                       </p>
                     </div>
-                  )}
+                  ) : null}
                 </div>
               )}
             </div>

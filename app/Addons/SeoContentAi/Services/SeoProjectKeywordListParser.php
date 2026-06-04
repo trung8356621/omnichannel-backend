@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+
 final class SeoProjectKeywordListParser
 {
     /**
@@ -57,6 +59,9 @@ final class SeoProjectKeywordListParser
                 'type' => $defaultType,
                 'source_content' => $phrase,
                 'description' => null,
+                'post_type' => $defaultType === SeoProjectTask::TYPE_NEW_KEYWORD
+                    ? SeoProjectTask::POST_TYPE_ARTICLE
+                    : null,
             ];
         }
 

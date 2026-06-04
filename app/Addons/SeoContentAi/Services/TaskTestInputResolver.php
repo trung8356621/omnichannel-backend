@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
 use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
+use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 
 final class TaskTestInputResolver
@@ -36,6 +38,26 @@ final class TaskTestInputResolver
         } finally {
             $this->articleScope = null;
         }
+    }
+
+    /**
+     * @param  null|callable(Builder): void  $scopeArticles
+     */
+    public function resolveForProjectTask(SeoProjectTask $task, ?callable $scopeArticles = null): TaskTestContext
+    {
+        $keyword = trim((string) $task->source_content);
+        if ($keyword === '') {
+            throw new \InvalidArgumentException('Hạng mục dự án thiếu từ khóa / tiêu đề.');
+        }
+
+        if ($task->type === SeoProjectTask::TYPE_REWRITE) {
+            return $this->resolve(null, $keyword, $keyword, $scopeArticles);
+        }
+
+        $siteId = (int) ($task->site_id ?? 0);
+        $postType = SeoProjectTask::normalizePostType($task->post_type);
+
+        return $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles);
     }
 
     private function resolveScoped(?int $articleId, ?string $title, ?string $keyword): TaskTestContext
@@ -116,46 +138,85 @@ final class TaskTestInputResolver
 
     private function contextForNewArticle(string $title, string $keyword): TaskTestContext
     {
-        $postTitle = $title;
-        $focusKeyword = $keyword;
-
-        if ($postTitle === '' && $focusKeyword !== '') {
-            $postTitle = $focusKeyword;
-        }
-
-        if ($focusKeyword === '' && $postTitle !== '') {
-            $focusKeyword = $postTitle;
-        }
-
-        $variables = $this->baseVariables($postTitle, $focusKeyword, null);
         $mainSite = $this->mainDomain->resolveMainSite();
-        $promptVars = $this->promptSettings->promptVariables('article');
-        $variables = array_merge(
-            $variables,
-            $promptVars,
-            $this->sitePromptContext->promptVariablesForSite($mainSite),
-        );
-        $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
-            $mainSite,
-            $promptVars['tone'] ?? '',
-        );
+        $siteId = $mainSite instanceof Site ? (int) $mainSite->id : 0;
 
-        if ($title === '' && $keyword === '') {
-            throw new \InvalidArgumentException('Chọn bài viết hoặc nhập tiêu đề / từ khóa để chạy thử.');
+        return $this->contextForNewArticleOnSite($title, $keyword, $siteId, 'article', $this->articleScope);
+    }
+
+    /**
+     * @param  null|callable(Builder): void  $scopeArticles
+     */
+    private function contextForNewArticleOnSite(
+        string $title,
+        string $keyword,
+        int $siteId,
+        string $postType,
+        ?callable $scopeArticles = null,
+    ): TaskTestContext {
+        $previousScope = $this->articleScope;
+        $this->articleScope = $scopeArticles;
+
+        try {
+            $postTitle = $title;
+            $focusKeyword = $keyword;
+
+            if ($postTitle === '' && $focusKeyword !== '') {
+                $postTitle = $focusKeyword;
+            }
+
+            if ($focusKeyword === '' && $postTitle !== '') {
+                $focusKeyword = $postTitle;
+            }
+
+            if ($postTitle !== '') {
+                $byTitle = $this->findArticleByTitle($postTitle);
+                if ($byTitle instanceof SeoArticle) {
+                    return $this->contextFromArticle($byTitle, 'title');
+                }
+            }
+
+            if ($focusKeyword !== '') {
+                $byKeyword = $this->findArticleByKeyword($focusKeyword);
+                if ($byKeyword instanceof SeoArticle) {
+                    return $this->contextFromArticle($byKeyword, 'keyword');
+                }
+            }
+
+            $variables = $this->baseVariables($postTitle, $focusKeyword, null);
+            $site = $siteId > 0 ? Site::query()->find($siteId) : $this->mainDomain->resolveMainSite();
+            $normalizedPostType = SeoProjectTask::normalizePostType($postType);
+            $promptVars = $this->promptSettings->promptVariables($normalizedPostType);
+            $variables = array_merge(
+                $variables,
+                $promptVars,
+                $this->sitePromptContext->promptVariablesForSite($site instanceof Site ? $site : null),
+            );
+            $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
+                $site instanceof Site ? $site : null,
+                $promptVars['tone'] ?? '',
+            );
+
+            $label = $postTitle !== '' ? $postTitle : $focusKeyword;
+            $summary = sprintf(
+                'Tạo bài mới — «%s» (loại %s, site #%s).',
+                $label,
+                $normalizedPostType,
+                $siteId > 0 ? (string) $siteId : '—',
+            );
+
+            return new TaskTestContext(
+                article: null,
+                isNewArticle: true,
+                matchedBy: null,
+                variables: $variables,
+                summary: $summary,
+                siteId: $siteId > 0 ? $siteId : null,
+                postType: $normalizedPostType,
+            );
+        } finally {
+            $this->articleScope = $previousScope;
         }
-
-        $label = $title !== '' ? $title : $keyword;
-        $summary = $title === $keyword || $keyword === ''
-            ? sprintf('Tạo bài mới — «%s» (đã tìm theo tiêu đề rồi từ khóa, chưa có bài khớp).', $label)
-            : 'Tạo bài mới (chưa có trong kho) — tiêu đề «' . $title . '», từ khóa «' . $keyword . '».';
-
-        return new TaskTestContext(
-            article: null,
-            isNewArticle: true,
-            matchedBy: null,
-            variables: $variables,
-            summary: $summary,
-        );
     }
 
     /**

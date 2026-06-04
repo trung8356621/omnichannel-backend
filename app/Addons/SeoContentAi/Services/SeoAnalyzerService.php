@@ -339,6 +339,10 @@ class SeoAnalyzerService
      */
     private function persistScoreResult(SeoArticle $article, array $scoreData, ?array $extractedLinks = null): array
     {
+        if (! $article->countsTowardSeoScore()) {
+            return $scoreData;
+        }
+
         $links = $extractedLinks ?? ['internal' => [], 'external' => []];
 
         $this->storeMeta($article, 'seo_rank_math_score', $scoreData);

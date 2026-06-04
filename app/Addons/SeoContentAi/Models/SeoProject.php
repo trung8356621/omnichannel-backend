@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Models\Site;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
@@ -16,6 +17,8 @@ class SeoProject extends Model
     use BelongsToOnDefaultConnection;
 
     public const STATUS_PENDING = 'pending';
+
+    public const STATUS_MANUAL = 'manual';
 
     public const STATUS_RUNNING = 'running';
 
@@ -31,8 +34,14 @@ class SeoProject extends Model
 
     protected $casts = [
         'month' => 'date',
+        'site_id' => 'integer',
         'total_tasks' => 'integer',
     ];
+
+    public function site(): BelongsTo
+    {
+        return $this->belongsToOnDefaultConnection(Site::class, 'site_id');
+    }
 
     public function user(): BelongsTo
     {
@@ -42,6 +51,11 @@ class SeoProject extends Model
     public function tasks(): HasMany
     {
         return $this->hasMany(SeoProjectTask::class, 'project_id');
+    }
+
+    public function runs(): HasMany
+    {
+        return $this->hasMany(SeoProjectRun::class, 'project_id');
     }
 
     public function monthCarbon(): Carbon
@@ -68,6 +82,7 @@ class SeoProject extends Model
     {
         return [
             self::STATUS_PENDING => 'Chờ duyệt',
+            self::STATUS_MANUAL => 'Thủ công',
             self::STATUS_RUNNING => 'Đang chạy',
             self::STATUS_COMPLETED => 'Hoàn thành',
             self::STATUS_PAUSED => 'Tạm dừng',

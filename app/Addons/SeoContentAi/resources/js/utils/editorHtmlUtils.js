@@ -11,6 +11,43 @@ export function isFaqPlaceholderHtml(html) {
     return /omi-faq-placeholder|\[omi_faq\]/i.test(html || '');
 }
 
+function isEmptyBlockNode(node) {
+    if (!node) {
+        return true;
+    }
+
+    if (node.nodeType === 3) {
+        return !(node.textContent || '').replace(/\u00a0/g, ' ').trim();
+    }
+
+    if (node.nodeType !== 1) {
+        return true;
+    }
+
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'br') {
+        return true;
+    }
+
+    if (tag !== 'p' && tag !== 'div') {
+        return false;
+    }
+
+    const inner = (node.innerHTML || '')
+        .replace(/<br\s*\/?>/gi, '')
+        .replace(/&nbsp;/gi, ' ')
+        .trim();
+    const text = (node.textContent || '').replace(/\u00a0/g, ' ').trim();
+
+    return !text && !inner.replace(/<[^>]+>/gi, '').trim();
+}
+
+function meaningfulBodyNodes(html) {
+    const doc = new DOMParser().parseFromString((html || '').trim(), 'text/html');
+
+    return Array.from(doc.body.childNodes).filter((node) => !isEmptyBlockNode(node));
+}
+
 /**
  * Một block chỉ gồm đúng một thẻ heading (thường gặp khi tách block từ WP).
  *
@@ -20,16 +57,28 @@ export function standaloneHeadingLevel(html) {
     const trimmed = (html || '').trim();
     if (!trimmed) return null;
 
-    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
-    const nodes = Array.from(doc.body.childNodes).filter((node) => {
-        if (node.nodeType === 3) return Boolean(node.textContent?.trim());
-        return node.nodeType === 1;
-    });
+    const nodes = meaningfulBodyNodes(trimmed);
 
     if (nodes.length !== 1 || nodes[0].nodeType !== 1) return null;
 
     const tag = nodes[0].tagName.toLowerCase();
     const match = tag.match(HEADING_TAG_RE);
+    return match ? Number(match[1]) : null;
+}
+
+/**
+ * Section heading block: heading đầu tiên (thường h2), có thể kèm <p></p> phía sau cho TipTap.
+ *
+ * @returns {number|null}
+ */
+export function leadingHeadingLevel(html) {
+    const nodes = meaningfulBodyNodes(html);
+    if (nodes.length === 0 || nodes[0].nodeType !== 1) {
+        return null;
+    }
+
+    const match = nodes[0].tagName.toLowerCase().match(HEADING_TAG_RE);
+
     return match ? Number(match[1]) : null;
 }
 
@@ -77,6 +126,123 @@ function rebuildStandaloneHeadingHtml(originalHtml, innerHtml, level) {
 }
 
 /**
+ * TipTap cần một paragraph sau heading để đặt con trỏ; chỉ dùng khi hydrate editor, không lưu state.
+ */
+export function ensureTiptapHeadingCursorParagraph(html) {
+    const trimmed = (html || '').trim();
+    if (!trimmed || leadingHeadingLevel(trimmed) === null) {
+        return trimmed;
+    }
+
+    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+    const nodes = Array.from(doc.body.childNodes).filter((node) => !isEmptyBlockNode(node));
+
+    if (nodes.length !== 1 || nodes[0].nodeType !== 1) {
+        return trimmed;
+    }
+
+    const tag = nodes[0].tagName.toLowerCase();
+    if (!HEADING_TAG_RE.test(tag)) {
+        return trimmed;
+    }
+
+    return `${nodes[0].outerHTML}<p></p>`;
+}
+
+/**
+ * Bỏ <p>/<div> rỗng ở cấp body (TipTap hay sinh khi lưu nháp / undo).
+ */
+export function stripEmptyParagraphsFromHtml(html) {
+    const trimmed = (html || '').trim();
+    if (!trimmed) {
+        return trimmed;
+    }
+
+    if (isFaqPlaceholderHtml(trimmed)) {
+        return stripEditorTransientMarkup(trimmed);
+    }
+
+    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+    const kept = Array.from(doc.body.childNodes).filter((node) => !isEmptyBlockNode(node));
+
+    if (kept.length === 0) {
+        return '';
+    }
+
+    const rebuilt = kept
+        .map((node) => {
+            if (node.nodeType === 1) {
+                return node.outerHTML;
+            }
+
+            return node.textContent || '';
+        })
+        .join('');
+
+    return stripEditorTransientMarkup(rebuilt);
+}
+
+/**
+ * Chuẩn hóa HTML block để hiển thị / lưu nháp (không thêm <p></p> sau heading).
+ */
+export function cleanBlockHtmlForEditorDisplay(html) {
+    return normalizeSectionHeadingBlockHtml(html);
+}
+
+/**
+ * HTML lưu vào block state sau khi TipTap export (coalesce + bỏ paragraph rỗng).
+ */
+export function persistBlockHtmlFromEditor(originalHtml, exportedHtml) {
+    return normalizeSectionHeadingBlockHtml(coalesceTiptapExportHtml(originalHtml, exportedHtml));
+}
+
+/**
+ * Gỡ <p></p> thừa quanh heading section (TipTap hay chèn khi flush / chèn ảnh).
+ */
+export function normalizeSectionHeadingBlockHtml(html) {
+    const trimmed = stripEmptyParagraphsFromHtml(html);
+    if (!trimmed) {
+        return trimmed;
+    }
+
+    const doc = new DOMParser().parseFromString(trimmed, 'text/html');
+    const nodes = Array.from(doc.body.childNodes);
+
+    while (nodes.length > 0 && isEmptyBlockNode(nodes[0])) {
+        nodes.shift();
+    }
+
+    if (nodes.length === 0 || nodes[0].nodeType !== 1) {
+        return stripEditorTransientMarkup(trimmed);
+    }
+
+    const firstTag = nodes[0].tagName.toLowerCase();
+    if (!HEADING_TAG_RE.test(firstTag)) {
+        return trimmed;
+    }
+
+    const headingHtml = nodes[0].outerHTML;
+    const rest = nodes.slice(1);
+    const meaningfulRest = rest.filter((node) => !isEmptyBlockNode(node));
+
+    if (meaningfulRest.length === 0) {
+        return stripEditorTransientMarkup(headingHtml);
+    }
+
+    const restHtml = meaningfulRest
+        .map((node) => {
+            if (node.nodeType === 1) {
+                return node.outerHTML;
+            }
+
+            return node.textContent || '';
+        })
+        .join('');
+
+    return stripEditorTransientMarkup(`${headingHtml}${restHtml}`);
+}
+
+/**
  * TipTap đôi khi đổi `<h2>…</h2>` thành `<p><strong>…</strong></p>` khi block chỉ có heading.
  * Giữ cấp heading và nội dung người dùng vừa sửa thay vì revert về HTML gốc.
  */
@@ -90,17 +256,17 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
             return FAQ_SHORTCODE_HTML;
         }
 
-        return stripEditorTransientMarkup(exportedHtml);
+        return normalizeSectionHeadingBlockHtml(exportedHtml);
     }
 
-    const originalLevel = standaloneHeadingLevel(originalHtml);
+    const originalLevel = leadingHeadingLevel(originalHtml);
     if (originalLevel === null) {
-        return stripEditorTransientMarkup(exportedHtml);
+        return normalizeSectionHeadingBlockHtml(exportedHtml);
     }
 
-    const exportedLevel = standaloneHeadingLevel(exportedHtml);
+    const exportedLevel = leadingHeadingLevel(exportedHtml);
     if (exportedLevel !== null) {
-        return stripEditorTransientMarkup(exportedHtml);
+        return normalizeSectionHeadingBlockHtml(exportedHtml);
     }
 
     const trimmedExport = (exportedHtml || '').trim();
@@ -113,7 +279,9 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
         return originalHtml;
     }
 
-    return stripEditorTransientMarkup(rebuildStandaloneHeadingHtml(originalHtml, innerHtml, originalLevel));
+    return normalizeSectionHeadingBlockHtml(
+        rebuildStandaloneHeadingHtml(originalHtml, innerHtml, originalLevel),
+    );
 }
 
 /**

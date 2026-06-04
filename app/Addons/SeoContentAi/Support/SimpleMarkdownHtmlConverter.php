@@ -60,6 +60,10 @@ final class SimpleMarkdownHtmlConverter
             if ($heading !== null) {
                 $this->closeList($html, $inList);
                 if ($heading['level'] === 1) {
+                    if ($this->isSpuriousHashStarHeadingLine($trimmed)) {
+                        $html[] = '<p>' . $this->formatInline(preg_replace('/^#\s+/u', '', $trimmed) ?? $trimmed) . '</p>';
+                    }
+
                     continue;
                 }
                 $level = $heading['level'];
@@ -158,7 +162,18 @@ final class SimpleMarkdownHtmlConverter
         }
 
         if (preg_match('/^#\s+(?!#)(.+)$/u', $line, $matches) === 1) {
-            return $this->cleanPlainHeadingText($matches[1]);
+            if ($this->isSpuriousHashStarHeadingLine($line)) {
+                return null;
+            }
+
+            $text = $matches[1];
+            if (preg_match('/^\*\s+/u', $text) === 1) {
+                $text = preg_replace('/^\*\s+/u', '', $text) ?? $text;
+            }
+
+            $title = $this->cleanPlainHeadingText($text);
+
+            return $title !== '' ? $title : null;
         }
 
         if (preg_match('/^\*{0,2}\s*H1\s*:\s*(.+?)\*{0,2}\s*$/iu', $line, $matches) === 1) {
@@ -229,6 +244,21 @@ final class SimpleMarkdownHtmlConverter
         $text = preg_replace('/\bH([1-6]):\s*/iu', '', $text) ?? $text;
 
         return trim($text);
+    }
+
+    /**
+     * Dòng «# *» rỗng / chỉ dấu * — không phải H1 (tránh nuốt dòng và bỏ qua tiêu đề thật phía sau).
+     */
+    private function isSpuriousHashStarHeadingLine(string $line): bool
+    {
+        $line = trim($line);
+        if (! preg_match('/^#\s+\*/u', $line)) {
+            return false;
+        }
+
+        $after = preg_replace('/^#\s+\*/u', '', $line) ?? '';
+
+        return trim(str_replace('*', '', $after)) === '';
     }
 
     /**
