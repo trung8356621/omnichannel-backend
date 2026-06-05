@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Str;
 
 final class CreateArticlesFromTaskService
 {
@@ -162,10 +163,13 @@ final class CreateArticlesFromTaskService
             $steps = $this->workflowRunner->run($task, $context);
             $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
             if ($stepFailed) {
+                $failure = $this->summarizeWorkflowFailure($steps);
+
                 return [
                     'success' => false,
                     'article_id' => $context->article?->id,
-                    'message' => 'Quy trình có bước lỗi.',
+                    'message' => $failure['message'],
+                    'failed_step' => $failure['failed_step'],
                 ];
             }
 
@@ -232,12 +236,17 @@ final class CreateArticlesFromTaskService
             (string) ($variables['_project_post_type'] ?? 'article'),
         );
 
+        $slug = Str::slug($keyword);
+        if ($slug === '') {
+            $slug = Str::slug($title);
+        }
+
         $article = SeoArticle::query()->create([
             'site_id' => $siteId,
             'user_id' => auth()->id(),
             'type' => $postType,
             'title' => $title,
-            'slug' => null,
+            'slug' => $slug !== '' ? $slug : null,
             'status' => 'draft',
             'body' => '',
             'language' => 'vi',
@@ -296,6 +305,39 @@ final class CreateArticlesFromTaskService
         if ($site instanceof Site) {
             $this->linkListSync->syncFromStoredContext($site);
         }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $steps
+     * @return array{message: string, failed_step: ?array{title: string, prompt_name: string, message: string}}
+     */
+    private function summarizeWorkflowFailure(array $steps): array
+    {
+        $failed = collect($steps)
+            ->first(fn (array $step): bool => (string) ($step['status'] ?? '') === 'failed');
+
+        if (! is_array($failed)) {
+            return [
+                'message' => 'Quy trình có bước lỗi.',
+                'failed_step' => null,
+            ];
+        }
+
+        $stepMessage = trim((string) ($failed['message'] ?? ''));
+        $stepTitle = trim((string) ($failed['title'] ?? ''));
+        $promptName = trim((string) ($failed['prompt_name'] ?? ''));
+
+        $labelParts = array_values(array_filter([$stepTitle, $promptName]));
+        $prefix = $labelParts !== [] ? implode(' — ', $labelParts) . ': ' : '';
+
+        return [
+            'message' => $prefix . ($stepMessage !== '' ? $stepMessage : 'Quy trình có bước lỗi.'),
+            'failed_step' => [
+                'title' => $stepTitle,
+                'prompt_name' => $promptName,
+                'message' => $stepMessage,
+            ],
+        ];
     }
 
     /**

@@ -513,7 +513,7 @@
                 if ($wire.pendingEditorCollectTarget) {
                     $wire.finalizePendingEditorCollect();
                 }
-            }, 2500);
+            }, 1200);
         "
         x-on:editor-html-collected.window="
             const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
@@ -528,6 +528,9 @@
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
         x-on:article-editor-shortcut.window="
             const action = $event.detail?.action;
+            if ($wire.articleHeavyActionBusy) {
+                return;
+            }
             if (action === 'save') {
                 $wire.requestSaveArticle();
             } else if (action === 'sync') {
@@ -560,10 +563,8 @@
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
         x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"
-        @article-faq-extract-debug-cleared.window="window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'))"
         x-on:extract-article-faqs-with-context.window="$wire.extractFaqsFromSelection($event.detail.html ?? '', $event.detail.articleHtml ?? '')"
         x-on:renew-article-faq.window="$wire.renewArticleFaq($event.detail.index, $event.detail.question, $event.detail.answer)"
-        x-on:generate-article-image.window="$wire.generateArticleImageFromEditor($event.detail.selectionText ?? '', $event.detail.selectionHtml ?? '', $event.detail.userBrief ?? '', $event.detail.activeBlockId ?? '', $event.detail.target ?? 'editor', $event.detail.loaiSanPhamCategoryArticleId ?? 0, $event.detail.loaiSanPhamCustom ?? '')"
         x-on:preview-generate-article-image-prompt.window="
             $wire.previewGenerateArticleImagePrompt(
                 $event.detail.userBrief ?? '',
@@ -617,25 +618,47 @@
                         <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
                         @if ($editingSlug)
                             <span class="text-gray-500">{{ $this->getPermalinkBase() }}/</span>
-                            <input
-                                type="text"
-                                wire:model.live.debounce.250ms="articleSlug"
-                                wire:keydown.enter.prevent="confirmArticleSlug"
-                                class="inline-block min-w-[12rem] max-w-full flex-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
-                            />
-                            @if ($this->getPermalinkSuffix() !== '')
-                                <span class="text-gray-500">{{ $this->getPermalinkSuffix() }}</span>
-                            @endif
-                            <button
-                                type="button"
-                                wire:click="confirmArticleSlug"
-                                wire:loading.attr="disabled"
-                                wire:target="confirmArticleSlug"
-                                class="ml-2 text-primary-600 hover:underline text-xs disabled:opacity-50"
+                            <span
+                                x-data="{
+                                    slug: @js(trim($articleSlug)),
+                                    normalizeSlug() {
+                                        const fn = window.normalizeArticleSlug;
+                                        if (typeof fn !== 'function') {
+                                            return;
+                                        }
+                                        const next = fn(this.slug);
+                                        if (next !== this.slug) {
+                                            this.slug = next;
+                                        }
+                                    },
+                                    async saveSlug() {
+                                        this.normalizeSlug();
+                                        await $wire.confirmArticleSlug(this.slug);
+                                    },
+                                }"
+                                class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1"
                             >
-                                <span wire:loading.remove wire:target="confirmArticleSlug">OK</span>
-                                <span wire:loading wire:target="confirmArticleSlug">…</span>
-                            </button>
+                                <input
+                                    type="text"
+                                    x-model="slug"
+                                    x-on:input="normalizeSlug()"
+                                    x-on:keydown.enter.prevent="saveSlug()"
+                                    class="inline-block min-w-[12rem] max-w-full flex-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
+                                />
+                                @if ($this->getPermalinkSuffix() !== '')
+                                    <span class="text-gray-500">{{ $this->getPermalinkSuffix() }}</span>
+                                @endif
+                                <button
+                                    type="button"
+                                    x-on:click="saveSlug()"
+                                    wire:loading.attr="disabled"
+                                    wire:target="confirmArticleSlug"
+                                    class="ml-2 text-primary-600 hover:underline text-xs disabled:opacity-50"
+                                >
+                                    <span wire:loading.remove wire:target="confirmArticleSlug">OK</span>
+                                    <span wire:loading wire:target="confirmArticleSlug">…</span>
+                                </button>
+                            </span>
                         @else
                             @php($previewPermalink = $this->getDisplayPermalink())
                             <a
@@ -671,6 +694,7 @@
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
                     window.__SEO_ARTICLE_MEDIA_PICKER__ = @json($this->getArticleMediaPickerPayload());
+                    window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ = @js($this->getId());
                 </script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
@@ -1148,8 +1172,113 @@
         </div>
     </div>
 
+    @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
+        <div
+            class="seo-debug-markdown-import"
+            x-data="{
+                open: false,
+                markdown: '',
+                openModal() {
+                    this.open = true;
+                    this.$nextTick(() => this.$refs.debugMarkdownInput?.focus());
+                },
+                closeModal() {
+                    this.open = false;
+                },
+                async importMarkdown() {
+                    const text = (this.markdown || '').trim();
+                    if (text === '') {
+                        return;
+                    }
+                    await $wire.importMarkdownDebug(text);
+                    this.markdown = '';
+                    this.open = false;
+                },
+            }"
+            x-on:open-debug-markdown-import.window="openModal()"
+            x-on:keydown.escape.window="if (open) closeModal()"
+        >
+            <div
+                x-show="open"
+                x-cloak
+                class="seo-debug-markdown-import__backdrop"
+                x-on:click.self="closeModal()"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="seo-debug-markdown-import-title"
+            >
+                <div class="seo-debug-markdown-import__panel">
+                    <h3 id="seo-debug-markdown-import-title" class="seo-debug-markdown-import__title">
+                        Debug: import nội dung markdown
+                    </h3>
+                    <p class="seo-debug-markdown-import__desc">
+                        Dán markdown AI để convert sang HTML editor. Chỉ gửi request khi bấm Import.
+                    </p>
+                    <textarea
+                        x-ref="debugMarkdownInput"
+                        x-model="markdown"
+                        rows="14"
+                        class="seo-debug-markdown-import__textarea"
+                        placeholder="Nội dung markdown…"
+                    ></textarea>
+                    <div class="seo-debug-markdown-import__actions">
+                        <button
+                            type="button"
+                            class="fi-btn fi-btn-size-md fi-color-gray"
+                            x-on:click="closeModal()"
+                        >
+                            Hủy
+                        </button>
+                        <button
+                            type="button"
+                            class="fi-btn fi-btn-size-md fi-color-primary"
+                            x-on:click="importMarkdown()"
+                            wire:loading.attr="disabled"
+                            wire:target="importMarkdownDebug"
+                        >
+                            <span wire:loading.remove wire:target="importMarkdownDebug">Import</span>
+                            <span wire:loading wire:target="importMarkdownDebug">Đang import…</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    @endif
+
     @push('scripts')
         @viteReactRefresh
         @vite('app/Addons/SeoContentAi/resources/js/article-editor.jsx')
+        @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
+            <script>
+                (function () {
+                    function mountDebugMarkdownHeaderButton() {
+                        const page = document.querySelector('.seo-article-edit-page');
+                        if (!page) {
+                            return;
+                        }
+
+                        const headerActions = page.querySelector('.fi-header > div:last-child');
+                        if (!headerActions || headerActions.querySelector('[data-seo-debug-md-import]')) {
+                            return;
+                        }
+
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.setAttribute('data-seo-debug-md-import', '1');
+                        button.className = 'fi-btn relative grid-flow-col items-center justify-center font-semibold outline-none transition duration-75 focus-visible:ring-2 fi-btn-size-md fi-color-gray gap-1.5 px-3 py-2 text-sm inline-grid shadow-sm bg-white text-gray-950 hover:bg-gray-50 dark:bg-white/5 dark:text-white dark:hover:bg-white/10 ring-1 ring-gray-950/10 dark:ring-white/20';
+                        button.innerHTML = '<span class="fi-btn-label">Debug import Markdown</span>';
+                        button.addEventListener('click', function (event) {
+                            event.preventDefault();
+                            window.dispatchEvent(new CustomEvent('open-debug-markdown-import'));
+                        });
+
+                        headerActions.insertBefore(button, headerActions.firstChild);
+                    }
+
+                    document.addEventListener('DOMContentLoaded', mountDebugMarkdownHeaderButton);
+                    document.addEventListener('livewire:navigated', mountDebugMarkdownHeaderButton);
+                })();
+            </script>
+        @endif
     @endpush
 </x-filament-panels::page>

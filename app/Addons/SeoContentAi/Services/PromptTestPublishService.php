@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\MarkdownOutlineParser;
 use App\Addons\SeoContentAi\Support\MarkdownSemanticKeywordsParser;
+use Illuminate\Support\Str;
 
 final class PromptTestPublishService
 {
@@ -48,7 +49,6 @@ final class PromptTestPublishService
             return ['success' => false, 'message' => 'Kết quả AI trống.'];
         }
 
-        $this->persistOutlineAndKeywords($article, $markdown);
         $this->syncFocusKeyword($article, $variables, $markdown);
 
         $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
@@ -77,11 +77,18 @@ final class PromptTestPublishService
             );
         }
 
-        $article->update([
+        $update = [
             'title' => $title,
             'body' => $html,
             'user_id' => auth()->id(),
-        ]);
+        ];
+
+        $slug = $this->resolveSlugForPublish($article, $variables, $title);
+        if ($slug !== null) {
+            $update['slug'] = $slug;
+        }
+
+        $article->update($update);
 
         app(ArticlePostImagesService::class)->syncFromHtml($article->fresh(), $html);
         app(SeoAnalyzerService::class)->analyze($article->fresh());
@@ -93,7 +100,7 @@ final class PromptTestPublishService
         return [
             'success' => true,
             'message' => sprintf(
-                'Đã tạo nội dung bài «%s» từ dàn ý (HTML trong DB). Mở editor để chỉnh và đồng bộ WP.',
+                'Đã lưu nội dung bài «%s» vào editor (HTML trong DB). Mở editor để chỉnh và đồng bộ WP.',
                 $title,
             ),
         ];
@@ -164,6 +171,28 @@ final class PromptTestPublishService
             (int) auth()->id(),
             $phrase,
         );
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function resolveSlugForPublish(SeoArticle $article, array $variables, string $title): ?string
+    {
+        if (filled($article->slug)) {
+            return null;
+        }
+
+        $source = trim((string) ($variables['focus_keyword'] ?? ''));
+        if ($source === '') {
+            $source = trim((string) ($variables['post_title'] ?? ''));
+        }
+        if ($source === '') {
+            $source = trim($title);
+        }
+
+        $slug = Str::slug($source);
+
+        return $slug !== '' ? $slug : null;
     }
 
     /**

@@ -14,6 +14,9 @@ import {
     writeArticleMediaPickerCache,
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
+import { normalizeArticleSlug } from './utils/articleSlugUtils';
+
+window.normalizeArticleSlug = normalizeArticleSlug;
 
 window.__seoArticleMediaPickerCache = {
     read: readArticleMediaPickerCache,
@@ -53,6 +56,10 @@ function registerArticleEditorLivewireBridge() {
 
     if (typeof Livewire !== 'undefined') {
         Livewire.on('collect-editor-html', forward('collect-editor-html'));
+        Livewire.on('article-faqs-extracted', forward('article-faqs-extracted'));
+        Livewire.on('seo-analyze-result', forward('seo-analyze-result'));
+        Livewire.on('flush-article-faqs', forward('flush-article-faqs'));
+        Livewire.on('article-faq-extract-debug', forward('article-faq-extract-debug'));
         Livewire.on('article-faq-extract-debug-cleared', () => {
             window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'));
         });
@@ -96,7 +103,7 @@ if (rootElement) {
     let initialHtml = '';
     let initialOutline = '';
     let initialSeo = null;
-    let editorSettings = { history_step: 20 };
+    let editorSettings = { history_step: 20, autosave_interval_seconds: 60 };
     let initialPostImages = [];
     let initialSupplementalImages = [];
     let articleId = null;

@@ -130,6 +130,11 @@ class EditArticle extends EditRecord
     /** @var 'save'|'sync'|null Thu thập HTML sau khi flush FAQ (Lưu / Đồng bộ WP). */
     public ?string $pendingEditorCollectTarget = null;
 
+    public bool $articleHeavyActionBusy = false;
+
+    /** @var 'save'|'sync'|null */
+    public ?string $articleHeavyAction = null;
+
     public bool $quickReviewsJobPending = false;
 
     public string $editorHtml = '';
@@ -154,8 +159,12 @@ class EditArticle extends EditRecord
         }
     }
 
-    public function confirmArticleSlug(): void
+    public function confirmArticleSlug(?string $slug = null): void
     {
+        if ($slug !== null) {
+            $this->articleSlug = Str::slug($slug);
+        }
+
         $slug = Str::slug($this->articleSlug);
         if ($slug === '') {
             Notification::make()
@@ -344,23 +353,6 @@ class EditArticle extends EditRecord
                 ->modalDescription(__('seo-content-ai::filament.article_list.fetch_from_wordpress_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.fetch_from_wordpress_submit'))
                 ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
-            Actions\Action::make('debugImportMarkdown')
-                ->label('Debug import Markdown')
-                ->icon('heroicon-o-bug-ant')
-                ->color('gray')
-                ->visible(fn (): bool => SeoAccessControl::canAccessManagerFeatures())
-                ->form([
-                    Forms\Components\Textarea::make('markdown')
-                        ->label('Nội dung markdown')
-                        ->rows(14)
-                        ->required(),
-                ])
-                ->modalHeading('Debug: import nội dung markdown')
-                ->modalDescription('Dùng để test nội dung AI trả về ở dạng markdown và convert sang HTML editor.')
-                ->modalSubmitActionLabel('Import')
-                ->action(function (array $data): void {
-                    $this->importMarkdownDebug((string) ($data['markdown'] ?? ''));
-                }),
             Actions\DeleteAction::make()
                 ->icon('heroicon-o-trash')
                 ->iconButton()
@@ -400,7 +392,6 @@ class EditArticle extends EditRecord
         );
 
         $this->dispatch('article-faq-extract-debug-cleared');
-        $this->js('window.dispatchEvent(new CustomEvent("article-faq-extract-debug-cleared"))');
 
         app(SeoAnalyzerService::class)->analyze($this->record->fresh());
 
@@ -1390,14 +1381,41 @@ class EditArticle extends EditRecord
 
     public function requestSaveArticle(): void
     {
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $this->beginHeavyArticleAction('save');
         $this->pendingEditorCollectTarget = 'save';
         $this->dispatch('flush-article-faqs');
     }
 
     public function requestSyncToWordPress(): void
     {
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $this->beginHeavyArticleAction('sync');
         $this->pendingEditorCollectTarget = 'sync';
         $this->dispatch('flush-article-faqs');
+    }
+
+    private function beginHeavyArticleAction(string $action): void
+    {
+        $this->articleHeavyActionBusy = true;
+        $this->articleHeavyAction = $action;
+    }
+
+    private function finishHeavyArticleActionWithReload(): void
+    {
+        $this->js('window.location.reload()');
+    }
+
+    private function cancelHeavyArticleAction(): void
+    {
+        $this->articleHeavyActionBusy = false;
+        $this->articleHeavyAction = null;
     }
 
     /** Dự phòng khi flush FAQ không gọi được saveArticleFaqs (timeout phía client). */
@@ -1748,64 +1766,72 @@ class EditArticle extends EditRecord
      */
     public function persistArticleLocal(string $html): void
     {
-        $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+        try {
+            $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
 
-        $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
-        $html = $faqSync['body_html'];
-        if ($faqSync['extracted']) {
-            $this->dispatch('article-faqs-extracted', faqs: $faqSync['faqs'], editorHtml: $html);
-        } else {
-            $this->dispatchFaqExtractDebugIfPresent($faqSync['extract_debug'] ?? null);
+            $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
+            $html = $faqSync['body_html'];
+            if ($faqSync['extracted']) {
+                $this->dispatch('article-faqs-extracted', faqs: $faqSync['faqs'], editorHtml: $html);
+            } else {
+                $this->dispatchFaqExtractDebugIfPresent($faqSync['extract_debug'] ?? null);
+            }
+
+            $slug = Str::slug($this->articleSlug);
+            $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
+            $seoMetaDescription = trim($this->seoMetaDescription);
+
+            $publishAt = $this->resolvePublishAtForSave();
+
+            $this->record->update([
+                'title' => trim($this->articleTitle),
+                'slug' => $slug !== '' ? $slug : null,
+                'status' => $this->articleStatus,
+                'published_at' => $publishAt,
+                'body' => $html,
+                'user_id' => auth()->id(),
+            ]);
+            $this->persistSeoMetaFields();
+
+            $this->articleSlug = $slug;
+            $this->editingSlug = false;
+            $this->syncPublishDatePartsFromRecord();
+
+            app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
+            $this->record->refresh();
+
+            app(SeoAnalyzerService::class)->analyze($this->record->fresh());
+
+            $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
+                $this->record->fresh(),
+                $html,
+                $seoTitle,
+                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                $seoMetaDescription !== '' ? $seoMetaDescription : null,
+            );
+            $this->dispatch('seo-analyze-result', result: $seoResult);
+
+            $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
+            if ($faqSync['extracted']) {
+                $saveBody = 'Extracted ' . $faqSync['faq_count'] . ' FAQ items from content into FAQ panel. ' . $saveBody;
+            } elseif (! empty($faqSync['extract_debug'])) {
+                $saveBody = 'FAQ heading exists but questions/answers were not extracted - check FAQ debug block. ' . $saveBody;
+            }
+
+            Notification::make()
+                ->title('Article saved')
+                ->body($saveBody)
+                ->success()
+                ->send();
+
+            if ($this->articleHeavyActionBusy) {
+                $this->finishHeavyArticleActionWithReload();
+            }
+        } catch (\Throwable $exception) {
+            $this->cancelHeavyArticleAction();
+
+            throw $exception;
         }
-
-        $slug = Str::slug($this->articleSlug);
-        $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
-        $seoMetaDescription = trim($this->seoMetaDescription);
-
-        $publishAt = $this->resolvePublishAtForSave();
-
-        $this->record->update([
-            'title' => trim($this->articleTitle),
-            'slug' => $slug !== '' ? $slug : null,
-            'status' => $this->articleStatus,
-            'published_at' => $publishAt,
-            'body' => $html,
-            'user_id' => auth()->id(),
-        ]);
-        $this->persistSeoMetaFields();
-
-        $this->articleSlug = $slug;
-        $this->editingSlug = false;
-        $this->syncPublishDatePartsFromRecord();
-
-        app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
-        $this->record->refresh();
-
-        app(SeoAnalyzerService::class)->analyze($this->record->fresh());
-
-        $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
-            $this->record->fresh(),
-            $html,
-            $seoTitle,
-            $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-            $seoMetaDescription !== '' ? $seoMetaDescription : null,
-        );
-        $this->dispatch('seo-analyze-result', result: $seoResult);
-
-        $this->js('window.dispatchEvent(new CustomEvent("seo-article-saved"))');
-
-        $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
-        if ($faqSync['extracted']) {
-            $saveBody = 'Extracted ' . $faqSync['faq_count'] . ' FAQ items from content into FAQ panel. ' . $saveBody;
-        } elseif (! empty($faqSync['extract_debug'])) {
-            $saveBody = 'FAQ heading exists but questions/answers were not extracted - check FAQ debug block. ' . $saveBody;
-        }
-
-        Notification::make()
-            ->title('Article saved')
-            ->body($saveBody)
-            ->success()
-            ->send();
     }
 
     /**
@@ -1813,42 +1839,50 @@ class EditArticle extends EditRecord
      */
     public function syncArticleToWordPress(string $html): void
     {
-        $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
+        try {
+            $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
 
-        $result = app(WordPressArticleSyncService::class)->syncForArticle(
-            $this->record->fresh(),
-            $this->resolveLivewireSeoPayloadForWordPress(),
-        );
+            $result = app(WordPressArticleSyncService::class)->syncForArticle(
+                $this->record->fresh(),
+                $this->resolveLivewireSeoPayloadForWordPress(),
+            );
 
-        $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
+            $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
 
-        if ($result['success']) {
-            $this->refreshEditorAfterWordPressSync();
+            if ($result['success']) {
+                $syncBody = $result['message'];
+                if (! empty($result['faq_extract_debug'])) {
+                    $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
+                    $syncBody = ($headingText !== ''
+                        ? 'Sync completed but 0 FAQ extracted (detected heading: "' . $headingText . '"). Check FAQ debug block.'
+                        : 'Sync completed but 0 FAQ extracted - check FAQ debug block.') . ' ' . $syncBody;
+                }
 
-            $syncBody = $result['message'];
-            if (! empty($result['faq_extract_debug'])) {
-                $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
-                $syncBody = ($headingText !== ''
-                    ? 'Sync completed but 0 FAQ extracted (detected heading: "' . $headingText . '"). Check FAQ debug block.'
-                    : 'Sync completed but 0 FAQ extracted - check FAQ debug block.') . ' ' . $syncBody;
+                Notification::make()
+                    ->title('WordPress synced')
+                    ->body($syncBody)
+                    ->success()
+                    ->send();
+
+                $this->finishHeavyArticleActionWithReload();
+
+                return;
             }
 
+            $failureBody = (string) ($result['message'] ?? '');
+
             Notification::make()
-                ->title('WordPress synced')
-                ->body($syncBody)
-                ->success()
+                ->title('WordPress sync failed')
+                ->body($failureBody !== '' ? $failureBody : 'WordPress sync failed.')
+                ->danger()
                 ->send();
 
-            return;
+            $this->cancelHeavyArticleAction();
+        } catch (\Throwable $exception) {
+            $this->cancelHeavyArticleAction();
+
+            throw $exception;
         }
-
-        $failureBody = (string) ($result['message'] ?? '');
-
-        Notification::make()
-            ->title('WordPress sync failed')
-            ->body($failureBody !== '' ? $failureBody : 'WordPress sync failed.')
-            ->danger()
-            ->send();
     }
 
     private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): void
@@ -2058,13 +2092,41 @@ class EditArticle extends EditRecord
     }
 
     /**
-     * Cấu hình editor (history_step lưu wp_options). Lịch sử undo/redo lưu localStorage phía client.
+     * Cấu hình editor (history_step, autosave_interval_seconds trong wp_options). Undo/redo lưu localStorage phía client.
      *
-     * @return array{history_step: int}
+     * @return array{history_step: int, autosave_interval_seconds: int}
      */
     public function getEditorSettingsPayload(): array
     {
         return app(ArticleEditorHistoryService::class)->getSettings();
+    }
+
+    public function autosaveArticleDraft(string $html): void
+    {
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $html = trim(app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html));
+        if ($html === '') {
+            return;
+        }
+
+        if (trim((string) ($this->record->body ?? '')) === $html) {
+            return;
+        }
+
+        try {
+            $this->record->update([
+                'body' => $html,
+                'user_id' => auth()->id(),
+            ]);
+            $this->editorHtml = $html;
+            app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record->fresh());
+            $this->skipRender();
+        } catch (\Throwable) {
+            $this->dispatch('article-autosave-failed');
+        }
     }
 
     /**
@@ -2406,6 +2468,8 @@ class EditArticle extends EditRecord
                 ->warning()
                 ->send();
 
+            $this->releaseHeavyArticleActionIfAborted();
+
             return;
         }
 
@@ -2436,6 +2500,8 @@ class EditArticle extends EditRecord
                     ->success()
                     ->send();
 
+                $this->releaseHeavyArticleActionIfAborted();
+
                 return;
             }
 
@@ -2452,6 +2518,8 @@ class EditArticle extends EditRecord
                 ->body((string) ($restore['message'] ?? 'FAQ has been removed from SEO system.'))
                 ->warning()
                 ->send();
+
+            $this->releaseHeavyArticleActionIfAborted();
 
             return;
         }
@@ -2483,6 +2551,8 @@ class EditArticle extends EditRecord
                     ->success()
                     ->send();
 
+                $this->releaseHeavyArticleActionIfAborted();
+
                 return;
             }
         }
@@ -2500,6 +2570,15 @@ class EditArticle extends EditRecord
             ->body('FAQ is saved in SEO system. Sync to WordPress when clicking "Sync".')
             ->success()
             ->send();
+
+        $this->releaseHeavyArticleActionIfAborted();
+    }
+
+    private function releaseHeavyArticleActionIfAborted(): void
+    {
+        if ($this->articleHeavyActionBusy && $this->pendingEditorCollectTarget === null) {
+            $this->cancelHeavyArticleAction();
+        }
     }
 
     /**
@@ -2569,11 +2648,6 @@ class EditArticle extends EditRecord
             galleryUrls: $galleryUrls,
         );
 
-        Notification::make()
-            ->title(__('seo-content-ai::common.generating_image'))
-            ->body(__('seo-content-ai::common.placeholder_inserted'))
-            ->success()
-            ->send();
     }
 
     /**

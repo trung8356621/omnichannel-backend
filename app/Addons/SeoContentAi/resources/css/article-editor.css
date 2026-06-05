@@ -236,6 +236,10 @@
     color: #fff;
 }
 
+.seo-publish-icon-btn.is-busy {
+    pointer-events: none;
+}
+
 .seo-publish-icon-btn.is-outline {
     border-color: #2271b1;
     color: #2271b1;

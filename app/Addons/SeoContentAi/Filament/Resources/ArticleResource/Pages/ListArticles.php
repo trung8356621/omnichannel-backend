@@ -18,6 +18,19 @@ class ListArticles extends ListRecords
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
 
+    public function setSeoScoreBandFilter(?string $band = null): void
+    {
+        if ($band === null || $band === '') {
+            unset($this->tableFilters['seo_score_band']);
+        } else {
+            $this->tableFilters['seo_score_band'] = [
+                'value' => $band,
+            ];
+        }
+
+        $this->resetPage($this->getTablePaginationPageName());
+    }
+
     protected function getHeaderActions(): array
     {
         return [

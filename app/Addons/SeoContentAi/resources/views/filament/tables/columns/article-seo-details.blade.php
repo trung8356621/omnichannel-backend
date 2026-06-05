@@ -4,141 +4,218 @@
 
     $record = $getRecord();
     $seo = ArticleListSeoSummary::for($record);
+
+    if (! empty($seo['score_skipped'])) {
+        $scoreLabel = __('seo-content-ai::filament.article_list.seo_score_skipped_label');
+        $scoreTone = 'skipped';
+    } elseif ($seo['score'] !== null) {
+        $scoreLabel = $seo['score'] . ' / 100';
+        $scoreTone = $seo['score_tone'];
+    } else {
+        $scoreLabel = '— / 100';
+        $scoreTone = 'muted';
+    }
+
+    $keywordLabel = filled($seo['keyword'])
+        ? (string) $seo['keyword']
+        : __('seo-content-ai::filament.article_list.seo_keyword_empty');
 @endphp
 
-<div class="article-seo-cell" wire:key="article-seo-{{ $record->id }}" onclick="event.stopPropagation()">
-    <div class="article-seo-cell__box">
-        
+<div
+    class="article-seo-cell"
+    wire:key="article-seo-{{ $record->id }}"
+    x-data="{ open: false }"
+    x-on:click.outside="open = false"
+    x-on:keydown.escape.window="open = false"
+    onclick="event.stopPropagation()"
+>
+    <button
+        type="button"
+        class="article-seo-dropdown__trigger"
+        x-on:click.stop="open = !open"
+        :aria-expanded="open"
+        aria-haspopup="true"
+        title="{{ $keywordLabel }}"
+    >
+        <span class="article-seo-score article-seo-score--{{ $scoreTone }}">
+            {{ $scoreLabel }}
+        </span>
+        <span class="article-seo-dropdown__keyword">{{ $keywordLabel }}</span>
+        <span class="article-seo-dropdown__chevron-wrap" x-bind:class="{ 'is-open': open }">
+            <x-filament::icon icon="heroicon-m-chevron-down" class="article-seo-dropdown__chevron" />
+        </span>
+    </button>
 
-        @if (! empty($seo['score_skipped']))
-            <span class="article-seo-score article-seo-score--skipped" title="{{ __('seo-content-ai::filament.article_list.seo_score_skipped_label') }}">
-                {{ __('seo-content-ai::filament.article_list.seo_score_skipped_label') }}
-            </span>
-        @elseif ($seo['score'] !== null)
-            <span class="article-seo-score article-seo-score--{{ $seo['score_tone'] }}">
-                {{ $seo['score'] }} / 100
-            </span>
-        @else
-            <span class="article-seo-score article-seo-score--muted">— / 100</span>
-        @endif
-
+    <div
+        class="article-seo-dropdown__panel"
+        x-show="open"
+        x-cloak
+        x-transition.opacity.duration.150ms
+        x-on:click.stop
+    >
         <p class="article-seo-line">
-            <span class="article-seo-line__label">Từ khóa:</span>
-            @if (filled($seo['keyword']))
-                <span class="article-seo-line__value">{{ $seo['keyword'] }}</span>
-            @else
-                <span class="article-seo-line__empty">Chưa có</span>
-            @endif
-        </p>
-
-        <p class="article-seo-line">
-            <span class="article-seo-line__label">Loại:</span>
+            <span class="article-seo-line__label">{{ __('seo-content-ai::filament.article_list.seo_type_label') }}:</span>
             <span class="article-seo-line__value">{{ $seo['schema'] }}</span>
         </p>
 
         <p class="article-seo-line">
-            <span class="article-seo-line__label">Hình ảnh:</span>
+            <span class="article-seo-line__label">{{ __('seo-content-ai::filament.article_list.seo_images_label') }}:</span>
             <span class="article-seo-line__value">{{ $seo['image_count'] }}</span>
         </p>
 
         <p class="article-seo-line">
             <span class="article-seo-line__label">FAQ:</span>
             <span class="article-seo-line__value">
-                {{ $seo['faq_count'] }} câu
+                {{ $seo['faq_count'] }} {{ __('seo-content-ai::filament.article_list.seo_faq_unit') }}
                 <span class="article-seo-line__sep" aria-hidden="true">·</span>
-                {{ $seo['faq_points'] }}/10 điểm
+                {{ $seo['faq_points'] }}/10 {{ __('seo-content-ai::filament.article_list.seo_points_unit') }}
             </span>
         </p>
 
         <p class="article-seo-line">
-            <span class="article-seo-line__label">Featured Snippet:</span>
-            <span class="article-seo-line__value">{{ $seo['featured_snippet_points'] }}/10 điểm</span>
+            <span class="article-seo-line__label">{{ __('seo-content-ai::filament.article_list.seo_featured_snippet_label') }}:</span>
+            <span class="article-seo-line__value">
+                {{ $seo['featured_snippet_points'] }}/10 {{ __('seo-content-ai::filament.article_list.seo_points_unit') }}
+            </span>
         </p>
 
         <p class="article-seo-line article-seo-line--links">
-            <span class="article-seo-line__label">Liên kết:</span>
+            <span class="article-seo-line__label">{{ __('seo-content-ai::filament.article_list.seo_links_label') }}:</span>
             <span class="article-seo-links">
-                <span class="article-seo-links__item" title="Tổng liên kết">
+                <span class="article-seo-links__item" title="{{ __('seo-content-ai::filament.article_list.seo_links_total') }}">
                     <x-filament::icon icon="heroicon-m-link" class="article-seo-links__icon" />
                     {{ $seo['links_total'] }}
                 </span>
                 <span class="article-seo-links__sep" aria-hidden="true">|</span>
-                <span class="article-seo-links__item" title="Liên kết ngoài">
+                <span class="article-seo-links__item" title="{{ __('seo-content-ai::filament.article_list.seo_links_external') }}">
                     <x-filament::icon icon="heroicon-m-arrow-top-right-on-square" class="article-seo-links__icon" />
                     {{ $seo['links_external'] }}
                 </span>
                 <span class="article-seo-links__sep" aria-hidden="true">|</span>
-                <span class="article-seo-links__item" title="Liên kết nội bộ">
+                <span class="article-seo-links__item" title="{{ __('seo-content-ai::filament.article_list.seo_links_internal') }}">
                     <x-filament::icon icon="heroicon-m-arrow-uturn-left" class="article-seo-links__icon" />
                     {{ $seo['links_internal'] }}
                 </span>
             </span>
         </p>
-
-        <div class="article-seo-cell__actions">
-            <button
-                type="button"
-                class="article-seo-cell__detail-link js-article-seo-open"
-                data-article-id="{{ $record->id }}"
-            >
-                Chi tiết
-            </button>
-        </div>
     </div>
 </div>
 
 @once
     <style>
-        .article-seo-cell {
-            min-width: 14rem;
-            max-width: 22rem;
+        td:has(.article-seo-cell),
+        .fi-ta-cell:has(.article-seo-cell) {
+            overflow: visible !important;
+            position: relative;
         }
 
-        .article-seo-cell__box {
+        .article-seo-cell {
             position: relative;
+            min-width: 10rem;
+            max-width: 18rem;
+        }
+
+        .article-seo-dropdown__trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            width: 100%;
+            max-width: 100%;
+            margin: 0;
+            padding: 0.3rem 0.45rem;
+            border: 1px solid rgb(229 231 235);
+            border-radius: 0.5rem;
+            background: rgb(255 255 255);
+            text-align: left;
+            cursor: pointer;
+            transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+        }
+
+        .article-seo-dropdown__trigger:hover {
+            border-color: rgb(191 219 254);
+            background: rgb(239 246 255);
+        }
+
+        .article-seo-dropdown__trigger:focus-visible {
+            outline: 2px solid rgb(59 130 246);
+            outline-offset: 2px;
+        }
+
+        .dark .article-seo-dropdown__trigger {
+            border-color: rgb(55 65 81);
+            background: rgb(17 24 39);
+        }
+
+        .dark .article-seo-dropdown__trigger:hover {
+            border-color: rgb(37 99 235);
+            background: rgb(30 41 59);
+        }
+
+        .article-seo-dropdown__keyword {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-size: 0.75rem;
+            font-weight: 600;
+            line-height: 1.35;
+            color: rgb(17 24 39);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .dark .article-seo-dropdown__keyword {
+            color: rgb(243 244 246);
+        }
+
+        .article-seo-dropdown__chevron-wrap {
+            display: inline-flex;
+            flex-shrink: 0;
+            transition: transform 0.15s ease;
+        }
+
+        .article-seo-dropdown__chevron-wrap.is-open {
+            transform: rotate(180deg);
+        }
+
+        .article-seo-dropdown__chevron {
+            width: 0.875rem;
+            height: 0.875rem;
+            color: rgb(107 114 128);
+        }
+
+        .dark .article-seo-dropdown__chevron {
+            color: rgb(156 163 175);
+        }
+
+        .article-seo-dropdown__panel {
+            position: absolute;
+            top: calc(100% + 0.25rem);
+            left: 0;
+            z-index: 50;
             display: flex;
             flex-direction: column;
             gap: 0.375rem;
-            padding: 0.5rem 4rem 0.5rem 0;
-            text-align: left;
+            min-width: 15rem;
+            max-width: min(22rem, 90vw);
+            padding: 0.5rem 0.625rem;
+            border: 1px solid rgb(229 231 235);
+            border-radius: 0.5rem;
+            background: rgb(255 255 255);
+            box-shadow: 0 10px 25px -12px rgb(0 0 0 / 25%);
         }
 
-        .article-seo-cell__actions {
-            position: relative;
-            z-index: 1;
-        }
-
-        .article-seo-cell__detail-link {
-            margin: 0;
-            padding: 0;
-            border: none;
-            background: none;
-            font-size: 0.8125rem;
-            font-weight: 600;
-            color: rgb(37 99 235);
-            cursor: pointer;
-            text-decoration: underline;
-            text-underline-offset: 2px;
-        }
-
-        .article-seo-cell__detail-link:hover {
-            color: rgb(29 78 216);
-        }
-
-        .dark .article-seo-cell__detail-link {
-            color: rgb(96 165 250);
-        }
-
-        .dark .article-seo-cell__detail-link:hover {
-            color: rgb(147 197 253);
+        .dark .article-seo-dropdown__panel {
+            border-color: rgb(55 65 81);
+            background: rgb(17 24 39);
+            box-shadow: 0 10px 25px -12px rgb(0 0 0 / 55%);
         }
 
         .article-seo-score {
             display: inline-block;
-            align-self: flex-start;
-            padding: 0.125rem 0.5rem;
+            flex-shrink: 0;
+            padding: 0.125rem 0.4rem;
             border-radius: 0.375rem;
-            font-size: 0.75rem;
+            font-size: 0.6875rem;
             font-weight: 700;
             line-height: 1.4;
         }
@@ -218,11 +295,6 @@
 
         .article-seo-line__value {
             font-weight: 500;
-        }
-
-        .article-seo-line__empty {
-            color: rgb(156 163 175);
-            font-style: italic;
         }
 
         .article-seo-line__sep {

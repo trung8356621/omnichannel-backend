@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -19,6 +20,7 @@ final class SeoProjectWorkflowRunService
     public function __construct(
         private readonly TaskTestInputResolver $inputResolver,
         private readonly CreateArticlesFromTaskService $articleRunner,
+        private readonly SeoProjectRunErrorFormatter $errorFormatter,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -54,53 +56,118 @@ final class SeoProjectWorkflowRunService
 
         $tasks = $query->get();
         $items = [];
-        $succeeded = 0;
-        $failed = 0;
-
-        $scope = $this->articleScopeForProject($projectSiteId);
 
         foreach ($tasks as $task) {
             /** @var SeoProjectTask $task */
-            $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
-            if ($taskSiteId <= 0) {
-                $items[] = $this->buildItemRow($task, false, null, 'Thiếu site_id.');
-                $failed++;
-                $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+            $items[] = $this->runOneTask($project, $run, $task, $projectSiteId);
+        }
 
-                continue;
-            }
+        return $this->finalizeRun($run, $items);
+    }
 
-            $task->update(['status' => SeoProjectTask::STATUS_WRITING]);
+    /**
+     * @return array<string, mixed>
+     */
+    public function retryTask(SeoProjectRun $run, int $taskId): array
+    {
+        @set_time_limit(0);
 
-            try {
-                $context = $this->inputResolver->resolveForProjectTask($task, $scope);
-                $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
+        $run->loadMissing('project.site');
+        $project = $run->project;
+        if (! $project instanceof SeoProject) {
+            throw new \InvalidArgumentException('Không tìm thấy dự án của lần run này.');
+        }
 
-                if ($result['success']) {
-                    $articleId = (int) ($result['article_id'] ?? 0);
-                    $items[] = $this->buildItemRow($task, true, $articleId, (string) $result['message']);
-                    $succeeded++;
-                    $task->update(['status' => SeoProjectTask::STATUS_COMPLETED]);
+        $task = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereKey($taskId)
+            ->first();
 
-                    if ($articleId > 0) {
-                        $this->storeArticleRunMeta($articleId, $run, $task);
-                    }
-                } else {
-                    $items[] = $this->buildItemRow(
-                        $task,
-                        false,
-                        isset($result['article_id']) ? (int) $result['article_id'] : null,
-                        (string) $result['message'],
-                    );
-                    $failed++;
-                    $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
-                }
-            } catch (\Throwable $exception) {
-                $items[] = $this->buildItemRow($task, false, null, $exception->getMessage());
-                $failed++;
-                $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+        if (! $task instanceof SeoProjectTask) {
+            throw new \InvalidArgumentException('Không tìm thấy hạng mục #' . $taskId . ' trong dự án.');
+        }
+
+        $projectSiteId = (int) ($project->site_id ?? 0);
+        $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId);
+
+        $items = is_array($run->items) ? $run->items : [];
+        $replaced = false;
+
+        foreach ($items as $index => $existing) {
+            if ((int) ($existing['task_id'] ?? 0) === $taskId) {
+                $items[$index] = $itemRow;
+                $replaced = true;
+
+                break;
             }
         }
+
+        if (! $replaced) {
+            $items[] = $itemRow;
+        }
+
+        $this->finalizeRun($run, array_values($items));
+
+        return $itemRow;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function runOneTask(SeoProject $project, SeoProjectRun $run, SeoProjectTask $task, int $projectSiteId): array
+    {
+        $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
+        if ($taskSiteId <= 0) {
+            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+
+            return $this->buildFailedItemRow(
+                $task,
+                null,
+                $this->errorFormatter->fromPlainDetail('Thiếu site_id.'),
+            );
+        }
+
+        $task->update(['status' => SeoProjectTask::STATUS_WRITING]);
+        $scope = $this->articleScopeForProject($projectSiteId);
+
+        try {
+            $context = $this->inputResolver->resolveForProjectTask($task, $scope);
+            $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
+
+            if ($result['success']) {
+                $articleId = (int) ($result['article_id'] ?? 0);
+                $task->update(['status' => SeoProjectTask::STATUS_COMPLETED]);
+
+                if ($articleId > 0) {
+                    $this->storeArticleRunMeta($articleId, $run, $task);
+                }
+
+                return $this->buildItemRow($task, true, $articleId, (string) $result['message']);
+            }
+
+            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+
+            $failedStep = is_array($result['failed_step'] ?? null) ? $result['failed_step'] : null;
+
+            return $this->buildFailedItemRow(
+                $task,
+                isset($result['article_id']) ? (int) $result['article_id'] : null,
+                $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep),
+            );
+        } catch (\Throwable $exception) {
+            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+
+            return $this->buildFailedItemRow($task, null, $this->errorFormatter->fromThrowable($exception));
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
+    private function finalizeRun(SeoProjectRun $run, array $items): SeoProjectRun
+    {
+        $succeeded = collect($items)->where('status', 'success')->count();
+        $failed = collect($items)->where('status', 'failed')->count();
 
         $run->update([
             'status' => SeoProjectRun::STATUS_COMPLETED,
@@ -136,8 +203,12 @@ final class SeoProjectWorkflowRunService
     /**
      * @return array<string, mixed>
      */
-    private function buildItemRow(SeoProjectTask $task, bool $success, ?int $articleId, string $message): array
-    {
+    private function buildItemRow(
+        SeoProjectTask $task,
+        bool $success,
+        ?int $articleId,
+        string $message,
+    ): array {
         return [
             'task_id' => (int) $task->id,
             'type' => (string) $task->type,
@@ -151,6 +222,37 @@ final class SeoProjectWorkflowRunService
             'article_edit_url' => $articleId > 0 ? ArticleResource::getUrl('edit', ['record' => $articleId]) : null,
             'message' => $message,
         ];
+    }
+
+    /**
+     * @param  array{
+     *     message: string,
+     *     error_detail: string,
+     *     error_class: ?string,
+     *     error_trace: ?string,
+     *     failed_step: ?array{title: string, prompt_name: string, message: string}
+     * }  $error
+     * @return array<string, mixed>
+     */
+    private function buildFailedItemRow(SeoProjectTask $task, ?int $articleId, array $error): array
+    {
+        $row = $this->buildItemRow($task, false, $articleId, $error['message']);
+
+        $row['error_detail'] = $error['error_detail'];
+
+        if (filled($error['error_class'] ?? null)) {
+            $row['error_class'] = $error['error_class'];
+        }
+
+        if (filled($error['error_trace'] ?? null)) {
+            $row['error_trace'] = $error['error_trace'];
+        }
+
+        if (is_array($error['failed_step'] ?? null)) {
+            $row['failed_step'] = $error['failed_step'];
+        }
+
+        return $row;
     }
 
     private function storeArticleRunMeta(int $articleId, SeoProjectRun $run, SeoProjectTask $task): void

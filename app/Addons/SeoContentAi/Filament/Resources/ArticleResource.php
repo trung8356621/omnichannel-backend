@@ -190,8 +190,15 @@ class ArticleResource extends Resource
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\ViewColumn::make('seo_details')
-                    ->label(__('seo-content-ai::filament.article_list.seo_details'))
+                    ->label(fn (): \Illuminate\Support\HtmlString => new \Illuminate\Support\HtmlString(
+                        view('seo-content-ai::filament.tables.columns.article-seo-details-header')->render(),
+                    ))
                     ->view('seo-content-ai::filament.tables.columns.article-seo-details')
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        return $query
+                            ->orderByRaw('CASE WHEN skip_seo_score = 1 THEN 1 ELSE 0 END ASC')
+                            ->orderBy('seo_score', $direction);
+                    })
                     ->disabledClick()
                     ->toggleable(isToggledHiddenByDefault: false),
             ])
@@ -251,11 +258,12 @@ class ArticleResource extends Resource
                     }),
                 SelectFilter::make('seo_score_band')
                     ->label(__('seo-content-ai::filament.article_list.seo_score'))
+                    ->visible(fn (): bool => false)
                     ->options([
-                        'poor' => '0–49',
-                        'fair' => '50–69',
-                        'good' => '70–89',
-                        'excellent' => '90–100',
+                        'poor' => __('seo-content-ai::filament.article_list.seo_score_poor'),
+                        'fair' => __('seo-content-ai::filament.article_list.seo_score_fair'),
+                        'good' => __('seo-content-ai::filament.article_list.seo_score_good'),
+                        'excellent' => __('seo-content-ai::filament.article_list.seo_score_excellent'),
                     ])
                     ->query(function (Builder $query, array $data): void {
                         $band = $data['value'] ?? null;

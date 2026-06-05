@@ -1,10 +1,12 @@
 import { initArticleSeoListModal } from './articleSeoListModal';
+import { initArticleListTableLoading } from './articleListTableLoading';
 import '../css/article-editor.css';
 
 export { mountArticleSeoPreview, unmountArticleSeoPreview } from './articleSeoPreviewMount';
 
 function bootArticleSeoListModal() {
     initArticleSeoListModal();
+    initArticleListTableLoading();
 }
 
 if (document.readyState === 'loading') {

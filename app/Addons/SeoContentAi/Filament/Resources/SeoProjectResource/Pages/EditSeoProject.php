@@ -87,7 +87,9 @@ class EditSeoProject extends EditRecord
                 ->color('success')
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
-                ->modalDescription(__('seo-content-ai::filament.projects.run_workflow_description'))
+                ->modalDescription(fn (): \Illuminate\Support\HtmlString => SeoProjectResource::runWorkflowModalDescription(
+                    $this->getRecord(),
+                ))
                 ->action(function (): mixed {
                     /** @var SeoProject $record */
                     $record = $this->getRecord();
@@ -100,9 +102,10 @@ class EditSeoProject extends EditRecord
                 ->color('warning')
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
-                ->modalDescription(__('seo-content-ai::filament.projects.test_run_workflow_description', [
-                    'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
-                ]))
+                ->modalDescription(fn (): \Illuminate\Support\HtmlString => SeoProjectResource::runWorkflowModalDescription(
+                    $this->getRecord(),
+                    SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
+                ))
                 ->action(function (): mixed {
                     /** @var SeoProject $record */
                     $record = $this->getRecord();

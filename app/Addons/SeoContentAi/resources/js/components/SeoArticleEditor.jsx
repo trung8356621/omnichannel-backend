@@ -53,6 +53,7 @@ import {
 } from '../utils/imageSlugRenameConfirm';
 import { dispatchWordPressAttachmentMetaUpdate } from '../utils/imageAttachmentMetaUpdate';
 import {
+    AI_PLACEHOLDER_LOADING_URL,
     createClipboardPasteHandler,
     fetchSeoMediaStatus,
     renameSeoMedia,
@@ -1281,6 +1282,7 @@ export default function SeoArticleEditor({
     editorSettings = {},
 }) {
     const historyStep = editorSettings?.history_step ?? 20;
+    const autosaveIntervalSeconds = Number(editorSettings?.autosave_interval_seconds ?? 60);
 
     const [blocks, setBlocks] = useState([]);
     const [activeBlockId, setActiveBlockId] = useState(null);
@@ -1317,6 +1319,10 @@ export default function SeoArticleEditor({
     }, []);
 
     const [saveStatus, setSaveStatus] = useState('saved');
+    const [dbSaveStatus, setDbSaveStatus] = useState('idle');
+    const activeTabRef = useRef('editor');
+    const lastDbAutosaveHtmlRef = useRef('');
+    const dbAutosaveInFlightRef = useRef(false);
     const [analyzing, setAnalyzing] = useState(false);
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
@@ -1700,12 +1706,14 @@ export default function SeoArticleEditor({
     const { debounced: debouncedAnalyze } = useDebouncedCallback(() => {
         setAnalyzing(true);
         requestAnalyze();
-    }, 700);
+    }, 2000);
 
     const scheduleAutosave = useCallback(() => {
         setSaveStatus('pending');
         debouncedLocalSave();
-        debouncedAnalyze();
+        if (activeTabRef.current === 'seo') {
+            debouncedAnalyze();
+        }
     }, [debouncedLocalSave, debouncedAnalyze]);
 
     const skipNextAutosave = useRef(true);
@@ -3765,6 +3773,92 @@ export default function SeoArticleEditor({
         ],
     );
 
+    const clearAwaitingClientImagePlaceholders = useCallback(() => {
+        for (const [key, pending] of [...pendingAiMediaRef.current.entries()]) {
+            if (!pending?.awaitingServer || !pending?.blockId) {
+                continue;
+            }
+
+            pendingAiMediaRef.current.delete(key);
+            updateBlocksWithoutHistory((prev) => prev.filter((block) => block.id !== pending.blockId));
+        }
+
+        setImagesReloadKey((value) => value + 1);
+    }, [updateBlocksWithoutHistory]);
+
+    const requestGenerateArticleImage = useCallback(
+        async (detail) => {
+            const payload = detail != null && typeof detail === 'object' ? detail : {};
+            const target = String(payload.target ?? 'editor').trim() || 'editor';
+            const userBrief = String(payload.userBrief ?? '').trim();
+            const selectionText = String(payload.selectionText ?? '').trim();
+            const activeBlockIdFromPayload = String(payload.activeBlockId ?? '').trim();
+
+            if (!userBrief && !selectionText && target !== 'product-gallery') {
+                return;
+            }
+
+            if (target !== 'product-gallery') {
+                const refBlockId = resolveAiRefBlockId(
+                    activeBlockIdFromPayload || String(activeBlockIdRef.current ?? '').trim(),
+                );
+                if (refBlockId) {
+                    commitActiveBlock();
+                    const placeholderId = placeProcessingImagePlaceholder(refBlockId, AI_PLACEHOLDER_LOADING_URL, {
+                        isProcessing: true,
+                    });
+                    if (placeholderId) {
+                        pendingAiMediaRef.current.set(`client:${placeholderId}`, {
+                            blockId: placeholderId,
+                            mediaType: 'image',
+                            awaitingServer: true,
+                        });
+                    }
+
+                    if (articleId) {
+                        setSaveStatus('saving');
+                        saveDraft(articleId, {
+                            blocks: blocksRef.current,
+                            html: getExportHtml(),
+                        });
+                        setSaveStatus('saved');
+                    }
+                }
+            }
+
+            try {
+                await callEditArticleLivewire(
+                    'generateArticleImageFromEditor',
+                    selectionText,
+                    String(payload.selectionHtml ?? ''),
+                    userBrief,
+                    activeBlockIdFromPayload,
+                    target,
+                    Number.parseInt(String(payload.loaiSanPhamCategoryArticleId ?? 0), 10) || 0,
+                    String(payload.loaiSanPhamCustom ?? '').trim(),
+                );
+            } catch (error) {
+                clearAwaitingClientImagePlaceholders();
+                window.dispatchEvent(
+                    new CustomEvent('article-ai-media-failed', {
+                        detail: {
+                            type: 'image',
+                            message: error?.message ?? t('editor_generate_image_failed'),
+                        },
+                    }),
+                );
+            }
+        },
+        [
+            articleId,
+            clearAwaitingClientImagePlaceholders,
+            commitActiveBlock,
+            getExportHtml,
+            placeProcessingImagePlaceholder,
+            resolveAiRefBlockId,
+        ],
+    );
+
     const insertVideoAfterBlock = useCallback(
         (refBlockId, videoUrl) => {
             const url = (videoUrl ?? '').trim();
@@ -4266,6 +4360,35 @@ export default function SeoArticleEditor({
 
             const isProcessingStatus = status === 'processing' || status === 'pending';
 
+            if (isProcessingStatus && mediaId > 0) {
+                const awaitingEntry = [...pendingAiMediaRef.current.entries()].find(
+                    ([, value]) => value?.awaitingServer && value?.blockId,
+                );
+                if (awaitingEntry) {
+                    const [clientKey, pending] = awaitingEntry;
+                    pendingAiMediaRef.current.delete(clientKey);
+                    patchImageInBlocks(
+                        pending.blockId,
+                        {
+                            seoMediaId: mediaId,
+                            isProcessing: true,
+                            src: url || AI_PLACEHOLDER_LOADING_URL,
+                        },
+                        true,
+                    );
+                    pendingAiMediaRef.current.set(mediaId, {
+                        blockId: pending.blockId,
+                        mediaType: 'image',
+                    });
+                    startMediaStatusPolling(mediaId, 'image');
+                    window.dispatchEvent(
+                        new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
+                    );
+
+                    return;
+                }
+            }
+
             if (mediaId > 0 && isProcessingStatus) {
                 const existingBlock = findImageBlockByMediaId(mediaId);
                 if (existingBlock) {
@@ -4509,12 +4632,76 @@ export default function SeoArticleEditor({
         }
     }, [activeTab, requestAnalyze]);
 
+    useEffect(() => {
+        const onGenerateImage = (event) => {
+            void requestGenerateArticleImage(event.detail);
+        };
+
+        const onImageFailed = (event) => {
+            if (String(event.detail?.type ?? '') !== 'image') {
+                return;
+            }
+
+            clearAwaitingClientImagePlaceholders();
+        };
+
+        window.addEventListener('generate-article-image', onGenerateImage);
+        window.addEventListener('article-ai-media-failed', onImageFailed);
+
+        return () => {
+            window.removeEventListener('generate-article-image', onGenerateImage);
+            window.removeEventListener('article-ai-media-failed', onImageFailed);
+        };
+    }, [clearAwaitingClientImagePlaceholders, requestGenerateArticleImage]);
+
+    useEffect(() => {
+        activeTabRef.current = activeTab;
+    }, [activeTab]);
+
+    useEffect(() => {
+        if (!articleId || autosaveIntervalSeconds <= 0) {
+            return undefined;
+        }
+
+        const timer = window.setInterval(() => {
+            if (document.hidden || dbAutosaveInFlightRef.current) {
+                return;
+            }
+
+            commitActiveBlock();
+            const html = getExportHtml().trim();
+            if (html === '' || html === lastDbAutosaveHtmlRef.current) {
+                return;
+            }
+
+            dbAutosaveInFlightRef.current = true;
+            setDbSaveStatus('saving');
+            void callEditArticleLivewire('autosaveArticleDraft', html)
+                .then(() => {
+                    lastDbAutosaveHtmlRef.current = html;
+                    setDbSaveStatus('saved');
+                })
+                .catch(() => setDbSaveStatus('error'))
+                .finally(() => {
+                    dbAutosaveInFlightRef.current = false;
+                });
+        }, autosaveIntervalSeconds * 1000);
+
+        return () => window.clearInterval(timer);
+    }, [articleId, autosaveIntervalSeconds, commitActiveBlock, getExportHtml]);
+
     const saveLabel =
-        saveStatus === 'saving'
-            ? t('editor_saving_draft')
-            : saveStatus === 'pending'
-              ? t('editor_draft_pending')
-              : t('editor_draft_saved_local');
+        dbSaveStatus === 'saving'
+            ? t('editor_db_autosaving')
+            : dbSaveStatus === 'error'
+              ? t('editor_db_autosave_failed')
+              : dbSaveStatus === 'saved'
+                ? t('editor_db_autosaved')
+                : saveStatus === 'saving'
+                  ? t('editor_saving_draft')
+                  : saveStatus === 'pending'
+                    ? t('editor_draft_pending')
+                    : t('editor_draft_saved_local');
 
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;

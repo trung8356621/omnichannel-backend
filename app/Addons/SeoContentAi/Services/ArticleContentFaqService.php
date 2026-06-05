@@ -72,7 +72,7 @@ final class ArticleContentFaqService
             ];
         }
 
-        $faqs = $this->workflowParser->parseFaqsFromContent($markdown);
+        $faqs = $this->parseFaqsForMarkdownImport($markdown);
         $faqs = $this->normalizeFaqRowsForEditor($faqs);
 
         $cleaned = $this->workflowParser->removeFaqAndAppendShortcodeFromContent($markdown);
@@ -103,6 +103,24 @@ final class ArticleContentFaqService
             'h1_title' => filled($h1Title) ? trim((string) $h1Title) : null,
             'faqs' => $faqs,
         ];
+    }
+
+    /**
+     * @return list<array{question: string, answer: string}>
+     */
+    private function parseFaqsForMarkdownImport(string $markdown): array
+    {
+        $faqs = $this->workflowParser->parseFaqsFromContent($markdown);
+        if ($faqs !== []) {
+            return $faqs;
+        }
+
+        $htmlPreview = $this->markdownHtml->toHtml($markdown);
+        if ($htmlPreview === '') {
+            return [];
+        }
+
+        return $this->workflowParser->parseFaqsFromContent($htmlPreview);
     }
 
     /**

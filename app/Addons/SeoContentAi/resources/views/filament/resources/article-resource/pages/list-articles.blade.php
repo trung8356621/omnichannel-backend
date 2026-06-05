@@ -8,7 +8,19 @@
         'fi-resource-' . str_replace('/', '-', $this->getResource()::getSlug()),
     ])
 >
-    {{ $this->table }}
+    <div class="article-list-table-shell">
+        <div
+            class="article-list-table-shell__overlay"
+            role="status"
+            aria-live="polite"
+        >
+            <x-filament::loading-indicator class="h-8 w-8" />
+            <span class="article-list-table-shell__overlay-text">
+                {{ __('seo-content-ai::filament.article_list.table_loading') }}
+            </span>
+        </div>
+        {{ $this->table }}
+    </div>
 
     <script type="application/json" id="article-seo-list-config">
         @json([
@@ -69,6 +81,47 @@
 
     @once
         <style>
+                .article-list-table-shell {
+                    position: relative;
+                }
+
+                .article-list-table-shell.is-table-loading > :not(.article-list-table-shell__overlay) {
+                    opacity: 0.45;
+                    pointer-events: none;
+                    transition: opacity 0.12s ease;
+                }
+
+                .article-list-table-shell__overlay {
+                    display: none;
+                    position: absolute;
+                    inset: 0;
+                    z-index: 25;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 0.5rem;
+                    background: rgb(255 255 255 / 72%);
+                    pointer-events: none;
+                }
+
+                .article-list-table-shell.is-table-loading .article-list-table-shell__overlay {
+                    display: flex;
+                }
+
+                .dark .article-list-table-shell__overlay {
+                    background: rgb(17 24 39 / 72%);
+                }
+
+                .article-list-table-shell__overlay-text {
+                    font-size: 0.8125rem;
+                    font-weight: 600;
+                    color: rgb(55 65 81);
+                }
+
+                .dark .article-list-table-shell__overlay-text {
+                    color: rgb(209 213 219);
+                }
+
                 /* Cột thao tác: 2 hàng × 3 nút */
                 .fi-resource-articles .fi-ta-actions-header-cell {
                     width: auto !important;

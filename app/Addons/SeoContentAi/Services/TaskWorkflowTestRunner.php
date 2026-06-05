@@ -534,6 +534,13 @@ final class TaskWorkflowTestRunner
         $messages = [];
         $articleMarkdown = trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
 
+        if ($articleMarkdown === '') {
+            $fallbackMarkdown = trim((string) ($state->lastPromptOutput ?? ''));
+            if ($fallbackMarkdown !== '' && $this->shouldPublishMarkdownAsArticle($fallbackMarkdown)) {
+                $articleMarkdown = $fallbackMarkdown;
+            }
+        }
+
         if ($articleMarkdown !== '') {
             try {
                 $publish = $this->promptPublisher->publishArticle(
@@ -568,10 +575,9 @@ final class TaskWorkflowTestRunner
 
             $article = $article->fresh() ?? $article;
             $state->article = $article;
+            $state->meta['article_markdown_published'] = true;
             $messages[] = (string) ($publish['message'] ?? 'Đã lưu nội dung bài viết (tiêu đề + body + meta).');
 
-            // publishArticle ghi seo_article_outline = markdown bài viết. Với chế độ gộp dàn ý,
-            // tab «Dàn ý» phải giữ DÀN Ý gốc (không phải nội dung bài) → ghi đè lại bằng dàn ý.
             $outlineMarkdown = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
             if ($outlineMarkdown !== '') {
                 $article->articleMetas()->updateOrCreate(
@@ -786,6 +792,8 @@ final class TaskWorkflowTestRunner
         if (
             filled($state->lastPromptOutput)
             && trim((string) ($state->meta['direct_publish_article_markdown'] ?? '')) === ''
+            && ! ($state->meta['article_markdown_published'] ?? false)
+            && ! $this->shouldPublishMarkdownAsArticle(trim((string) $state->lastPromptOutput))
         ) {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'seo_article_outline'],
@@ -948,6 +956,28 @@ final class TaskWorkflowTestRunner
      * Làm sạch dàn ý gốc (đầu vào prompt viết bài) để lưu vào tab «Dàn ý»:
      * bỏ các dòng đánh dấu tag [START_TASK_X] / [END_TASK_X] và gộp dòng trống thừa.
      */
+    private function shouldPublishMarkdownAsArticle(string $markdown): bool
+    {
+        $markdown = trim($markdown);
+        if ($markdown === '') {
+            return false;
+        }
+
+        if (preg_match('/\*\*Meta Description:\*\*/iu', $markdown) === 1) {
+            return true;
+        }
+
+        if (preg_match('/^#\s+\S+/mu', $markdown) === 1 && mb_strlen($markdown) >= 200) {
+            return true;
+        }
+
+        if (preg_match('/^##\s+.+\R\R[^\n#\-*\d]/mu', $markdown) === 1) {
+            return true;
+        }
+
+        return mb_strlen($markdown) >= 400;
+    }
+
     private function cleanWorkflowOutlineMarkdown(string $input): string
     {
         $input = trim($input);
@@ -974,12 +1004,18 @@ final class TaskWorkflowTestRunner
             $title = trim((string) ($variables['focus_keyword'] ?? 'Bài viết mới'));
         }
 
+        $slugSource = trim((string) ($variables['focus_keyword'] ?? ''));
+        if ($slugSource === '') {
+            $slugSource = $title;
+        }
+        $slug = \Illuminate\Support\Str::slug($slugSource);
+
         $article = SeoArticle::query()->create([
             'site_id' => $siteId,
             'user_id' => auth()->id(),
             'type' => 'article',
             'title' => $title,
-            'slug' => null,
+            'slug' => $slug !== '' ? $slug : null,
             'status' => 'draft',
             'body' => '',
             'language' => 'vi',

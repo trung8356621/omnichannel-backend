@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsEditor;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsPrompt;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
@@ -28,6 +29,12 @@ final class SeoSettingsMenu
                 'label' => 'Workflows',
                 'icon' => 'heroicon-o-arrows-right-left',
                 'url' => SeoSettingsWorkflows::getUrl(),
+            ],
+            [
+                'id' => 'editor',
+                'label' => 'Article editor',
+                'icon' => 'heroicon-o-document-text',
+                'url' => SeoSettingsEditor::getUrl(),
             ],
             [
                 'id' => 'ai',

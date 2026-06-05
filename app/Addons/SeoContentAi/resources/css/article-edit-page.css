@@ -86,3 +86,75 @@ body:has(.seo-article-edit-page) .fi-topbar {
         box-sizing: border-box;
     }
 }
+
+.seo-debug-markdown-import__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgb(0 0 0 / 0.45);
+}
+
+.seo-debug-markdown-import__panel {
+    width: min(42rem, 100%);
+    max-height: min(90vh, 48rem);
+    overflow: auto;
+    border-radius: 0.75rem;
+    background: #fff;
+    padding: 1.25rem;
+    box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+}
+
+.dark .seo-debug-markdown-import__panel {
+    background: rgb(17 24 39);
+}
+
+.seo-debug-markdown-import__title {
+    margin: 0 0 0.5rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: rgb(17 24 39);
+}
+
+.dark .seo-debug-markdown-import__title {
+    color: rgb(243 244 246);
+}
+
+.seo-debug-markdown-import__desc {
+    margin: 0 0 1rem;
+    font-size: 0.875rem;
+    color: rgb(75 85 99);
+}
+
+.dark .seo-debug-markdown-import__desc {
+    color: rgb(156 163 175);
+}
+
+.seo-debug-markdown-import__textarea {
+    display: block;
+    width: 100%;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(209 213 219);
+    background: #fff;
+    padding: 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: rgb(17 24 39);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.dark .seo-debug-markdown-import__textarea {
+    border-color: rgb(75 85 99);
+    background: rgb(17 24 39);
+    color: rgb(243 244 246);
+}
+
+.seo-debug-markdown-import__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}

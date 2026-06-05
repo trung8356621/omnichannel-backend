@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
+use App\Addons\SeoContentAi\Services\SeoProjectRunPreflightService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
@@ -28,6 +29,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
 class SeoProjectResource extends Resource
@@ -415,7 +417,9 @@ class SeoProjectResource extends Resource
                     ->color('success')
                     ->requiresConfirmation()
                     ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
-                    ->modalDescription(__('seo-content-ai::filament.projects.run_workflow_description'))
+                    ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
+                        $record,
+                    ))
                     ->action(function (SeoProject $record): mixed {
                         return static::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_FULL);
                     }),
@@ -425,9 +429,10 @@ class SeoProjectResource extends Resource
                     ->color('warning')
                     ->requiresConfirmation()
                     ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
-                    ->modalDescription(__('seo-content-ai::filament.projects.test_run_workflow_description', [
-                        'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
-                    ]))
+                    ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
+                        $record,
+                        SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
+                    ))
                     ->action(function (SeoProject $record): mixed {
                         return static::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_TEST);
                     }),
@@ -490,9 +495,23 @@ class SeoProjectResource extends Resource
         return [
             'index' => Pages\ListSeoProjects::route('/'),
             'create' => Pages\CreateSeoProject::route('/create'),
-            'edit' => Pages\EditSeoProject::route('/{record}/edit'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
+            'edit' => Pages\EditSeoProject::route('/{record}/edit'),
         ];
+    }
+
+    public static function runWorkflowModalDescription(SeoProject $project, ?int $pendingLimit = null): HtmlString
+    {
+        $base = $pendingLimit !== null
+            ? __('seo-content-ai::filament.projects.test_run_workflow_description', [
+                'limit' => $pendingLimit,
+            ])
+            : __('seo-content-ai::filament.projects.run_workflow_description');
+
+        $warnings = app(SeoProjectRunPreflightService::class)
+            ->formatWarningsForModal($project, $pendingLimit);
+
+        return new HtmlString('<p>' . e($base) . '</p>' . $warnings->toHtml());
     }
 
     public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
@@ -504,15 +523,19 @@ class SeoProjectResource extends Resource
             $limit = $mode === SeoProjectRun::MODE_TEST ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT : null;
             $run = $runner->execute($project, $run, $limit);
 
-            Notification::make()
+            $notification = Notification::make()
                 ->title(__('seo-content-ai::filament.projects.run_completed'))
                 ->body(__('seo-content-ai::filament.projects.run_completed_body', [
                     'succeeded' => (int) $run->succeeded,
                     'failed' => (int) $run->failed,
                     'total' => (int) $run->total,
-                ]))
-                ->success()
-                ->send();
+                ]));
+
+            if ((int) $run->failed > 0) {
+                $notification->warning()->send();
+            } else {
+                $notification->success()->send();
+            }
 
             return redirect(static::getUrl('view-run', ['run' => $run->id]));
         } catch (\InvalidArgumentException $exception) {

@@ -1612,12 +1612,14 @@ class WorkflowParserService
         $plain = trim(str_replace(['**', '*'], '', $line));
 
         return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1
-            || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?\s*$/u', $plain) === 1;
+            || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?\s*$/u', $plain) === 1
+            || preg_match('/^(❓\s*)?Q\s*\d*\s*:\s*.+/iu', $plain) === 1
+            || preg_match('/^(❓\s*)?Hỏi\s*:\s*.+/iu', $plain) === 1;
     }
 
     private function normalizeFaqQuestionLine(string $line): string
     {
-        return trim(str_replace(['**', '*'], '', $line));
+        return $this->normalizeExtractedFaqQuestion($line);
     }
 
     private function isFaqMarkdownBulletQuestion(string $line): bool

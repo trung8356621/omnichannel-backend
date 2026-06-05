@@ -148,6 +148,27 @@ MD;
         $this->assertStringNotContainsString('MOQ', $stripped);
     }
 
+    public function test_parse_faqs_from_markdown_q_prefix_lines(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+## FAQ
+
+**Q1: Giá in logo bao nhiêu?**
+Tùy số lượng và kích thước.
+
+**Q2: Có giao hàng toàn quốc không?**
+Có, giao COD hoặc chuyển phát.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(2, $faqs);
+        $this->assertSame('Giá in logo bao nhiêu?', $faqs[0]['question']);
+        $this->assertStringContainsString('số lượng', $faqs[0]['answer']);
+    }
+
     public function test_remove_faq_and_append_shortcode(): void
     {
         $parser = $this->parser();

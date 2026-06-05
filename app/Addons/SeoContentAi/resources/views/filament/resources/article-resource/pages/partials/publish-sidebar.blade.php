@@ -247,38 +247,43 @@
                 type="button"
                 wire:click="requestSaveArticle"
                 wire:loading.attr="disabled"
-                wire:target="requestSaveArticle,persistArticleLocal"
-                class="seo-publish-icon-btn is-primary"
+                wire:target="requestSaveArticle,requestSyncToWordPress,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
+                @disabled($articleHeavyActionBusy)
+                class="seo-publish-icon-btn is-primary @if ($articleHeavyActionBusy && $articleHeavyAction === 'save') is-busy @endif"
                 title="{{ ($articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật') . ' (Ctrl+S)' }}"
                 aria-label="{{ ($articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật') . ' (Ctrl+S)' }}"
+                @if ($articleHeavyActionBusy) aria-busy="true" @endif
             >
-                <span wire:loading.remove wire:target="requestSaveArticle,persistArticleLocal">
+                @if ($articleHeavyActionBusy && $articleHeavyAction === 'save')
+                    <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+                @else
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 21v-8H7v8M7 3v5h8" />
                     </svg>
-                </span>
-                <span wire:loading wire:target="requestSaveArticle,persistArticleLocal" class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+                @endif
             </button>
 
             <button
                 type="button"
                 wire:click="requestSyncToWordPress"
                 wire:loading.attr="disabled"
-                wire:target="requestSyncToWordPress,syncArticleToWordPress"
-                class="seo-publish-icon-btn"
+                wire:target="requestSaveArticle,requestSyncToWordPress,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
+                @disabled($articleHeavyActionBusy || ! $record->wp_post_id)
+                class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
                 title="Đồng bộ WordPress (Ctrl+Shift+S)"
                 aria-label="Đồng bộ WordPress (Ctrl+Shift+S)"
-                @if (! $record->wp_post_id) disabled @endif
+                @if ($articleHeavyActionBusy) aria-busy="true" @endif
             >
-                <span wire:loading.remove wire:target="requestSyncToWordPress,syncArticleToWordPress">
+                @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync')
+                    <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+                @else
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
                     </svg>
-                </span>
-                <span wire:loading wire:target="requestSyncToWordPress,syncArticleToWordPress" class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+                @endif
             </button>
 
             @if (! $record->is_reviewed)
