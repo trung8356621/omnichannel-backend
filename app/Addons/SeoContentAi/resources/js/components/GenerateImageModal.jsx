@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import SeoSelect from './SeoSelect';
 import { fetchSeoMediaStatus } from '../utils/seoMediaApi';
+import { loadProductAlbum } from '../utils/articleProductAlbumStorage';
 import { t } from '../utils/i18n';
 
 function readProductGalleryUrlsFromStorage(articleId) {
@@ -10,23 +11,9 @@ function readProductGalleryUrlsFromStorage(articleId) {
         return [];
     }
 
-    try {
-        const raw = window.localStorage.getItem(`seo_product_album_list_${articleId}`);
-        if (!raw) {
-            return [];
-        }
-
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) {
-            return [];
-        }
-
-        return parsed
-            .map((item) => String(item?.url ?? item?.src ?? '').trim())
-            .filter(Boolean);
-    } catch {
-        return [];
-    }
+    return loadProductAlbum(articleId)
+        .map((item) => String(item?.url ?? '').trim())
+        .filter(Boolean);
 }
 
 function readProductGalleryUrlsFromDom() {

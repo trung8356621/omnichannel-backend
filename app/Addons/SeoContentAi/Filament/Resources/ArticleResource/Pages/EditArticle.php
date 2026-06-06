@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
@@ -78,11 +79,7 @@ class EditArticle extends EditRecord
 
     public string $visibility = 'public';
 
-    public bool $editingStatus = false;
-
-    public bool $editingVisibility = false;
-
-    public bool $editingPublishAt = false;
+    public string $articlePostType = 'article';
 
     public string $publishDay = '';
 
@@ -124,8 +121,6 @@ class EditArticle extends EditRecord
 
     /** @var 'original'|'local'|'article' */
     public string $mediaPickerTab = 'original';
-
-    public bool $editingSlug = false;
 
     /** @var 'save'|'sync'|null Thu thập HTML sau khi flush FAQ (Lưu / Đồng bộ WP). */
     public ?string $pendingEditorCollectTarget = null;
@@ -177,7 +172,6 @@ class EditArticle extends EditRecord
 
         $previousSlug = trim((string) ($this->record->slug ?? ''));
         $this->articleSlug = $slug;
-        $this->editingSlug = false;
 
         if ($slug === $previousSlug) {
             return;
@@ -414,6 +408,7 @@ class EditArticle extends EditRecord
 
         $this->articleTitle = $flags->decodeWordPressText((string) ($this->record->title ?? ''));
         $this->articleSlug = $service->resolveSlug($this->record);
+        $this->articlePostType = SeoProjectTask::normalizePostType(ArticlePostTypeResolver::resolve($this->record));
         $this->articleStatus = (string) ($this->record->status ?? 'draft');
         $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
         $this->featuredImageUrl = $service->resolveFeaturedImageUrl($this->record);
@@ -433,17 +428,9 @@ class EditArticle extends EditRecord
 
     public function isProduct(): bool
     {
-        $type = strtolower(trim((string) ($this->record->type ?? '')));
-        if (in_array($type, ['product', 'e-commerce'], true)) {
-            return true;
-        }
+        $type = strtolower(trim(SeoProjectTask::normalizePostType($this->articlePostType)));
 
-        $this->record->loadMissing('articleMetas');
-        $wpPostType = strtolower(trim((string) (
-            $this->record->articleMetas->firstWhere('meta_key', 'wp_post_type')?->meta_value ?? ''
-        )));
-
-        return $wpPostType === 'product';
+        return in_array($type, ['product', 'e-commerce'], true);
     }
 
     public function isTaxonomyArticle(): bool
@@ -1284,99 +1271,84 @@ class EditArticle extends EditRecord
         };
     }
 
-    public function startStatusEdit(): void
-    {
-        $this->editingStatus = true;
-    }
+    public function applyPublishBoxFromClient(
+        string $postType,
+        string $status,
+        string $visibility,
+        string $publishDay,
+        string $publishMonth,
+        string $publishYear,
+        string $publishHour,
+        string $publishMinute,
+    ): void {
+        $this->articlePostType = SeoProjectTask::normalizePostType($postType);
+        $this->articleStatus = in_array($status, ['draft', 'published', 'scheduled', 'private'], true)
+            ? $status
+            : 'draft';
+        $this->visibility = $visibility === 'private' ? 'private' : 'public';
+        $this->publishDay = $publishDay;
+        $this->publishMonth = $publishMonth;
+        $this->publishYear = $publishYear;
+        $this->publishHour = $publishHour;
+        $this->publishMinute = $publishMinute;
 
-    public function cancelStatusEdit(): void
-    {
-        $this->editingStatus = false;
-    }
-
-    public function applyStatusEdit(): void
-    {
-        $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
-
-        $this->editingStatus = false;
-    }
-
-    public function startVisibilityEdit(): void
-    {
-        $this->editingVisibility = true;
-    }
-
-    public function cancelVisibilityEdit(): void
-    {
-        $this->editingVisibility = false;
-        $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
-    }
-
-    public function applyVisibilityEdit(): void
-    {
-        if ($this->visibility === 'private') {
-            $this->articleStatus = 'private';
-        } elseif ($this->articleStatus === 'private') {
-            $this->articleStatus = 'draft';
+        if ($this->supportsProductGallery()) {
+            $this->productGallery = app(ArticleMediaLocalService::class)->resolveProductAlbum($this->record);
+            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? $this->featuredImageUrl;
+        } else {
+            $this->productGallery = [];
         }
 
-        $this->editingVisibility = false;
+        $this->skipRender();
     }
 
-    public function startPublishAtEdit(): void
+    /**
+     * @param  list<array{id?: int, url?: string, wp_attachment_id?: int, seo_media_id?: int}>  $items
+     * @return list<array{id: int, url: string}>
+     */
+    public function persistProductAlbumFromClient(array $items): array
     {
-        $this->editingPublishAt = true;
-        $this->randomizePublishAtFuture();
-    }
+        if (! $this->supportsProductGallery()) {
+            $this->skipRender();
 
-    public function cancelPublishAtEdit(): void
-    {
-        $this->editingPublishAt = false;
-        $this->syncPublishDatePartsFromRecord();
-    }
-
-    public function applyPublishAtEdit(): void
-    {
-        $dt = $this->buildPublishAtFromParts();
-        if ($dt === null) {
-            Notification::make()
-                ->title('Invalid date/time')
-                ->body('Please review scheduled publish date/time.')
-                ->warning()
-                ->send();
-
-            return;
+            return [];
         }
 
-        $this->publishYear = $dt->format('Y');
-        $this->publishMonth = $dt->format('m');
-        $this->publishDay = $dt->format('d');
-        $this->publishHour = $dt->format('H');
-        $this->publishMinute = $dt->format('i');
+        $localMedia = app(ArticleMediaLocalService::class);
+        $siteId = (int) ($this->record->site_id ?? 0);
+        $album = [];
 
-        if ($this->visibility !== 'private') {
-            $this->articleStatus = $dt->greaterThan(now(config('app.timezone'))) ? 'scheduled' : 'published';
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
+            $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? $item['id'] ?? 0));
+            $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+
+            if ($localRefId <= 0) {
+                $localRefId = $localMedia->resolveLocalRefIdFromImageUrl($siteId, $url);
+            }
+
+            $album[] = [
+                'id' => $localRefId,
+                'url' => $url,
+            ];
         }
 
-        $this->editingPublishAt = false;
-    }
+        $this->productGallery = $localMedia->saveProductAlbumLocal($this->record, $album);
+        $this->featuredImageUrl = $this->productGallery[0]['url'] ?? $this->featuredImageUrl;
+        $this->record->refresh();
 
-    public function randomizePublishAtFuture(): void
-    {
-        $base = now(config('app.timezone'))->addHours(random_int(1, 8));
-        $minutePool = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
-        $minute = $minutePool[array_rand($minutePool)];
-        $dt = $base->copy()->minute($minute)->second(0);
+        $this->skipRender();
 
-        $this->publishYear = $dt->format('Y');
-        $this->publishMonth = $dt->format('m');
-        $this->publishDay = $dt->format('d');
-        $this->publishHour = $dt->format('H');
-        $this->publishMinute = $dt->format('i');
-
-        if ($this->visibility !== 'private') {
-            $this->articleStatus = 'scheduled';
-        }
+        return $this->productGallery;
     }
 
     public function requestSaveArticle(): void
@@ -1782,19 +1754,22 @@ class EditArticle extends EditRecord
             $seoMetaDescription = trim($this->seoMetaDescription);
 
             $publishAt = $this->resolvePublishAtForSave();
+            $postType = SeoProjectTask::normalizePostType($this->articlePostType);
 
             $this->record->update([
                 'title' => trim($this->articleTitle),
                 'slug' => $slug !== '' ? $slug : null,
+                'type' => $postType,
                 'status' => $this->articleStatus,
                 'published_at' => $publishAt,
                 'body' => $html,
                 'user_id' => auth()->id(),
             ]);
+            $this->persistArticlePostTypeMeta($postType);
+            $this->articlePostType = $postType;
             $this->persistSeoMetaFields();
 
             $this->articleSlug = $slug;
-            $this->editingSlug = false;
             $this->syncPublishDatePartsFromRecord();
 
             app(ArticlePostImagesService::class)->syncFromHtml($this->record, $html);
@@ -1900,15 +1875,19 @@ class EditArticle extends EditRecord
         $slug = Str::slug($this->articleSlug);
 
         $publishAt = $this->resolvePublishAtForSave();
+        $postType = SeoProjectTask::normalizePostType($this->articlePostType);
 
         $this->record->update([
             'title' => trim($this->articleTitle),
             'slug' => $slug !== '' ? $slug : null,
+            'type' => $postType,
             'status' => $this->articleStatus,
             'published_at' => $publishAt,
             'body' => $html,
             'user_id' => auth()->id(),
         ]);
+        $this->persistArticlePostTypeMeta($postType);
+        $this->articlePostType = $postType;
         $this->persistSeoMetaFields();
 
         $this->articleSlug = $slug;
@@ -2144,7 +2123,7 @@ class EditArticle extends EditRecord
             'id' => (int) $this->record->id,
             'site_id' => $siteId,
             'title' => (string) $this->articleTitle,
-            'post_type' => ArticlePostTypeResolver::resolve($this->record),
+            'post_type' => SeoProjectTask::normalizePostType($this->articlePostType),
             'virtual_reviews' => $this->getVirtualReviewsPayload(),
             'supports_product_gallery' => $this->supportsProductGallery(),
             'product_category_options' => collect($productCategoryOptions)
@@ -3158,6 +3137,14 @@ class EditArticle extends EditRecord
             'meta_description' => trim($this->seoMetaDescription),
             'focus_keyword' => trim($this->focusKeyword),
         ];
+    }
+
+    private function persistArticlePostTypeMeta(string $postType): void
+    {
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_post_type'],
+            ['meta_value' => $postType],
+        );
     }
 
     protected function mutateFormDataBeforeSave(array $data): array

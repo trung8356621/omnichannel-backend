@@ -143,6 +143,8 @@ class SeoMediaController extends Controller
         $validated = $request->validate([
             'url' => ['required', 'string', 'max:2048'],
             'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
+            'site_id' => ['nullable', 'integer'],
+            'article_id' => ['nullable', 'integer'],
         ]);
 
         $url = trim((string) $validated['url']);
@@ -162,33 +164,38 @@ class SeoMediaController extends Controller
             throw ValidationException::withMessages(['url' => 'Không xác định được đường dẫn ảnh.']);
         }
 
-        $media = SeoMedia::query()->where('path', $relativePath)->first();
-        if (! $media instanceof SeoMedia) {
-            // Legacy URL cũ có thể chứa random folder: uploads/seo_media/<rand>/<file>.
-            // Ưu tiên map về path phẳng hiện tại uploads/seo_media/<file>.
-            $filename = basename($relativePath);
-            if ($filename !== '' && $filename !== '.' && $filename !== '..') {
-                $flatCandidate = 'uploads/seo_media/' . $filename;
-                $media = SeoMedia::query()->where('path', $flatCandidate)->first();
+        $siteId = isset($validated['site_id']) ? (int) $validated['site_id'] : null;
+        $articleId = isset($validated['article_id']) ? (int) $validated['article_id'] : null;
+        if ($articleId !== null && $articleId > 0) {
+            $article = SeoArticle::query()->find($articleId);
+            if ($article instanceof SeoArticle) {
+                abort_unless($this->canAccessArticle($article), 403);
+                $siteId = (int) $article->site_id;
             }
         }
 
-        if (! $media instanceof SeoMedia) {
-            // Fallback cuối: tìm theo filename (không tuyệt đối), ưu tiên bản mới nhất.
+        $media = $this->resolveSeoMediaForStoragePath($relativePath, $siteId);
+
+        if (! $media instanceof SeoMedia && Storage::disk('public')->exists($relativePath)) {
             $filename = basename($relativePath);
             if ($filename !== '' && $filename !== '.' && $filename !== '..') {
-                $media = SeoMedia::query()
-                    ->where('filename', $filename)
-                    ->orderByDesc('id')
-                    ->first();
+                $media = SeoMedia::query()->create([
+                    'site_id' => $siteId,
+                    'article_id' => $articleId,
+                    'filename' => $filename,
+                    'slug' => Str::slug((string) pathinfo($filename, PATHINFO_FILENAME)),
+                    'path' => $relativePath,
+                    'url' => $this->storage->urlForPath($relativePath),
+                    'source' => 'storage_adopt',
+                ]);
             }
         }
 
         if (! $media instanceof SeoMedia) {
             return response()->json([
                 'success' => false,
-                'message' => 'Không tìm thấy ảnh nội bộ theo URL.',
-            ], 404);
+                'message' => 'Không tìm thấy ảnh nội bộ theo URL (thiếu bản ghi thư viện hoặc file không tồn tại).',
+            ], 422);
         }
 
         abort_unless($this->canAccessMedia($media), 403);
@@ -588,6 +595,47 @@ class SeoMediaController extends Controller
         }
 
         return '';
+    }
+
+    private function resolveSeoMediaForStoragePath(string $relativePath, ?int $siteId = null): ?SeoMedia
+    {
+        $relativePath = ltrim(str_replace('\\', '/', $relativePath), '/');
+        if ($relativePath === '') {
+            return null;
+        }
+
+        $query = SeoMedia::query()->where('path', $relativePath);
+        if ($siteId !== null && $siteId > 0) {
+            $query->where('site_id', $siteId);
+        }
+
+        $media = $query->first();
+        if ($media instanceof SeoMedia) {
+            return $media;
+        }
+
+        $filename = basename($relativePath);
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            return null;
+        }
+
+        $flatCandidate = 'uploads/seo_media/' . $filename;
+        $flatQuery = SeoMedia::query()->where('path', $flatCandidate);
+        if ($siteId !== null && $siteId > 0) {
+            $flatQuery->where('site_id', $siteId);
+        }
+
+        $media = $flatQuery->first();
+        if ($media instanceof SeoMedia) {
+            return $media;
+        }
+
+        $filenameQuery = SeoMedia::query()->where('filename', $filename);
+        if ($siteId !== null && $siteId > 0) {
+            $filenameQuery->where('site_id', $siteId);
+        }
+
+        return $filenameQuery->orderByDesc('id')->first();
     }
 
     private function canAccessMedia(SeoMedia $media): bool

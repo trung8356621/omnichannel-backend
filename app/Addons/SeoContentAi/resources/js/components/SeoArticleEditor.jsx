@@ -30,6 +30,7 @@ import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import { appendProductAlbumItems, loadProductAlbum } from '../utils/articleProductAlbumStorage';
 import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
@@ -562,24 +563,6 @@ const distributeProductImagesToEmptySections = (blocks, supplementalImages) => {
     };
 };
 
-const readProductAlbumFromStorage = (articleId) => {
-    if (!articleId) {
-        return [];
-    }
-
-    try {
-        const raw = window.localStorage.getItem(`seo_product_album_list_${articleId}`);
-        if (!raw) {
-            return [];
-        }
-
-        const parsed = JSON.parse(raw);
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-};
-
 const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleId) => {
     const rows = [];
     const seen = new Set();
@@ -621,7 +604,7 @@ const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleI
 
     const albumItems = Array.isArray(storageAlbum) && storageAlbum.length > 0
         ? storageAlbum
-        : readProductAlbumFromStorage(articleId);
+        : loadProductAlbum(articleId);
 
     albumItems.forEach((item) => {
         const src = String(item?.url || item?.src || '').trim();
@@ -1976,6 +1959,11 @@ export default function SeoArticleEditor({
         dispatchWordPressSlugRename(items);
     }, []);
 
+    const renameLocalMediaByUrl = useCallback(
+        (mediaUrl, newSlug) => renameSeoMediaByUrl(mediaUrl, newSlug, { siteId, articleId }),
+        [siteId, articleId],
+    );
+
     const requestWordPressAttachmentMetaUpdate = useCallback((items) => {
         dispatchWordPressAttachmentMetaUpdate(items);
     }, []);
@@ -2029,7 +2017,7 @@ export default function SeoArticleEditor({
 
             if (!row.wpAttachmentId && row.src && String(row.src).includes('/storage/uploads/seo_media/')) {
                 const oldSlug = (row.slug || '').trim();
-                renameSeoMediaByUrl(row.src, trimmed)
+                renameLocalMediaByUrl(row.src, trimmed)
                     .then((data) => {
                         applyPatch({
                             slug: data.slug,
@@ -2057,7 +2045,7 @@ export default function SeoArticleEditor({
 
             return true;
         },
-        [requestWordPressRenames],
+        [renameLocalMediaByUrl, requestWordPressRenames],
     );
 
     const patchSupplementalImageRow = useCallback((targetRow, patch = {}) => {
@@ -2136,7 +2124,7 @@ export default function SeoArticleEditor({
                         }
 
                         const data =
-                            id > 0 ? await renameSeoMedia(id, newSlug) : await renameSeoMediaByUrl(src, newSlug);
+                            id > 0 ? await renameSeoMedia(id, newSlug) : await renameLocalMediaByUrl(src, newSlug);
 
                         const matchedRow = supplementalOnlyRows.find((row) => {
                             const rowId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
@@ -2169,7 +2157,7 @@ export default function SeoArticleEditor({
                 setImagesReloadKey((k) => k + 1);
             })();
         },
-        [patchSupplementalImageRow],
+        [patchSupplementalImageRow, renameLocalMediaByUrl],
     );
 
     const buildQuickFixContext = useCallback(
@@ -2230,7 +2218,7 @@ export default function SeoArticleEditor({
 
                             const data = id > 0
                                 ? await renameSeoMedia(id, newSlug)
-                                : await renameSeoMediaByUrl(src, newSlug);
+                                : await renameLocalMediaByUrl(src, newSlug);
 
                             const oldSrc = normalizeImageSrcKey(src);
                             const resolvedSeoId = Number(data.id ?? id ?? 0);
@@ -2498,7 +2486,7 @@ export default function SeoArticleEditor({
                 if (!newSlug || !src) {
                     return;
                 }
-                const renamePromise = id > 0 ? renameSeoMedia(id, newSlug) : renameSeoMediaByUrl(src, newSlug);
+                const renamePromise = id > 0 ? renameSeoMedia(id, newSlug) : renameLocalMediaByUrl(src, newSlug);
                 renamePromise
                     .then((data) => {
                         patchSupplementalImageRow(row, {
@@ -3416,42 +3404,25 @@ export default function SeoArticleEditor({
     }, [patchImageInBlocks, updateBlocksWithoutHistory]);
 
     const applyCompletedMediaToProductGallery = useCallback((mediaId, finalUrl, galleryItems = null) => {
-        const items = Array.isArray(galleryItems) && galleryItems.length > 0
-            ? galleryItems
-            : [{ id: mediaId, url: finalUrl }];
-
-        if (typeof Livewire === 'undefined') {
+        if (!articleId) {
             return false;
         }
 
-        let appended = false;
-        for (const item of items) {
-            const url = String(item?.url ?? '').trim();
-            const id = Number(item?.id ?? mediaId);
-            if (!url || id <= 0) {
-                continue;
-            }
+        const rawItems = Array.isArray(galleryItems) && galleryItems.length > 0
+            ? galleryItems
+            : [{ id: mediaId, url: finalUrl }];
 
-            Livewire.dispatch('append-editor-image-to-product-gallery', {
-                url,
-                seoMediaId: id,
-                wpAttachmentId: 0,
-                slug: '',
-                alt: String(window.__SEO_MAIN_KEYWORD__ ?? '').trim(),
-            });
-            appended = true;
-        }
-
-        if (!appended) {
+        const appended = appendProductAlbumItems(articleId, rawItems);
+        if (appended.length === 0) {
             return false;
         }
 
         pendingAiMediaRef.current.delete(mediaId);
         window.dispatchEvent(new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }));
 
-        const galleryUrls = items
+        const galleryUrls = appended
             .map((item) => ({
-                id: Number(item?.id ?? mediaId) || mediaId,
+                id: Number(item?.id ?? 0),
                 url: String(item?.url ?? '').trim(),
             }))
             .filter((item) => item.url !== '');
@@ -3470,7 +3441,7 @@ export default function SeoArticleEditor({
         );
 
         return true;
-    }, []);
+    }, [articleId]);
 
     const clearMediaPolling = useCallback((mediaId) => {
         const timer = mediaPollTimersRef.current.get(mediaId);

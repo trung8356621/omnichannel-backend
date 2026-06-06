@@ -22,7 +22,7 @@
             galleryPickerSelectedKeys: [],
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
-            get galleryPickerSelectedCount() {
+            galleryPickerSelectedCount() {
                 return this.galleryPickerSelectedKeys.length;
             },
             clearGalleryPickerSelection() {
@@ -86,7 +86,7 @@
                 this.galleryPickerAnchorKey = key;
             },
             confirmGalleryPickerSelection() {
-                if (this.galleryPickerSelectedCount === 0) {
+                if (this.galleryPickerSelectedCount() === 0) {
                     return;
                 }
 
@@ -95,6 +95,15 @@
                     .filter((item) => item && String(item.url || '').trim() !== '');
 
                 if (items.length === 0) {
+                    return;
+                }
+
+                const articleId = @js((int) $record->getKey());
+                const appendAlbum = window.__seoProductAlbumStorage?.append;
+                if (typeof appendAlbum === 'function' && articleId) {
+                    appendAlbum(articleId, items);
+                    this.clearGalleryPickerSelection();
+                    this.closeArticleMediaModal();
                     return;
                 }
 
@@ -400,6 +409,19 @@
                 this.pickerSearching = false;
                 $wire.closeMediaPicker();
             },
+            handlePickerImageClick(event, image, el) {
+                if (!image || !String(image.url || '').trim()) {
+                    return;
+                }
+
+                if (this.mediaModalMode === 'gallery') {
+                    this.toggleGalleryPickerItem(event, image.picker_key, el);
+
+                    return;
+                }
+
+                this.selectPickerImage(image);
+            },
             selectPickerImage(image) {
                 if (!image || !String(image.url || '').trim()) {
                     return;
@@ -493,8 +515,11 @@
             $wire.handleEditorNotify(payload);
         "
         x-on:open-article-media-modal.window="
-            mediaModalMode = $wire.mediaPickerMode || 'featured';
             mediaModalOpen = true;
+            const wireMode = $wire.mediaPickerMode || 'featured';
+            if (wireMode === 'gallery' || wireMode === 'editor-block') {
+                mediaModalMode = wireMode;
+            }
         "
         x-on:article-media-picker-loading.window="
             if (!pickerSuppressLoadingOverlay) {
@@ -517,12 +542,21 @@
         "
         x-on:editor-html-collected.window="
             const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            const articleId = @js((int) $record->getKey());
+            const persistAlbum = window.__seoPersistProductAlbumDraft;
+            const runAfterAlbum = (fn) => {
+                if (typeof persistAlbum === 'function' && articleId) {
+                    persistAlbum(articleId, $wire).then(() => fn(detail));
+                } else {
+                    fn(detail);
+                }
+            };
             if (detail.target === 'sync') {
-                $wire.syncArticleToWordPress(detail.html ?? '');
+                runAfterAlbum((d) => $wire.syncArticleToWordPress(d.html ?? ''));
             } else if (detail.target === 'generate-faq') {
-                $wire.generateArticleFaqs(detail.html ?? '');
+                runAfterAlbum((d) => $wire.generateArticleFaqs(d.html ?? ''));
             } else {
-                $wire.persistArticleLocal(detail.html ?? '');
+                runAfterAlbum((d) => $wire.persistArticleLocal(d.html ?? ''));
             }
         "
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
@@ -531,11 +565,20 @@
             if ($wire.articleHeavyActionBusy) {
                 return;
             }
+            const pushPublish = window.__seoPublishBoxPush;
             if (action === 'save') {
-                $wire.requestSaveArticle();
+                if (typeof pushPublish === 'function') {
+                    pushPublish().then(() => $wire.requestSaveArticle());
+                } else {
+                    $wire.requestSaveArticle();
+                }
             } else if (action === 'sync') {
                 @if ($record->wp_post_id)
-                    $wire.requestSyncToWordPress();
+                    if (typeof pushPublish === 'function') {
+                        pushPublish().then(() => $wire.requestSyncToWordPress());
+                    } else {
+                        $wire.requestSyncToWordPress();
+                    }
                 @endif
             } else if (action === 'preview') {
                 const url = @js($this->getArticlePreviewUrl());
@@ -613,31 +656,33 @@
 
                     <div
                         class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400"
-                        wire:key="article-permalink-{{ md5($articleSlug . '|' . $this->getArticlePermalink()) }}"
+                        x-data="{
+                            editingSlug: false,
+                            slug: @js(trim($articleSlug)),
+                            permalinkBase: @js($this->getPermalinkBase()),
+                            permalinkSuffix: @js($this->getPermalinkSuffix()),
+                            previewPermalink: @js($this->getDisplayPermalink()),
+                            normalizeSlug() {
+                                const fn = window.normalizeArticleSlug;
+                                if (typeof fn !== 'function') {
+                                    return;
+                                }
+                                const next = fn(this.slug);
+                                if (next !== this.slug) {
+                                    this.slug = next;
+                                }
+                            },
+                            async saveSlug() {
+                                this.normalizeSlug();
+                                await $wire.confirmArticleSlug(this.slug);
+                                this.editingSlug = false;
+                            },
+                        }"
                     >
                         <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
-                        @if ($editingSlug)
-                            <span class="text-gray-500">{{ $this->getPermalinkBase() }}/</span>
-                            <span
-                                x-data="{
-                                    slug: @js(trim($articleSlug)),
-                                    normalizeSlug() {
-                                        const fn = window.normalizeArticleSlug;
-                                        if (typeof fn !== 'function') {
-                                            return;
-                                        }
-                                        const next = fn(this.slug);
-                                        if (next !== this.slug) {
-                                            this.slug = next;
-                                        }
-                                    },
-                                    async saveSlug() {
-                                        this.normalizeSlug();
-                                        await $wire.confirmArticleSlug(this.slug);
-                                    },
-                                }"
-                                class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1"
-                            >
+                        <template x-if="editingSlug">
+                            <span class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1">
+                                <span class="text-gray-500" x-text="(permalinkBase || '') + '/'"></span>
                                 <input
                                     type="text"
                                     x-model="slug"
@@ -645,9 +690,7 @@
                                     x-on:keydown.enter.prevent="saveSlug()"
                                     class="inline-block min-w-[12rem] max-w-full flex-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
                                 />
-                                @if ($this->getPermalinkSuffix() !== '')
-                                    <span class="text-gray-500">{{ $this->getPermalinkSuffix() }}</span>
-                                @endif
+                                <span class="text-gray-500" x-show="permalinkSuffix !== ''" x-text="permalinkSuffix"></span>
                                 <button
                                     type="button"
                                     x-on:click="saveSlug()"
@@ -659,24 +702,25 @@
                                     <span wire:loading wire:target="confirmArticleSlug">…</span>
                                 </button>
                             </span>
-                        @else
-                            @php($previewPermalink = $this->getDisplayPermalink())
-                            <a
-                                href="{{ $previewPermalink !== '' ? $previewPermalink : '#' }}"
-                                target="_blank"
-                                rel="noopener"
-                                class="text-sky-600 dark:text-sky-400 hover:underline break-all"
-                            >
-                                {{ $previewPermalink !== '' ? $previewPermalink : ($this->getPermalinkBase() !== '' ? $this->getPermalinkBase() . '/sample-post' : '#') }}
-                            </a>
-                            <button
-                                type="button"
-                                wire:click="$set('editingSlug', true)"
-                                class="ml-2 text-xs text-gray-500 hover:text-primary-600 hover:underline"
-                            >
-                                Chỉnh sửa
-                            </button>
-                        @endif
+                        </template>
+                        <template x-if="!editingSlug">
+                            <span class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1">
+                                <a
+                                    x-bind:href="previewPermalink || '#'"
+                                    target="_blank"
+                                    rel="noopener"
+                                    class="text-sky-600 dark:text-sky-400 hover:underline break-all"
+                                    x-text="previewPermalink || ((permalinkBase || '') !== '' ? permalinkBase + '/sample-post' : '#')"
+                                ></a>
+                                <button
+                                    type="button"
+                                    x-on:click="editingSlug = true"
+                                    class="ml-2 text-xs text-gray-500 hover:text-primary-600 hover:underline"
+                                >
+                                    Chỉnh sửa
+                                </button>
+                            </span>
+                        </template>
                     </div>
 
                     @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-fields-collapsible')
@@ -774,86 +818,60 @@
                 @endif
 
                 @if ($this->supportsProductGallery())
-                    {{-- Album hình ảnh sản phẩm (WooCommerce) --}}
+                    {{-- Album hình ảnh sản phẩm (WooCommerce) — chỉnh sửa qua localStorage, lưu DB khi Lưu/Đồng bộ --}}
                     <div class="wp-postbox">
                         <div class="wp-postbox-header">
                             <h2>Album hình ảnh sản phẩm</h2>
                         </div>
                         <div
                             class="wp-postbox-inside"
-                            x-data="{
-                                dragUrl: null,
-                                startDrag(event) {
-                                    this.dragUrl = event.currentTarget.dataset.galleryUrl || null;
-                                },
-                                onDrop(event) {
-                                    event.preventDefault();
-                                    if (!this.dragUrl) return;
-                                    const target = event.currentTarget.closest('[data-gallery-url]');
-                                    const targetUrl = target?.dataset?.galleryUrl || null;
-                                    if (!targetUrl || targetUrl === this.dragUrl) return;
-
-                                    const list = Array.from($el.querySelectorAll('[data-gallery-url]'));
-                                    const dragNode = list.find((node) => node.dataset.galleryUrl === this.dragUrl);
-                                    const targetNode = list.find((node) => node.dataset.galleryUrl === targetUrl);
-                                    if (!dragNode || !targetNode) return;
-
-                                    const parent = dragNode.parentNode;
-                                    parent.insertBefore(dragNode, targetNode);
-                                    const ordered = Array.from(parent.querySelectorAll('[data-gallery-url]'))
-                                        .map((node) => node.dataset.galleryUrl)
-                                        .filter(Boolean);
-                                    $wire.reorderProductGallery(ordered);
-                                },
-                                allowDrop(event) {
-                                    event.preventDefault();
-                                },
-                                finishDrag() {
-                                    this.dragUrl = null;
-                                },
-                            }"
+                            x-data="seoProductAlbumBoxData(@js((int) $record->getKey()))"
                         >
-                            @if (count($productGallery) > 0)
+                            <template x-if="albumItems.length > 0">
                                 <div class="wp-product-gallery-grid" role="list">
-                                    @foreach ($productGallery as $idx => $image)
+                                    <template x-for="(image, idx) in albumItems" :key="image.url">
                                         <div
                                             class="wp-product-gallery-thumb-wrap"
                                             role="listitem"
                                             draggable="true"
-                                            data-gallery-url="{{ $image['url'] }}"
+                                            x-bind:data-gallery-url="image.url"
                                             x-on:dragstart="startDrag($event)"
                                             x-on:dragover="allowDrop($event)"
                                             x-on:drop="onDrop($event)"
                                             x-on:dragend="finishDrag()"
                                         >
                                             <a
-                                                href="{{ $image['url'] }}"
+                                                x-bind:href="image.url"
                                                 target="_blank"
                                                 rel="noopener noreferrer"
                                                 class="wp-product-gallery-thumb-link"
                                             >
                                                 <img
-                                                    src="{{ $image['url'] }}"
+                                                    x-bind:src="image.url"
                                                     alt=""
                                                     class="wp-product-gallery-thumb"
                                                 />
                                             </a>
-                                            @if ($idx === 0)
-                                                <span class="wp-product-gallery-badge">Đại diện</span>
-                                            @endif
+                                            <span
+                                                x-show="idx === 0"
+                                                class="wp-product-gallery-badge"
+                                            >
+                                                Đại diện
+                                            </span>
                                             <button
                                                 type="button"
                                                 class="wp-product-gallery-remove"
-                                                wire:click="removeProductGalleryImage(@js($image['url']))"
+                                                x-on:click="removeItem(image.url)"
                                                 title="Xóa ảnh khỏi album"
                                                 aria-label="Xóa ảnh khỏi album"
                                             >
                                                 ×
                                             </button>
                                         </div>
-                                    @endforeach
+                                    </template>
                                 </div>
-                            @else
+                            </template>
+                            <template x-if="albumItems.length === 0">
                                 <button
                                     type="button"
                                     class="wp-product-gallery-generate mt-2"
@@ -862,7 +880,7 @@
                                 >
                                     Tạo ảnh
                                 </button>
-                            @endif
+                            </template>
                             <button
                                 type="button"
                                 x-on:click="openArticleMediaModal('gallery')"
@@ -879,23 +897,7 @@
                             >
                                 Rải ảnh vào các section
                             </button>
-                            <p class="mt-1 text-xs text-gray-500">
-                                @if (count($productGallery) > 0)
-                                    {{ count($productGallery) }} ảnh · Ảnh đầu là đại diện · Kéo thả để đổi vị trí
-                                @else
-                                    Chưa có ảnh trong album
-                                @endif
-                            </p>
-                            <script>
-                                try {
-                                    window.localStorage.setItem(
-                                        'seo_product_album_list_{{ (int) $record->getKey() }}',
-                                        JSON.stringify(@json($productGallery))
-                                    );
-                                } catch (error) {
-                                    // ignore localStorage failures
-                                }
-                            </script>
+                            <p class="mt-1 text-xs text-gray-500" x-text="albumCountLabel()"></p>
                         </div>
                     </div>
                 @endif
@@ -1087,9 +1089,7 @@
                                     x-bind:data-picker-slug="image.slug"
                                     x-bind:data-picker-media-type="image.media_type"
                                     x-bind:class="{ 'is-selected': mediaModalMode === 'gallery' && isGalleryPickerSelected(image.picker_key) }"
-                                    x-on:click="mediaModalMode === 'gallery'
-                                        ? toggleGalleryPickerItem($event, image.picker_key, $el)
-                                        : selectPickerImage(image)"
+                                    x-on:click="handlePickerImageClick($event, image, $el)"
                                 >
                                     <span
                                         class="seo-article-media-modal__thumb seo-article-media-modal__thumb--video"
@@ -1144,13 +1144,13 @@
                 >
                     <div class="seo-article-media-modal__select-bar-left">
                         <span>
-                            Đã chọn: <strong x-text="galleryPickerSelectedCount">0</strong>
+                            Đã chọn: <strong x-text="galleryPickerSelectedCount()">0</strong>
                         </span>
                         <button
                             type="button"
                             class="seo-article-media-modal__select-bar-clear"
                             x-on:click="clearGalleryPickerSelection()"
-                            x-show="galleryPickerSelectedCount > 0"
+                            x-show="galleryPickerSelectedCount() > 0"
                             x-cloak
                         >
                             Bỏ chọn
@@ -1160,7 +1160,7 @@
                         type="button"
                         class="seo-article-media-modal__select-bar-submit"
                         x-on:click="confirmGalleryPickerSelection()"
-                        x-bind:disabled="galleryPickerSelectedCount === 0"
+                        x-bind:disabled="galleryPickerSelectedCount() === 0"
                         wire:loading.attr="disabled"
                         wire:target="confirmGallerySelectionFromPicker"
                     >

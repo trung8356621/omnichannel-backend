@@ -431,7 +431,20 @@ export async function renameSeoMedia(mediaId, newSlug) {
     return data;
 }
 
-export async function renameSeoMediaByUrl(mediaUrl, newSlug) {
+export async function renameSeoMediaByUrl(mediaUrl, newSlug, { siteId = null, articleId = null } = {}) {
+    const payload = {
+        url: mediaUrl,
+        new_slug: newSlug,
+    };
+    const resolvedSiteId = Number.parseInt(String(siteId ?? ''), 10);
+    const resolvedArticleId = Number.parseInt(String(articleId ?? ''), 10);
+    if (Number.isFinite(resolvedSiteId) && resolvedSiteId > 0) {
+        payload.site_id = resolvedSiteId;
+    }
+    if (Number.isFinite(resolvedArticleId) && resolvedArticleId > 0) {
+        payload.article_id = resolvedArticleId;
+    }
+
     const response = await fetch(RENAME_BY_URL, {
         method: 'POST',
         headers: {
@@ -440,7 +453,7 @@ export async function renameSeoMediaByUrl(mediaUrl, newSlug) {
             Accept: 'application/json',
         },
         credentials: 'same-origin',
-        body: JSON.stringify({ url: mediaUrl, new_slug: newSlug }),
+        body: JSON.stringify(payload),
     });
 
     const data = await response.json().catch(() => ({}));

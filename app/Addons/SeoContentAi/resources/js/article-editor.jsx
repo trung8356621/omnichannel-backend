@@ -15,6 +15,15 @@ import {
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
+import {
+    appendProductAlbumItems,
+    loadProductAlbum,
+    normalizeProductAlbumList,
+    persistProductAlbumDraftToServer,
+    removeProductAlbumItem,
+    reorderProductAlbum,
+    saveProductAlbum,
+} from './utils/articleProductAlbumStorage';
 
 window.normalizeArticleSlug = normalizeArticleSlug;
 
@@ -22,6 +31,101 @@ window.__seoArticleMediaPickerCache = {
     read: readArticleMediaPickerCache,
     write: writeArticleMediaPickerCache,
     isCacheableTab: isArticleMediaPickerCacheableTab,
+};
+
+window.__seoProductAlbumStorage = {
+    load: loadProductAlbum,
+    save: saveProductAlbum,
+    append: appendProductAlbumItems,
+    remove: removeProductAlbumItem,
+    reorder: reorderProductAlbum,
+};
+
+window.__seoPersistProductAlbumDraft = persistProductAlbumDraftToServer;
+
+window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
+    const id = Number(articleId ?? 0);
+
+    return {
+        articleId: id,
+        albumItems: [],
+        dragUrl: null,
+        init() {
+            this.syncFromStorage();
+            this._onGalleryUpdated = (event) => {
+                const detail = event?.detail ?? {};
+                const aid = Number(detail.article_id ?? detail.articleId ?? 0);
+                if (aid === this.articleId) {
+                    this.syncFromStorage();
+                }
+            };
+            window.addEventListener('seo-product-gallery-updated', this._onGalleryUpdated);
+        },
+        destroy() {
+            if (this._onGalleryUpdated) {
+                window.removeEventListener('seo-product-gallery-updated', this._onGalleryUpdated);
+            }
+        },
+        syncFromStorage() {
+            const storage = window.__seoProductAlbumStorage;
+            this.albumItems = storage?.load ? storage.load(this.articleId) : [];
+        },
+        removeItem(url) {
+            const storage = window.__seoProductAlbumStorage;
+            if (storage?.remove) {
+                storage.remove(this.articleId, url);
+            }
+            this.syncFromStorage();
+        },
+        startDrag(event) {
+            this.dragUrl = event.currentTarget.dataset.galleryUrl || null;
+        },
+        allowDrop(event) {
+            event.preventDefault();
+        },
+        finishDrag() {
+            this.dragUrl = null;
+        },
+        onDrop(event) {
+            event.preventDefault();
+            const dragUrl = this.dragUrl;
+            if (!dragUrl) {
+                return;
+            }
+
+            const targetEl = event.currentTarget.closest('[data-gallery-url]');
+            const targetUrl = targetEl?.dataset?.galleryUrl || null;
+            if (!targetUrl || targetUrl === dragUrl) {
+                return;
+            }
+
+            const urls = this.albumItems.map((item) => String(item?.url ?? '').trim());
+            const from = urls.indexOf(dragUrl);
+            const to = urls.indexOf(targetUrl);
+            if (from < 0 || to < 0 || from === to) {
+                return;
+            }
+
+            urls.splice(from, 1);
+            urls.splice(to, 0, dragUrl);
+
+            const storage = window.__seoProductAlbumStorage;
+            if (storage?.reorder) {
+                storage.reorder(this.articleId, urls);
+            }
+
+            this.syncFromStorage();
+            this.dragUrl = null;
+        },
+        albumCountLabel() {
+            const count = this.albumItems.length;
+            if (count === 0) {
+                return 'Chưa có ảnh trong album';
+            }
+
+            return `${count} ảnh · Ảnh đầu là đại diện · Kéo thả để đổi vị trí`;
+        },
+    };
 };
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
@@ -46,12 +150,26 @@ function registerArticleEditorLivewireBridge() {
     }
     window.__seoArticleLivewireBridgeRegistered = true;
 
+    /** Livewire 3 listens to window events with the same name — prevent echo loops. */
+    const forwardingLivewireEvents = new Set();
+
     const forward = (name) => (payload) => {
-        window.dispatchEvent(
-            new CustomEvent(name, {
-                detail: normalizeLivewireEventDetail(payload),
-            }),
-        );
+        if (forwardingLivewireEvents.has(name)) {
+            return;
+        }
+
+        forwardingLivewireEvents.add(name);
+        try {
+            window.dispatchEvent(
+                new CustomEvent(name, {
+                    detail: normalizeLivewireEventDetail(payload),
+                }),
+            );
+        } finally {
+            queueMicrotask(() => {
+                forwardingLivewireEvents.delete(name);
+            });
+        }
     };
 
     if (typeof Livewire !== 'undefined') {
@@ -60,28 +178,32 @@ function registerArticleEditorLivewireBridge() {
         Livewire.on('seo-analyze-result', forward('seo-analyze-result'));
         Livewire.on('flush-article-faqs', forward('flush-article-faqs'));
         Livewire.on('article-faq-extract-debug', forward('article-faq-extract-debug'));
-        Livewire.on('article-faq-extract-debug-cleared', () => {
-            window.dispatchEvent(new CustomEvent('article-faq-extract-debug-cleared'));
-        });
+        Livewire.on('article-faq-extract-debug-cleared', forward('article-faq-extract-debug-cleared'));
         Livewire.on('editor-block-image-selected', forward('editor-block-image-selected'));
         Livewire.on('article-media-selected', forward('article-media-selected'));
         Livewire.on('article-media-removed', forward('article-media-removed'));
         Livewire.on('article-faqs-save-finished', forward('article-faqs-save-finished'));
         Livewire.on('seo-product-gallery-updated', (payload) => {
-            const detail = normalizeLivewireEventDetail(payload);
-            const gallery = detail.gallery;
-            const articleId = detail.article_id ?? detail.articleId;
-            if (articleId && Array.isArray(gallery)) {
-                try {
-                    window.localStorage.setItem(
-                        `seo_product_album_list_${articleId}`,
-                        JSON.stringify(gallery),
-                    );
-                } catch {
-                    // ignore
-                }
+            const name = 'seo-product-gallery-updated';
+            if (forwardingLivewireEvents.has(name)) {
+                return;
             }
-            window.dispatchEvent(new CustomEvent('seo-product-gallery-updated', { detail }));
+
+            const detail = normalizeLivewireEventDetail(payload);
+            const gallery = normalizeProductAlbumList(detail.gallery);
+            const syncedArticleId = detail.article_id ?? detail.articleId;
+            if (syncedArticleId && gallery.length > 0) {
+                saveProductAlbum(syncedArticleId, gallery, { dispatch: false });
+            }
+
+            forwardingLivewireEvents.add(name);
+            try {
+                window.dispatchEvent(new CustomEvent(name, { detail: { ...detail, gallery } }));
+            } finally {
+                queueMicrotask(() => {
+                    forwardingLivewireEvents.delete(name);
+                });
+            }
         });
         Livewire.on('article-ai-image-generated', forward('article-ai-image-generated'));
         Livewire.on('article-ai-video-generated', forward('article-ai-video-generated'));
@@ -190,6 +312,10 @@ if (rootElement) {
         }
     } catch (e) {
         console.warn('Invalid article meta JSON', e);
+    }
+
+    if (articleId && initialProductGallery.length > 0 && loadProductAlbum(articleId).length === 0) {
+        saveProductAlbum(articleId, initialProductGallery);
     }
 
     let initialFaqs = [];

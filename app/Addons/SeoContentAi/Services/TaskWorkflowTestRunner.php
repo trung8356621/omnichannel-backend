@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
@@ -1010,16 +1011,25 @@ final class TaskWorkflowTestRunner
         }
         $slug = \Illuminate\Support\Str::slug($slugSource);
 
+        $postType = SeoProjectTask::normalizePostType(
+            (string) ($context->postType ?? $variables['_project_post_type'] ?? 'article'),
+        );
+
         $article = SeoArticle::query()->create([
             'site_id' => $siteId,
             'user_id' => auth()->id(),
-            'type' => 'article',
+            'type' => $postType,
             'title' => $title,
             'slug' => $slug !== '' ? $slug : null,
             'status' => 'draft',
             'body' => '',
             'language' => 'vi',
         ]);
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_post_type'],
+            ['meta_value' => $postType],
+        );
 
         $focusKeyword = trim((string) ($variables['focus_keyword'] ?? ''));
         if ($focusKeyword !== '') {

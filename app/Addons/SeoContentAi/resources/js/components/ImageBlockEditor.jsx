@@ -4,6 +4,7 @@ import { AlignCenter, AlignLeft, AlignRight, Images, Maximize2, Pencil, RefreshC
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
 import { importSeoMediaFromUrl, processClipboardImagePaste } from '../utils/seoMediaApi';
 import { ImageBlockPickerBox } from './BlockInsertMenu';
+import { appendProductAlbumItems } from '../utils/articleProductAlbumStorage';
 import { t } from '../utils/i18n';
 import ImageMetaEditForm from './imageMeta/ImageMetaEditForm';
 import { applyWordPressImageSize, detectWordPressImageSize } from '../utils/wordpressImageSize';
@@ -414,18 +415,18 @@ export default function ImageBlockEditor({
 
     const handleAppendToProductAlbum = useCallback(() => {
         const src = String(image?.src ?? '').trim();
-        if (!src || typeof Livewire === 'undefined') {
+        if (!src || !articleId) {
             return;
         }
 
-        Livewire.dispatch('append-editor-image-to-product-gallery', {
+        appendProductAlbumItems(articleId, [{
             url: src,
             wpAttachmentId: Number(image?.wpAttachmentId ?? 0),
             seoMediaId: Number(image?.seoMediaId ?? 0),
             slug: String(image?.slug ?? '').trim(),
             alt: String(image?.alt ?? '').trim(),
-        });
-    }, [image]);
+        }]);
+    }, [image, articleId]);
 
     useEffect(() => {
         if (!isActive) {

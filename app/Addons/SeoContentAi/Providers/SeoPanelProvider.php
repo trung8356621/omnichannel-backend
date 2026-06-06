@@ -100,6 +100,8 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.media.upload');
                 Route::post('/import-url', [SeoMediaController::class, 'importFromUrl'])
                     ->name('seo.media.import-url');
+                Route::post('/rename-by-url', [SeoMediaController::class, 'renameByUrl'])
+                    ->name('seo.media.rename-by-url');
                 Route::get('/splitter-source', [SeoMediaController::class, 'splitterSource'])
                     ->name('seo.media.splitter-source');
                 Route::post('/save-split', [SeoMediaController::class, 'saveSplit'])
@@ -120,8 +122,6 @@ class SeoPanelProvider extends PanelProvider
                 Route::delete('/{media}/ai-job', [SeoMediaController::class, 'deleteAiJob'])
                     ->whereNumber('media')
                     ->name('seo.media.delete-ai-job');
-                Route::post('/rename-by-url', [SeoMediaController::class, 'renameByUrl'])
-                    ->name('seo.media.rename-by-url');
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
                     ->name('seo.media.rename');

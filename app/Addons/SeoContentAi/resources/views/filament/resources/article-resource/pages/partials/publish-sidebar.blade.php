@@ -1,3 +1,254 @@
+@php
+    $publishBoxLabels = [
+        'postType' => [
+            'article' => __('seo-content-ai::filament.article_list.post_type_article'),
+            'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+            'category' => __('seo-content-ai::filament.article_list.post_type_category'),
+            'product_category' => __('seo-content-ai::filament.article_list.post_type_product_category'),
+        ],
+        'status' => [
+            'draft' => 'Draft',
+            'published' => 'Published',
+            'scheduled' => 'Scheduled',
+            'private' => 'Private',
+        ],
+        'visibility' => [
+            'public' => 'Public',
+            'private' => 'Private',
+        ],
+    ];
+    $publishBoxInitial = [
+        'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType($articlePostType),
+        'status' => $articleStatus,
+        'visibility' => $visibility,
+        'publishDay' => $publishDay,
+        'publishMonth' => $publishMonth,
+        'publishYear' => $publishYear,
+        'publishHour' => $publishHour,
+        'publishMinute' => $publishMinute,
+        'publishWhenLabel' => $this->getPublishWhenLabel(),
+    ];
+@endphp
+
+@once
+    <script>
+        window.seoPublishBoxData = function seoPublishBoxData(initial, labels) {
+            const minutePool = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+
+            return {
+                postType: initial.postType ?? 'article',
+                status: initial.status ?? 'draft',
+                visibility: initial.visibility ?? 'public',
+                publishDay: initial.publishDay ?? '',
+                publishMonth: initial.publishMonth ?? '',
+                publishYear: initial.publishYear ?? '',
+                publishHour: initial.publishHour ?? '',
+                publishMinute: initial.publishMinute ?? '',
+                publishWhenLabel: initial.publishWhenLabel ?? 'Not scheduled',
+                publishIso: '',
+                labels,
+                editingPostType: false,
+                editingStatus: false,
+                editingVisibility: false,
+                editingPublishAt: false,
+                _backup: null,
+
+                init() {
+                    this.publishIso = this.buildIso();
+                    window.__seoPublishBoxPush = () => this.pushToWire();
+                },
+
+                postTypeLabel() {
+                    return this.labels.postType[this.postType] ?? this.labels.postType.article;
+                },
+
+                statusLabel() {
+                    return this.labels.status[this.status] ?? this.labels.status.draft;
+                },
+
+                visibilityLabel() {
+                    return this.labels.visibility[this.visibility] ?? this.labels.visibility.public;
+                },
+
+                saveButtonTitle() {
+                    return (this.status === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật') + ' (Ctrl+S)';
+                },
+
+                pad(value) {
+                    const n = Number(value || 0);
+                    if (Number.isNaN(n)) {
+                        return '00';
+                    }
+
+                    return String(n).padStart(2, '0');
+                },
+
+                buildIso() {
+                    const y = String(this.publishYear || '').padStart(4, '0');
+                    const m = this.pad(this.publishMonth);
+                    const d = this.pad(this.publishDay);
+                    const h = this.pad(this.publishHour);
+                    const i = this.pad(this.publishMinute);
+
+                    return `${y}-${m}-${d}T${h}:${i}`;
+                },
+
+                formatScheduleLabel(date) {
+                    const weekdayMap = ['CN', 'Th2', 'Th3', 'Th4', 'Th5', 'Th6', 'Th7'];
+                    const weekday = weekdayMap[date.getDay()] ?? 'Th';
+
+                    return `${weekday} ${date.getDate()}, ${date.getFullYear()} at ${this.pad(date.getHours())}:${this.pad(date.getMinutes())}`;
+                },
+
+                snapshot() {
+                    return {
+                        postType: this.postType,
+                        status: this.status,
+                        visibility: this.visibility,
+                        publishDay: this.publishDay,
+                        publishMonth: this.publishMonth,
+                        publishYear: this.publishYear,
+                        publishHour: this.publishHour,
+                        publishMinute: this.publishMinute,
+                        publishWhenLabel: this.publishWhenLabel,
+                    };
+                },
+
+                restoreSnapshot(snapshot) {
+                    if (!snapshot) {
+                        return;
+                    }
+
+                    Object.assign(this, snapshot);
+                    this.publishIso = this.buildIso();
+                },
+
+                beginEdit(field) {
+                    this._backup = this.snapshot();
+                    this[`editing${field}`] = true;
+                },
+
+                cancelEdit(field) {
+                    this.restoreSnapshot(this._backup);
+                    this._backup = null;
+                    this[`editing${field}`] = false;
+                },
+
+                applyPostType() {
+                    this.editingPostType = false;
+                    this._backup = null;
+                    window.dispatchEvent(new CustomEvent('seo-publish-post-type-changed', {
+                        detail: { postType: this.postType },
+                    }));
+                },
+
+                applyStatus() {
+                    this.visibility = this.status === 'private' ? 'private' : 'public';
+                    this.editingStatus = false;
+                    this._backup = null;
+                },
+
+                applyVisibility() {
+                    if (this.visibility === 'private') {
+                        this.status = 'private';
+                    } else if (this.status === 'private') {
+                        this.status = 'draft';
+                    }
+
+                    this.editingVisibility = false;
+                    this._backup = null;
+                },
+
+                randomizePublishAtFuture() {
+                    const base = new Date();
+                    base.setHours(base.getHours() + Math.floor(Math.random() * 8) + 1);
+                    base.setMinutes(minutePool[Math.floor(Math.random() * minutePool.length)]);
+                    base.setSeconds(0);
+                    base.setMilliseconds(0);
+
+                    this.publishYear = String(base.getFullYear());
+                    this.publishMonth = String(base.getMonth() + 1).padStart(2, '0');
+                    this.publishDay = String(base.getDate()).padStart(2, '0');
+                    this.publishHour = String(base.getHours()).padStart(2, '0');
+                    this.publishMinute = String(base.getMinutes()).padStart(2, '0');
+                    this.publishIso = this.buildIso();
+
+                    if (this.visibility !== 'private') {
+                        this.status = 'scheduled';
+                    }
+                },
+
+                beginPublishAtEdit() {
+                    this.beginEdit('PublishAt');
+                    this.randomizePublishAtFuture();
+                },
+
+                applyPublishIso() {
+                    if (!this.publishIso || !this.publishIso.includes('T')) {
+                        return;
+                    }
+
+                    const [datePart, timePart] = this.publishIso.split('T');
+                    const [y, m, d] = datePart.split('-');
+                    const [h, i] = timePart.split(':');
+                    this.publishYear = y || this.publishYear;
+                    this.publishMonth = m || this.publishMonth;
+                    this.publishDay = d || this.publishDay;
+                    this.publishHour = h || this.publishHour;
+                    this.publishMinute = i || this.publishMinute;
+                },
+
+                applyPublishAt() {
+                    this.applyPublishIso();
+
+                    const dt = new Date(this.publishIso);
+                    if (Number.isNaN(dt.getTime())) {
+                        return;
+                    }
+
+                    this.publishWhenLabel = this.formatScheduleLabel(dt);
+
+                    if (this.visibility !== 'private') {
+                        this.status = dt > new Date() ? 'scheduled' : 'published';
+                    }
+
+                    this.editingPublishAt = false;
+                    this._backup = null;
+                },
+
+                pushToWire() {
+                    return this.$wire.applyPublishBoxFromClient(
+                        this.postType,
+                        this.status,
+                        this.visibility,
+                        this.publishDay,
+                        this.publishMonth,
+                        this.publishYear,
+                        this.publishHour,
+                        this.publishMinute,
+                    );
+                },
+
+                requestSave() {
+                    if (this.$wire.articleHeavyActionBusy) {
+                        return;
+                    }
+
+                    this.pushToWire().then(() => this.$wire.requestSaveArticle());
+                },
+
+                requestSync() {
+                    if (this.$wire.articleHeavyActionBusy) {
+                        return;
+                    }
+
+                    this.pushToWire().then(() => this.$wire.requestSyncToWordPress());
+                },
+            };
+        };
+    </script>
+@endonce
+
 <div class="wp-postbox wp-publish-box">
     <div class="wp-postbox-header">
         <h2>Xuất bản</h2>
@@ -15,7 +266,10 @@
             <span>Xem trước</span>
         </a>
     </div>
-    <div class="wp-postbox-inside wp-publish-box__inside">
+    <div
+        class="wp-postbox-inside wp-publish-box__inside"
+        x-data="seoPublishBoxData(@js($publishBoxInitial), @js($publishBoxLabels))"
+    >
         <div class="wp-publish-meta space-y-2">
             @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
                 <div class="text-xs" x-data="{ markdownImportOpen: false, markdownImportDraft: '' }">
@@ -64,125 +318,103 @@
                     <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
                 </div>
             @endif
+
             <div class="text-xs">
-                <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
-                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getStatusLabelForPublishBox() }}</strong>
+                <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.post_type') }}:</span>
+                <strong class="text-gray-800 dark:text-gray-100" x-text="postTypeLabel()"></strong>
                 <button
                     type="button"
-                    wire:click="startStatusEdit"
+                    x-on:click="beginEdit('PostType')"
                     class="ml-1 text-sky-600 hover:underline"
                 >
                     Chỉnh sửa
                 </button>
-                @if ($editingStatus)
-                    <div class="mt-2 flex items-center gap-2">
-                        <select
-                            wire:model.live="articleStatus"
-                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
-                        >
-                            <option value="draft">Bản nháp</option>
-                            <option value="published">Đã xuất bản</option>
-                            <option value="scheduled">Đã lên lịch</option>
-                            <option value="private">Riêng tư</option>
-                        </select>
-                        <button type="button" wire:click="applyStatusEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                        <button type="button" wire:click="cancelStatusEdit" class="text-sky-600 hover:underline">Hủy</button>
-                    </div>
-                @endif
+                <div class="mt-2 flex items-center gap-2" x-show="editingPostType" x-cloak>
+                    <select
+                        x-model="postType"
+                        class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                    >
+                        <option value="article">{{ __('seo-content-ai::filament.article_list.post_type_article') }}</option>
+                        <option value="product">{{ __('seo-content-ai::filament.article_list.post_type_product') }}</option>
+                        <option value="category">{{ __('seo-content-ai::filament.article_list.post_type_category') }}</option>
+                        <option value="product_category">{{ __('seo-content-ai::filament.article_list.post_type_product_category') }}</option>
+                    </select>
+                    <button type="button" x-on:click="applyPostType()" class="text-sky-600 hover:underline">Đồng ý</button>
+                    <button type="button" x-on:click="cancelEdit('PostType')" class="text-sky-600 hover:underline">Hủy</button>
+                </div>
+            </div>
+
+            <div class="text-xs">
+                <span class="text-gray-500 dark:text-gray-400">Trạng thái:</span>
+                <strong class="text-gray-800 dark:text-gray-100" x-text="statusLabel()"></strong>
+                <button
+                    type="button"
+                    x-on:click="beginEdit('Status')"
+                    class="ml-1 text-sky-600 hover:underline"
+                >
+                    Chỉnh sửa
+                </button>
+                <div class="mt-2 flex items-center gap-2" x-show="editingStatus" x-cloak>
+                    <select
+                        x-model="status"
+                        class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                    >
+                        <option value="draft">Bản nháp</option>
+                        <option value="published">Đã xuất bản</option>
+                        <option value="scheduled">Đã lên lịch</option>
+                        <option value="private">Riêng tư</option>
+                    </select>
+                    <button type="button" x-on:click="applyStatus()" class="text-sky-600 hover:underline">Đồng ý</button>
+                    <button type="button" x-on:click="cancelEdit('Status')" class="text-sky-600 hover:underline">Hủy</button>
+                </div>
             </div>
 
             <div class="text-xs">
                 <span class="text-gray-500 dark:text-gray-400">Hiển thị:</span>
-                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getVisibilityLabel() }}</strong>
+                <strong class="text-gray-800 dark:text-gray-100" x-text="visibilityLabel()"></strong>
                 <button
                     type="button"
-                    wire:click="startVisibilityEdit"
+                    x-on:click="beginEdit('Visibility')"
                     class="ml-1 text-sky-600 hover:underline"
                 >
                     Chỉnh sửa
                 </button>
-                @if ($editingVisibility)
-                    <div class="mt-2 flex items-center gap-2">
-                        <select
-                            wire:model.live="visibility"
-                            class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
-                        >
-                            <option value="public">Công khai</option>
-                            <option value="private">Riêng tư</option>
-                        </select>
-                        <button type="button" wire:click="applyVisibilityEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                        <button type="button" wire:click="cancelVisibilityEdit" class="text-sky-600 hover:underline">Hủy</button>
-                    </div>
-                @endif
+                <div class="mt-2 flex items-center gap-2" x-show="editingVisibility" x-cloak>
+                    <select
+                        x-model="visibility"
+                        class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
+                    >
+                        <option value="public">Công khai</option>
+                        <option value="private">Riêng tư</option>
+                    </select>
+                    <button type="button" x-on:click="applyVisibility()" class="text-sky-600 hover:underline">Đồng ý</button>
+                    <button type="button" x-on:click="cancelEdit('Visibility')" class="text-sky-600 hover:underline">Hủy</button>
+                </div>
             </div>
 
             <div class="text-xs">
                 <span class="text-gray-500 dark:text-gray-400">Bài lên lịch:</span>
-                <strong class="text-gray-800 dark:text-gray-100">{{ $this->getPublishWhenLabel() }}</strong>
+                <strong class="text-gray-800 dark:text-gray-100" x-text="publishWhenLabel"></strong>
                 <button
                     type="button"
-                    wire:click="startPublishAtEdit"
+                    x-on:click="beginPublishAtEdit()"
                     class="ml-1 text-sky-600 hover:underline"
                 >
                     Chỉnh sửa
                 </button>
-                @if ($editingPublishAt)
-                    <div
-                        class="mt-2 space-y-2"
-                        x-data="{
-                            day: @entangle('publishDay').live,
-                            month: @entangle('publishMonth').live,
-                            year: @entangle('publishYear').live,
-                            hour: @entangle('publishHour').live,
-                            minute: @entangle('publishMinute').live,
-                            iso: '',
-                            init() {
-                                this.rebuildIso();
-                                this.$watch('day', () => this.rebuildIso());
-                                this.$watch('month', () => this.rebuildIso());
-                                this.$watch('year', () => this.rebuildIso());
-                                this.$watch('hour', () => this.rebuildIso());
-                                this.$watch('minute', () => this.rebuildIso());
-                            },
-                            pad(v) {
-                                const n = Number(v || 0);
-                                if (Number.isNaN(n)) return '00';
-                                return String(n).padStart(2, '0');
-                            },
-                            rebuildIso() {
-                                const y = String(this.year || '').padStart(4, '0');
-                                const m = this.pad(this.month);
-                                const d = this.pad(this.day);
-                                const h = this.pad(this.hour);
-                                const i = this.pad(this.minute);
-                                this.iso = `${y}-${m}-${d}T${h}:${i}`;
-                            },
-                            applyIso() {
-                                if (!this.iso || !this.iso.includes('T')) return;
-                                const [datePart, timePart] = this.iso.split('T');
-                                const [y, m, d] = datePart.split('-');
-                                const [h, i] = timePart.split(':');
-                                this.year = y || this.year;
-                                this.month = m || this.month;
-                                this.day = d || this.day;
-                                this.hour = h || this.hour;
-                                this.minute = i || this.minute;
-                            }
-                        }"
-                    >
-                        <input
-                            x-model="iso"
-                            x-on:change="applyIso()"
-                            type="datetime-local"
-                            step="60"
-                            class="seo-publish-datetime-input rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1.5 px-2"
-                        />
+                <div class="mt-2 space-y-2" x-show="editingPublishAt" x-cloak>
+                    <input
+                        x-model="publishIso"
+                        x-on:change="applyPublishIso()"
+                        type="datetime-local"
+                        step="60"
+                        class="seo-publish-datetime-input rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1.5 px-2"
+                    />
+                    <div class="flex items-center gap-2">
+                        <button type="button" x-on:click="applyPublishAt()" class="text-sky-600 hover:underline">Đồng ý</button>
+                        <button type="button" x-on:click="cancelEdit('PublishAt')" class="text-sky-600 hover:underline">Hủy</button>
                     </div>
-                    <div class="mt-1 flex items-center gap-2">
-                        <button type="button" wire:click="applyPublishAtEdit" class="text-sky-600 hover:underline">Đồng ý</button>
-                        <button type="button" wire:click="cancelPublishAtEdit" class="text-sky-600 hover:underline">Hủy</button>
-                    </div>
-                @endif
+                </div>
             </div>
 
             <div class="text-xs">
@@ -245,13 +477,13 @@
         <div class="seo-publish-icon-actions">
             <button
                 type="button"
-                wire:click="requestSaveArticle"
+                x-on:click="requestSave()"
                 wire:loading.attr="disabled"
-                wire:target="requestSaveArticle,requestSyncToWordPress,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
+                wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
                 @disabled($articleHeavyActionBusy)
                 class="seo-publish-icon-btn is-primary @if ($articleHeavyActionBusy && $articleHeavyAction === 'save') is-busy @endif"
-                title="{{ ($articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật') . ' (Ctrl+S)' }}"
-                aria-label="{{ ($articleStatus === 'scheduled' ? 'Cập nhật lịch' : 'Cập nhật') . ' (Ctrl+S)' }}"
+                x-bind:title="saveButtonTitle()"
+                x-bind:aria-label="saveButtonTitle()"
                 @if ($articleHeavyActionBusy) aria-busy="true" @endif
             >
                 @if ($articleHeavyActionBusy && $articleHeavyAction === 'save')
@@ -266,9 +498,9 @@
 
             <button
                 type="button"
-                wire:click="requestSyncToWordPress"
+                x-on:click="requestSync()"
                 wire:loading.attr="disabled"
-                wire:target="requestSaveArticle,requestSyncToWordPress,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
+                wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
                 @disabled($articleHeavyActionBusy || ! $record->wp_post_id)
                 class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
                 title="Đồng bộ WordPress (Ctrl+Shift+S)"

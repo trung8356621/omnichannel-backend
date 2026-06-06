@@ -205,12 +205,16 @@ final class CreateArticlesFromTaskService
             if (($step['type'] ?? '') === 'action' && is_numeric($step['article_id'] ?? null)) {
                 $article = SeoArticle::query()->find((int) $step['article_id']);
                 if ($article instanceof SeoArticle) {
+                    $this->ensureArticlePostType($article, $context);
+
                     return $article;
                 }
             }
         }
 
         if ($context->article instanceof SeoArticle) {
+            $this->ensureArticlePostType($context->article, $context);
+
             return $context->article;
         }
 
@@ -268,7 +272,30 @@ final class CreateArticlesFromTaskService
             ], JSON_UNESCAPED_UNICODE)],
         );
 
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_post_type'],
+            ['meta_value' => $postType],
+        );
+
         return $article;
+    }
+
+    private function ensureArticlePostType(SeoArticle $article, TaskTestContext $context): void
+    {
+        if ($context->postType === null || trim((string) $context->postType) === '') {
+            return;
+        }
+
+        $postType = SeoProjectTask::normalizePostType($context->postType);
+        if (SeoProjectTask::normalizePostType((string) ($article->type ?? '')) === $postType) {
+            return;
+        }
+
+        $article->update(['type' => $postType]);
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_post_type'],
+            ['meta_value' => $postType],
+        );
     }
 
     private function attachKeyword(SeoArticle $article, string $phrase): void
