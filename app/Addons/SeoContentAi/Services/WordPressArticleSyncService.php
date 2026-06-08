@@ -14,6 +14,129 @@ use Throwable;
 final class WordPressArticleSyncService
 {
     /**
+     * Tạo post/product mới trên WordPress và liên kết lại với bản ghi Laravel.
+     *
+     * @return array{success: bool, message: string, wp_post_id?: int, permalink?: string}
+     */
+    public function createForArticle(SeoArticle $article): array
+    {
+        if ((int) ($article->wp_post_id ?? 0) > 0) {
+            return [
+                'success' => true,
+                'message' => 'Bài viết đã liên kết WordPress.',
+                'wp_post_id' => (int) $article->wp_post_id,
+            ];
+        }
+
+        $article->loadMissing('site', 'articleMetas');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return [
+                'success' => false,
+                'message' => 'Không tìm thấy tên miền của bài viết.',
+            ];
+        }
+
+        $type = strtolower(trim((string) ($article->type ?? 'article')));
+        if (in_array($type, ['category', 'product_category'], true)) {
+            return [
+                'success' => false,
+                'message' => 'Danh mục phải được tạo bằng luồng taxonomy WordPress, không thể đăng như bài viết.',
+            ];
+        }
+
+        $site->loadMissing('metas');
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return [
+                'success' => false,
+                'message' => 'Thiếu Migration/Write token trên domain.',
+            ];
+        }
+
+        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
+        if ($base === '') {
+            return [
+                'success' => false,
+                'message' => 'Không xác định được URL WordPress.',
+            ];
+        }
+
+        $postType = $type === 'product' ? 'product' : 'post';
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken($writeToken)
+                ->post($base.'/wp-json/omi-seo-ai/v1/posts', [
+                    'title' => trim((string) ($article->title ?? '')),
+                    'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
+                    'post_type' => $postType,
+                ]);
+
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => WordPressRestResponseParser::formatHttpErrorMessage($response->status(), $response),
+                ];
+            }
+
+            $decoded = $response->json();
+            $wpPostId = is_array($decoded) ? (int) ($decoded['wp_post_id'] ?? 0) : 0;
+            if (! is_array($decoded) || ! ($decoded['success'] ?? false) || $wpPostId <= 0) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($decoded['message'] ?? 'WordPress không trả về ID bài viết mới.'),
+                ];
+            }
+
+            $permalink = trim((string) ($decoded['permalink'] ?? ''));
+            $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
+            $article->update(array_filter([
+                'wp_post_id' => $wpPostId,
+                'slug' => $remoteSlug !== '' ? $remoteSlug : null,
+            ], static fn (mixed $value): bool => $value !== null));
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_type'],
+                ['meta_value' => $postType],
+            );
+            if ($remoteSlug !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_slug'],
+                    ['meta_value' => $remoteSlug],
+                );
+            }
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_entity'],
+                ['meta_value' => 'post'],
+            );
+            if ($permalink !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_permalink'],
+                    ['meta_value' => $permalink],
+                );
+            }
+
+            return [
+                'success' => true,
+                'message' => (string) ($decoded['message'] ?? 'Đã tạo bài viết mới trên WordPress.'),
+                'wp_post_id' => $wpPostId,
+                'permalink' => $permalink,
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress article create exception', [
+                'article_id' => $article->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Cập nhật slug lên WordPress ngay khi sửa permalink trên editor (không cần đồng bộ full).
      *
      * @return array{success: bool, message: string}
@@ -84,7 +207,7 @@ final class WordPressArticleSyncService
 
             return [
                 'success' => false,
-                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
     }
@@ -93,7 +216,6 @@ final class WordPressArticleSyncService
      * Đẩy tiêu đề, slug, trạng thái, nội dung và FAQ lên WordPress (nút «Đồng bộ»).
      *
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
-     *
      * @return array{success: bool, message: string, faq_count?: int, faq_extract_debug?: array<string, mixed>|null}
      */
     public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
@@ -136,7 +258,7 @@ final class WordPressArticleSyncService
                 ]);
                 $localMediaSync = [
                     'html' => $postContent,
-                    'errors' => ['Lỗi đồng bộ ảnh local: ' . $mediaException->getMessage()],
+                    'errors' => ['Lỗi đồng bộ ảnh local: '.$mediaException->getMessage()],
                 ];
             }
             $postContent = (string) ($localMediaSync['html'] ?? $postContent);
@@ -222,6 +344,22 @@ final class WordPressArticleSyncService
                 ];
             }
 
+            $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
+            $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
+            if ($remoteSlug !== '') {
+                $article->update(['slug' => $remoteSlug]);
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_slug'],
+                    ['meta_value' => $remoteSlug],
+                );
+            }
+            if ($remotePermalink !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_permalink'],
+                    ['meta_value' => $remotePermalink],
+                );
+            }
+
             $this->storeWpPostContentMeta($article, $postContent);
             if ($postContent !== '' && trim((string) ($article->body ?? '')) !== $postContent) {
                 // Sau khi sync, body Laravel dùng URL WordPress để tránh quay lại URL local.
@@ -231,11 +369,11 @@ final class WordPressArticleSyncService
             $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
             $virtualCount = (int) ($decoded['virtual_count'] ?? 0);
             if ($virtualCount > 0) {
-                $message .= ' Đã đồng bộ ' . $virtualCount . ' review ảo.';
+                $message .= ' Đã đồng bộ '.$virtualCount.' review ảo.';
             }
             $virtualError = trim((string) ($decoded['virtual_comments_error'] ?? ''));
             if ($virtualError !== '') {
-                $message .= ' Review chưa lưu: ' . mb_substr($virtualError, 0, 200);
+                $message .= ' Review chưa lưu: '.mb_substr($virtualError, 0, 200);
             }
             $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
             $dirtySync = app(WordPressLocalMediaSyncService::class)->syncDirtyLocalMediaForArticle($article->fresh());
@@ -254,17 +392,17 @@ final class WordPressArticleSyncService
                 if ($mediaPush['success']) {
                     $message .= ' Đã đẩy ảnh đại diện/album lên WordPress.';
                 } else {
-                    $message .= ' Ảnh chưa đẩy được: ' . mb_substr((string) $mediaPush['message'], 0, 200);
+                    $message .= ' Ảnh chưa đẩy được: '.mb_substr((string) $mediaPush['message'], 0, 200);
                 }
             }
             if (($dirtySync['synced'] ?? 0) > 0) {
-                $message .= ' Đã ghi đè ' . (int) $dirtySync['synced'] . ' ảnh local đã chỉnh sửa lên WordPress.';
+                $message .= ' Đã ghi đè '.(int) $dirtySync['synced'].' ảnh local đã chỉnh sửa lên WordPress.';
             }
             if (($dirtySync['errors'] ?? []) !== []) {
-                $message .= ' Một số ảnh local chỉnh sửa chưa ghi đè được: ' . mb_substr(implode(' | ', $dirtySync['errors']), 0, 300);
+                $message .= ' Một số ảnh local chỉnh sửa chưa ghi đè được: '.mb_substr(implode(' | ', $dirtySync['errors']), 0, 300);
             }
             if ($localMediaSyncErrors !== []) {
-                $message .= ' Một số ảnh trong nội dung chưa sync được: ' . mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
+                $message .= ' Một số ảnh trong nội dung chưa sync được: '.mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
             }
 
             if ($syncedLocalMediaIds !== []) {
@@ -273,6 +411,9 @@ final class WordPressArticleSyncService
                     $message .= " Đã gắn cờ trash {$trashed} ảnh local đã đồng bộ.";
                 }
             }
+
+            $article->update(['body' => null]);
+            app(ArticleWordPressSyncFlagService::class)->clearAll($article);
 
             return [
                 'success' => true,
@@ -289,7 +430,7 @@ final class WordPressArticleSyncService
 
             return [
                 'success' => false,
-                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
     }
@@ -365,7 +506,6 @@ final class WordPressArticleSyncService
 
     /**
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $override
-     *
      * @return array{seo_title: string, meta_description: string, focus_keyword: string}
      */
     private function resolveSeoPayloadForWordPress(SeoArticle $article, ?array $override = null): array
@@ -420,5 +560,4 @@ final class WordPressArticleSyncService
             return $faq;
         }, $faqs);
     }
-
 }

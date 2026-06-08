@@ -62,6 +62,115 @@ body:has(.seo-article-edit-page) .fi-topbar {
     padding-top: 0.25rem;
 }
 
+html.seo-article-sync-locked,
+html.seo-article-sync-locked body {
+    overflow: hidden;
+}
+
+.seo-article-sync-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgb(15 23 42 / 58%);
+    backdrop-filter: blur(3px);
+    cursor: wait;
+}
+
+.seo-article-sync-overlay__panel {
+    width: min(28rem, 100%);
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.875rem;
+    background: #fff;
+    padding: 1.5rem;
+    box-shadow: 0 24px 64px rgb(15 23 42 / 30%);
+    text-align: center;
+    color: rgb(15 23 42);
+}
+
+.dark .seo-article-sync-overlay__panel {
+    border-color: rgb(51 65 85);
+    background: rgb(15 23 42);
+    color: rgb(241 245 249);
+}
+
+.seo-article-sync-overlay__panel strong,
+.seo-article-sync-overlay__panel span {
+    display: block;
+}
+
+.seo-article-sync-overlay__panel strong {
+    margin-top: 0.875rem;
+    font-size: 1rem;
+}
+
+.seo-article-sync-overlay__panel span {
+    margin-top: 0.375rem;
+    font-size: 0.8125rem;
+    color: rgb(100 116 139);
+}
+
+.dark .seo-article-sync-overlay__panel span {
+    color: rgb(148 163 184);
+}
+
+.seo-article-sync-overlay__spinner {
+    width: 2rem;
+    height: 2rem;
+    margin: 0 auto;
+    border: 3px solid rgb(203 213 225);
+    border-top-color: rgb(14 165 233);
+    border-radius: 9999px;
+    animation: seo-article-sync-spin 0.75s linear infinite;
+}
+
+.seo-article-sync-overlay__skeleton {
+    display: grid;
+    gap: 0.5rem;
+    margin-top: 1.25rem;
+}
+
+.seo-article-sync-overlay__skeleton i {
+    display: block;
+    height: 0.55rem;
+    border-radius: 9999px;
+    background: linear-gradient(90deg, #e2e8f0 25%, #f8fafc 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: seo-article-sync-shimmer 1.15s ease-in-out infinite;
+}
+
+.seo-article-sync-overlay__skeleton i:nth-child(2) {
+    width: 84%;
+}
+
+.seo-article-sync-overlay__skeleton i:nth-child(3) {
+    width: 62%;
+}
+
+.dark .seo-article-sync-overlay__skeleton i {
+    background: linear-gradient(90deg, #334155 25%, #475569 50%, #334155 75%);
+    background-size: 200% 100%;
+}
+
+@keyframes seo-article-sync-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes seo-article-sync-shimmer {
+    from {
+        background-position: 200% 0;
+    }
+
+    to {
+        background-position: -200% 0;
+    }
+}
+
 /* Filament grid uses flex-1 — don't shrink article editor below its content */
 .seo-article-edit-page .grid.flex-1 {
     flex: none;

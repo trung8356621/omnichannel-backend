@@ -9,7 +9,9 @@ use App\Models\User;
 final class SeoAccessControl
 {
     public const ROLE_MANAGER = 'manager';
+
     public const ROLE_PLANNER = 'planner';
+
     public const ROLE_CONTENT_MANAGER = 'content_manager';
 
     /** @var array<string, int> */
@@ -70,6 +72,29 @@ final class SeoAccessControl
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_CONTENT_MANAGER);
     }
 
+    public static function isContentManager(): bool
+    {
+        return self::effectiveRole() === self::ROLE_CONTENT_MANAGER;
+    }
+
+    public static function isPlanner(): bool
+    {
+        return self::effectiveRole() === self::ROLE_PLANNER;
+    }
+
+    public static function accountOwnerId(): ?int
+    {
+        /** @var User|null $user */
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            return null;
+        }
+
+        return $user->isStaff() && (int) $user->parent_id > 0
+            ? (int) $user->parent_id
+            : (int) $user->id;
+    }
+
     public static function globalSiteId(): ?int
     {
         $siteId = session('seo_global_site_id');
@@ -114,4 +139,3 @@ final class SeoAccessControl
         return self::ROLE_RANK[$role] ?? self::ROLE_RANK[self::ROLE_CONTENT_MANAGER];
     }
 }
-

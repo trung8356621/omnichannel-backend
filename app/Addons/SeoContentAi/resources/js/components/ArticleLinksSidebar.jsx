@@ -376,7 +376,7 @@ export default function ArticleLinksSidebar() {
         const href = String(item?.href ?? '').trim();
         const count = occurrenceCount(item);
         const currentCycle = Number(cycleByKey[itemKey] ?? 0);
-        const nextIndex = count > 1 ? currentCycle % count : listIndex;
+        const nextIndex = count > 1 ? currentCycle % count : 0;
 
         setCycleByKey((prev) => ({
             ...prev,
@@ -408,6 +408,9 @@ export default function ArticleLinksSidebar() {
 
         const text = String(item?.text ?? '').trim();
         const href = String(item?.href ?? item?.target_url ?? '').trim();
+        const count = occurrenceCount(item);
+        const cycle = Number(cycleByKey[itemKey] ?? 0);
+        const occurrenceIndex = cycle > 0 && count > 1 ? (cycle - 1) % count : 0;
         if (!text || !href) {
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
@@ -427,6 +430,7 @@ export default function ArticleLinksSidebar() {
                     text,
                     href,
                     keyword_id: item.keyword_id ?? null,
+                    occurrence_index: occurrenceIndex,
                 },
             }),
         );

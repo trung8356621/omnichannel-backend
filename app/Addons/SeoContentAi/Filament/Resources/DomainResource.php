@@ -19,7 +19,6 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Str;
 
 class DomainResource extends Resource
@@ -164,6 +163,9 @@ class DomainResource extends Resource
                     ->icon('heroicon-o-chart-bar')
                     ->color('info')
                     ->url(fn (Site $record): string => DomainResource::getUrl('general', ['record' => $record])),
+                Tables\Actions\DeleteAction::make()
+                    ->label('Xóa')
+                    ->icon('heroicon-o-trash'),
             ])
             ->bulkActions([]);
     }
@@ -176,9 +178,7 @@ class DomainResource extends Resource
             return $query->where('user_id', auth()->id());
         }
 
-        return $query->withoutGlobalScopes([
-            SoftDeletingScope::class,
-        ]);
+        return $query;
     }
 
     public static function canCreate(): bool

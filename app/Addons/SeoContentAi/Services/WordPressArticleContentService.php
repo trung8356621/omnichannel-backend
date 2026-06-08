@@ -29,6 +29,15 @@ class WordPressArticleContentService
         $cached = trim((string) $this->getMeta($article, 'wp_post_content', ''));
         $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
 
+        // With no local body, WordPress remains the content source until the next local save.
+        if ((int) ($article->wp_post_id ?? 0) > 0) {
+            $remote = $this->fetchFromWordPress($article, importFaqs: false);
+            $fresh = trim((string) ($remote['post_content'] ?? ''));
+            if ($fresh !== '') {
+                return $fresh;
+            }
+        }
+
         // Danh mục (product_cat / category): chỉ tin cache sau khi đồng bộ đúng entity=term.
         // Tránh hiển thị nhầm nội dung post WP trùng term_id (vd. JSON font family).
         if ($this->isTaxonomyRecord($article)) {
@@ -36,19 +45,14 @@ class WordPressArticleContentService
                 return $cached;
             }
 
-            $remote = $this->fetchFromWordPress($article);
-            $fresh = trim((string) ($remote['post_content'] ?? ''));
-
-            return $fresh !== '' ? $fresh : $cached;
+            return $cached;
         }
 
         if ($cached !== '') {
             return $cached;
         }
 
-        $remote = $this->fetchFromWordPress($article);
-
-        return trim((string) ($remote['post_content'] ?? ''));
+        return '';
     }
 
     public function resolveSlug(SeoArticle $article): string
@@ -74,13 +78,22 @@ class WordPressArticleContentService
     {
         $cached = trim((string) $this->getMeta($article, 'wp_permalink', ''));
         if ($cached !== '') {
-            return $this->permalinkBuilder->resolve($article, $cached, $this->resolveSlug($article));
+            return (int) ($article->wp_post_id ?? 0) > 0
+                ? $cached
+                : $this->permalinkBuilder->resolve($article, $cached, $this->resolveSlug($article));
         }
 
         $remote = $this->fetchFromWordPress($article);
         $remotePermalink = trim((string) ($remote['permalink'] ?? ''));
 
-        return $this->permalinkBuilder->resolve($article, $remotePermalink, $this->resolveSlug($article));
+        return (int) ($article->wp_post_id ?? 0) > 0
+            ? $remotePermalink
+            : $this->permalinkBuilder->resolve($article, $remotePermalink, $this->resolveSlug($article));
+    }
+
+    public function resolveStoredWordPressPermalink(SeoArticle $article): string
+    {
+        return trim((string) $this->getMeta($article, 'wp_permalink', ''));
     }
 
     /**
@@ -104,8 +117,12 @@ class WordPressArticleContentService
         $slug = trim((string) ($post['slug'] ?? ''));
         $permalink = trim((string) ($post['permalink'] ?? ''));
 
+        $updates = [];
         if ($slug !== '' && $slug !== trim((string) ($article->slug ?? ''))) {
-            $article->update(['slug' => $slug]);
+            $updates['slug'] = $slug;
+        }
+        if ($updates !== []) {
+            $article->update($updates);
         }
 
         $article->refresh();
@@ -115,8 +132,19 @@ class WordPressArticleContentService
         }
         if ($permalink === '') {
             $permalink = $this->resolvePermalink($article);
-        } else {
-            $permalink = $this->permalinkBuilder->resolve($article, $permalink, $slug);
+        }
+
+        if ($slug !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_slug'],
+                ['meta_value' => $slug],
+            );
+        }
+        if ($permalink !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_permalink'],
+                ['meta_value' => $permalink],
+            );
         }
 
         return [
@@ -175,7 +203,7 @@ class WordPressArticleContentService
 
         $scheme = ! empty($site->ssl) ? 'https' : 'http';
 
-        return $scheme . '://' . rtrim($domain, '/');
+        return $scheme.'://'.rtrim($domain, '/');
     }
 
     /**
@@ -214,7 +242,13 @@ class WordPressArticleContentService
             $response = Http::timeout(30)
                 ->acceptJson()
                 ->withToken($readToken)
-                ->get($url);
+                ->withHeaders([
+                    'Cache-Control' => 'no-cache, no-store, max-age=0',
+                    'Pragma' => 'no-cache',
+                ])
+                ->get($url, [
+                    '_seo_fresh' => now()->getTimestampMs(),
+                ]);
 
             if (! $response->successful()) {
                 return [];
@@ -344,14 +378,7 @@ class WordPressArticleContentService
         }
 
         if (filled($post['permalink'] ?? null)) {
-            $slugForLink = filled($post['slug'] ?? null)
-                ? trim((string) $post['slug'])
-                : trim((string) ($article->slug ?? ''));
-            $permalink = $this->permalinkBuilder->resolve(
-                $article,
-                (string) $post['permalink'],
-                $slugForLink !== '' ? $slugForLink : null,
-            );
+            $permalink = trim((string) $post['permalink']);
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_permalink'],
                 ['meta_value' => $permalink],
@@ -510,7 +537,7 @@ class WordPressArticleContentService
             return '';
         }
 
-        return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpPostId;
+        return $base.'/wp-json/omi-seo-ai/v1/posts/'.$wpPostId;
     }
 
     private function buildTermUrl(Site $site, string $taxonomy, int $termId): string
@@ -520,7 +547,7 @@ class WordPressArticleContentService
             return '';
         }
 
-        return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $termId;
+        return $base.'/wp-json/omi-seo-ai/v1/terms/'.rawurlencode($taxonomy).'/'.$termId;
     }
 
     private function parseRemotePublishedAt(mixed $value): ?Carbon
@@ -553,9 +580,9 @@ class WordPressArticleContentService
 
         $taxonomy = $this->resolveWpTaxonomy($article);
         if ($taxonomy !== null) {
-            return $base . '/wp-json/omi-seo-ai/v1/terms/' . rawurlencode($taxonomy) . '/' . $wpId . '/editor-sync';
+            return $base.'/wp-json/omi-seo-ai/v1/terms/'.rawurlencode($taxonomy).'/'.$wpId.'/editor-sync';
         }
 
-        return $base . '/wp-json/omi-seo-ai/v1/posts/' . $wpId . '/editor-sync';
+        return $base.'/wp-json/omi-seo-ai/v1/posts/'.$wpId.'/editor-sync';
     }
 }

@@ -5,6 +5,7 @@ const draftKey = (articleId) => `seo_article_draft_${articleId}`;
 const historyKey = (articleId) => `seo_article_history_${articleId}`;
 const outlineKey = (articleId) => `seo_article_outline_${articleId}`;
 const chatKey = (articleId) => `seo_article_chat_${articleId}`;
+const faqKey = (articleId) => `seo_article_faq_${articleId}`;
 const STORAGE_PREFIX = 'seo_article_';
 
 function isQuotaExceededError(error) {
@@ -159,12 +160,19 @@ export function saveDraft(articleId, payload) {
     if (!articleId) return;
     const updatedAt = Date.now();
     const cleaned = sanitizeDraftPayload(payload ?? {});
+    const existingRevision = String(loadDraft(articleId)?.contentRevision ?? '').trim();
+    const contentRevision =
+        typeof cleaned?.contentRevision === 'string'
+            ? cleaned.contentRevision.trim()
+            : existingRevision;
     const fullPayload = {
         ...cleaned,
+        contentRevision,
         updatedAt,
     };
     const fallbackPayload = {
         html: typeof cleaned?.html === 'string' ? cleaned.html : '',
+        contentRevision,
         updatedAt,
     };
 
@@ -269,4 +277,44 @@ export function saveChat(articleId, messages) {
     } catch (e) {
         console.warn('Không lưu được chat localStorage', e);
     }
+}
+
+export function loadFaqDraft(articleId) {
+    if (!articleId) return null;
+    try {
+        const raw = localStorage.getItem(faqKey(articleId));
+        if (!raw) return null;
+        const data = JSON.parse(raw);
+
+        return Array.isArray(data?.faqs) ? data.faqs : null;
+    } catch {
+        return null;
+    }
+}
+
+export function saveFaqDraft(articleId, faqs) {
+    if (!articleId) return;
+    try {
+        setItemWithPrune(
+            faqKey(articleId),
+            JSON.stringify({
+                faqs: Array.isArray(faqs) ? faqs : [],
+                updatedAt: Date.now(),
+            }),
+            'FAQ',
+        );
+    } catch (error) {
+        console.warn('Không lưu được FAQ vào localStorage', error);
+    }
+}
+
+export function clearArticleEditorStorage(articleId) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return;
+    }
+
+    [draftKey(id), historyKey(id), outlineKey(id), chatKey(id), faqKey(id)].forEach((key) => {
+        localStorage.removeItem(key);
+    });
 }

@@ -12,24 +12,28 @@ import {
     scrollToFaqByIndex,
     scrollToFaqKeyword,
     scrollToKeywordAnchor,
-    scrollToPlainTextInBlock,
 } from '../utils/articleLinkScroll';
 import {
     wrapFirstPlainTextWithLink,
-    wrapFirstPlainTextWithLinkInBlocks,
     replaceFirstPlainTextWithLink,
     replaceFirstPlainTextWithText,
 } from '../utils/articleLinkInsert';
+import { findPlainTextRangeInRoot } from '../utils/articlePlainTextRange';
 import { insertCtaInEditor, insertLinkInEditor } from '../utils/editorSelectionUtils';
 import { isCtaPlainTextType } from '../utils/ctaLinkFormat';
 import { SEO_EDITOR_LINK_CLASS } from '../utils/articleEditorTransientMarkup';
-import { filterSuggestedInternalLinks } from '../utils/articleLinkSuggestionFilter';
+import {
+    filterSuggestedInternalLinks,
+    normalizeHrefForCompare,
+    normalizeLinkLabel,
+} from '../utils/articleLinkSuggestionFilter';
 import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
 import SeoScorePanel from './SeoScorePanel';
 import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
 import { appendProductAlbumItems, loadProductAlbum } from '../utils/articleProductAlbumStorage';
 import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
@@ -1256,6 +1260,7 @@ export default function SeoArticleEditor({
     initialPostImages = [],
     initialSupplementalImages = [],
     initialPostType = '',
+    contentRevision = '',
     supportsProductGallery = false,
     productCategoryOptions = [],
     initialProductGallery = [],
@@ -1263,9 +1268,17 @@ export default function SeoArticleEditor({
     initialVirtualReviews = [],
     articleTitle = '',
     editorSettings = {},
+    mediaPickerUrl = '',
 }) {
     const historyStep = editorSettings?.history_step ?? 20;
-    const autosaveIntervalSeconds = Number(editorSettings?.autosave_interval_seconds ?? 60);
+
+    useEffect(() => {
+        window.__SEO_ARTICLE_MEDIA_PICKER_ENDPOINT__ = mediaPickerUrl;
+
+        return () => {
+            delete window.__SEO_ARTICLE_MEDIA_PICKER_ENDPOINT__;
+        };
+    }, [mediaPickerUrl]);
 
     const [blocks, setBlocks] = useState([]);
     const [activeBlockId, setActiveBlockId] = useState(null);
@@ -1302,10 +1315,7 @@ export default function SeoArticleEditor({
     }, []);
 
     const [saveStatus, setSaveStatus] = useState('saved');
-    const [dbSaveStatus, setDbSaveStatus] = useState('idle');
     const activeTabRef = useRef('editor');
-    const lastDbAutosaveHtmlRef = useRef('');
-    const dbAutosaveInFlightRef = useRef(false);
     const [analyzing, setAnalyzing] = useState(false);
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
@@ -1421,6 +1431,12 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-open-generate-image-modal', onOpenGenerateImageModal);
         };
     }, [mainKeyword]);
+
+    useEffect(() => {
+        setArticleAutosaveLock('generate-image-modal', generateImageModalOpen);
+
+        return () => setArticleAutosaveLock('generate-image-modal', false);
+    }, [generateImageModalOpen]);
 
     const submitGenerateImageFromModal = useCallback(
         (payload) => {
@@ -1792,10 +1808,15 @@ export default function SeoArticleEditor({
         clearTempMerge();
 
         const draft = loadDraft(articleId);
+        const serverRevision = String(contentRevision ?? '').trim();
+        const draftRevision = String(draft?.contentRevision ?? '').trim();
+        const canUseDraft =
+            draft &&
+            (serverRevision === '' || draftRevision === serverRevision);
         let parsed = [];
-        if (draft?.blocks?.length) {
+        if (canUseDraft && draft?.blocks?.length) {
             parsed = normalizeBlocks(draft.blocks);
-        } else if (draft?.html) {
+        } else if (canUseDraft && draft?.html) {
             parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(draft.html));
         } else {
             parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml));
@@ -1803,12 +1824,16 @@ export default function SeoArticleEditor({
         let nextBlocks = enrichBlocksWithPostImages(parsed, postImagesRef.current);
         setBlocks(nextBlocks);
         if (articleId && nextBlocks.length > 0) {
-            saveDraft(articleId, { blocks: nextBlocks, html: exportBlocksToHtml(nextBlocks) });
+            saveDraft(articleId, {
+                blocks: nextBlocks,
+                html: exportBlocksToHtml(nextBlocks),
+                contentRevision: serverRevision,
+            });
         }
 
         setActiveBlockId(null);
         setGlobalEditor(null);
-    }, [articleId, initialHtml, initialPostImages, clearTempMerge]);
+    }, [articleId, initialHtml, initialPostImages, contentRevision, clearTempMerge]);
 
     useEffect(() => {
         if (initialSeo) {
@@ -1882,6 +1907,71 @@ export default function SeoArticleEditor({
         if (tempMergeRef.current) return;
         blockFlushRef.current?.();
     }, []);
+
+    const selectPlainTextInBlock = useCallback((blockId, text, occurrenceIndex = 0, onSelected) => {
+        const maxAttempts = 30;
+
+        const attempt = (attemptNo) => {
+            const editor = blockEditorsRef.current.get(blockId);
+            if (!editor || editor.isDestroyed) {
+                if (attemptNo < maxAttempts) {
+                    window.setTimeout(() => attempt(attemptNo + 1), 20);
+                }
+                return;
+            }
+
+            const match = findPlainTextRangeInRoot(editor.view.dom, text, occurrenceIndex);
+            if (!match) {
+                return;
+            }
+
+            const from = editor.view.posAtDOM(match.node, match.start);
+            const to = editor.view.posAtDOM(match.endNode, match.endOffset);
+            if (to <= from) {
+                return;
+            }
+
+            editor.chain().focus().setTextSelection({ from, to }).run();
+            const domAt = editor.view.domAtPos(from);
+            const target =
+                domAt.node instanceof Element
+                    ? domAt.node
+                    : domAt.node?.parentElement;
+            target?.scrollIntoView?.({
+                behavior: attemptNo === 0 ? 'smooth' : 'auto',
+                block: 'center',
+            });
+            onSelected?.(editor);
+        };
+
+        attempt(0);
+    }, []);
+
+    const persistEditorContentImmediately = useCallback(
+        (editor, blockId) => {
+            const currentBlocks = blocksRef.current;
+            const block = currentBlocks.find((item) => item.id === blockId);
+            if (!block || !editor || editor.isDestroyed) {
+                return;
+            }
+
+            const content = persistBlockHtmlFromEditor(block.content ?? '', editor.getHTML());
+            const nextBlocks = currentBlocks.map((item) =>
+                item.id === blockId ? { ...item, content } : item,
+            );
+
+            blocksRef.current = nextBlocks;
+            setBlocks(nextBlocks);
+            if (articleId) {
+                saveDraft(articleId, {
+                    blocks: nextBlocks,
+                    html: exportBlocksToHtml(nextBlocks),
+                });
+                setSaveStatus('saved');
+            }
+        },
+        [articleId],
+    );
 
     const distributeProductGalleryImages = useCallback(() => {
         if (!supportsProductGallery) {
@@ -2910,9 +3000,7 @@ export default function SeoArticleEditor({
                     return;
                 }
                 if (searchPlainText) {
-                    scrollToPlainTextInBlock(targetBlockId, text, localAnchorIndex, {
-                        onMiss: () => scrollToFaqKeyword(text, listIndex),
-                    });
+                    selectPlainTextInBlock(targetBlockId, text, localAnchorIndex);
                     return;
                 }
                 scrollToKeywordAnchor(targetBlockId, preferHrefMatch ? '' : text, localAnchorIndex, href, {
@@ -2926,91 +3014,100 @@ export default function SeoArticleEditor({
                 runScroll();
             }
         },
-        [clearTempMerge, commitActiveBlock],
+        [clearTempMerge, commitActiveBlock, selectPlainTextInBlock],
     );
 
     const insertSuggestedLinkIntoContent = useCallback(
         (detail) => {
             const text = String(detail?.text ?? '').trim();
             const href = String(detail?.href ?? '').trim();
+            const occurrenceIndex = Math.max(0, Number(detail?.occurrence_index) || 0);
             if (!text || !href) {
                 return;
             }
 
-            const notifyInserted = () => {
-                requestAnalyze();
+            const notifyInserted = (editor, blockId) => {
+                persistEditorContentImmediately(editor, blockId);
+                setExtractedLinks((prev) => {
+                    const current = prev && typeof prev === 'object'
+                        ? prev
+                        : { internal: [], external: [] };
+                    const internal = Array.isArray(current.internal) ? current.internal : [];
+                    const alreadyAdded = internal.some(
+                        (item) =>
+                            normalizeLinkLabel(item?.text) === normalizeLinkLabel(text) ||
+                            normalizeHrefForCompare(item?.href) === normalizeHrefForCompare(href),
+                    );
+
+                    return alreadyAdded
+                        ? current
+                        : {
+                              ...current,
+                              internal: [...internal, { text, href, occurrence_count: 1 }],
+                          };
+                });
+                setSuggestedInternalLinks((prev) =>
+                    filterSuggestedInternalLinks(prev, [{ text, href }]),
+                );
                 window.dispatchEvent(
                     new CustomEvent('seo-editor-suggested-link-inserted', {
                         detail: { text, href },
                     }),
                 );
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: t('editor_internal_link_inserted'),
-                            body: `«${text}»`,
-                            status: 'success',
-                        },
-                    }),
-                );
             };
 
             setActiveTab('editor');
-            commitActiveBlock();
+            activeTabRef.current = 'editor';
+            let remainingIndex = occurrenceIndex;
+            let targetBlockId = null;
+            let localIndex = 0;
 
-            // Case 1: Cụm từ đã có trong bài → bọc link đúng vị trí tìm được (không chèn sau con trỏ).
-            const wrapped = wrapFirstPlainTextWithLinkInBlocks(blocksRef.current, text, href);
-            if (wrapped) {
-                updateBlockContent(wrapped.blockId, wrapped.html);
-                notifyInserted();
-
-                return;
-            }
-
-            // Case 2: Không có trong bài → chèn tại vùng chọn / con trỏ hiện tại.
-            const editor = resolveActiveEditor();
-            const selectionText = getSelectionTextFromEditor(editor);
-            const selectedText = (selectionText || intraSelectionRef.current.text || '').trim();
-
-            if (selectedText) {
-                const activeId = activeBlockIdRef.current;
-                const activeBlock = blocksRef.current.find(
-                    (block) => block.id === activeId && block.type !== 'image',
-                );
-                if (activeBlock) {
-                    const { html, replaced } = replaceFirstPlainTextWithLink(
-                        activeBlock.content ?? '',
-                        selectedText,
-                        text,
-                        href,
-                    );
-                    if (replaced) {
-                        updateBlockContent(activeBlock.id, html);
-                        notifyInserted();
-
-                        return;
-                    }
+            for (const block of blocksRef.current) {
+                if (block.type === 'image' || !block.content) {
+                    continue;
                 }
+
+                const count = countPlainTextInHtml(block.content, text);
+                if (count <= 0) {
+                    continue;
+                }
+                if (remainingIndex < count) {
+                    targetBlockId = block.id;
+                    localIndex = remainingIndex;
+                    break;
+                }
+                remainingIndex -= count;
             }
 
-            if (insertLinkInEditor(editor, text, href)) {
-                commitActiveBlock();
-                notifyInserted();
-
+            if (!targetBlockId) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_keyword_not_found'),
+                            body: t('editor_keyword_not_found_body', { text }),
+                            status: 'warning',
+                        },
+                    }),
+                );
                 return;
             }
 
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('editor_keyword_not_found'),
-                        body: t('editor_keyword_not_found_body', { text }),
-                        status: 'warning',
-                    },
-                }),
-            );
+            const currentActive = activeBlockIdRef.current;
+            if (currentActive !== targetBlockId) {
+                if (currentActive) {
+                    commitActiveBlock();
+                }
+                setActiveBlockId(targetBlockId);
+            }
+
+            selectPlainTextInBlock(targetBlockId, text, localIndex, (editor) => {
+                if (!insertLinkInEditor(editor, text, href)) {
+                    return;
+                }
+                notifyInserted(editor, targetBlockId);
+            });
         },
-        [commitActiveBlock, updateBlockContent, requestAnalyze, resolveActiveEditor],
+        [commitActiveBlock, persistEditorContentImmediately, selectPlainTextInBlock],
     );
 
     const insertCtaLinkIntoContent = useCallback(
@@ -3797,6 +3894,8 @@ export default function SeoArticleEditor({
                 }
             }
 
+            setArticleAutosaveLock('generate-image-request', true);
+
             try {
                 await callEditArticleLivewire(
                     'generateArticleImageFromEditor',
@@ -3818,6 +3917,8 @@ export default function SeoArticleEditor({
                         },
                     }),
                 );
+            } finally {
+                setArticleAutosaveLock('generate-image-request', false);
             }
         },
         [
@@ -4629,50 +4730,12 @@ export default function SeoArticleEditor({
         activeTabRef.current = activeTab;
     }, [activeTab]);
 
-    useEffect(() => {
-        if (!articleId || autosaveIntervalSeconds <= 0) {
-            return undefined;
-        }
-
-        const timer = window.setInterval(() => {
-            if (document.hidden || dbAutosaveInFlightRef.current) {
-                return;
-            }
-
-            commitActiveBlock();
-            const html = getExportHtml().trim();
-            if (html === '' || html === lastDbAutosaveHtmlRef.current) {
-                return;
-            }
-
-            dbAutosaveInFlightRef.current = true;
-            setDbSaveStatus('saving');
-            void callEditArticleLivewire('autosaveArticleDraft', html)
-                .then(() => {
-                    lastDbAutosaveHtmlRef.current = html;
-                    setDbSaveStatus('saved');
-                })
-                .catch(() => setDbSaveStatus('error'))
-                .finally(() => {
-                    dbAutosaveInFlightRef.current = false;
-                });
-        }, autosaveIntervalSeconds * 1000);
-
-        return () => window.clearInterval(timer);
-    }, [articleId, autosaveIntervalSeconds, commitActiveBlock, getExportHtml]);
-
     const saveLabel =
-        dbSaveStatus === 'saving'
-            ? t('editor_db_autosaving')
-            : dbSaveStatus === 'error'
-              ? t('editor_db_autosave_failed')
-              : dbSaveStatus === 'saved'
-                ? t('editor_db_autosaved')
-                : saveStatus === 'saving'
-                  ? t('editor_saving_draft')
-                  : saveStatus === 'pending'
-                    ? t('editor_draft_pending')
-                    : t('editor_draft_saved_local');
+        saveStatus === 'saving'
+            ? t('editor_saving_draft')
+            : saveStatus === 'pending'
+              ? t('editor_draft_pending')
+              : t('editor_draft_saved_local');
 
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;

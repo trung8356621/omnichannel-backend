@@ -4,16 +4,16 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
-use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
-use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
-use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
+use App\Addons\SeoContentAi\Services\SeoProjectMergeService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunPreflightService;
+use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
@@ -52,7 +52,7 @@ class SeoProjectResource extends Resource
 
     public static function canViewAny(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return SeoAccessControl::canAccessContentFeatures();
     }
 
     public static function canCreate(): bool
@@ -62,6 +62,10 @@ class SeoProjectResource extends Resource
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
+        if (SeoAccessControl::isContentManager()) {
+            return (int) $record->user_id === (int) auth()->id();
+        }
+
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
@@ -106,6 +110,8 @@ class SeoProjectResource extends Resource
                             ->searchable()
                             ->preload()
                             ->required()
+                            ->disabled(fn (): bool => SeoAccessControl::isContentManager())
+                            ->dehydrated()
                             ->native(false),
 
                         Forms\Components\Placeholder::make('site_id_display')
@@ -149,7 +155,9 @@ class SeoProjectResource extends Resource
 
                         Forms\Components\Placeholder::make('status_display')
                             ->label(__('seo-content-ai::filament.projects.status'))
-                            ->content(__('seo-content-ai::filament.projects.status_manual_fixed')),
+                            ->content(fn (?SeoProject $record): string => $record instanceof SeoProject
+                                ? (SeoProject::statusOptions()[(string) $record->status] ?? (string) $record->status)
+                                : __('seo-content-ai::filament.projects.status_manual_fixed')),
 
                         Forms\Components\Textarea::make('description')
                             ->label(__('seo-content-ai::filament.projects.description'))
@@ -366,6 +374,7 @@ class SeoProjectResource extends Resource
                         SeoProject::STATUS_RUNNING => 'warning',
                         SeoProject::STATUS_COMPLETED => 'success',
                         SeoProject::STATUS_PAUSED => 'danger',
+                        SeoProject::STATUS_APPROVED => 'success',
                         default => 'gray',
                     }),
 
@@ -415,6 +424,7 @@ class SeoProjectResource extends Resource
                     ->label(__('seo-content-ai::filament.projects.run_workflow'))
                     ->icon('heroicon-o-play')
                     ->color('success')
+                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
                     ->requiresConfirmation()
                     ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
                     ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
@@ -427,6 +437,7 @@ class SeoProjectResource extends Resource
                     ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
                     ->icon('heroicon-o-beaker')
                     ->color('warning')
+                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
                     ->requiresConfirmation()
                     ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
                     ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
@@ -436,14 +447,81 @@ class SeoProjectResource extends Resource
                     ->action(function (SeoProject $record): mixed {
                         return static::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_TEST);
                     }),
-                Tables\Actions\Action::make('view_last_run')
-                    ->label(__('seo-content-ai::filament.projects.view_last_run'))
+                Tables\Actions\Action::make('view_runs')
+                    ->label(__('seo-content-ai::filament.projects.view_runs'))
                     ->icon('heroicon-o-queue-list')
                     ->color('gray')
-                    ->visible(fn (SeoProject $record): bool => $record->runs()->exists())
-                    ->url(fn (SeoProject $record): string => static::getUrl('view-run', [
-                        'run' => (int) $record->runs()->latest('id')->value('id'),
+                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessPlannerFeatures()
+                        && $record->runs()->exists())
+                    ->url(fn (SeoProject $record): string => static::getLatestRunUrl($record) ?? static::getUrl('edit', [
+                        'record' => $record,
                     ])),
+                Tables\Actions\Action::make('merge_completed_tasks')
+                    ->label(__('seo-content-ai::filament.projects.merge_projects'))
+                    ->icon('heroicon-o-arrows-pointing-in')
+                    ->color('info')
+                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessPlannerFeatures()
+                        && $record->tasks()
+                        ->where('status', SeoProjectTask::STATUS_COMPLETED)
+                        ->exists()
+                        && app(SeoProjectMergeService::class)->availableTargets($record)->isNotEmpty())
+                    ->modalHeading(__('seo-content-ai::filament.projects.merge_projects_heading'))
+                    ->modalDescription(__('seo-content-ai::filament.projects.merge_projects_description'))
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.merge_projects_submit'))
+                    ->form(fn (SeoProject $record): array => [
+                        Forms\Components\Select::make('target_project_id')
+                            ->label(__('seo-content-ai::filament.projects.merge_target'))
+                            ->options(
+                                app(SeoProjectMergeService::class)
+                                    ->availableTargets($record)
+                                    ->mapWithKeys(static fn (SeoProject $project): array => [
+                                        (int) $project->getKey() => __('seo-content-ai::filament.projects.merge_target_option', [
+                                            'name' => $project->name,
+                                            'count' => (int) $project->tasks_count,
+                                            'max' => $project->maxTasksAllowed(),
+                                        ]),
+                                    ])
+                                    ->all(),
+                            )
+                            ->default(
+                                fn (): ?int => app(SeoProjectMergeService::class)
+                                    ->availableTargets($record)
+                                    ->first()?->getKey(),
+                            )
+                            ->required()
+                            ->native(false),
+                    ])
+                    ->action(function (SeoProject $record, array $data): void {
+                        $target = SeoProject::query()->find((int) ($data['target_project_id'] ?? 0));
+                        if (! $target instanceof SeoProject) {
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.merge_failed'))
+                                ->body(__('seo-content-ai::filament.projects.merge_invalid_target'))
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
+
+                        try {
+                            $result = app(SeoProjectMergeService::class)
+                                ->mergeCompletedTasks($record, $target);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.merge_completed'))
+                                ->body(__('seo-content-ai::filament.projects.merge_completed_body', $result))
+                                ->success()
+                                ->send();
+                        } catch (\Throwable $exception) {
+                            report($exception);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.merge_failed'))
+                                ->body($exception->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
                 Tables\Actions\EditAction::make(),
             ])
             ->bulkActions([
@@ -455,7 +533,15 @@ class SeoProjectResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->with(['user', 'site']);
+        $query = static::applyGlobalSiteScopeToProjectQuery(
+            parent::getEloquentQuery()->with(['user', 'site']),
+        );
+
+        if (SeoAccessControl::isContentManager()) {
+            $query->where('user_id', (int) auth()->id());
+        }
+
+        return $query;
     }
 
     public static function applyGlobalSiteScopeToProjectQuery(Builder $query): Builder
@@ -500,6 +586,16 @@ class SeoProjectResource extends Resource
         ];
     }
 
+    public static function getLatestRunUrl(SeoProject $project): ?string
+    {
+        $latestRunId = (int) $project->runs()->latest('id')->value('id');
+        if ($latestRunId <= 0) {
+            return null;
+        }
+
+        return static::getUrl('view-run', ['run' => $latestRunId]);
+    }
+
     public static function runWorkflowModalDescription(SeoProject $project, ?int $pendingLimit = null): HtmlString
     {
         $base = $pendingLimit !== null
@@ -511,7 +607,7 @@ class SeoProjectResource extends Resource
         $warnings = app(SeoProjectRunPreflightService::class)
             ->formatWarningsForModal($project, $pendingLimit);
 
-        return new HtmlString('<p>' . e($base) . '</p>' . $warnings->toHtml());
+        return new HtmlString('<p>'.e($base).'</p>'.$warnings->toHtml());
     }
 
     public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
@@ -562,7 +658,18 @@ class SeoProjectResource extends Resource
      */
     public static function userSelectOptions(): array
     {
-        return User::query()
+        $query = User::query()
+            ->where('seo_role', User::SEO_ROLE_CONTENT_MANAGER)
+            ->where('status', User::STATUS_NORMAL);
+
+        if (auth()->user()?->role !== User::ROLE_ADMIN) {
+            $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
+            $query->where(function (Builder $users) use ($ownerId): void {
+                $users->whereKey($ownerId)->orWhere('parent_id', $ownerId);
+            });
+        }
+
+        return $query
             ->orderBy('name')
             ->pluck('name', 'id')
             ->all();
@@ -588,7 +695,7 @@ class SeoProjectResource extends Resource
             $escaped = str_replace(['%', '_'], ['\\%', '\\_'], $search);
 
             $query->where(function (Builder $inner) use ($search, $escaped): void {
-                $inner->where('title', 'like', '%' . $escaped . '%');
+                $inner->where('title', 'like', '%'.$escaped.'%');
 
                 if (ctype_digit($search)) {
                     $inner->orWhere('id', (int) $search);
@@ -665,7 +772,7 @@ class SeoProjectResource extends Resource
         $query = Site::query()->orderBy('domain');
 
         if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
         }
 
         return $query->pluck('domain', 'id')->all();

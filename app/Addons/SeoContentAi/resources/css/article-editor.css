@@ -733,8 +733,12 @@
 
 .seo-article-media-modal__upload {
     flex-shrink: 0;
-    padding: 0.45rem 0.85rem;
-    font-size: 0.8125rem;
+    display: inline-flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     font-weight: 600;
     color: #fff;
     background: #2271b1;
@@ -760,19 +764,42 @@
 
 .seo-article-media-modal__reload {
     flex: 0 0 auto;
-    padding: 0.4rem 0.7rem;
+    display: inline-flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     border-radius: 6px;
     border: 1px solid #c3c4c7;
     background: #fff;
     color: #1d2327;
-    font-size: 0.75rem;
-    font-weight: 600;
     cursor: pointer;
 }
 
-.seo-article-media-modal__reload:hover {
+.seo-article-media-modal__reload:hover:not(:disabled) {
     border-color: #2271b1;
     color: #2271b1;
+}
+
+.seo-article-media-modal__reload:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.seo-article-media-modal__button-spinner {
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 9999px;
+    animation: seo-spin 0.7s linear infinite;
+}
+
+@keyframes seo-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .seo-article-media-modal__body {

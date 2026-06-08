@@ -229,20 +229,38 @@
                     );
                 },
 
-                requestSave() {
+                async requestSave() {
                     if (this.$wire.articleHeavyActionBusy) {
                         return;
                     }
 
-                    this.pushToWire().then(() => this.$wire.requestSaveArticle());
+                    window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
+                        detail: { action: 'save' },
+                    }));
+
+                    try {
+                        await this.pushToWire();
+                        await this.$wire.requestSaveArticle();
+                    } catch (error) {
+                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+                    }
                 },
 
-                requestSync() {
+                async requestSync() {
                     if (this.$wire.articleHeavyActionBusy) {
                         return;
                     }
 
-                    this.pushToWire().then(() => this.$wire.requestSyncToWordPress());
+                    window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
+                        detail: { action: 'sync' },
+                    }));
+
+                    try {
+                        await this.pushToWire();
+                        await this.$wire.requestSyncToWordPress();
+                    } catch (error) {
+                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+                    }
                 },
             };
         };
@@ -501,10 +519,10 @@
                 x-on:click="requestSync()"
                 wire:loading.attr="disabled"
                 wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
-                @disabled($articleHeavyActionBusy || ! $record->wp_post_id)
+                @disabled($articleHeavyActionBusy)
                 class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
-                title="Đồng bộ WordPress (Ctrl+Shift+S)"
-                aria-label="Đồng bộ WordPress (Ctrl+Shift+S)"
+                title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
+                aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
                 @if ($articleHeavyActionBusy) aria-busy="true" @endif
             >
                 @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync')
@@ -518,7 +536,13 @@
                 @endif
             </button>
 
-            @if (! $record->is_reviewed)
+            @if (
+                ! $record->is_reviewed
+                && (
+                    ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
+                    || \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record)
+                )
+            )
                 <button
                     type="button"
                     wire:click="approveArticle"
@@ -526,8 +550,8 @@
                     wire:loading.attr="disabled"
                     wire:target="approveArticle"
                     class="seo-publish-icon-btn is-success"
-                    title="{{ __('seo-content-ai::filament.article_list.mark_reviewed') }}"
-                    aria-label="{{ __('seo-content-ai::filament.article_list.mark_reviewed') }}"
+                    title="{{ \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed') }}"
+                    aria-label="{{ \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed') }}"
                 >
                     <span wire:loading.remove wire:target="approveArticle">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">

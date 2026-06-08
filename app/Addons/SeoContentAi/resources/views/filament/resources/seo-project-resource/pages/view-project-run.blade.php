@@ -53,6 +53,7 @@
                             @php
                                 $taskId = (int) ($item['task_id'] ?? 0);
                                 $itemStatus = (string) ($item['status'] ?? '');
+                                $articleId = (int) ($item['article_id'] ?? 0);
                             @endphp
                             <tr
                                 class="align-top {{ $itemStatus === 'pending' ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
@@ -126,23 +127,56 @@
                                     @endif
                                 </td>
                                 <td class="px-3 py-3">
-                                    @if ($taskId > 0 && in_array($itemStatus, ['failed', 'pending'], true))
-                                        <x-filament::button
-                                            size="xs"
-                                            color="{{ $itemStatus === 'pending' ? 'success' : 'warning' }}"
-                                            wire:click="runItem({{ $taskId }})"
-                                            wire:loading.attr="disabled"
-                                            wire:target="runItem({{ $taskId }})"
-                                        >
-                                            <span wire:loading.remove wire:target="runItem({{ $taskId }})">
-                                                {{ $itemStatus === 'pending'
-                                                    ? __('seo-content-ai::filament.projects.run_run_item')
-                                                    : __('seo-content-ai::filament.projects.run_retry_item') }}
-                                            </span>
-                                            <span wire:loading wire:target="runItem({{ $taskId }})">
-                                                {{ __('seo-content-ai::filament.projects.run_retry_running') }}
-                                            </span>
-                                        </x-filament::button>
+                                    @if ($taskId > 0 && in_array($itemStatus, ['success', 'failed', 'pending'], true))
+                                        <div class="flex flex-wrap gap-2">
+                                            @if ($itemStatus === 'success')
+                                                <x-filament::button
+                                                    size="xs"
+                                                    color="warning"
+                                                    wire:click="runItem({{ $taskId }})"
+                                                    wire:confirm="Chạy lại hạng mục đã OK? Thao tác này có thể sử dụng AI API."
+                                                    wire:loading.attr="disabled"
+                                                    wire:target="runItem({{ $taskId }})"
+                                                >
+                                                    <span wire:loading.remove wire:target="runItem({{ $taskId }})">
+                                                        {{ __('seo-content-ai::filament.projects.run_retry_item') }}
+                                                    </span>
+                                                    <span wire:loading wire:target="runItem({{ $taskId }})">
+                                                        {{ __('seo-content-ai::filament.projects.run_retry_running') }}
+                                                    </span>
+                                                </x-filament::button>
+                                            @else
+                                                <x-filament::button
+                                                    size="xs"
+                                                    color="{{ $itemStatus === 'pending' ? 'success' : 'warning' }}"
+                                                    wire:click="runItem({{ $taskId }})"
+                                                    wire:loading.attr="disabled"
+                                                    wire:target="runItem({{ $taskId }})"
+                                                >
+                                                    <span wire:loading.remove wire:target="runItem({{ $taskId }})">
+                                                        {{ $itemStatus === 'pending'
+                                                            ? __('seo-content-ai::filament.projects.run_run_item')
+                                                            : __('seo-content-ai::filament.projects.run_retry_item') }}
+                                                    </span>
+                                                    <span wire:loading wire:target="runItem({{ $taskId }})">
+                                                        {{ __('seo-content-ai::filament.projects.run_retry_running') }}
+                                                    </span>
+                                                </x-filament::button>
+                                            @endif
+
+                                            @if ($itemStatus === 'failed' && $articleId > 0)
+                                                <x-filament::button
+                                                    size="xs"
+                                                    color="success"
+                                                    wire:click="markItemFixed({{ $taskId }}, {{ $articleId }})"
+                                                    wire:confirm="Xác nhận bài viết đã được sửa lỗi thủ công?"
+                                                    wire:loading.attr="disabled"
+                                                    wire:target="markItemFixed({{ $taskId }}, {{ $articleId }})"
+                                                >
+                                                    Đã fix
+                                                </x-filament::button>
+                                            @endif
+                                        </div>
                                     @else
                                         —
                                     @endif

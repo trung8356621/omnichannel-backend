@@ -3,6 +3,7 @@ import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react';
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
+import { loadFaqDraft, saveFaqDraft } from '../utils/articleEditorStorage';
 import { t } from '../utils/i18n';
 
 const normalizeQuestion = (text) =>
@@ -175,7 +176,11 @@ export default function ArticleFaqEditor({
     initialExtractDebug = null,
     canGenerateFaq = false,
 }) {
-    const [faqs, setFaqs] = useState(() => normalizeFaqRows(initialFaqs));
+    const [faqs, setFaqs] = useState(() => {
+        const localFaqs = loadFaqDraft(articleId);
+
+        return normalizeFaqRows(localFaqs ?? initialFaqs);
+    });
     const [extractDebug, setExtractDebug] = useState(
         initialExtractDebug && typeof initialExtractDebug === 'object' ? initialExtractDebug : null,
     );
@@ -198,12 +203,8 @@ export default function ArticleFaqEditor({
 
     const { debounced: debouncedSave } = useDebouncedCallback((rows) => {
         if (!articleId) return;
-        setSaveStatus('saving');
-        window.dispatchEvent(
-            new CustomEvent('save-article-faqs', {
-                detail: { faqs: rows },
-            }),
-        );
+        saveFaqDraft(articleId, rows);
+        setSaveStatus('saved');
     }, 1200);
 
     const persistRows = useCallback(
@@ -328,7 +329,9 @@ export default function ArticleFaqEditor({
             }
 
             setExtractDebug(null);
-            setFaqs(normalizeFaqRows(incoming));
+            const next = normalizeFaqRows(incoming);
+            setFaqs(next);
+            saveFaqDraft(articleId, next);
             setSaveStatus('saved');
         };
 
@@ -371,7 +374,7 @@ export default function ArticleFaqEditor({
             window.removeEventListener('article-faq-generate-started', onGenerateStarted);
             window.removeEventListener('article-faq-generate-finished', onGenerateFinished);
         };
-    }, [debouncedSave, flushFaqs]);
+    }, [articleId, debouncedSave, flushFaqs]);
 
     const generateAllFaqs = () => {
         if (!canGenerateFaq || generatingAll) {

@@ -5,8 +5,11 @@
 <x-filament-panels::page @class(['seo-article-edit-page'])>
     <div
         x-data="{
+            syncPageLocked: false,
+            heavyPageAction: null,
             mediaModalOpen: false,
             mediaModalMode: 'featured',
+            mediaModalTargetBlockId: null,
             pickerLoading: false,
             pickerSearching: false,
             pickerSearchQuery: '',
@@ -22,6 +25,84 @@
             galleryPickerSelectedKeys: [],
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
+            showHeavyActionOverlay(action) {
+                const overlayId = 'seo-article-heavy-action-overlay';
+                let overlay = document.getElementById(overlayId);
+
+                if (!overlay) {
+                    overlay = document.createElement('div');
+                    overlay.id = overlayId;
+                    overlay.className = 'seo-article-sync-overlay';
+                    overlay.setAttribute('role', 'alert');
+                    overlay.setAttribute('aria-live', 'assertive');
+                    overlay.setAttribute('aria-busy', 'true');
+                    overlay.innerHTML = `
+                        <div class='seo-article-sync-overlay__panel'>
+                            <div class='seo-article-sync-overlay__spinner' aria-hidden='true'></div>
+                            <strong data-heavy-action-title></strong>
+                            <span>Vui lòng chờ. Trang sẽ tự tải lại sau khi hoàn tất.</span>
+                            <div class='seo-article-sync-overlay__skeleton' aria-hidden='true'>
+                                <i></i><i></i><i></i>
+                            </div>
+                        </div>
+                    `;
+                    document.body.appendChild(overlay);
+                }
+
+                const title = overlay.querySelector('[data-heavy-action-title]');
+                if (title) {
+                    title.textContent = action === 'save'
+                        ? 'Đang cập nhật bài viết'
+                        : 'Đang đồng bộ với WordPress';
+                }
+
+                document.querySelectorAll('body > *:not(#' + overlayId + ')').forEach((element) => {
+                    if (!element.hasAttribute('inert')) {
+                        element.setAttribute('data-seo-heavy-action-inert', '1');
+                        element.setAttribute('inert', '');
+                    }
+                });
+
+                if (!window.__seoArticleHeavyActionKeyBlocker) {
+                    window.__seoArticleHeavyActionKeyBlocker = (event) => {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                    };
+                    window.addEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
+                }
+            },
+            hideHeavyActionOverlay() {
+                document.getElementById('seo-article-heavy-action-overlay')?.remove();
+                document.querySelectorAll('[data-seo-heavy-action-inert]').forEach((element) => {
+                    element.removeAttribute('inert');
+                    element.removeAttribute('data-seo-heavy-action-inert');
+                });
+
+                if (window.__seoArticleHeavyActionKeyBlocker) {
+                    window.removeEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
+                    delete window.__seoArticleHeavyActionKeyBlocker;
+                }
+            },
+            lockPageForHeavyAction(action = 'sync') {
+                if (this.syncPageLocked || document.getElementById('seo-article-heavy-action-overlay')) {
+                    return false;
+                }
+
+                this.syncPageLocked = true;
+                this.heavyPageAction = action === 'save' ? 'save' : 'sync';
+                document.documentElement.classList.add('seo-article-sync-locked');
+                this.showHeavyActionOverlay(this.heavyPageAction);
+                window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
+
+                return true;
+            },
+            unlockPageAfterHeavyActionFailure() {
+                this.syncPageLocked = false;
+                this.heavyPageAction = null;
+                document.documentElement.classList.remove('seo-article-sync-locked');
+                this.hideHeavyActionOverlay();
+                window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
+            },
             galleryPickerSelectedCount() {
                 return this.galleryPickerSelectedKeys.length;
             },
@@ -43,8 +124,14 @@
                     media_type: String(el?.dataset?.pickerMediaType || 'image'),
                 };
             },
-            visibleGalleryPickerElements() {
-                return Array.from(document.querySelectorAll('.seo-article-media-modal__item[data-picker-key]'));
+            visibleGalleryPickerElements(el) {
+                const grid = el?.closest('.seo-article-media-modal__grid');
+                if (!grid) {
+                    return [];
+                }
+
+                return Array.from(grid.querySelectorAll('.seo-article-media-modal__item[data-picker-key]'))
+                    .filter((node) => node.offsetParent !== null);
             },
             toggleGalleryPickerItem(event, key, el) {
                 if (this.mediaModalMode !== 'gallery' || !key) {
@@ -53,7 +140,7 @@
 
                 const shiftKey = event?.shiftKey === true;
                 if (shiftKey && this.galleryPickerAnchorKey) {
-                    const nodes = this.visibleGalleryPickerElements();
+                    const nodes = this.visibleGalleryPickerElements(el);
                     const keys = nodes.map((node) => node.dataset.pickerKey);
                     const fromIndex = keys.indexOf(this.galleryPickerAnchorKey);
                     const toIndex = keys.indexOf(key);
@@ -130,6 +217,69 @@
                 const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
 
                 return Number(picker.siteId || 0);
+            },
+            pickerWordPressLinked() {
+                return Boolean(window.__SEO_ARTICLE_MEDIA_PICKER__?.wordPressLinked);
+            },
+            async fetchPickerImages({ resetPage = false } = {}) {
+                if (this.pickerTab === 'article') {
+                    await this.loadArticleTabFromEditor();
+
+                    return;
+                }
+
+                if (this.pickerTab === 'original' && !this.pickerWordPressLinked()) {
+                    this.pickerImages = [];
+                    this.pickerCatalog = [];
+                    this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi chọn ảnh WordPress.';
+                    this.pickerLoading = false;
+                    this.pickerSearching = false;
+
+                    return;
+                }
+
+                if (resetPage) {
+                    this.pickerPage = 1;
+                }
+
+                this.pickerLoading = true;
+                this.pickerError = null;
+
+                try {
+                    const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+                    const endpoint = String(picker.endpoint || window.__SEO_ARTICLE_MEDIA_PICKER_ENDPOINT__ || '').trim();
+                    if (!endpoint) {
+                        throw new Error('Media picker endpoint is unavailable');
+                    }
+
+                    const url = new URL(endpoint, window.location.origin);
+                    url.searchParams.set('tab', this.pickerTab);
+                    url.searchParams.set('page', String(this.pickerPage || 1));
+                    if (this.pickerSearchQuery.trim() !== '') {
+                        url.searchParams.set('search', this.pickerSearchQuery.trim());
+                    }
+
+                    const response = await fetch(url.toString(), {
+                        credentials: 'same-origin',
+                        headers: {
+                            Accept: 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                    });
+                    const detail = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(detail?.error || `Media picker failed with status ${response.status}`);
+                    }
+
+                    this.applyPickerPayload(detail);
+                    this.persistPickerCacheFromFetch(detail);
+                } catch (error) {
+                    this.pickerImages = [];
+                    this.pickerError = error?.message || 'Không tải được thư viện media.';
+                } finally {
+                    this.pickerLoading = false;
+                    this.pickerSearching = false;
+                }
             },
             isPickerCacheableTab(tab) {
                 const cacheApi = window.__seoArticleMediaPickerCache;
@@ -277,16 +427,16 @@
                 }
 
                 this.pickerSuppressLoadingOverlay = false;
-                this.pickerSaveCacheAfterLoad = false;
-
-                try {
-                    await $wire.searchMediaPicker(this.pickerSearchQuery);
-                } catch (error) {
-                    this.pickerSearching = false;
-                }
+                await this.fetchPickerImages({ resetPage: true });
             },
             async switchPickerTab(tab) {
                 if (this.pickerTab === tab) {
+                    return;
+                }
+
+                if (tab === 'original' && !this.pickerWordPressLinked()) {
+                    this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi chọn ảnh WordPress.';
+
                     return;
                 }
 
@@ -310,9 +460,9 @@
                     this.pickerLoading = true;
                 }
 
-                await $wire.setMediaPickerTab(tab);
+                await this.fetchPickerImages({ resetPage: true });
             },
-            pickerPrevPage() {
+            async pickerPrevPage() {
                 if (this.pickerPage <= 1) {
                     return;
                 }
@@ -326,17 +476,14 @@
 
                 const prevPage = this.pickerPage - 1;
                 if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, prevPage)) {
-                    this.pickerSuppressLoadingOverlay = true;
-                    $wire.goToMediaPickerPage(prevPage);
-
                     return;
                 }
 
                 this.pickerSuppressLoadingOverlay = false;
-                this.pickerLoading = true;
-                $wire.mediaPickerPreviousPage();
+                this.pickerPage = prevPage;
+                await this.fetchPickerImages();
             },
-            pickerNextPage() {
+            async pickerNextPage() {
                 if (this.pickerPage >= this.pickerTotalPages) {
                     return;
                 }
@@ -350,31 +497,22 @@
 
                 const nextPage = this.pickerPage + 1;
                 if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, nextPage)) {
-                    this.pickerSuppressLoadingOverlay = true;
-                    $wire.goToMediaPickerPage(nextPage);
-
                     return;
                 }
 
                 this.pickerSuppressLoadingOverlay = false;
-                this.pickerLoading = true;
-                $wire.mediaPickerNextPage();
+                this.pickerPage = nextPage;
+                await this.fetchPickerImages();
             },
-            reloadPickerImages() {
-                if (this.pickerTab === 'article') {
-                    this.loadArticleTabFromEditor();
-
-                    return;
-                }
-
-                this.pickerSuppressLoadingOverlay = false;
-                this.pickerLoading = true;
-                $wire.reloadMediaPickerImages();
+            async reloadPickerImages() {
+                await this.fetchPickerImages();
             },
-            openArticleMediaModal(mode, blockId = null) {
+            async openArticleMediaModal(mode, blockId = null) {
                 this.clearGalleryPickerSelection();
                 this.mediaModalMode = mode;
+                this.mediaModalTargetBlockId = blockId;
                 this.mediaModalOpen = true;
+                window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
                 this.pickerSearchQuery = '';
                 this.pickerCatalog = [];
                 this.pickerImages = [];
@@ -383,31 +521,29 @@
 
                 if (mode === 'editor-block') {
                     this.pickerTab = 'article';
-                    $wire.armEditorBlockMediaPicker(blockId ?? '');
-                    this.loadArticleTabFromEditor();
+                    await this.loadArticleTabFromEditor();
 
                     return;
                 }
 
                 this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
-                const hydrated = this.tryHydratePickerFromCache('original', 1);
-                this.pickerSuppressLoadingOverlay = hydrated;
-                if (hydrated) {
-                    this.pickerLoading = false;
+                this.pickerTab = this.pickerWordPressLinked() ? 'original' : 'local';
+                const hydrated = this.tryHydratePickerFromCache(this.pickerTab, 1);
+                if (!hydrated) {
+                    await this.fetchPickerImages({ resetPage: true });
                 }
-
-                $wire.prepareMediaPicker(mode);
             },
             closeArticleMediaModal() {
                 this.clearGalleryPickerSelection();
                 this.mediaModalOpen = false;
+                this.mediaModalTargetBlockId = null;
+                window.__seoArticleAutosaveLock?.set('media-picker-modal', false);
                 this.pickerImages = [];
                 this.pickerCatalog = [];
                 this.pickerSearchQuery = '';
                 this.pickerError = null;
                 this.pickerLoading = false;
                 this.pickerSearching = false;
-                $wire.closeMediaPicker();
             },
             handlePickerImageClick(event, image, el) {
                 if (!image || !String(image.url || '').trim()) {
@@ -439,6 +575,9 @@
                         String(image.slug || ''),
                         Number(image.seo_media_id || 0),
                         String(image.media_type || 'image'),
+                        String(this.mediaModalMode || 'featured'),
+                        String(this.pickerTab || 'article'),
+                        String(this.mediaModalTargetBlockId || ''),
                     )
                     .then(() => {
                         if (this.mediaModalMode === 'editor-block') {
@@ -465,6 +604,7 @@
                 }
 
                 this.localMediaUploading = true;
+                window.__seoArticleAutosaveLock?.set('media-upload', true);
                 this.pickerLoading = true;
 
                 const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
@@ -482,7 +622,7 @@
                         source: 'library',
                     });
 
-                    await $wire.reloadMediaPickerImages();
+                    await this.reloadPickerImages();
 
                     const count = uploaded?.length ?? 0;
                     const titleMany = String(i18n.upload_success_many || '');
@@ -501,6 +641,7 @@
                     });
                 } finally {
                     this.localMediaUploading = false;
+                    window.__seoArticleAutosaveLock?.set('media-upload', false);
                     this.pickerLoading = false;
                     if (input) {
                         input.value = '';
@@ -509,6 +650,8 @@
             },
         }"
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
+        x-on:article-wordpress-sync-lock.window="lockPageForHeavyAction($event.detail?.action ?? 'sync')"
+        x-on:article-wordpress-sync-unlock.window="unlockPageAfterHeavyActionFailure()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
         x-on:seo-article-editor-notify.window="
             const payload = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
@@ -516,6 +659,7 @@
         "
         x-on:open-article-media-modal.window="
             mediaModalOpen = true;
+            window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
             const wireMode = $wire.mediaPickerMode || 'featured';
             if (wireMode === 'gallery' || wireMode === 'editor-block') {
                 mediaModalMode = wireMode;
@@ -562,22 +706,34 @@
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
         x-on:article-editor-shortcut.window="
             const action = $event.detail?.action;
-            if ($wire.articleHeavyActionBusy) {
+            if (syncPageLocked || $wire.articleHeavyActionBusy) {
                 return;
             }
             const pushPublish = window.__seoPublishBoxPush;
             if (action === 'save') {
+                if (!lockPageForHeavyAction('save')) {
+                    return;
+                }
                 if (typeof pushPublish === 'function') {
-                    pushPublish().then(() => $wire.requestSaveArticle());
+                    pushPublish()
+                        .then(() => $wire.requestSaveArticle())
+                        .catch(() => unlockPageAfterHeavyActionFailure());
                 } else {
-                    $wire.requestSaveArticle();
+                    $wire.requestSaveArticle()
+                        .catch(() => unlockPageAfterHeavyActionFailure());
                 }
             } else if (action === 'sync') {
                 @if ($record->wp_post_id)
+                    if (!lockPageForHeavyAction('sync')) {
+                        return;
+                    }
                     if (typeof pushPublish === 'function') {
-                        pushPublish().then(() => $wire.requestSyncToWordPress());
+                        pushPublish()
+                            .then(() => $wire.requestSyncToWordPress())
+                            .catch(() => unlockPageAfterHeavyActionFailure());
                     } else {
-                        $wire.requestSyncToWordPress();
+                        $wire.requestSyncToWordPress()
+                            .catch(() => unlockPageAfterHeavyActionFailure());
                     }
                 @endif
             } else if (action === 'preview') {
@@ -662,6 +818,7 @@
                             permalinkBase: @js($this->getPermalinkBase()),
                             permalinkSuffix: @js($this->getPermalinkSuffix()),
                             previewPermalink: @js($this->getDisplayPermalink()),
+                            hasWordPressPost: @js((int) ($record->wp_post_id ?? 0) > 0),
                             normalizeSlug() {
                                 const fn = window.normalizeArticleSlug;
                                 if (typeof fn !== 'function') {
@@ -705,13 +862,22 @@
                         </template>
                         <template x-if="!editingSlug">
                             <span class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1">
-                                <a
-                                    x-bind:href="previewPermalink || '#'"
-                                    target="_blank"
-                                    rel="noopener"
-                                    class="text-sky-600 dark:text-sky-400 hover:underline break-all"
-                                    x-text="previewPermalink || ((permalinkBase || '') !== '' ? permalinkBase + '/sample-post' : '#')"
-                                ></a>
+                                <template x-if="hasWordPressPost && previewPermalink">
+                                    <a
+                                        x-bind:href="previewPermalink"
+                                        target="_blank"
+                                        rel="noopener"
+                                        class="text-sky-600 dark:text-sky-400 hover:underline break-all"
+                                        x-text="previewPermalink"
+                                    ></a>
+                                </template>
+                                <template x-if="!hasWordPressPost || !previewPermalink">
+                                    <span
+                                        class="break-all text-gray-500 dark:text-gray-400"
+                                        x-text="previewPermalink || ((permalinkBase || '') !== '' ? permalinkBase + '/sample-post' : '#')"
+                                        title="URL dự kiến, chưa tồn tại trên WordPress"
+                                    ></span>
+                                </template>
                                 <button
                                     type="button"
                                     x-on:click="editingSlug = true"
@@ -960,6 +1126,8 @@
                         class="seo-article-media-modal__tab"
                         x-bind:class="{ 'is-active': pickerTab === 'original' }"
                         x-on:click="switchPickerTab('original')"
+                        x-bind:disabled="!pickerWordPressLinked()"
+                        x-bind:title="pickerWordPressLinked() ? 'Thư viện WordPress' : 'Đồng bộ bài viết với WordPress để sử dụng thư viện này'"
                     >
                         Gốc (WP)
                     </button>
@@ -1006,16 +1174,26 @@
                         x-cloak
                         x-on:click="openLocalMediaUploadPicker()"
                         x-bind:disabled="localMediaUploading"
+                        title="{{ __('seo-content-ai::filament.media_tools.upload') }}"
+                        aria-label="{{ __('seo-content-ai::filament.media_tools.upload') }}"
                     >
-                        <span x-show="!localMediaUploading">{{ __('seo-content-ai::filament.media_tools.upload') }}</span>
-                        <span x-show="localMediaUploading" x-cloak>{{ __('seo-content-ai::filament.media_tools.uploading') }}</span>
+                        <span x-show="!localMediaUploading">
+                            <x-filament::icon icon="heroicon-o-arrow-up-tray" class="h-4 w-4" />
+                        </span>
+                        <span x-show="localMediaUploading" x-cloak class="seo-article-media-modal__button-spinner"></span>
                     </button>
                     <button
                         type="button"
                         class="seo-article-media-modal__reload"
                         x-on:click="reloadPickerImages()"
+                        x-bind:disabled="pickerLoading"
+                        title="Tải lại thư viện"
+                        aria-label="Tải lại thư viện"
                     >
-                        Reload
+                        <span x-show="!pickerLoading">
+                            <x-filament::icon icon="heroicon-o-arrow-path" class="h-4 w-4" />
+                        </span>
+                        <span x-show="pickerLoading" x-cloak class="seo-article-media-modal__button-spinner"></span>
                     </button>
                 </div>
 
@@ -1089,7 +1267,10 @@
                                     x-bind:data-picker-slug="image.slug"
                                     x-bind:data-picker-media-type="image.media_type"
                                     x-bind:class="{ 'is-selected': mediaModalMode === 'gallery' && isGalleryPickerSelected(image.picker_key) }"
+                                    x-on:mousedown.shift.prevent
                                     x-on:click="handlePickerImageClick($event, image, $el)"
+                                    x-on:dragstart.prevent
+                                    style="user-select: none;"
                                 >
                                     <span
                                         class="seo-article-media-modal__thumb seo-article-media-modal__thumb--video"
@@ -1103,6 +1284,7 @@
                                         x-bind:alt="image.alt || image.slug || ''"
                                         loading="lazy"
                                         decoding="async"
+                                        draggable="false"
                                         width="300"
                                         height="300"
                                     />

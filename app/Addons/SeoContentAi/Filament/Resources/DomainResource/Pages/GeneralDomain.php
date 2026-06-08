@@ -10,7 +10,6 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Models\Site;
 use Filament\Actions\Action;
-use Filament\Actions\DeleteAction;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
@@ -242,10 +241,24 @@ class GeneralDomain extends Page
     protected function domainActions(): array
     {
         return [
-            DeleteAction::make()
+            Action::make('delete_domain')
                 ->label(__('Delete domain'))
                 ->icon('heroicon-o-trash')
-                ->successRedirectUrl(DomainResource::getUrl('index')),
+                ->color('danger')
+                ->requiresConfirmation()
+                ->modalHeading('Xóa domain')
+                ->modalDescription('Domain sẽ được chuyển vào thùng rác. Hành động này không xóa nội dung trên WordPress.')
+                ->modalSubmitActionLabel('Xóa domain')
+                ->action(function (): void {
+                    $this->getRecord()->delete();
+
+                    Notification::make()
+                        ->title('Đã xóa domain')
+                        ->success()
+                        ->send();
+
+                    $this->redirect(DomainResource::getUrl('index'), navigate: false);
+                }),
             Action::make('sync_data')
                 ->label('Sync data')
                 ->color('warning')

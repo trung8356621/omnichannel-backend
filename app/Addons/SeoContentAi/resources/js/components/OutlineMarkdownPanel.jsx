@@ -21,10 +21,13 @@ export default function OutlineMarkdownPanel({ articleId, initialOutline = '', o
         }
 
         const draft = loadOutline(articleId);
-        if (draft !== null) {
+        if (draft !== null && (draft.trim() !== '' || String(initialOutline || '').trim() === '')) {
             setMarkdown(draft);
         } else {
             setMarkdown(initialOutline || '');
+            if (String(initialOutline || '').trim() !== '') {
+                saveOutline(articleId, initialOutline);
+            }
         }
         setLoaded(true);
     }, [articleId, initialOutline]);

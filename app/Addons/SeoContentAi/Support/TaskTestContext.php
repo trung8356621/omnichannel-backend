@@ -19,7 +19,22 @@ final class TaskTestContext
         public readonly string $summary,
         public readonly ?int $siteId = null,
         public readonly ?string $postType = null,
+        public readonly ?string $projectTaskType = null,
     ) {}
+
+    public function withProjectTaskType(string $projectTaskType): self
+    {
+        return new self(
+            article: $this->article,
+            isNewArticle: $this->isNewArticle,
+            matchedBy: $this->matchedBy,
+            variables: $this->variables,
+            summary: $this->summary,
+            siteId: $this->siteId,
+            postType: $this->postType,
+            projectTaskType: $projectTaskType,
+        );
+    }
 
     /**
      * @return array<string, mixed>
@@ -32,6 +47,9 @@ final class TaskTestContext
             'matched_by' => $this->matchedBy,
             'summary' => $this->summary,
             'variables' => $this->variables,
+            'site_id' => $this->siteId,
+            'post_type' => $this->postType,
+            'project_task_type' => $this->projectTaskType,
         ];
     }
 
@@ -59,6 +77,9 @@ final class TaskTestContext
             matchedBy: is_string($data['matched_by'] ?? null) ? $data['matched_by'] : null,
             variables: $normalizedVariables,
             summary: (string) ($data['summary'] ?? ''),
+            siteId: is_numeric($data['site_id'] ?? null) ? (int) $data['site_id'] : null,
+            postType: is_string($data['post_type'] ?? null) ? $data['post_type'] : null,
+            projectTaskType: is_string($data['project_task_type'] ?? null) ? $data['project_task_type'] : null,
         );
     }
 }

@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
-use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 use App\Models\Site;
@@ -24,6 +24,7 @@ final class TaskWorkflowTestRunner
         private readonly WorkflowTagExtractorService $tagExtractor,
         private readonly WordPressCommentReviewService $commentReviewPublisher,
         private readonly PromptTestPublishService $promptPublisher,
+        private readonly WorkflowExistingAiOutputService $existingAiOutput,
     ) {}
 
     /**
@@ -76,7 +77,7 @@ final class TaskWorkflowTestRunner
             }
         }
 
-        throw new \InvalidArgumentException('Không tìm thấy bước quy trình: ' . $nodeId);
+        throw new \InvalidArgumentException('Không tìm thấy bước quy trình: '.$nodeId);
     }
 
     /**
@@ -97,7 +98,7 @@ final class TaskWorkflowTestRunner
 
     private function initialState(TaskTestContext $context): WorkflowExecutionState
     {
-        $state = new WorkflowExecutionState();
+        $state = new WorkflowExecutionState;
         $state->article = $context->article;
 
         return $state;
@@ -152,6 +153,10 @@ final class TaskWorkflowTestRunner
             $filterType = (string) ($step['filter_type'] ?? '');
             if ($filterType === 'parse_outline') {
                 $state->setParsedOutline($parsed);
+                $outlineMarkdown = trim((string) ($step['outline_markdown'] ?? ''));
+                if ($outlineMarkdown !== '') {
+                    $state->meta['direct_publish_outline_markdown'] = $outlineMarkdown;
+                }
             } elseif ($filterType === 'parse_keywords') {
                 /** @var array<string, list<string>> $parsed */
                 $state->setParsedKeywords($parsed);
@@ -215,7 +220,7 @@ final class TaskWorkflowTestRunner
                     'type' => $type,
                     'title' => $title,
                     'status' => 'failed',
-                    'message' => 'Không tìm thấy prompt #' . (string) $promptId,
+                    'message' => 'Không tìm thấy prompt #'.(string) $promptId,
                 ];
             }
 
@@ -223,6 +228,36 @@ final class TaskWorkflowTestRunner
                 $input = $this->resolveInputForNode($nodeId, $edges, $state);
                 if ($input !== '') {
                     $variables['input'] = $input;
+                }
+
+                $reused = $this->existingAiOutput->resolve(
+                    $node,
+                    $prompt,
+                    $state->article ?? $context->article,
+                    allowReuse: $context->projectTaskType !== SeoProjectTask::TYPE_REWRITE,
+                );
+                if ($reused !== null) {
+                    $output = $reused['output'];
+                    $state->lastPromptOutput = $output;
+                    $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputs($prompt, $output, $state);
+
+                    if ($reused['type'] === WorkflowExistingAiOutputService::TYPE_OUTLINE) {
+                        $state->meta['direct_publish_outline_markdown'] = $output;
+                    } elseif ($reused['type'] === WorkflowExistingAiOutputService::TYPE_CONTENT) {
+                        $state->meta['preserve_existing_article_body'] = true;
+                    }
+
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => $type,
+                        'title' => $title,
+                        'status' => 'skipped',
+                        'prompt_id' => $prompt->id,
+                        'prompt_name' => (string) $prompt->name,
+                        'output' => $output,
+                        'outputs' => $state->nodeOutputs[$nodeId],
+                        'message' => $reused['message'],
+                    ];
                 }
 
                 $model = trim((string) ($node['data']['aiModel'] ?? ''));
@@ -261,7 +296,7 @@ final class TaskWorkflowTestRunner
                     'prompt_id' => $prompt->id,
                     'prompt_name' => (string) $prompt->name,
                     'ai_model' => $model !== '' ? $model : null,
-                    'input_used' => $input !== '' ? mb_substr($input, 0, 120) . (mb_strlen($input) > 120 ? '…' : '') : null,
+                    'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
                     'output' => $output,
                     'outputs' => $state->nodeOutputs[$nodeId] ?? [],
                     'result_id' => $result->id,
@@ -287,7 +322,7 @@ final class TaskWorkflowTestRunner
             'type' => $type,
             'title' => $title,
             'status' => 'skipped',
-            'message' => 'Loại node không hỗ trợ: ' . $type,
+            'message' => 'Loại node không hỗ trợ: '.$type,
         ];
     }
 
@@ -396,19 +431,23 @@ final class TaskWorkflowTestRunner
         if ($filterType === 'parse_outline') {
             $parsedResult = $this->workflowParser->parseOutline($inputData);
             $state->setParsedOutline($parsedResult);
+            $state->meta['direct_publish_outline_markdown'] = $this->cleanWorkflowOutlineMarkdown($inputData);
             $this->refreshWorkflowSeoScore($state, $inputData);
             $jsonOutput = json_encode($parsedResult, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
             $state->nodeOutputs[$nodeId] = ['out_main' => $jsonOutput];
 
-            return $this->filterStepResponse(
+            $response = $this->filterStepResponse(
                 $nodeId,
                 $title,
                 $filterType,
-                'Đã bóc tách dàn ý (' . count($parsedResult) . ' mục H2/H3).',
+                'Đã bóc tách dàn ý ('.count($parsedResult).' mục H2/H3).',
                 $parsedResult,
                 $jsonOutput,
                 $state,
             );
+            $response['outline_markdown'] = $state->meta['direct_publish_outline_markdown'];
+
+            return $response;
         }
 
         if ($filterType === 'parse_keywords') {
@@ -424,7 +463,7 @@ final class TaskWorkflowTestRunner
                 $nodeId,
                 $title,
                 $filterType,
-                'Đã bóc tách từ khóa (' . count($parsedResult) . ' nhóm, ' . $keywordCount . ' từ).',
+                'Đã bóc tách từ khóa ('.count($parsedResult).' nhóm, '.$keywordCount.' từ).',
                 $parsedResult,
                 $jsonOutput,
                 $state,
@@ -444,7 +483,7 @@ final class TaskWorkflowTestRunner
                 $nodeId,
                 $title,
                 $filterType,
-                'Đã bóc tách FAQ (' . count($parsedResult) . ' câu) và chèn [omi_faq].',
+                'Đã bóc tách FAQ ('.count($parsedResult).' câu) và chèn [omi_faq].',
                 $parsedResult,
                 $jsonOutput,
                 $state,
@@ -462,7 +501,7 @@ final class TaskWorkflowTestRunner
                 $nodeId,
                 $title,
                 $filterType,
-                'Đã chấm điểm SEO tự động (+' . $total . ' điểm).',
+                'Đã chấm điểm SEO tự động (+'.$total.' điểm).',
                 $scoreData,
                 $jsonOutput,
                 $state,
@@ -475,7 +514,7 @@ final class TaskWorkflowTestRunner
             'title' => $title,
             'filter_type' => $filterType,
             'status' => 'skipped',
-            'message' => 'Loại lọc không hỗ trợ: ' . $filterType,
+            'message' => 'Loại lọc không hỗ trợ: '.$filterType,
         ];
     }
 
@@ -533,13 +572,20 @@ final class TaskWorkflowTestRunner
         }
 
         $messages = [];
-        $articleMarkdown = trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
+        $preserveExistingBody = (bool) ($state->meta['preserve_existing_article_body'] ?? false);
+        $articleMarkdown = $preserveExistingBody
+            ? ''
+            : trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
 
-        if ($articleMarkdown === '') {
+        if (! $preserveExistingBody && $articleMarkdown === '') {
             $fallbackMarkdown = trim((string) ($state->lastPromptOutput ?? ''));
             if ($fallbackMarkdown !== '' && $this->shouldPublishMarkdownAsArticle($fallbackMarkdown)) {
                 $articleMarkdown = $fallbackMarkdown;
             }
+        }
+
+        if ($preserveExistingBody) {
+            $messages[] = 'Giữ nguyên nội dung bài viết đã có.';
         }
 
         if ($articleMarkdown !== '') {
@@ -558,7 +604,7 @@ final class TaskWorkflowTestRunner
                     'action_type' => $actionType,
                     'status' => 'failed',
                     'article_id' => $article->id,
-                    'message' => 'Lỗi khi lưu nội dung bài viết: ' . $exception->getMessage(),
+                    'message' => 'Lỗi khi lưu nội dung bài viết: '.$exception->getMessage(),
                 ];
             }
 
@@ -590,7 +636,7 @@ final class TaskWorkflowTestRunner
 
         $savedKeys = $this->persistWorkflowMeta($article, $state);
         if ($savedKeys !== []) {
-            $messages[] = 'Đã lưu meta: ' . implode(', ', $savedKeys);
+            $messages[] = 'Đã lưu meta: '.implode(', ', $savedKeys);
         }
 
         if ($this->keywordResearch->shouldSyncKeywords($actionType, $state)) {
@@ -704,14 +750,19 @@ final class TaskWorkflowTestRunner
         $article = $state->article ?? $context->article;
 
         if ($article === null) {
-            return [
-                'node_id' => $nodeId,
-                'type' => 'action',
-                'title' => $title,
-                'action_type' => $actionType,
-                'status' => 'failed',
-                'message' => 'Không tìm thấy bài viết đích để lưu nghiên cứu từ vựng.',
-            ];
+            $article = $this->createArticleFromContext($context);
+            if ($article === null) {
+                return [
+                    'node_id' => $nodeId,
+                    'type' => 'action',
+                    'title' => $title,
+                    'action_type' => $actionType,
+                    'status' => 'failed',
+                    'message' => 'Không thể tạo bài viết đích để lưu nghiên cứu từ vựng.',
+                ];
+            }
+
+            $state->article = $article;
         }
 
         $savedKeys = $this->persistWorkflowMeta($article, $state);
@@ -730,7 +781,7 @@ final class TaskWorkflowTestRunner
             ];
         }
 
-        $metaNote = $savedKeys !== [] ? ' Meta: ' . implode(', ', $savedKeys) . '.' : '';
+        $metaNote = $savedKeys !== [] ? ' Meta: '.implode(', ', $savedKeys).'.' : '';
 
         return [
             'node_id' => $nodeId,
@@ -790,8 +841,18 @@ final class TaskWorkflowTestRunner
             $savedKeys[] = 'seo_article_keywords';
         }
 
+        $outlineMarkdown = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
+        if ($outlineMarkdown !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_article_outline'],
+                ['meta_value' => $outlineMarkdown],
+            );
+            $savedKeys[] = 'seo_article_outline';
+        }
+
         if (
             filled($state->lastPromptOutput)
+            && $outlineMarkdown === ''
             && trim((string) ($state->meta['direct_publish_article_markdown'] ?? '')) === ''
             && ! ($state->meta['article_markdown_published'] ?? false)
             && ! $this->shouldPublishMarkdownAsArticle(trim((string) $state->lastPromptOutput))
@@ -915,7 +976,7 @@ final class TaskWorkflowTestRunner
             ['meta_value' => json_encode($scoreData['checklist'] ?? [], JSON_UNESCAPED_UNICODE)],
         );
 
-        return 'seo_score (+' . $bonus . ')';
+        return 'seo_score (+'.$bonus.')';
     }
 
     private function isArticlePersistAction(string $actionType): bool
@@ -1071,7 +1132,7 @@ final class TaskWorkflowTestRunner
      */
     public function applyParsedMetaFromSteps(SeoArticle $article, array $steps): void
     {
-        $state = new WorkflowExecutionState();
+        $state = new WorkflowExecutionState;
 
         foreach ($steps as $step) {
             $this->applyCompletedStepToState($step, $state);
@@ -1182,7 +1243,7 @@ final class TaskWorkflowTestRunner
 
             $extract = $this->tagExtractor->extractSegment($output, $tagKey);
             $segment = trim((string) ($extract['content'] ?? ''));
-            $outputs['out_' . $tagId] = $segment;
+            $outputs['out_'.$tagId] = $segment;
             $state->meta['extracted_segments'][$tagKey] = $segment;
         }
 

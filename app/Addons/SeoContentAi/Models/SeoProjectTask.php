@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 class SeoProjectTask extends Model
 {
     use BelongsToOnDefaultConnection;
+
     public const TYPE_REWRITE = 'rewrite';
 
     public const TYPE_NEW_KEYWORD = 'new_keyword';
@@ -42,6 +43,7 @@ class SeoProjectTask extends Model
 
     protected $casts = [
         'site_id' => 'integer',
+        'article_id' => 'integer',
         'target_date' => 'date',
     ];
 

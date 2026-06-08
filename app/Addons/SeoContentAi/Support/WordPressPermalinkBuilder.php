@@ -23,7 +23,7 @@ final class WordPressPermalinkBuilder
         $cached = trim($cachedPermalink);
         $slug = trim($slug ?? (string) ($article->slug ?? ''));
 
-        if ($cached !== '' && ! $this->isPlainPermalinkUrl($cached)) {
+        if ((int) ($article->wp_post_id ?? 0) > 0 && $cached !== '') {
             return $cached;
         }
 
@@ -34,6 +34,16 @@ final class WordPressPermalinkBuilder
         }
 
         $settings = $this->permalinkSettings($site);
+        if ($slug !== '' && $this->hasRuntimeTemplate($article, $settings)) {
+            $built = $this->buildPrettyPermalink($site, $article, $slug, $settings);
+            if ($built !== '') {
+                return $built;
+            }
+        }
+
+        if ($cached !== '' && ! $this->isPlainPermalinkUrl($cached)) {
+            return $cached;
+        }
 
         if ($this->isPlainStructure($settings)) {
             return $cached !== '' ? $cached : $this->buildPlainPermalink($site, $article);
@@ -49,6 +59,11 @@ final class WordPressPermalinkBuilder
         }
 
         return $cached;
+    }
+
+    public function preview(SeoArticle $article, string $slug): string
+    {
+        return $this->resolve($article, '', $slug);
     }
 
     /**
@@ -121,12 +136,17 @@ final class WordPressPermalinkBuilder
     {
         $permalink = $this->readPermalinkFromStoredSiteInfo($site);
 
-        if ($permalink !== [] && array_key_exists('structure', $permalink)) {
+        if (
+            $permalink !== []
+            && array_key_exists('structure', $permalink)
+            && (int) ($permalink['templates_version'] ?? 0) >= 1
+            && is_array($permalink['templates'] ?? null)
+        ) {
             return $permalink;
         }
 
         $site->loadMissing('metas');
-        if (trim((string) ($site->getMeta('seo_read_token') ?? '')) !== '') {
+        if ($site->exists && trim((string) ($site->getMeta('seo_read_token') ?? '')) !== '') {
             $fetched = $this->siteInfo->fetchAndStore($site);
             if ($fetched['success'] ?? false) {
                 $permalink = $this->readPermalinkFromStoredSiteInfo($site);
@@ -134,6 +154,10 @@ final class WordPressPermalinkBuilder
                     return $permalink;
                 }
             }
+        }
+
+        if ($permalink !== [] && array_key_exists('structure', $permalink)) {
+            return $permalink;
         }
 
         return [
@@ -153,6 +177,24 @@ final class WordPressPermalinkBuilder
         $permalink = is_array($info['permalink'] ?? null) ? $info['permalink'] : [];
 
         return $permalink;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    private function hasRuntimeTemplate(SeoArticle $article, array $settings): bool
+    {
+        $templates = is_array($settings['templates'] ?? null) ? $settings['templates'] : [];
+        $type = strtolower(trim((string) ($article->type ?? 'article')));
+        $wpPostType = $this->resolveWpPostType($article);
+        $key = match (true) {
+            $type === 'product' || $wpPostType === 'product' => 'product',
+            $type === 'product_category' || $wpPostType === 'product_cat' => 'product_category',
+            $type === 'category' || $wpPostType === 'category' => 'category',
+            default => 'post',
+        };
+
+        return str_contains(trim((string) ($templates[$key] ?? '')), '%slug%');
     }
 
     /**
@@ -191,6 +233,17 @@ final class WordPressPermalinkBuilder
         $base = $this->siteBaseUrl($site);
         if ($base === '') {
             return '';
+        }
+
+        $templateKey = match (true) {
+            $type === 'product' || $wpPostType === 'product' => 'product',
+            $type === 'product_category' || $wpPostType === 'product_cat' => 'product_category',
+            $type === 'category' || $wpPostType === 'category' => 'category',
+            default => 'post',
+        };
+        $template = trim((string) (($settings['templates'] ?? [])[$templateKey] ?? ''));
+        if ($template !== '' && str_contains($template, '%slug%')) {
+            return str_replace('%slug%', rawurlencode($slug), $template);
         }
 
         $path = match (true) {
@@ -233,10 +286,6 @@ final class WordPressPermalinkBuilder
         $wc = is_array($settings['woocommerce'] ?? null) ? $settings['woocommerce'] : [];
         $base = trim((string) ($wc['product_base'] ?? 'product'), '/');
 
-        if ($base === '') {
-            $base = 'product';
-        }
-
         $categorySlug = $article instanceof SeoArticle ? $this->resolvePrimaryCategorySlug($article) : '';
 
         $path = str_replace(
@@ -247,6 +296,10 @@ final class WordPressPermalinkBuilder
 
         $path = trim($path, '/');
         $path = preg_replace('#/+#', '/', $path) ?? $path;
+
+        if ($base === '') {
+            return $slug;
+        }
 
         if (! str_contains($base, '%product%')) {
             $path = $path !== '' ? $path . '/' . $slug : $slug;
@@ -269,7 +322,7 @@ final class WordPressPermalinkBuilder
         }
 
         if ($base === '') {
-            $base = $type === 'product_category' ? 'product-category' : 'category';
+            return $slug;
         }
 
         return trim($base . '/' . $slug, '/');

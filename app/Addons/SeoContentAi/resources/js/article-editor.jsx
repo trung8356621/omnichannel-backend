@@ -14,6 +14,7 @@ import {
     writeArticleMediaPickerCache,
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
+import { clearArticleLocalState } from './utils/articleLocalState';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     appendProductAlbumItems,
@@ -24,8 +25,12 @@ import {
     reorderProductAlbum,
     saveProductAlbum,
 } from './utils/articleProductAlbumStorage';
+import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
+
+installArticleAutosaveLock();
 
 window.normalizeArticleSlug = normalizeArticleSlug;
+window.__seoClearArticleLocalState = clearArticleLocalState;
 
 window.__seoArticleMediaPickerCache = {
     read: readArticleMediaPickerCache,
@@ -211,6 +216,7 @@ function registerArticleEditorLivewireBridge() {
         Livewire.on('article-post-images-synced', forward('article-post-images-synced'));
         Livewire.on('article-supplemental-images-synced', forward('article-supplemental-images-synced'));
         Livewire.on('virtual-reviews-updated', forward('virtual-reviews-updated'));
+        Livewire.on('article-autosave-lock', forward('article-autosave-lock'));
     }
 }
 
@@ -232,11 +238,13 @@ if (rootElement) {
     let siteId = null;
     let articleTitle = '';
     let articlePostType = '';
+    let contentRevision = '';
     let supportsProductGallery = false;
     let productCategoryOptions = [];
     let initialProductGallery = [];
     let aiDebug = { enabled: false };
     let initialVirtualReviews = [];
+    let mediaPickerUrl = '';
 
     try {
         const htmlEl = document.getElementById('seo-article-initial-html');
@@ -297,6 +305,7 @@ if (rootElement) {
             siteId = meta?.site_id ?? meta?.siteId ?? null;
             articleTitle = meta?.title ?? '';
             articlePostType = String(meta?.post_type ?? '').trim();
+            contentRevision = String(meta?.content_revision ?? '').trim();
             supportsProductGallery = Boolean(meta?.supports_product_gallery);
             productCategoryOptions = Array.isArray(meta?.product_category_options)
                 ? meta.product_category_options
@@ -309,6 +318,7 @@ if (rootElement) {
             initialVirtualReviews = Array.isArray(meta?.virtual_reviews)
                 ? meta.virtual_reviews
                 : [];
+            mediaPickerUrl = String(meta?.media_picker_url ?? '').trim();
         }
     } catch (e) {
         console.warn('Invalid article meta JSON', e);
@@ -341,6 +351,7 @@ if (rootElement) {
             initialPostImages={initialPostImages}
             initialSupplementalImages={initialSupplementalImages}
             initialPostType={articlePostType}
+            contentRevision={contentRevision}
             supportsProductGallery={supportsProductGallery}
             productCategoryOptions={productCategoryOptions}
             initialProductGallery={initialProductGallery}
@@ -348,6 +359,7 @@ if (rootElement) {
             initialVirtualReviews={initialVirtualReviews}
             articleTitle={articleTitle}
             editorSettings={editorSettings}
+            mediaPickerUrl={mediaPickerUrl}
         />,
     );
 

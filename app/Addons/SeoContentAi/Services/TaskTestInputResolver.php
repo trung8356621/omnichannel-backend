@@ -6,9 +6,6 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
-use App\Addons\SeoContentAi\Services\SeoMainDomainService;
-use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
@@ -51,13 +48,15 @@ final class TaskTestInputResolver
         }
 
         if ($task->type === SeoProjectTask::TYPE_REWRITE) {
-            return $this->resolve(null, $keyword, $keyword, $scopeArticles);
+            return $this->resolve(null, $keyword, $keyword, $scopeArticles)
+                ->withProjectTaskType($task->type);
         }
 
         $siteId = (int) ($task->site_id ?? 0);
         $postType = SeoProjectTask::normalizePostType($task->post_type);
 
-        return $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles);
+        return $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
+            ->withProjectTaskType($task->type);
     }
 
     private function resolveScoped(?int $articleId, ?string $title, ?string $keyword): TaskTestContext
@@ -68,7 +67,7 @@ final class TaskTestInputResolver
         if ($articleId !== null && $articleId > 0) {
             $article = $this->articlesQuery()->find($articleId);
             if ($article === null) {
-                throw new \InvalidArgumentException('Không tìm thấy bài viết với ID #' . $articleId . ' trong danh sách của bạn.');
+                throw new \InvalidArgumentException('Không tìm thấy bài viết với ID #'.$articleId.' trong danh sách của bạn.');
             }
 
             return $this->contextFromArticle($article, 'id');
@@ -248,7 +247,7 @@ final class TaskTestInputResolver
         }
 
         return $this->articlesQuery()
-            ->where('title', 'like', '%' . $this->escapeLike($title) . '%')
+            ->where('title', 'like', '%'.$this->escapeLike($title).'%')
             ->orderByDesc('id')
             ->first();
     }
@@ -260,7 +259,7 @@ final class TaskTestInputResolver
         $viaRelation = $this->articlesQuery()
             ->whereHas('keywords', function (Builder $query) use ($normalized, $keyword): void {
                 $query->whereRaw('LOWER(phrase) = ?', [$normalized])
-                    ->orWhere('phrase', 'like', '%' . $this->escapeLike($keyword) . '%');
+                    ->orWhere('phrase', 'like', '%'.$this->escapeLike($keyword).'%');
             })
             ->orderByDesc('id')
             ->first();
@@ -274,7 +273,7 @@ final class TaskTestInputResolver
                 $query->where('meta_key', 'seo_focus_keyword')
                     ->where(function (Builder $inner) use ($normalized, $keyword): void {
                         $inner->whereRaw('LOWER(meta_value) = ?', [$normalized])
-                            ->orWhere('meta_value', 'like', '%' . $this->escapeLike($keyword) . '%');
+                            ->orWhere('meta_value', 'like', '%'.$this->escapeLike($keyword).'%');
                     });
             })
             ->orderByDesc('id')

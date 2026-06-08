@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -53,17 +54,33 @@ final class SeoProjectTaskSyncService
         $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
 
         DB::connection($project->getConnectionName())->transaction(function () use ($project, $sanitized, $carbonMonth): void {
+            $existing = $project->tasks()
+                ->get()
+                ->keyBy(static fn (SeoProjectTask $task): string => implode('|', [
+                    (int) $task->site_id,
+                    (string) $task->type,
+                    mb_strtolower(trim((string) $task->source_content)),
+                ]));
+
             $project->tasks()->delete();
 
             foreach ($sanitized as $index => $task) {
+                $key = implode('|', [
+                    (int) $task['site_id'],
+                    (string) $task['type'],
+                    mb_strtolower(trim((string) $task['source_content'])),
+                ]);
+                $previous = $existing->get($key);
+
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
+                    'article_id' => $previous?->article_id,
                     'type' => $task['type'],
                     'post_type' => $task['post_type'] ?? null,
                     'source_content' => $task['source_content'],
                     'description' => $task['description'] ?? null,
                     'target_date' => $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
-                    'status' => SeoProjectTask::STATUS_PENDING,
+                    'status' => $previous?->status ?? SeoProjectTask::STATUS_PENDING,
                 ]);
             }
 
@@ -158,7 +175,7 @@ final class SeoProjectTaskSyncService
         $query = Site::query();
 
         if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
         }
 
         return $query->pluck('id')

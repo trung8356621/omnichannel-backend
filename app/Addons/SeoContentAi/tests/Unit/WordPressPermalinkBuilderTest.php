@@ -6,9 +6,10 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Services\WordPressSiteInfoService;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Models\Site;
 use Mockery;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class WordPressPermalinkBuilderTest extends TestCase
 {
@@ -34,6 +35,7 @@ final class WordPressPermalinkBuilderTest extends TestCase
             'domain' => 'maybalotuixachgiare.com',
             'ssl' => true,
         ]);
+        $site->setRelation('metas', collect());
 
         $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
         $siteInfo->shouldReceive('getStoredSiteInfo')
@@ -77,5 +79,140 @@ final class WordPressPermalinkBuilderTest extends TestCase
             'slug' => 'my-slug',
             'type' => 'article',
         ]));
+    }
+
+    public function test_previews_unsynced_article_with_wordpress_permalink_structure(): void
+    {
+        $site = new Site([
+            'domain' => 'example.com',
+            'ssl' => true,
+        ]);
+        $site->setRelation('metas', collect());
+        $article = new SeoArticle([
+            'type' => 'article',
+        ]);
+        $article->setRelation('site', $site);
+        $article->setRelation('articleMetas', collect());
+
+        $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
+        $siteInfo->shouldReceive('getStoredSiteInfo')
+            ->andReturn([
+                'permalink' => [
+                    'structure' => '/%postname%.html',
+                ],
+            ]);
+
+        $builder = new WordPressPermalinkBuilder($siteInfo);
+
+        $this->assertSame(
+            'https://example.com/bai-viet-moi.html',
+            $builder->preview($article, 'bai-viet-moi'),
+        );
+    }
+
+    public function test_uses_runtime_product_template_after_remove_product_base_filter(): void
+    {
+        $site = new Site(['domain' => 'example.com', 'ssl' => true]);
+        $article = new SeoArticle(['type' => 'product']);
+        $article->setRelation('site', $site);
+        $article->setRelation('articleMetas', collect());
+
+        $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
+        $siteInfo->shouldReceive('getStoredSiteInfo')->andReturn([
+            'permalink' => [
+                'structure' => '/%postname%/',
+                'templates_version' => 1,
+                'templates' => [
+                    'product' => 'https://example.com/%slug%/',
+                ],
+                'woocommerce' => [
+                    'product_base' => 'product',
+                ],
+            ],
+        ]);
+
+        $builder = new WordPressPermalinkBuilder($siteInfo);
+
+        $this->assertSame(
+            'https://example.com/cap-hoc-sinh-kim-nguu/',
+            $builder->preview($article, 'cap-hoc-sinh-kim-nguu'),
+        );
+
+        $this->assertSame(
+            'https://example.com/cap-hoc-sinh-kim-nguu/',
+            $builder->resolve(
+                $article,
+                'https://example.com/product/cap-hoc-sinh-kim-nguu/',
+                'cap-hoc-sinh-kim-nguu',
+            ),
+        );
+    }
+
+    public function test_empty_product_category_base_means_root_url(): void
+    {
+        $site = new Site(['domain' => 'example.com', 'ssl' => true]);
+        $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
+        $siteInfo->shouldReceive('getStoredSiteInfo')->andReturn([
+            'permalink' => [
+                'structure' => '/%postname%/',
+                'templates_version' => 1,
+                'templates' => [],
+                'woocommerce' => [
+                    'category_base' => '',
+                ],
+            ],
+        ]);
+
+        $builder = new WordPressPermalinkBuilder($siteInfo);
+
+        $this->assertSame('https://example.com/balo', $builder->resolveFromSyncItem($site, [
+            'slug' => 'balo',
+            'type' => 'product_category',
+            'wp_post_type' => 'product_cat',
+        ]));
+    }
+
+    public function test_linked_article_keeps_real_wordpress_permalink(): void
+    {
+        $site = new Site(['domain' => 'example.com', 'ssl' => true]);
+        $article = new SeoArticle([
+            'type' => 'product',
+            'wp_post_id' => 123,
+        ]);
+        $article->setRelation('site', $site);
+        $article->setRelation('articleMetas', collect());
+
+        $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
+        $siteInfo->shouldNotReceive('getStoredSiteInfo');
+        $builder = new WordPressPermalinkBuilder($siteInfo);
+
+        $this->assertSame(
+            'https://example.com/url-wordpress-that/',
+            $builder->resolve(
+                $article,
+                'https://example.com/url-wordpress-that/',
+                'slug-local',
+            ),
+        );
+    }
+
+    public function test_linked_article_keeps_plain_wordpress_permalink_without_simulating_it(): void
+    {
+        $site = new Site(['domain' => 'example.com', 'ssl' => true]);
+        $article = new SeoArticle([
+            'type' => 'product',
+            'wp_post_id' => 123,
+        ]);
+        $article->setRelation('site', $site);
+        $article->setRelation('articleMetas', collect());
+
+        $siteInfo = Mockery::mock(WordPressSiteInfoService::class);
+        $siteInfo->shouldNotReceive('getStoredSiteInfo');
+        $builder = new WordPressPermalinkBuilder($siteInfo);
+
+        $this->assertSame(
+            'https://example.com/?p=123',
+            $builder->resolve($article, 'https://example.com/?p=123', 'product-slug'),
+        );
     }
 }

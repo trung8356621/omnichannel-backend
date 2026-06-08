@@ -153,10 +153,6 @@ let lastClipboardPasteAt = 0;
 
 function dispatchEditorNotify(title, body, status = 'success') {
     const payload = { title, body, status };
-    if (typeof Livewire !== 'undefined') {
-        Livewire.dispatch('seo-article-editor-notify', payload);
-        return;
-    }
     window.dispatchEvent(
         new CustomEvent('seo-article-editor-notify', {
             detail: payload,

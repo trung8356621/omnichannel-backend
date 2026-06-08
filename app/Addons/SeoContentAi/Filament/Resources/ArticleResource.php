@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
@@ -417,7 +418,10 @@ class ArticleResource extends Resource
                         ->label(__('seo-content-ai::filament.article_list.review_articles'))
                         ->icon('heroicon-o-check-badge')
                         ->color('success')
-                        ->requiresConfirmation()
+                        ->visible(fn (): bool => ! SeoAccessControl::isContentManager())
+                        ->extraAttributes([
+                            'wire:confirm' => __('seo-content-ai::filament.article_list.review_article_description'),
+                        ])
                         ->deselectRecordsAfterCompletion()
                         ->action(function (Collection $records): void {
                             $approvedCount = 0;
@@ -489,6 +493,7 @@ class ArticleResource extends Resource
         return static::applyArticleAccessScopes(
             parent::getEloquentQuery()->with(static::articleEagerLoads()),
             includeGlobalSiteScope: true,
+            includeReviewScope: true,
         );
     }
 
@@ -497,6 +502,8 @@ class ArticleResource extends Resource
         return static::applyArticleAccessScopes(
             parent::getEloquentQuery()->with(static::articleEagerLoads()),
             includeGlobalSiteScope: false,
+            includeReviewScope: false,
+            includeContentManagerOwnershipScope: false,
         );
     }
 
@@ -519,12 +526,17 @@ class ArticleResource extends Resource
         ];
     }
 
-    public static function applyArticleAccessScopes(Builder $query, bool $includeGlobalSiteScope = true): Builder
-    {
-        if (auth()->user()?->role !== 'admin') {
+    public static function applyArticleAccessScopes(
+        Builder $query,
+        bool $includeGlobalSiteScope = true,
+        bool $includeReviewScope = true,
+        bool $includeContentManagerOwnershipScope = true,
+    ): Builder {
+        if (auth()->user()?->role !== 'admin' && ! SeoAccessControl::isContentManager()) {
+            $siteOwnerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
             $query->whereIn(
                 'site_id',
-                Site::query()->where('user_id', auth()->id())->select('id')
+                Site::query()->where('user_id', $siteOwnerId)->select('id')
             );
         }
 
@@ -532,13 +544,51 @@ class ArticleResource extends Resource
             $query->where('site_id', $globalSiteId);
         }
 
-        if (! SeoAccessControl::canAccessManagerFeatures()) {
+        if ($includeContentManagerOwnershipScope && SeoAccessControl::isContentManager()) {
+            static::applyContentManagerOwnershipScope($query);
+        }
+
+        if ($includeReviewScope
+            && ! SeoAccessControl::isContentManager()
+            && ! SeoAccessControl::canAccessManagerFeatures()) {
             $query->where(function (Builder $sub): void {
                 $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
             });
         }
 
         return $query;
+    }
+
+    public static function canContentManagerAccessArticle(SeoArticle $article): bool
+    {
+        return static::canContentManagerAccessArticleId((int) $article->getKey());
+    }
+
+    public static function canContentManagerAccessArticleId(int $articleId): bool
+    {
+        if (! SeoAccessControl::isContentManager()) {
+            return true;
+        }
+
+        return static::applyContentManagerOwnershipScope(
+            SeoArticle::query()->whereKey($articleId),
+        )->exists();
+    }
+
+    private static function applyContentManagerOwnershipScope(Builder $query): Builder
+    {
+        $userId = (int) auth()->id();
+
+        return $query->where(function (Builder $ownership) use ($userId): void {
+            $ownership
+                ->where('user_id', $userId)
+                ->orWhereIn('id', SeoProjectTask::query()
+                    ->whereNotNull('article_id')
+                    ->whereIn('project_id', SeoProject::query()
+                        ->where('user_id', $userId)
+                        ->select('id'))
+                    ->select('article_id'));
+        });
     }
 
     public static function syncGlobalSiteForArticle(SeoArticle $article): void
@@ -653,15 +703,26 @@ class ArticleResource extends Resource
                 ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
                 ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
                     ? __('seo-content-ai::filament.article_list.already_reviewed')
-                    : __('seo-content-ai::filament.article_list.mark_reviewed'))
+                    : (SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed')))
+                ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canAccessManagerFeatures()
+                    || (SeoAccessControl::isContentManager()
+                        && ! (bool) $record->is_reviewed
+                        && static::articleIsInContentProject($record)))
                 ->requiresConfirmation()
-                ->modalHeading(__('seo-content-ai::filament.article_list.review_article'))
-                ->modalDescription(__('seo-content-ai::filament.article_list.review_article_description'))
                 ->action(function (SeoArticle $record): void {
+                    if (SeoAccessControl::isContentManager()) {
+                        app(SeoProjectApprovalService::class)->approveLinkedProject(
+                            $record,
+                            auth()->user(),
+                        );
+                    }
+
                     $deletedCount = static::markArticleReviewed($record);
 
                     Notification::make()
-                        ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
+                        ->title(SeoAccessControl::isContentManager()
+                            ? 'Project đã được đánh dấu Đã duyệt'
+                            : __('seo-content-ai::filament.article_list.article_reviewed'))
                         ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
                         ->success()
                         ->send();
@@ -805,7 +866,7 @@ class ArticleResource extends Resource
             ->orderByDesc('month')
             ->orderBy('id');
 
-        if (auth()->user()?->role !== 'admin') {
+        if (SeoAccessControl::isContentManager()) {
             $query->where('user_id', auth()->id());
         }
 
@@ -853,6 +914,13 @@ class ArticleResource extends Resource
 
     public static function articleAssignedContentProjectId(SeoArticle $article): ?int
     {
+        $directProjectId = SeoProjectTask::query()
+            ->where('article_id', (int) $article->id)
+            ->value('project_id');
+        if ($directProjectId !== null) {
+            return (int) $directProjectId;
+        }
+
         $needle = mb_strtolower(trim(static::resolveArticleProjectSourceContent($article)));
         $articleSiteId = static::resolveArticleSiteId($article) ?? 0;
 
@@ -971,6 +1039,7 @@ class ArticleResource extends Resource
                 SeoProjectTask::query()->create([
                     'project_id' => (int) $project->id,
                     'site_id' => $siteId > 0 ? $siteId : null,
+                    'article_id' => (int) $record->id,
                     'type' => SeoProjectTask::TYPE_REWRITE,
                     'source_content' => $sourceContent,
                     'description' => null,
@@ -1044,6 +1113,8 @@ class ArticleResource extends Resource
         return [
             'index' => Pages\ListArticles::route('/'),
             'trash' => Pages\ListArticlesTrash::route('/trash'),
+            'domain-mismatch' => Pages\ArticleDomainMismatch::route('/{record}/domain-mismatch'),
+            'access-denied' => Pages\ArticleAccessDenied::route('/{record}/access-denied'),
             'edit' => Pages\EditArticle::route('/{record}/edit'),
         ];
     }

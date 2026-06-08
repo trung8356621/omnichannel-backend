@@ -32,6 +32,11 @@ class WatermarkEditor extends Page
 
     protected static bool $shouldRegisterNavigation = true;
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+    }
+
     #[Url]
     public ?int $siteId = null;
 

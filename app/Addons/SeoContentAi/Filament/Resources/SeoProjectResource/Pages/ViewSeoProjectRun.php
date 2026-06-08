@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use App\Models\Site;
 use Filament\Actions;
@@ -36,11 +37,15 @@ class ViewSeoProjectRun extends Page
     public function mount(int|string $run): void
     {
         static::authorizeResourceAccess();
+        abort_if(SeoAccessControl::isContentManager(), 403);
 
         $this->run = (int) $run;
         $this->projectRun = SeoProjectRun::query()
             ->with(['project.site', 'user', 'project.tasks'])
             ->findOrFail($this->run);
+
+        app(SeoProjectWorkflowRunService::class)->ensureFailedTasksQueued($this->projectRun);
+        $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
     }
 
     public function getTitle(): string|Htmlable
@@ -167,7 +172,9 @@ class ViewSeoProjectRun extends Page
             if (auth()->user()?->role !== 'admin') {
                 $query->whereIn(
                     'site_id',
-                    Site::query()->where('user_id', auth()->id())->select('id'),
+                    Site::query()
+                        ->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id())
+                        ->select('id'),
                 );
             }
 
@@ -287,6 +294,34 @@ class ViewSeoProjectRun extends Page
                 ]))
                 ->danger()
                 ->persistent()
+                ->send();
+        }
+    }
+
+    public function markItemFixed(int $taskId, int $articleId): void
+    {
+        if ($this->projectRun === null) {
+            return;
+        }
+
+        try {
+            app(SeoProjectWorkflowRunService::class)->markTaskFixed(
+                $this->projectRun,
+                $taskId,
+                $articleId,
+            );
+            $this->projectRun->refresh();
+
+            Notification::make()
+                ->title('Đã đánh dấu bài viết OK')
+                ->body('Hạng mục được ghi nhận là đã sửa lỗi thủ công.')
+                ->success()
+                ->send();
+        } catch (\Throwable $exception) {
+            Notification::make()
+                ->title('Không thể đánh dấu đã fix')
+                ->body($exception->getMessage())
+                ->danger()
                 ->send();
         }
     }

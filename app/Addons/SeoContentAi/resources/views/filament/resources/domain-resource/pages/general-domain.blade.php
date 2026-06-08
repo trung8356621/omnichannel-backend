@@ -70,7 +70,7 @@
                             size="sm"
                             color="danger"
                             icon="heroicon-o-trash"
-                            wire:click="mountAction('delete')"
+                            wire:click="mountAction('delete_domain')"
                         >
                             {{ __('Xóa domain') }}
                         </x-filament::button>

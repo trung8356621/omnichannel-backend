@@ -26,6 +26,8 @@ class SeoProject extends Model
 
     public const STATUS_PAUSED = 'paused';
 
+    public const STATUS_APPROVED = 'approved';
+
     protected $connection = 'omi_seo_ai';
 
     protected $table = 'seo_projects';
@@ -72,7 +74,7 @@ class SeoProject extends Model
     {
         $carbon = Carbon::parse($month)->startOfMonth();
 
-        return 'project ' . $carbon->format('n/Y');
+        return 'project '.$carbon->format('n/Y');
     }
 
     /**
@@ -81,6 +83,7 @@ class SeoProject extends Model
     public static function statusOptions(): array
     {
         return [
+            self::STATUS_APPROVED => 'Đã duyệt',
             self::STATUS_PENDING => 'Chờ duyệt',
             self::STATUS_MANUAL => 'Thủ công',
             self::STATUS_RUNNING => 'Đang chạy',

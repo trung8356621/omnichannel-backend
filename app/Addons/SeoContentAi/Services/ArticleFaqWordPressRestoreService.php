@@ -18,8 +18,7 @@ final class ArticleFaqWordPressRestoreService
         private readonly ArticleFaqExtractDebugService $extractDebug,
         private readonly WorkflowParserService $workflowParser,
         private readonly ArticleWordPressSyncFlagService $syncFlags,
-    ) {
-    }
+    ) {}
 
     /**
      * @return array{restored: bool, editor_html: ?string, message: string}
@@ -122,6 +121,7 @@ final class ArticleFaqWordPressRestoreService
 
         $this->applyRestoredTitleAndSlug($article, $title, $slug);
         $this->syncFlags->clearAll($article);
+        $article->update(['body' => null]);
 
         return [
             'restored' => true,
@@ -298,7 +298,7 @@ final class ArticleFaqWordPressRestoreService
             $foundHeading = $this->workflowParser->findFaqSectionHeadingInContent($headingSource);
             $heading = is_array($foundHeading) ? (string) ($foundHeading['text'] ?? 'FAQ') : 'FAQ';
             $faqBlock = $this->workflowParser->buildFaqSectionHtmlForEditor($wpFaqs, $heading);
-            $rebuilt = trim($content) . ($content !== '' ? "\n\n" : '') . $faqBlock;
+            $rebuilt = trim($content).($content !== '' ? "\n\n" : '').$faqBlock;
             $this->persistWordPressSourceSnapshot($article, $rebuilt);
 
             return $rebuilt;

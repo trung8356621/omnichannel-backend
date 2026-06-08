@@ -17,6 +17,11 @@ use Livewire\Attributes\Url;
 
 class ImageProcessingPage extends Page
 {
+    public static function shouldRegisterNavigation(): bool
+    {
+        return ! SeoAccessControl::isContentManager();
+    }
+
     protected static ?string $navigationIcon = 'heroicon-o-sparkles';
 
     protected static ?string $navigationLabel = 'Image processing';

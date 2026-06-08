@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
@@ -52,11 +52,11 @@ final class CreateArticlesFromTaskService
 
         $task = SeoTask::query()->find($taskId);
         if ($task === null) {
-            throw new \InvalidArgumentException('Quy trình tạo bài viết (#' . $taskId . ') không tồn tại.');
+            throw new \InvalidArgumentException('Quy trình tạo bài viết (#'.$taskId.') không tồn tại.');
         }
 
         if (! $task->is_active) {
-            throw new \InvalidArgumentException('Quy trình «' . $task->name . '» đang tắt. Hãy kích hoạt hoặc chọn task khác.');
+            throw new \InvalidArgumentException('Quy trình «'.$task->name.'» đang tắt. Hãy kích hoạt hoặc chọn task khác.');
         }
 
         $this->assertSiteAccessible($siteId);
@@ -91,7 +91,7 @@ final class CreateArticlesFromTaskService
                 $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
                 if ($stepFailed) {
                     $failed++;
-                    $messages[] = '«' . $keyword . '»: quy trình có bước lỗi.';
+                    $messages[] = '«'.$keyword.'»: quy trình có bước lỗi.';
 
                     continue;
                 }
@@ -100,10 +100,10 @@ final class CreateArticlesFromTaskService
                 $this->workflowRunner->applyParsedMetaFromSteps($article, $steps);
                 $created++;
                 $articleIds[] = (int) $article->id;
-                $messages[] = '«' . $keyword . '»: đã tạo bài nháp và chạy quy trình.';
+                $messages[] = '«'.$keyword.'»: đã tạo bài nháp và chạy quy trình.';
             } catch (\Throwable $exception) {
                 $failed++;
-                $messages[] = '«' . $keyword . '»: ' . $exception->getMessage();
+                $messages[] = '«'.$keyword.'»: '.$exception->getMessage();
             }
         }
 
@@ -139,18 +139,22 @@ final class CreateArticlesFromTaskService
 
         $task = SeoTask::query()->find($taskId);
         if ($task === null) {
-            throw new \InvalidArgumentException('Quy trình tạo bài viết (#' . $taskId . ') không tồn tại.');
+            throw new \InvalidArgumentException('Quy trình tạo bài viết (#'.$taskId.') không tồn tại.');
         }
 
         if (! $task->is_active) {
-            throw new \InvalidArgumentException('Quy trình «' . $task->name . '» đang tắt.');
+            throw new \InvalidArgumentException('Quy trình «'.$task->name.'» đang tắt.');
         }
 
         $resolvedSiteId = (int) ($context->siteId ?? $siteId);
         $this->assertSiteAccessible($resolvedSiteId);
         $this->syncDomainLinkListKeywords($resolvedSiteId);
 
-        $keyword = trim((string) ($context->variables['focus_keyword'] ?? $context->variables['post_title'] ?? ''));
+        $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
+        if ($keyword === '') {
+            $keyword = trim((string) ($context->variables['post_title'] ?? ''));
+        }
+
         if ($keyword === '') {
             return [
                 'success' => false,
@@ -164,10 +168,11 @@ final class CreateArticlesFromTaskService
             $stepFailed = collect($steps)->contains(fn (array $step): bool => ($step['status'] ?? '') === 'failed');
             if ($stepFailed) {
                 $failure = $this->summarizeWorkflowFailure($steps);
+                $articleId = $this->resolveArticleIdFromSteps($context, $steps);
 
                 return [
                     'success' => false,
-                    'article_id' => $context->article?->id,
+                    'article_id' => $articleId,
                     'message' => $failure['message'],
                     'failed_step' => $failure['failed_step'],
                 ];
@@ -188,6 +193,23 @@ final class CreateArticlesFromTaskService
                 'message' => $exception->getMessage(),
             ];
         }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $steps
+     */
+    private function resolveArticleIdFromSteps(TaskTestContext $context, array $steps): ?int
+    {
+        foreach (array_reverse($steps) as $step) {
+            $articleId = (int) ($step['article_id'] ?? 0);
+            if ($articleId > 0) {
+                return $articleId;
+            }
+        }
+
+        return $context->article instanceof SeoArticle
+            ? (int) $context->article->id
+            : null;
     }
 
     /**
@@ -355,10 +377,10 @@ final class CreateArticlesFromTaskService
         $promptName = trim((string) ($failed['prompt_name'] ?? ''));
 
         $labelParts = array_values(array_filter([$stepTitle, $promptName]));
-        $prefix = $labelParts !== [] ? implode(' — ', $labelParts) . ': ' : '';
+        $prefix = $labelParts !== [] ? implode(' — ', $labelParts).': ' : '';
 
         return [
-            'message' => $prefix . ($stepMessage !== '' ? $stepMessage : 'Quy trình có bước lỗi.'),
+            'message' => $prefix.($stepMessage !== '' ? $stepMessage : 'Quy trình có bước lỗi.'),
             'failed_step' => [
                 'title' => $stepTitle,
                 'prompt_name' => $promptName,

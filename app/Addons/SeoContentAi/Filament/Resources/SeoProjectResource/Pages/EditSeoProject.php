@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Carbon\Carbon;
 use Filament\Actions;
 use Filament\Resources\Pages\EditRecord;
@@ -61,7 +62,9 @@ class EditSeoProject extends EditRecord
         app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $sanitized);
 
         $data['total_tasks'] = count($sanitized);
-        $data['status'] = SeoProject::STATUS_MANUAL;
+        $data['status'] = $this->getRecord()->status === SeoProject::STATUS_APPROVED
+            ? SeoProject::STATUS_APPROVED
+            : SeoProject::STATUS_MANUAL;
 
         unset($data['tasks_data']);
 
@@ -85,6 +88,7 @@ class EditSeoProject extends EditRecord
                 ->label(__('seo-content-ai::filament.projects.run_workflow'))
                 ->icon('heroicon-o-play')
                 ->color('success')
+                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
                 ->modalDescription(fn (): \Illuminate\Support\HtmlString => SeoProjectResource::runWorkflowModalDescription(
@@ -100,6 +104,7 @@ class EditSeoProject extends EditRecord
                 ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
                 ->icon('heroicon-o-beaker')
                 ->color('warning')
+                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
                 ->modalDescription(fn (): \Illuminate\Support\HtmlString => SeoProjectResource::runWorkflowModalDescription(
@@ -112,15 +117,17 @@ class EditSeoProject extends EditRecord
 
                     return SeoProjectResource::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_TEST);
                 }),
-            Actions\Action::make('view_last_run')
-                ->label(__('seo-content-ai::filament.projects.view_last_run'))
+            Actions\Action::make('view_runs')
+                ->label(__('seo-content-ai::filament.projects.view_runs'))
                 ->icon('heroicon-o-queue-list')
                 ->color('gray')
-                ->visible(fn (): bool => $this->getRecord()->runs()->exists())
-                ->url(fn (): string => SeoProjectResource::getUrl('view-run', [
-                    'run' => (int) $this->getRecord()->runs()->latest('id')->value('id'),
+                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures()
+                    && $this->getRecord()->runs()->exists())
+                ->url(fn (): string => SeoProjectResource::getLatestRunUrl($this->getRecord()) ?? SeoProjectResource::getUrl('edit', [
+                    'record' => $this->getRecord(),
                 ])),
-            Actions\DeleteAction::make(),
+            Actions\DeleteAction::make()
+                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures()),
         ];
     }
 

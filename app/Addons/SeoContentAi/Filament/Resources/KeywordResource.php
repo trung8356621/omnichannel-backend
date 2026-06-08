@@ -20,6 +20,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Validation\Rules\Unique;
 
 class KeywordResource extends Resource
@@ -55,9 +56,11 @@ class KeywordResource extends Resource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
-    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    public static function canDelete(Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return SeoAccessControl::canAccessPlannerFeatures()
+            && $record instanceof Keyword
+            && static::isUnused($record);
     }
 
     public static function getNavigationLabel(): string
@@ -144,7 +147,7 @@ class KeywordResource extends Resource
                 Tables\Columns\TextColumn::make('site.domain')
                     ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->searchable(query: function (Builder $query, string $search): Builder {
-                        $like = '%' . addcslashes($search, '%_\\') . '%';
+                        $like = '%'.addcslashes($search, '%_\\').'%';
                         $siteIds = Site::query()->where('domain', 'like', $like)->pluck('id');
 
                         if ($siteIds->isEmpty()) {
@@ -184,6 +187,14 @@ class KeywordResource extends Resource
                     ->sortable()
                     ->weight('bold')
                     ->wrap(),
+
+                Tables\Columns\TextColumn::make('word_count')
+                    ->label('Số từ')
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderByRaw(static::wordCountExpression().' '.$direction))
+                    ->alignCenter()
+                    ->badge()
+                    ->color('gray'),
 
                 Tables\Columns\TextColumn::make('main_articles_count')
                     ->label(__('seo-content-ai::filament.keyword.main_articles'))
@@ -234,6 +245,22 @@ class KeywordResource extends Resource
                         Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus_short'),
                         Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal_short'),
                     ]),
+                Tables\Filters\Filter::make('word_count')
+                    ->label('Số từ')
+                    ->form([
+                        Forms\Components\TextInput::make('value')
+                            ->label('Số từ')
+                            ->numeric()
+                            ->integer()
+                            ->minValue(1),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $wordCount = (int) ($data['value'] ?? 0);
+
+                        return $wordCount > 0
+                            ? $query->whereRaw(static::wordCountExpression().' = ?', [$wordCount])
+                            : $query;
+                    }),
             ])
             ->actions([
                 Tables\Actions\Action::make('write_article')
@@ -286,6 +313,8 @@ class KeywordResource extends Resource
                         (int) $record->site_id,
                         (int) $record->id,
                     )),
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn (Keyword $record): bool => static::isUnused($record)),
             ])
             ->bulkActions([]);
     }
@@ -308,9 +337,13 @@ class KeywordResource extends Resource
     {
         $query = parent::getEloquentQuery()
             ->with(['site'])
+            ->selectRaw('keywords.*, '.static::wordCountExpression().' as word_count')
             ->withCount([
+                'articles as articles_count',
                 'mainArticles as main_articles_count',
                 'articlesViaInternalLink as linked_articles_count',
+                'inboundLinks as inbound_links_count',
+                'children as children_count',
             ]);
 
         if (auth()->user()?->role !== 'admin') {
@@ -322,6 +355,33 @@ class KeywordResource extends Resource
         }
 
         return InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);
+    }
+
+    public static function isUnused(Keyword $keyword): bool
+    {
+        if ($keyword->parent_id !== null) {
+            return false;
+        }
+
+        $attributes = $keyword->getAttributes();
+        if (
+            ! array_key_exists('articles_count', $attributes)
+            || ! array_key_exists('inbound_links_count', $attributes)
+            || ! array_key_exists('children_count', $attributes)
+        ) {
+            $keyword->loadCount(['articles', 'inboundLinks', 'children']);
+        }
+
+        return (int) $keyword->articles_count === 0
+            && (int) $keyword->inbound_links_count === 0
+            && (int) $keyword->children_count === 0;
+    }
+
+    private static function wordCountExpression(): string
+    {
+        return "CASE WHEN TRIM(phrase) = '' THEN 0 ELSE "
+            ."LENGTH(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' ')) "
+            ."- LENGTH(REPLACE(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' '), ' ', '')) + 1 END";
     }
 
     public static function getPages(): array

@@ -1,0 +1,106 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Http\Controllers;
+
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
+use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
+use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
+use App\Http\Controllers\Controller;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+
+class ArticleMediaPickerController extends Controller
+{
+    public function __invoke(
+        Request $request,
+        int $article,
+        SeoMediaLibraryService $localLibrary,
+        WordPressMediaLibraryService $wordPressLibrary,
+        MediaLibraryArticleResolver $articleResolver,
+    ): JsonResponse {
+        $record = ArticleResource::getRecordRouteBindingEloquentQuery()->findOrFail($article);
+        $record->loadMissing('site');
+        $site = $record->site;
+        abort_if($site === null, 404);
+
+        $tab = $request->string('tab')->toString() === 'local' ? 'local' : 'original';
+        $page = max(1, $request->integer('page', 1));
+        $search = trim($request->string('search')->toString());
+
+        if ($tab === 'local') {
+            $localLibrary->assignRecentOrphanMediaToArticle($site, (int) $record->id);
+            $result = $localLibrary->fetch(
+                $site,
+                null,
+                $page,
+                $search !== '' ? $search : null,
+                24,
+                (int) $record->id,
+            );
+            $images = $articleResolver->enrichImages(
+                (int) $site->id,
+                is_array($result['images'] ?? null) ? $result['images'] : [],
+            );
+        } else {
+            if ((int) ($record->wp_post_id ?? 0) <= 0) {
+                return response()->json([
+                    'images' => [],
+                    'catalog' => null,
+                    'page' => 1,
+                    'totalPages' => 1,
+                    'error' => 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi chọn ảnh WordPress.',
+                    'tab' => $tab,
+                ], 422);
+            }
+
+            $result = $wordPressLibrary->fetch(
+                $site,
+                null,
+                $page,
+                24,
+                $search !== '' ? $search : null,
+            );
+            $images = is_array($result['images'] ?? null) ? $result['images'] : [];
+        }
+
+        return response()->json([
+            'images' => $this->normalizeImages($images, $tab),
+            'catalog' => null,
+            'page' => max(1, (int) ($result['page'] ?? $page)),
+            'totalPages' => max(1, (int) ($result['total_pages'] ?? 1)),
+            'error' => filled($result['error'] ?? null) ? (string) $result['error'] : null,
+            'tab' => $tab,
+        ]);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $images
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeImages(array $images, string $tab): array
+    {
+        return array_values(array_map(static function (array $image) use ($tab): array {
+            $wpId = (int) ($image['wp_attachment_id'] ?? ($tab === 'original' ? ($image['id'] ?? 0) : 0));
+            $seoId = (int) ($image['seo_media_id'] ?? ($tab === 'local' ? ($image['id'] ?? 0) : 0));
+            $url = trim((string) ($image['url'] ?? ''));
+            $thumbUrl = trim((string) ($image['thumb_url'] ?? $url));
+
+            return [
+                'picker_key' => $tab . '-' . ($seoId > 0 ? 'seo-' . $seoId : 'wp-' . $wpId) . '-' . md5($url),
+                'id' => (int) ($image['id'] ?? ($wpId > 0 ? $wpId : $seoId)),
+                'wp_attachment_id' => $wpId,
+                'seo_media_id' => $seoId,
+                'url' => $url,
+                'thumb_url' => $thumbUrl !== '' ? $thumbUrl : $url,
+                'slug' => trim((string) ($image['slug'] ?? '')),
+                'alt' => trim((string) ($image['alt'] ?? '')),
+                'media_type' => strtolower(trim((string) ($image['media_type'] ?? 'image'))) === 'video'
+                    ? 'video'
+                    : 'image',
+            ];
+        }, $images));
+    }
+}

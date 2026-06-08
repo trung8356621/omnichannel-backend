@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
@@ -169,6 +170,9 @@ class SeoPanelProvider extends PanelProvider
         ])
             ->prefix('seo')
             ->group(function (): void {
+                Route::get('/articles/{article}/media-picker', ArticleMediaPickerController::class)
+                    ->whereNumber('article')
+                    ->name('seo.articles.media-picker');
                 Route::get('/articles/{article}/seo-preview', ArticleSeoPreviewController::class)
                     ->name('seo.articles.seo-preview');
                 Route::get('/articles/{article}/preview', ArticlePreviewController::class)
@@ -186,6 +190,8 @@ class SeoPanelProvider extends PanelProvider
             ->id('seo')
             ->path('seo')
             ->login()
+            ->databaseNotifications()
+            ->databaseNotificationsPolling('30s')
             ->colors([
                 'primary' => Color::Emerald,
             ])

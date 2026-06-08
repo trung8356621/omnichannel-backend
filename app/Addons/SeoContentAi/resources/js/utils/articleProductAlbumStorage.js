@@ -167,3 +167,12 @@ export function persistProductAlbumDraftToServer(articleId, wire) {
 
     return wire.persistProductAlbumFromClient(items);
 }
+
+export function clearProductAlbumStorage(articleId) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return;
+    }
+
+    window.localStorage.removeItem(albumKey(id));
+}

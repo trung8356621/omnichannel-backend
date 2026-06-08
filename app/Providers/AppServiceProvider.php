@@ -4,9 +4,9 @@ namespace App\Providers;
 
 use BezhanSalleh\FilamentLanguageSwitch\LanguageSwitch;
 use Illuminate\Auth\Notifications\ResetPassword;
-use Illuminate\Support\ServiceProvider;
-use Schema;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -15,7 +15,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        $this->registerActiveAddonProviders();
+        // Active addons are stored in the database, so resolve them only after
+        // Eloquent has received its connection resolver from the database provider.
+        $this->app->booted(fn () => $this->registerActiveAddonProviders());
     }
 
     /**

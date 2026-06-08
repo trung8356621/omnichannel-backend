@@ -126,3 +126,20 @@ export function writeArticleMediaPickerCache(siteId, tab, page, detail) {
 export function isArticleMediaPickerCacheableTab(tab) {
     return isCacheableTab(tab);
 }
+
+export function clearArticleMediaPickerCache(siteId) {
+    const id = Number(siteId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return;
+    }
+
+    const prefix = `${STORAGE_PREFIX}:${id}:`;
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(prefix)) {
+            keys.push(key);
+        }
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+}
