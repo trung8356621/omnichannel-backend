@@ -3,6 +3,16 @@
     'maxHeight' => '28rem',
 ])
 
+@php
+    $content = trim((string) $slot);
+    $firstLine = trim((string) (strtok($content, "\n") ?: $content));
+    $isMediaUrl = (bool) preg_match('#^(https?://|/storage/)#i', $firstLine);
+    $mediaPath = parse_url($firstLine, PHP_URL_PATH) ?? $firstLine;
+    $isImage = $isMediaUrl && (bool) preg_match('/\.(png|jpe?g|gif|webp|svg)$/i', $mediaPath);
+    $isVideo = $isMediaUrl && (bool) preg_match('/\.(mp4|webm|mov|m4v)$/i', $mediaPath);
+    $showMedia = ($isImage || $isVideo) && $content === $firstLine;
+@endphp
+
 @once
     @vite('app/Addons/SeoContentAi/resources/css/ai-result.css')
 @endonce
@@ -12,7 +22,9 @@
     x-data="{
         copied: false,
         async copyResult() {
-            const text = this.$refs.content.textContent || '';
+            const text = this.$refs.content?.dataset?.copyText
+                || this.$refs.content?.textContent
+                || '';
 
             try {
                 await navigator.clipboard.writeText(text);
@@ -52,9 +64,30 @@
         </button>
     </div>
 
-    <pre
-        x-ref="content"
-        class="seo-ai-result__content"
-        style="--seo-ai-result-max-height: {{ $maxHeight }}"
-    >{{ $slot }}</pre>
+    @if ($showMedia)
+        <div
+            class="seo-ai-result__media"
+            style="--seo-ai-result-max-height: {{ $maxHeight }}"
+        >
+            @if ($isImage)
+                <img
+                    src="{{ $firstLine }}"
+                    alt="AI generated image"
+                    loading="lazy"
+                />
+            @else
+                <video
+                    src="{{ $firstLine }}"
+                    controls
+                    preload="metadata"
+                ></video>
+            @endif
+        </div>
+    @else
+        <pre
+            x-ref="content"
+            class="seo-ai-result__content"
+            style="--seo-ai-result-max-height: {{ $maxHeight }}"
+        >{{ $slot }}</pre>
+    @endif
 </div>

@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
@@ -434,6 +437,11 @@ final class WordPressArticleSyncService
             }
 
             if ($syncedLocalMediaIds !== []) {
+                $updatedPromptMediaLinks = $this->syncPromptMediaLinksToWordPressUrls($article, $syncedLocalMediaIds);
+                if ($updatedPromptMediaLinks > 0) {
+                    $message .= " Đã cập nhật {$updatedPromptMediaLinks} kết quả prompt sang URL ảnh WordPress.";
+                }
+
                 $trashed = app(WordPressLocalMediaSyncService::class)->markSyncedLocalMediaAsTrash($syncedLocalMediaIds);
                 if ($trashed > 0) {
                     $message .= " Đã gắn cờ trash {$trashed} ảnh local đã đồng bộ.";
@@ -533,6 +541,165 @@ final class WordPressArticleSyncService
             ['meta_key' => 'wp_post_content'],
             ['meta_value' => $html],
         );
+    }
+
+    /**
+     * @param  list<int>  $mediaIds
+     */
+    private function syncPromptMediaLinksToWordPressUrls(SeoArticle $article, array $mediaIds): int
+    {
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId <= 0) {
+            return 0;
+        }
+
+        $mediaIds = array_values(array_unique(array_filter(array_map(
+            static fn (mixed $id): int => (int) $id,
+            $mediaIds,
+        ), static fn (int $id): bool => $id > 0)));
+        if ($mediaIds === []) {
+            return 0;
+        }
+
+        $mediaById = SeoMedia::query()
+            ->whereIn('id', $mediaIds)
+            ->get()
+            ->keyBy(static fn (SeoMedia $media): int => (int) $media->id);
+
+        if ($mediaById->isEmpty()) {
+            return 0;
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return 0;
+        }
+
+        $links = SeoPromptResultLink::query()
+            ->where('article_id', $articleId)
+            ->where('source', 'editor_media_generation')
+            ->orderBy('id')
+            ->get();
+
+        if ($links->isEmpty()) {
+            return 0;
+        }
+
+        $updated = 0;
+        $resultCache = [];
+        $wpUrlCache = [];
+        foreach ($links as $link) {
+            $meta = is_array($link->meta) ? $link->meta : [];
+            $seoMediaId = (int) ($meta['seo_media_id'] ?? 0);
+            if ($seoMediaId <= 0) {
+                continue;
+            }
+
+            $media = $mediaById->get($seoMediaId);
+            if (! $media instanceof SeoMedia) {
+                continue;
+            }
+
+            if (! array_key_exists($seoMediaId, $wpUrlCache)) {
+                $wpUrlCache[$seoMediaId] = $this->resolveWordPressMediaUrl($site, $media);
+            }
+
+            $wpUrl = trim((string) $wpUrlCache[$seoMediaId]);
+            if ($wpUrl === '') {
+                continue;
+            }
+
+            $resultId = (int) ($link->prompt_result_id ?? 0);
+            if ($resultId <= 0) {
+                continue;
+            }
+
+            if (! array_key_exists($resultId, $resultCache)) {
+                $resultCache[$resultId] = PromptResult::query()->find($resultId);
+            }
+
+            $result = $resultCache[$resultId];
+            if (! $result instanceof PromptResult) {
+                continue;
+            }
+
+            $existingOutput = (string) ($result->output_text ?? '');
+            $newOutput = $this->replaceFirstLocalMediaUrl($existingOutput, $wpUrl);
+            if ($newOutput === null || $newOutput === $existingOutput) {
+                continue;
+            }
+
+            $result->update(['output_text' => $newOutput]);
+            $result->output_text = $newOutput;
+            $resultCache[$resultId] = $result;
+
+            $meta['wp_url'] = $wpUrl;
+            $link->update(['meta' => $meta]);
+            $updated++;
+        }
+
+        return $updated;
+    }
+
+    private function resolveWordPressMediaUrl(Site $site, SeoMedia $media): string
+    {
+        $candidate = trim((string) ($media->getAttribute('wp_url') ?? ''));
+        if ($candidate !== '') {
+            return $candidate;
+        }
+
+        $attachmentId = (int) ($media->wp_attachment_id ?? 0);
+        if ($attachmentId <= 0) {
+            return '';
+        }
+
+        $attachment = app(WordPressMediaLibraryService::class)->fetchAttachmentById($site, $attachmentId);
+        if (! is_array($attachment)) {
+            return '';
+        }
+
+        return trim((string) ($attachment['url'] ?? ''));
+    }
+
+    private function replaceFirstLocalMediaUrl(string $output, string $wpUrl): ?string
+    {
+        $wpUrl = trim($wpUrl);
+        if ($wpUrl === '') {
+            return null;
+        }
+
+        $normalized = trim($output);
+        if ($normalized === '') {
+            return null;
+        }
+
+        $lines = preg_split('/\R/', $normalized) ?: [];
+        $firstLine = trim((string) ($lines[0] ?? ''));
+        if ($firstLine === '' || ! $this->isLocalSeoMediaUrl($firstLine)) {
+            return null;
+        }
+
+        if ($firstLine === $wpUrl) {
+            return $normalized;
+        }
+
+        $lines[0] = $wpUrl;
+
+        return implode("\n", $lines);
+    }
+
+    private function isLocalSeoMediaUrl(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return false;
+        }
+
+        $path = parse_url($value, PHP_URL_PATH);
+        $path = is_string($path) ? $path : $value;
+
+        return preg_match('#/storage/uploads/seo_media/#i', $path) === 1;
     }
 
     /**

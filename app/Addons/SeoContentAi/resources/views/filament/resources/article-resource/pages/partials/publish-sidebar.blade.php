@@ -536,43 +536,32 @@
                 @endif
             </button>
 
-            @if (
-                ! $record->is_reviewed
-                && (
-                    ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
-                    || \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record)
-                )
-            )
-                <button
-                    type="button"
-                    wire:click="approveArticle"
+            @php
+                $approvedToggleTitle = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
+                    ? 'Đánh dấu project đã duyệt'
+                    : __('seo-content-ai::filament.article_list.mark_reviewed');
+            @endphp
+
+            <button
+                type="button"
+                wire:click="toggleArticleReview"
+                @if (! $record->is_reviewed)
                     wire:confirm="{{ __('seo-content-ai::filament.article_list.review_article_description') }}"
-                    wire:loading.attr="disabled"
-                    wire:target="approveArticle"
-                    class="seo-publish-icon-btn is-success"
-                    title="{{ \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed') }}"
-                    aria-label="{{ \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed') }}"
-                >
-                    <span wire:loading.remove wire:target="approveArticle">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                        </svg>
-                    </span>
-                    <span wire:loading wire:target="approveArticle" class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
-                </button>
-            @else
-                <button
-                    type="button"
-                    class="seo-publish-icon-btn is-success is-active"
-                    disabled
-                    title="{{ __('seo-content-ai::filament.article_list.already_reviewed') }}"
-                    aria-label="{{ __('seo-content-ai::filament.article_list.already_reviewed') }}"
-                >
+                @endif
+                wire:loading.attr="disabled"
+                wire:target="toggleArticleReview,approveArticle"
+                @disabled(! $this->canToggleArticleReview())
+                class="seo-publish-icon-btn is-success @if ($record->is_reviewed) is-active @endif"
+                title="{{ $record->is_reviewed ? __('seo-content-ai::filament.article_list.reviewed') : $approvedToggleTitle }}"
+                aria-label="{{ __('seo-content-ai::filament.article_list.reviewed') }}"
+            >
+                <span wire:loading.remove wire:target="toggleArticleReview,approveArticle">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
                     </svg>
-                </button>
-            @endif
+                </span>
+                <span wire:loading wire:target="toggleArticleReview,approveArticle" class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+            </button>
 
             @if ($record->wp_post_id)
                 @php($wpPermalink = $this->getArticlePermalink())

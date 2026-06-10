@@ -16,20 +16,22 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 
 - **Bài viết / sản phẩm / danh mục** — Editor block (TipTap/React), FAQ, SEO meta, preview Google SERP, điểm SEO, review ảo.
 - **Đồng bộ WordPress** — Lưu local, đồng bộ full (`WordPressArticleSyncService`), sửa slug trực tiếp lên WP + refresh permalink, lấy nội dung từ WP, redirect sửa bài từ frontend WP.
-- **Prompt & Task** — Quản lý prompt, workflow builder, chạy thử, tích hợp AI (Gemini và kết nối AI).
+- **Prompt, Task & Content Projects** — Quản lý prompt, workflow builder, chạy thử, project theo tháng, chạy workflow và theo dõi run/task.
 - **Trợ lý AI toàn cục** — Sidebar chat Gemini/Claude trên các trang SEO, hỗ trợ ảnh và dùng model active từ AI settings; không render trong `/admin` hoặc trang sửa bài viết vì editor có panel AI riêng.
+- **Phân quyền SEO workspace** — Tách quyền `manager` / `planner` / `content_manager`, hỗ trợ scope domain toàn cục và role simulation qua `GlobalSeoBar`.
 - **Domain** — Cấu hình site, từ khóa, internal link list, CTA, tone, prompt theo domain.
 - **Thư viện media** — Upload local, sync WP, watermark, split ảnh, tối ưu ảnh, job AI generate.
+- **Editor nâng cao** — Lưu nháp local cho featured image + product album, bridge event Livewire↔React, autosave lock, FAQ extract debug.
 - **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain; widget tải plugin WP trên dashboard.
 
 ---
 
 ## Yêu cầu
 
-- PHP 8.3+, Laravel 12, Filament 3
-- MySQL (connection `omi_seo_ai` kế thừ cấu hình `mysql`, database name từ `addon.json`)
+- PHP 8.2+, Laravel 12, Filament 3
+- MySQL (connection `omi_seo_ai` kế thừa cấu hình `mysql`, database name từ `addon.json`)
 - Node.js — build frontend (`npm run build` / `npm run dev`)
-- WordPress site có cài **[omi-seo-ai-bridge](https://github.com/)** (repo: `wp-seo-ai`) với token đọc/ghi trên domain
+- WordPress site có cài plugin **omi-seo-ai-bridge** (repo nội bộ: `wp-seo-ai`) với token đọc/ghi trên domain
 
 ---
 
@@ -72,7 +74,8 @@ SeoContentAi/
 │   ├── css/                   # Tailwind / editor / media styles
 │   └── views/                 # Blade (seo-content-ai::)
 ├── routes/
-│   └── api.php                # WP bridge webhook, plugin update API
+│   ├── api.php                # WP bridge webhook, plugin update API
+│   └── web.php                # Route web được mount qua SeoPanelProvider
 └── tests/Unit/                # PHPUnit unit tests addon
 ```
 
@@ -135,13 +138,14 @@ Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên fronten
 
 | Nhóm | Prefix | Mô tả |
 |------|--------|--------|
-| Panel | `/seo` | Filament (articles, domains, prompts, tasks, media, settings) |
+| Panel | `/seo` | Filament (articles, content-projects, domains, prompts, tasks, media, settings) |
 | Media API | `/api/seo/media` | Upload, watermark, rename, AI jobs |
 | Watermark API | `/api/seo/watermark` | Cấu hình & batch watermark |
 | Article | `/seo/articles/{id}/preview`, `seo-preview`, `wp-edit-redirect` | Preview & redirect WP |
 | Global AI chat | `GET /api/ai/chat/models`, `POST /api/ai/chat` | Danh sách model được phép và chat text/image có session auth |
 | WP bridge | `/api/seo-wp-bridge/*` | Webhook push content từ WP |
 | Plugin | `/api/seo/plugin/*` | Update check / download bridge |
+| Plugin (panel) | `/seo/wp-plugin/download/{version}` | Download plugin trực tiếp từ panel SEO |
 
 ---
 
@@ -153,6 +157,7 @@ Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên fronten
 4. **Đồng bộ** — `syncArticleToWordPress()` → `WordPressArticleSyncService` → `POST …/editor-sync`.
 5. **Slug** — `confirmArticleSlug()` → `syncSlugForArticle()` → fetch lại permalink từ WP (`refreshSlugAndPermalinkFromWordPress`).
 6. **Lấy từ WordPress** — `restoreArticleFromWordPress()` / `ArticleFaqWordPressRestoreService`.
+7. **Ảnh đại diện + album sản phẩm** — nháp lưu localStorage và đồng bộ về server qua bridge client (`articleFeaturedImageStorage`, `articleProductAlbumStorage`).
 
 HTML gửi WP được làm sạch qua `ArticleEditorHtmlSanitizeService` (gỡ class Tailwind/utility từ output AI cũ).
 
@@ -169,6 +174,11 @@ HTML gửi WP được làm sạch qua `ArticleEditorHtmlSanitizeService` (gỡ 
 | `SeoMediaLibraryService` / `WordPressMediaLibraryService` | Thư viện ảnh |
 | `SeoWatermarkService` | Watermark theo domain |
 | `WorkflowParserService` | Parse workflow / FAQ từ nội dung |
+| `SeoProjectWorkflowRunService` | Chạy workflow cho content project và quản lý trạng thái run/task |
+| `SeoProjectTaskSyncService` | Đồng bộ task theo project, kiểm soát limit và dữ liệu đầu vào |
+| `SeoProjectApprovalService` | Duyệt bài và cập nhật trạng thái content project liên kết |
+| `DomainOverviewService` | Tổng hợp trạng thái kết nối/token WordPress theo domain |
+| `WordPressPluginReleaseService` | Quản lý metadata + package plugin để update/download |
 | `VirtualCommentService` | Review ảo ↔ meta `_omi_seo_virtual_comments` |
 | `ArticleWpEditRedirectController` | Redirect từ WP frontend sang editor Laravel |
 
@@ -190,7 +200,7 @@ php artisan test --filter=SeoContentAi
 php artisan test app/Addons/SeoContentAi/tests
 ```
 
-Một số test có sẵn: `WorkflowParserServiceTest`, `KeywordPhraseMatcherTest`, `ArticleEditorHtmlSanitizeServiceTest`, `SeoWatermarkSettingTest`.
+Một số test có sẵn: `WorkflowParserServiceTest`, `KeywordPhraseMatcherTest`, `ArticleEditorHtmlSanitizeServiceTest`, `SeoWatermarkSettingTest`, `SeoProjectMergeServiceTest`, `SeoProjectRunPreflightServiceTest`, `SeoMediaStorageServiceTest`.
 
 ---
 

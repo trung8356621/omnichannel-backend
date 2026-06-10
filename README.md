@@ -12,11 +12,11 @@ Backend quản lý đa kênh: **site khách hàng**, **gói dịch vụ / subscr
 | **Site ↔ Service** | Một site có nhiều bản ghi `site_services` (dịch vụ đã kích hoạt trên site), mỗi bản ghi có `settings` (JSON) tùy addon. |
 | **Service (addon)** | Bảng `services` mô tả từng addon: `slug`, `addon_namespace` (class ServiceProvider), `is_active`, `config` (toàn bộ `addon.json`). |
 | **AddonManager** | Quét thư mục `app/Addons/*/addon.json`, đồng bộ/`updateOrCreate` vào bảng `services` theo `slug`. |
-| **AppServiceProvider** | Khi có bảng `services`, với mỗi service `is_active = true`, gọi `$this->app->register($service->addon_namespace)` để nạp route, migration connection, observer, … của addon. |
-| **AdminPanelProvider (Filament)** | Đăng ký panel `path('admin')`. Với mỗi service active, map `slug` → tên thư mục PascalCase (vd. `wp-headless` → `WpHeadless`), rồi tự **`discoverPages` / `discoverResources`** và **`loadViewsFrom`** (namespace view = `slug`). |
+| **AppServiceProvider** | Sau khi app boot (`$this->app->booted(...)`), nếu có bảng `services`, sẽ register mọi addon `is_active = true` bằng `$this->app->register($service->addon_namespace)`. |
+| **AdminPanelProvider (Filament)** | Đăng ký panel `path('admin')`. Với mỗi service active, map `slug` → PascalCase (vd. `wp-headless` → `WpHeadless`), rồi auto **`discoverPages` / `discoverResources`** và **`loadViewsFrom`** (namespace view = `slug`). Riêng `seo-content-ai` được bỏ qua ở `/admin` vì dùng panel riêng `/seo`. |
 | **Proxy frontend** | `FrontendProject` + route `/frontend/{router}/{path?}` proxy sang Next.js/React theo `router`, `port`, `proxy_auto`. Addon WP Headless có thể tự `updateOrCreate` bản ghi project khi boot. |
 
-**Lưu ý:** Một số addon dùng **database riêng** (vd. WP Headless: `omi_wp_headless`). Connection runtime được đăng ký qua trait `RegistersAddonDatabase` trong ServiceProvider của addon (clone cấu hình từ `mysql`, đổi `database`).
+**Lưu ý:** Một số addon dùng **database riêng** (vd. WP Headless: `omi_wp_headless`, SEO Content AI: `omi_seo_ai`). Connection runtime được đăng ký qua trait `RegistersAddonDatabase` trong ServiceProvider của addon (clone cấu hình từ `mysql`, đổi `database` theo `addon.json`).
 
 ---
 
@@ -31,7 +31,7 @@ Các bảng dưới đây lấy từ migrations trong `database/migrations/` (t�
 | **users** | `name`, `email`, `password`, `role` (`admin` \| `owner` \| `staff`), `status`, `parent_id` (staff thuộc owner), `google_id`, `avatar`, soft delete. |
 | **sites** | `user_id`, `subscription_id`, `domain` (unique), `ssl`, `status`, soft delete. (Cột `url` đã bỏ.) |
 | **site_meta** | Meta kỹ thuật theo site: `meta_key`, `meta_value`. |
-| **services** | Danh mục addon: `name`, `slug`, `addon_namespace`, `db_connection`, `is_active`, `config` (JSON). |
+| **services** | Danh mục addon: `name`, `slug`, `addon_namespace`, `db_connection` (legacy/default), `is_active`, `config` (JSON metadata từ `addon.json`). |
 | **site_services** | Gán dịch vụ cho site: `site_id`, `service_id`, `status`, `settings` (JSON). |
 | **service_plans** | Gói bán kèm service: `name`, `price`, `duration_days`, `limits` (JSON), … |
 | **subscriptions** | User đăng ký plan: `user_id`, `plan_id`, `starts_at`, `ends_at`, `status`, soft delete. |
@@ -105,7 +105,6 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 | **Site Management** | **WP Headless** | Chỉ khi addon `wp-headless` **active**; URL: `/admin/wp-headless/manage`. Chỉ role **`admin`**. |
 | **React/Next** | **Frontend (Next/React)** | `FrontendProjectResource` — chỉ **`admin`**. |
 | **React/Next** | **Lệnh NPM** | `FrontendNpmCommandsPage` — chỉ **`admin`**. |
-| **SEO Automation** | **SEO AI Generator** | Chỉ khi addon `seo-content-ai` **active** và user **`admin`**; URL: `/admin/seo/dashboard`. `canAccess` còn kiểm tra service đang bật trong DB. |
 | **Hệ thống** | **Quản lý Service** | `ManageServices` — bật/tắt addon, sync `addon.json`; chỉ **`admin`**. |
 | *(mặc định)* | **Users** | `UserResource` (hoặc nhãn plural của model) — query scoped theo role. |
 
@@ -113,6 +112,8 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 
 - `/admin/wp-headless/connect` — flow kết nối WP (`WpHeadlessConnect`, CSRF có exception trong `bootstrap/app.php`).
 - `/admin/wp-headless/site` — chi tiết/sync site headless (`WpHeadlessSitePage`, cần đăng nhập).
+
+**Panel tách riêng:** SEO Content AI chạy panel riêng tại `/seo` (provider: `App\Addons\SeoContentAi\Providers\SeoPanelProvider`), không nằm trong navigation `/admin`.
 
 ---
 

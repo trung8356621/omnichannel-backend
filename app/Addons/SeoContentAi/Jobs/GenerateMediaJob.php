@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
+use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -49,6 +50,7 @@ class GenerateMediaJob implements ShouldQueue
         PromptRunnerService $promptRunner,
         PromptMediaStorageService $promptMediaStorage,
         PromptPostProcessingApplyService $postProcessing,
+        PromptResultLinkService $promptResultLinks,
     ): void {
         $media = SeoMedia::query()->find($this->seoMediaId);
         $prompt = SeoPrompt::query()->where('is_active', true)->find($this->promptId);
@@ -78,6 +80,27 @@ class GenerateMediaJob implements ShouldQueue
             );
             $output = trim((string) ($promptResult->output_text ?? ''));
             $finalUrl = trim((string) (explode("\n", $output, 2)[0] ?? ''));
+
+            $articleId = (int) ($media->firstArticleId() ?? 0);
+            if ($articleId > 0) {
+                try {
+                    $promptResultLinks->linkPromptResult(
+                        promptResultId: (int) $promptResult->id,
+                        articleId: $articleId,
+                        source: 'editor_media_generation',
+                        meta: [
+                            'tool_type' => $this->toolType,
+                            'seo_media_id' => (int) $media->id,
+                            'editor_block_id' => (string) ($media->editor_block_id ?? ''),
+                        ],
+                    );
+                } catch (Throwable $linkException) {
+                    // Link lịch sử prompt không được làm hỏng luồng tạo ảnh.
+                    logger()->warning(
+                        "GenerateMediaJob linkPromptResult failed [media_id={$this->seoMediaId}]: {$linkException->getMessage()}",
+                    );
+                }
+            }
 
             if ($finalUrl === '') {
                 throw new PromptRunException('Không nhận được URL kết quả từ AI.');

@@ -21,6 +21,7 @@ final class ArticleQuickPostReviewService
         private readonly VirtualCommentService $virtualComments,
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly CommentReviewPayloadParser $payloadParser,
+        private readonly PromptResultLinkService $promptResultLinks,
     ) {}
 
     /**
@@ -88,6 +89,14 @@ final class ArticleQuickPostReviewService
                 'message' => $failedMessage,
             ];
         }
+
+        $this->promptResultLinks->linkFromWorkflowSteps(
+            steps: $steps,
+            articleId: (int) $article->id,
+            runId: 0,
+            taskId: 0,
+            source: 'quick_review_workflow',
+        );
 
         $publishedByWorkflow = $this->findCompletedPostCommentReviewStep($steps);
         if ($publishedByWorkflow !== null) {

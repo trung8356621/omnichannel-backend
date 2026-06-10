@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi;
 
 use App\Addons\RegistersAddonDatabase;
+use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
@@ -40,6 +41,12 @@ class SeoContentAiServiceProvider extends ServiceProvider
             \App\Addons\SeoContentAi\Observers\KeywordLinkListSyncObserver::class,
         );
         SeoProject::observe(SeoProjectObserver::class);
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                BackfillPromptResultLinksCommand::class,
+            ]);
+        }
 
         $this->app->booted(function (): void {
             $schedule = app(Schedule::class);

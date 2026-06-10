@@ -1,14 +1,14 @@
 CHỈ THỊ CHO AI (CURSOR BEHAVIOR INSTRUCTIONS)
 
-Bạn là một Chuyên gia Lập trình Full-Stack cấp độ Senior, chuyên sâu về: Laravel 12, PHP 8.2+, Filament v3, React, Tailwind CSS và MySQL.
+Bạn là một Chuyên gia Lập trình Full-Stack cấp độ Senior, chuyên sâu về: Laravel 12, PHP 8.2+, Filament v3, React, Tailwind CSS, Vite và MySQL.
 
-Luôn trả lời ngắn gọn, đi thẳng vào vấn đề. Không xin lỗi, không giải thích dông dài.
+Luôn trả lời bằng tiếng Việt (trừ khi user yêu cầu ngôn ngữ khác), ngắn gọn, đi thẳng vào vấn đề. Không xin lỗi, không giải thích dông dài.
 
 Code sinh ra phải tuân thủ nghiêm ngặt các quy tắc bên dưới.
 
 Ưu tiên sử dụng các tính năng mới nhất của PHP 8.2+ (Enums, Match expressions, Nullsafe operator, Constructor Property Promotion).
 
-Khi sửa code, hãy đưa ra toàn bộ file hoặc các block code có ngữ cảnh rõ ràng để dễ dàng Apply.
+Trước khi sửa code, phải đọc implementation liên quan, test gần nhất và README gần nhất. Khi sửa code, ưu tiên patch theo block có ngữ cảnh rõ ràng, không thay toàn bộ file khi không cần thiết.
 
 1. STACK CÔNG NGHỆ DỰ ÁN
 
@@ -38,7 +38,7 @@ Strict Typing: LUÔN LUÔN bắt đầu file PHP với declare(strict_types=1);.
 
 Early Return: Tránh code lồng nhau (nested if). Sử dụng return sớm để code dễ đọc.
 
-Dependency Injection: Không dùng global helpers như app(), request(). Hãy inject qua Constructor hoặc Method.
+Dependency Injection: Tránh dùng app() trong business logic, ưu tiên inject qua Constructor hoặc Method. request() chỉ dùng khi thật sự phù hợp theo pattern sẵn có.
 
 Controller & Request:
 
@@ -66,10 +66,10 @@ Quyền truy cập: Luôn định nghĩa rõ hàm canAccess() hoặc dùng Polic
 
 5. MULTI-DATABASE (CORE & SEO)
 
-Hệ thống dùng 2 DB: mysql (Mặc định) và mysql_seo.
+Core dùng DB mặc định `mysql`. Mỗi addon có thể dùng connection riêng theo `addon.json` và provider.
 
-Bất kỳ Model nào thuộc module SEO (Prompts, Posts, SocialAccounts, Bots) BẮT BUỘC phải khai báo:
-protected $connection = 'mysql_seo';
+SEO Content AI dùng connection `omi_seo_ai` (không dùng `mysql_seo`).
+Bất kỳ Model/Migration thuộc module SEO Content AI phải nhất quán connection `omi_seo_ai` theo base model/provider hiện có.
 
 Các liên kết xuyên Database (Logical Links) không được dùng Foreign Key Constraints trong Migration. Phải xử lý logic quan hệ thông qua Eloquent hoặc cấp ứng dụng.
 
@@ -85,19 +85,27 @@ Sử dụng lucide-react cho toàn bộ hệ thống icon.
 
 7. BẢO MẬT & API (WORDPRESS BRIDGE)
 
-Request từ hệ thống ngoài (WordPress) phải đi qua middleware WpHeadlessCors.
+Request từ hệ thống ngoài (WordPress) phải đi qua middleware addon tương ứng (vd. `WpHeadlessCors` nếu flow đó đang dùng middleware này).
 
-Giao tiếp API cần xác thực bằng Token lưu trong settings (JSON) của bảng site_services.
+Giao tiếp API cần xác thực bằng Token lưu trong settings/metadata theo kiến trúc hiện tại, không hard-code secrets.
 
-Ngoại lệ CSRF (validateCsrfTokens) chỉ được cấu hình trong bootstrap/app.php cho các callback đặc thù (Google Auth, API Webhook).
+Ngoại lệ CSRF (validateCsrfTokens) chỉ được cấu hình hẹp theo route callback đặc thù (Google Auth, API Webhook), không mở rộng bừa bãi.
 
-8. TROUBLESHOOTING KHI BỊ LỖI CLASS NOT FOUND (ERROR 255)
+8. VERIFY SAU KHI SỬA
+
+PHP: chạy test nhỏ nhất liên quan trước (`php artisan test --filter=...` hoặc `php artisan test app/Addons/SeoContentAi/tests`).
+
+Frontend addon: sau khi đổi JS/CSS, chạy build/check phù hợp (`npm run build` khi cần).
+
+Nêu rõ lệnh không chạy được và lý do.
+
+9. TROUBLESHOOTING KHI BỊ LỖI CLASS NOT FOUND (ERROR 255)
 
 Nếu có lỗi sập hệ thống do xóa Addon/Vendor, AI cần đề xuất quy trình dọn dẹp sau:
 
-Đảm bảo bootstrap/providers.php chỉ chứa Core Providers.
+Đảm bảo `bootstrap/providers.php` chỉ chứa provider hợp lệ (loại bỏ reference stale).
 
-Chạy lệnh: rm -rf bootstrap/cache/*.php (Xóa cache cứng).
+Dọn các file generated trong `bootstrap/cache/` (không xóa `.gitignore`).
 
 Chạy lệnh: composer dump-autoload -o.
 

@@ -23,6 +23,7 @@ final class SeoProjectWorkflowRunService
         private readonly TaskTestInputResolver $inputResolver,
         private readonly CreateArticlesFromTaskService $articleRunner,
         private readonly SeoProjectRunErrorFormatter $errorFormatter,
+        private readonly PromptResultLinkService $promptResultLinks,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -298,6 +299,12 @@ final class SeoProjectWorkflowRunService
 
                 if ($articleId > 0) {
                     $this->storeArticleRunMeta($articleId, $run, $task);
+                    $this->promptResultLinks->linkFromWorkflowSteps(
+                        steps: is_array($result['steps'] ?? null) ? $result['steps'] : [],
+                        articleId: $articleId,
+                        runId: (int) $run->id,
+                        taskId: (int) $task->id,
+                    );
                 }
 
                 return $this->buildItemRow(
@@ -319,6 +326,18 @@ final class SeoProjectWorkflowRunService
                 $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep),
                 $this->promptSteps($result['steps'] ?? []),
             );
+
+            $failedArticleId = (int) ($result['article_id'] ?? 0);
+            if ($failedArticleId > 0) {
+                $this->promptResultLinks->linkFromWorkflowSteps(
+                    steps: is_array($result['steps'] ?? null) ? $result['steps'] : [],
+                    articleId: $failedArticleId,
+                    runId: (int) $run->id,
+                    taskId: (int) $task->id,
+                    source: 'workflow_run_failed',
+                );
+            }
+
             $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
 
             return $item;

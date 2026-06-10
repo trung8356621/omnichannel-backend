@@ -727,6 +727,26 @@ class ArticleResource extends Resource
                         ->success()
                         ->send();
                 }),
+                Tables\Actions\Action::make('view_content_project_runs')
+                    ->icon('heroicon-o-queue-list')
+                    ->iconButton()
+                    ->color('info')
+                    ->tooltip('View content project runs')
+                    ->visible(function (SeoArticle $record): bool {
+                        return static::articleAssignedContentProjectId($record) !== null;
+                    })
+                    ->url(function (SeoArticle $record): ?string {
+                        $projectId = static::articleAssignedContentProjectId($record);
+                        if ($projectId === null) {
+                            return null;
+                        }
+
+                        $project = SeoProject::query()->find($projectId);
+
+                        return $project instanceof SeoProject
+                            ? SeoProjectResource::getRunHistoryUrl($project)
+                            : null;
+                    }),
                 Tables\Actions\Action::make('assign_to_content_project')
                     ->icon('heroicon-o-folder-plus')
                     ->iconButton()
@@ -780,6 +800,14 @@ class ArticleResource extends Resource
         ])->save();
 
         return $deletedCount;
+    }
+
+    public static function markArticleUnreviewed(SeoArticle $article): void
+    {
+        $article->forceFill([
+            'is_reviewed' => false,
+            'reviewed_at' => null,
+        ])->save();
     }
 
     /**
@@ -1115,6 +1143,7 @@ class ArticleResource extends Resource
             'trash' => Pages\ListArticlesTrash::route('/trash'),
             'domain-mismatch' => Pages\ArticleDomainMismatch::route('/{record}/domain-mismatch'),
             'access-denied' => Pages\ArticleAccessDenied::route('/{record}/access-denied'),
+            'prompts' => Pages\ViewArticlePrompts::route('/{record}/prompts'),
             'edit' => Pages\EditArticle::route('/{record}/edit'),
         ];
     }

@@ -326,6 +326,12 @@ class EditArticle extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('view_content_project_runs')
+                ->label('Prompts')
+                ->icon('heroicon-o-queue-list')
+                ->color('info')
+                ->url(fn (): string => ArticleResource::getUrl('prompts', ['record' => $this->record]))
+                ->openUrlInNewTab(),
             Actions\Action::make('assign_to_content_project')
                 ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->icon('heroicon-o-folder-plus')
@@ -1499,6 +1505,19 @@ class EditArticle extends EditRecord
             : __('seo-content-ai::filament.article_list.not_reviewed');
     }
 
+    public function canToggleArticleReview(): bool
+    {
+        if (SeoAccessControl::canAccessManagerFeatures()) {
+            return true;
+        }
+
+        if (SeoAccessControl::isContentManager()) {
+            return ArticleResource::articleIsInContentProject($this->record);
+        }
+
+        return false;
+    }
+
     public function getReviewedAtLabel(): ?string
     {
         $reviewedAt = $this->record->reviewed_at;
@@ -1734,14 +1753,35 @@ class EditArticle extends EditRecord
         $this->record->refresh();
     }
 
-    public function approveArticle(): void
+    public function toggleArticleReview(): void
     {
-        if ((bool) $this->record->is_reviewed && ! SeoAccessControl::isContentManager()) {
+        if (! $this->canToggleArticleReview()) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.already_reviewed'))
-                ->info()
+                ->title(__('seo-content-ai::filament.article_list.review_toggle_denied'))
+                ->warning()
                 ->send();
 
+            return;
+        }
+
+        if ((bool) $this->record->is_reviewed) {
+            ArticleResource::markArticleUnreviewed($this->record);
+            $this->record->refresh();
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.not_reviewed'))
+                ->success()
+                ->send();
+
+            return;
+        }
+
+        $this->approveArticle();
+    }
+
+    public function approveArticle(): void
+    {
+        if ((bool) $this->record->is_reviewed) {
             return;
         }
 
@@ -1752,9 +1792,7 @@ class EditArticle extends EditRecord
             );
         }
 
-        $deletedCount = (bool) $this->record->is_reviewed
-            ? 0
-            : ArticleResource::markArticleReviewed($this->record);
+        $deletedCount = ArticleResource::markArticleReviewed($this->record);
 
         Notification::make()
             ->title(SeoAccessControl::isContentManager()
