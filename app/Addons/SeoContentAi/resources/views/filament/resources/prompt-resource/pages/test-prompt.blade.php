@@ -43,9 +43,9 @@
                         Ghép từ cấu hình prompt hiện tại trên database (sau khi bạn lưu ở trang Sửa). Kết quả AI bên dưới có thể từ lần chạy cũ trong sidebar.
                     </x-slot>
                     @if (filled($compiledPreview))
-                        <div class="seo-prompt-test-pre-wrap">
-                            <pre class="seo-prompt-test-pre">{{ $compiledPreview }}</pre>
-                        </div>
+                        <x-seo-content-ai::ai-result
+                            label="Prompt đã ghép"
+                        >{{ $compiledPreview }}</x-seo-content-ai::ai-result>
                     @else
                         <p class="text-sm text-gray-500 dark:text-gray-400">
                             Chưa có nội dung xem trước. Nhấn «Làm mới xem trước» hoặc «Chạy thử».
@@ -160,9 +160,7 @@
                             </video>
                         </div>
                     @else
-                        <div class="seo-prompt-test-pre-wrap">
-                            <pre class="seo-prompt-test-pre">{{ $outputText }}</pre>
-                        </div>
+                        <x-seo-content-ai::ai-result>{{ $outputText }}</x-seo-content-ai::ai-result>
                     @endif
 
                     @if ($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun())
@@ -715,28 +713,6 @@
             overflow: hidden;
         }
 
-        .seo-prompt-test-pre-wrap {
-            max-height: min(28rem, 55vh);
-            overflow: auto;
-            border-radius: 0.5rem;
-            border: 1px solid #d1d5db;
-        }
-
-        .dark .seo-prompt-test-pre-wrap {
-            border-color: #4b5563;
-        }
-
-        .seo-prompt-test-pre {
-            margin: 0;
-            padding: 1rem;
-            font-size: 0.875rem;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-word;
-            background-color: #f3f4f6;
-            color: #111827;
-        }
-
         .seo-prompt-test-media-wrap {
             border-radius: 0.5rem;
             border: 1px solid #d1d5db;
@@ -864,11 +840,6 @@
         .dark .seo-prompt-test-image,
         .dark .seo-prompt-test-video {
             background: #111827;
-        }
-
-        .dark .seo-prompt-test-pre {
-            background-color: #1f2937;
-            color: #f3f4f6;
         }
 
         .seo-prompt-test-publish {

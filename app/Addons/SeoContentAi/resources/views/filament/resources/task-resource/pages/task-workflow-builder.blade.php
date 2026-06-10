@@ -10,7 +10,7 @@
     <div
         x-data
         x-on:save-task-flow.window="$wire.saveFlow($event.detail)"
-        class="w-full h-[calc(100vh-100px)] -mt-6 -mx-6 rounded-xl overflow-hidden"
+        class="seo-task-builder-page h-full w-full overflow-hidden"
     >
         <script type="application/json" id="seo-task-initial-flow">@json($flow)</script>
 

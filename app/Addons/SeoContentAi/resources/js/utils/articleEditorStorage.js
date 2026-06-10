@@ -1,4 +1,6 @@
 import { cleanBlockHtmlForEditorDisplay, stripEmptyParagraphsFromHtml } from './editorHtmlUtils';
+
+export const ARTICLE_EDITOR_DRAFT_VERSION = 3;
 import { pruneEmptyTextBlocks } from './blockImageUtils';
 
 const draftKey = (articleId) => `seo_article_draft_${articleId}`;
@@ -167,11 +169,13 @@ export function saveDraft(articleId, payload) {
             : existingRevision;
     const fullPayload = {
         ...cleaned,
+        parserVersion: ARTICLE_EDITOR_DRAFT_VERSION,
         contentRevision,
         updatedAt,
     };
     const fallbackPayload = {
         html: typeof cleaned?.html === 'string' ? cleaned.html : '',
+        parserVersion: ARTICLE_EDITOR_DRAFT_VERSION,
         contentRevision,
         updatedAt,
     };

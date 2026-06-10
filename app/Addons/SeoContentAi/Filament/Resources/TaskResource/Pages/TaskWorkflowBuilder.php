@@ -43,7 +43,7 @@ class TaskWorkflowBuilder extends Page
         return null;
     }
 
-    protected function persistTaskFlow(string $taskName, array $flowData): void
+    protected function persistTaskFlow(string $taskName, array $flowData): bool
     {
         if ($taskName === '') {
             Notification::make()
@@ -51,7 +51,7 @@ class TaskWorkflowBuilder extends Page
                 ->danger()
                 ->send();
 
-            return;
+            return false;
         }
 
         $task = SeoTask::query()->create([
@@ -70,6 +70,8 @@ class TaskWorkflowBuilder extends Page
             ->send();
 
         $this->redirect(TaskResource::getUrl('builder', ['record' => $task]));
+
+        return true;
     }
 
     /**

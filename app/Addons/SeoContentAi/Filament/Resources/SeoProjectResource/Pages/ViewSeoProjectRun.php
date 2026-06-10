@@ -131,6 +131,22 @@ class ViewSeoProjectRun extends Page
 
     /**
      * @param  array<string, mixed>  $item
+     */
+    public function itemStepsUrl(array $item): ?string
+    {
+        $articleId = (int) ($item['article_id'] ?? 0);
+        if ($articleId <= 0 || $this->projectRun === null) {
+            return null;
+        }
+
+        return SeoProjectResource::getUrl('view-run-step', [
+            'run' => $this->projectRun,
+            'article' => $articleId,
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
      * @return array<string, mixed>
      */
     private function enrichItemArticleLink(array $item): array
@@ -195,7 +211,7 @@ class ViewSeoProjectRun extends Page
         }
 
         $byTitleLike = $baseQuery()
-            ->where('title', 'like', '%' . $like . '%')
+            ->where('title', 'like', '%'.$like.'%')
             ->orderByDesc('id')
             ->value('id');
 
@@ -206,7 +222,7 @@ class ViewSeoProjectRun extends Page
         $byKeyword = $baseQuery()
             ->whereHas('keywords', function (Builder $query) use ($normalized, $like): void {
                 $query->whereRaw('LOWER(phrase) = ?', [$normalized])
-                    ->orWhere('phrase', 'like', '%' . $like . '%');
+                    ->orWhere('phrase', 'like', '%'.$like.'%');
             })
             ->orderByDesc('id')
             ->value('id');
@@ -220,7 +236,7 @@ class ViewSeoProjectRun extends Page
                 $query->where('meta_key', 'seo_focus_keyword')
                     ->where(function (Builder $inner) use ($normalized, $like): void {
                         $inner->whereRaw('LOWER(meta_value) = ?', [$normalized])
-                            ->orWhere('meta_value', 'like', '%' . $like . '%');
+                            ->orWhere('meta_value', 'like', '%'.$like.'%');
                     });
             })
             ->orderByDesc('id')
@@ -332,11 +348,11 @@ class ViewSeoProjectRun extends Page
 
         return [
             Actions\Action::make('back_to_project')
-                ->label(__('seo-content-ai::filament.projects.back_to_project'))
+                ->label(__('seo-content-ai::filament.projects.view_runs'))
                 ->icon('heroicon-o-arrow-left')
                 ->url(
                     $project !== null
-                        ? SeoProjectResource::getUrl('edit', ['record' => $project])
+                        ? SeoProjectResource::getRunHistoryUrl($project)
                         : SeoProjectResource::getUrl('index'),
                 ),
             Actions\Action::make('back_to_list')

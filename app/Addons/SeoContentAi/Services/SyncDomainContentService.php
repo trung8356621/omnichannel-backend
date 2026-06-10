@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
-use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -15,6 +15,10 @@ use Throwable;
 
 class SyncDomainContentService
 {
+    public function __construct(
+        private readonly WordPressArticleTimestampService $timestampService,
+    ) {}
+
     /**
      * @param  array{is_test?:bool,limit_per_type?:int}  $options
      * @return array{success:bool,message:string,synced?:array<string,int>,counts?:array<string,int>}
@@ -53,7 +57,7 @@ class SyncDomainContentService
                 return [
                     'success' => false,
                     'message' => 'Không lấy được thông tin plugin SEO từ WordPress: '
-                        . (string) ($siteInfoResult['message'] ?? 'Lỗi không xác định.'),
+                        .(string) ($siteInfoResult['message'] ?? 'Lỗi không xác định.'),
                 ];
             }
 
@@ -70,7 +74,7 @@ class SyncDomainContentService
 
                 return [
                     'success' => false,
-                    'message' => 'WordPress trả lỗi HTTP ' . $response->status() . ': ' . mb_substr($message, 0, 300),
+                    'message' => 'WordPress trả lỗi HTTP '.$response->status().': '.mb_substr($message, 0, 300),
                 ];
             }
 
@@ -115,7 +119,7 @@ class SyncDomainContentService
 
             return [
                 'success' => false,
-                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
     }
@@ -293,6 +297,8 @@ class SyncDomainContentService
                     'error' => $e->getMessage(),
                 ]);
             }
+
+            $this->timestampService->sync($article, $item);
         }
 
         return $synced;
@@ -419,13 +425,13 @@ class SyncDomainContentService
         $currency = strtoupper(trim((string) ($woocommerce['currency'] ?? 'VND')));
 
         $map = [
-            '_price'         => (string) ($woocommerce['price'] ?? ''),
-            'regular_price'  => (string) ($woocommerce['regular_price'] ?? ''),
+            '_price' => (string) ($woocommerce['price'] ?? ''),
+            'regular_price' => (string) ($woocommerce['regular_price'] ?? ''),
             '_regular_price' => (string) ($woocommerce['regular_price'] ?? ''),
-            'sale_price'     => (string) ($woocommerce['sale_price'] ?? ''),
-            '_sale_price'    => (string) ($woocommerce['sale_price'] ?? ''),
-            'min_price'      => (string) ($woocommerce['min_price'] ?? ''),
-            'max_price'      => (string) ($woocommerce['max_price'] ?? ''),
+            'sale_price' => (string) ($woocommerce['sale_price'] ?? ''),
+            '_sale_price' => (string) ($woocommerce['sale_price'] ?? ''),
+            'min_price' => (string) ($woocommerce['min_price'] ?? ''),
+            'max_price' => (string) ($woocommerce['max_price'] ?? ''),
             'price_currency' => $currency !== '' ? $currency : 'VND',
         ];
 
@@ -485,7 +491,7 @@ class SyncDomainContentService
 
     private function buildSyncUrl(Site $site): string
     {
-        return $this->buildSiteBaseUrl($site) . '/wp-json/omi-seo-ai/v1/sync';
+        return $this->buildSiteBaseUrl($site).'/wp-json/omi-seo-ai/v1/sync';
     }
 
     private function buildSiteBaseUrl(Site $site): string
@@ -501,7 +507,7 @@ class SyncDomainContentService
 
         $scheme = ! empty($site->ssl) ? 'https' : 'http';
 
-        return $scheme . '://' . rtrim($domain, '/');
+        return $scheme.'://'.rtrim($domain, '/');
     }
 
     private function normalizeType(string $type): string

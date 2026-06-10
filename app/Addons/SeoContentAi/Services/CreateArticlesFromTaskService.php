@@ -126,7 +126,7 @@ final class CreateArticlesFromTaskService
     }
 
     /**
-     * @return array{success: bool, article_id: ?int, message: string}
+     * @return array{success: bool, article_id: ?int, message: string, steps: list<array<string, mixed>>}
      */
     public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
     {
@@ -159,9 +159,12 @@ final class CreateArticlesFromTaskService
             return [
                 'success' => false,
                 'article_id' => null,
+                'steps' => [],
                 'message' => 'Thiếu từ khóa / tiêu đề.',
             ];
         }
+
+        $steps = [];
 
         try {
             $steps = $this->workflowRunner->run($task, $context);
@@ -175,6 +178,7 @@ final class CreateArticlesFromTaskService
                     'article_id' => $articleId,
                     'message' => $failure['message'],
                     'failed_step' => $failure['failed_step'],
+                    'steps' => $steps,
                 ];
             }
 
@@ -184,12 +188,14 @@ final class CreateArticlesFromTaskService
             return [
                 'success' => true,
                 'article_id' => (int) $article->id,
+                'steps' => $steps,
                 'message' => 'Đã chạy quy trình và tạo/cập nhật bài.',
             ];
         } catch (\Throwable $exception) {
             return [
                 'success' => false,
                 'article_id' => $context->article?->id,
+                'steps' => $steps,
                 'message' => $exception->getMessage(),
             ];
         }

@@ -14,31 +14,42 @@ final class KeywordFocusAttach
         $phrase = trim($phrase);
         $article->loadMissing('keywords');
 
-        foreach ($article->keywords as $keyword) {
-            if ((int) ($keyword->pivot->is_main ?? 0) === 1) {
-                $article->keywords()->updateExistingPivot($keyword->id, ['is_main' => false]);
-            }
-        }
+        $previousMainKeywordIds = $article->keywords
+            ->filter(fn (Keyword $keyword): bool => (int) ($keyword->pivot->is_main ?? 0) === 1)
+            ->pluck('id')
+            ->map(fn (mixed $id): int => (int) $id)
+            ->all();
 
         if ($phrase === '') {
             $article->articleMetas()->where('meta_key', 'seo_focus_keyword')->delete();
+            $newMainKeywordId = null;
+        } else {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'seo_focus_keyword'],
+                ['meta_value' => $phrase],
+            );
 
-            return;
+            $newMainKeywordId = self::attachMainKeyword($article, $siteId, $userId, $phrase);
         }
 
-        $article->articleMetas()->updateOrCreate(
-            ['meta_key' => 'seo_focus_keyword'],
-            ['meta_value' => $phrase],
-        );
+        $detachedKeywordIds = array_values(array_filter(
+            $previousMainKeywordIds,
+            fn (int $keywordId): bool => $keywordId !== $newMainKeywordId,
+        ));
 
-        self::attachMainKeyword($article, $siteId, $userId, $phrase);
+        if ($detachedKeywordIds !== []) {
+            $article->keywords()->detach($detachedKeywordIds);
+            KeywordOrphanCleanup::deleteUnusedByIds($detachedKeywordIds);
+        }
+
+        $article->unsetRelation('keywords');
     }
 
-    public static function attachMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): void
+    public static function attachMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): ?int
     {
         $phrase = trim($phrase);
         if ($phrase === '') {
-            return;
+            return null;
         }
 
         $keyword = Keyword::query()->firstOrCreate(
@@ -58,5 +69,7 @@ final class KeywordFocusAttach
                 'is_main' => true,
             ],
         ]);
+
+        return (int) $keyword->id;
     }
 }

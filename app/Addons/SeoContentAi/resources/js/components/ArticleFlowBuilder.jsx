@@ -19,7 +19,13 @@ const Icons = {
   Play: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
   Lightning: () => <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.381z" clipRule="evenodd" /></svg>,
   Trash: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
+  ZoomIn: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0ZM11 8v6m-3-3h6" /></svg>,
+  ZoomOut: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-13 0h6" /></svg>,
 };
+
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 1.5;
+const ZOOM_STEP = 0.1;
 
 const defaultMockPrompts = [
   { id: 'p1', name: 'Outline & Entity JSON', tasks: [{id: 'task_1', name: 'Outline H1,H2'}, {id: 'task_2', name: 'JSON data'}] },
@@ -37,15 +43,7 @@ const mockTaxonomies = ['category', 'post_tag', 'product_cat', 'brand'];
 const mockActions = [
   { id: 'create', label: 'Create' },
   { id: 'update', label: 'Update' },
-  { id: 'add_comment_review', label: 'Add comment/review' },
 ];
-
-const commentReviewFilters = [
-  { id: 'with', label: 'Has comment/review' },
-  { id: 'without', label: 'No comment/review yet' },
-];
-
-const commentReviewLabels = Object.fromEntries(commentReviewFilters.map((o) => [o.id, o.label]));
 
 const actionLabels = Object.fromEntries(mockActions.map((a) => [a.id, a.label]));
 
@@ -87,15 +85,18 @@ function defaultPromptNodeData(promptId) {
 }
 
 function normalizeArticleNodeData(data = {}) {
-  const next = { ...data };
-  if (!Array.isArray(next.actions)) {
-    next.actions = next.action ? [next.action] : [];
-  }
-  delete next.action;
-  if (!Array.isArray(next.postTypes)) next.postTypes = [];
-  if (!Array.isArray(next.taxonomies)) next.taxonomies = [];
-  if (!Array.isArray(next.commentReview)) next.commentReview = [];
-  return next;
+  const actions = Array.isArray(data.actions) ? data.actions : (data.action ? [data.action] : []);
+
+  return {
+    actions: actions.filter((action) => action !== 'add_comment_review'),
+  };
+}
+
+function normalizeArticleFilterNodeData(data = {}) {
+  return {
+    postTypes: Array.isArray(data.postTypes) ? data.postTypes : [],
+    taxonomies: Array.isArray(data.taxonomies) ? data.taxonomies : [],
+  };
 }
 
 const ARTICLE_SAVE_ACTION = 'save_article';
@@ -154,6 +155,10 @@ function normalizeNodes(nodes) {
       ? { ...migrated, data: normalizeArticleNodeData(migrated.data) }
       : migrated;
 
+    if (next.type === 'article_filter') {
+      next = { ...next, data: normalizeArticleFilterNodeData(next.data) };
+    }
+
     if (next.type === 'prompt') {
       const config = getPromptConfig(next.data?.promptId);
       const promptData = {
@@ -186,6 +191,76 @@ function normalizeNodes(nodes) {
   });
 }
 
+function normalizeFlowData(initialData = {}) {
+  const providedNodes = Array.isArray(initialData.nodes) ? initialData.nodes : [];
+  const sourceNodes = providedNodes.length > 0
+    ? providedNodes
+    : [{
+      id: 'n1',
+      type: 'article',
+      title: 'Article (Input)',
+      x: 50,
+      y: 150,
+      data: { actions: [] },
+    }];
+  let edges = Array.isArray(initialData.edges) ? [...initialData.edges] : [];
+  const nodes = [];
+
+  sourceNodes.forEach((node) => {
+    const legacyPostTypes = Array.isArray(node.data?.postTypes) ? node.data.postTypes : [];
+    const legacyTaxonomies = Array.isArray(node.data?.taxonomies) ? node.data.taxonomies : [];
+
+    nodes.push(node);
+
+    if (node.type !== 'article') {
+      return;
+    }
+
+    const filterId = `${node.id}_article_filter`;
+    const hasConnectedFilter = edges.some((edge) => {
+      if (edge.sourceNode !== node.id) {
+        return false;
+      }
+
+      return sourceNodes.some(
+        (candidate) => candidate.id === edge.targetNode && candidate.type === 'article_filter',
+      );
+    });
+    if (hasConnectedFilter || sourceNodes.some((candidate) => candidate.id === filterId)) {
+      return;
+    }
+
+    const outgoing = edges.filter((edge) => edge.sourceNode === node.id);
+    edges = edges
+      .filter((edge) => edge.sourceNode !== node.id)
+      .concat(outgoing.map((edge) => ({ ...edge, sourceNode: filterId })))
+      .concat([{
+        id: `edge_${node.id}_article_filter`,
+        sourceNode: node.id,
+        sourcePort: 'out_main',
+        targetNode: filterId,
+        targetPort: 'in_main',
+      }]);
+
+    nodes.push({
+      id: filterId,
+      type: 'article_filter',
+      title: 'Lọc bài viết',
+      x: Number(node.x ?? 50) + 260,
+      y: Number(node.y ?? 150),
+      data: {
+        postTypes: legacyPostTypes,
+        taxonomies: legacyTaxonomies,
+      },
+    });
+  });
+
+  return {
+    nodes: normalizeNodes(nodes),
+    edges,
+  };
+}
+
 function formatSelection(values, labels = {}) {
   if (!values?.length) return 'All';
   return values.map((v) => labels[v] ?? v).join(', ');
@@ -207,31 +282,26 @@ function useDarkMode() {
   return isDark;
 }
 
-export default function ArticleFlowBuilder({ initialData, onSave, taskName, setTaskName }) {
+export default function ArticleFlowBuilder({ initialData, onSave, saving = false, taskName, setTaskName }) {
   const isDark = useDarkMode();
   const t = buildFlowTheme(isDark);
+  const initialFlowRef = useRef(null);
+
+  if (initialFlowRef.current === null) {
+    initialFlowRef.current = normalizeFlowData(initialData);
+  }
 
   const [nodes, setNodes] = useState(() =>
-    normalizeNodes(
-      initialData?.nodes ?? [
-        {
-          id: 'n1',
-          type: 'article',
-          title: 'Article (Input)',
-          x: 50,
-          y: 150,
-          data: { postTypes: [], taxonomies: [], actions: [], commentReview: [] },
-        },
-      ],
-    ),
+    initialFlowRef.current.nodes,
   );
-  const [edges, setEdges] = useState(initialData?.edges || []);
+  const [edges, setEdges] = useState(initialFlowRef.current.edges);
   const [selectedNodeId, setSelectedNodeId] = useState('n1');
   
   const [isDragging, setIsDragging] = useState(false);
   const [draggedNodeId, setDraggedNodeId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [connecting, setConnecting] = useState(null);
+  const [zoom, setZoom] = useState(1);
 
   const canvasRef = useRef(null);
 
@@ -240,7 +310,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
     let title = '', data = {};
     if (type === 'article') {
       title = 'Article';
-      data = { postTypes: [], taxonomies: [], actions: [], commentReview: [] };
+      data = { actions: [] };
+    }
+    else if (type === 'article_filter') {
+      title = 'Lọc bài viết';
+      data = { postTypes: [], taxonomies: [] };
     }
     else if (type === 'prompt') {
       title = 'Prompt block';
@@ -280,21 +354,31 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
 
   const handleMouseDown = (nodeId, e) => {
     e.stopPropagation(); setDraggedNodeId(nodeId); setIsDragging(true); setSelectedNodeId(nodeId);
-    const rect = e.currentTarget.getBoundingClientRect();
-    setDragOffset({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const canvasRect = canvasRef.current?.getBoundingClientRect();
+    const node = nodes.find((candidate) => candidate.id === nodeId);
+    if (!canvasRect || !node) return;
+
+    setDragOffset({
+      x: (e.clientX - canvasRect.left) / zoom - node.x,
+      y: (e.clientY - canvasRect.top) / zoom - node.y,
+    });
   };
 
   const handleMouseMove = (e) => {
     if (!isDragging || !draggedNodeId || !canvasRef.current) return;
     const canvasRect = canvasRef.current.getBoundingClientRect();
-    const nx = Math.max(10, e.clientX - canvasRect.left - dragOffset.x);
-    const ny = Math.max(10, e.clientY - canvasRect.top - dragOffset.y);
+    const nx = Math.max(10, (e.clientX - canvasRect.left) / zoom - dragOffset.x);
+    const ny = Math.max(10, (e.clientY - canvasRect.top) / zoom - dragOffset.y);
     setNodes((prev) =>
       prev.map((n) => (n.id === draggedNodeId ? { ...n, x: nx, y: ny } : n)),
     );
   };
 
   const handleMouseUp = () => { setIsDragging(false); setDraggedNodeId(null); };
+
+  const changeZoom = (amount) => {
+    setZoom((current) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Number((current + amount).toFixed(2)))));
+  };
 
   const handlePortClick = (nodeId, portId, type, e) => {
     e.stopPropagation();
@@ -327,7 +411,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
 
   return (
     <div
-      className={`seo-flow-builder flex flex-col h-full w-full font-sans rounded-xl overflow-hidden shadow-md border transition-colors duration-200 ${t.root}`}
+      className={`seo-flow-builder flex h-full w-full flex-col overflow-hidden font-sans transition-colors duration-200 ${t.root}`}
       data-theme={isDark ? 'dark' : 'light'}
       style={{ colorScheme: isDark ? 'dark' : 'light' }}
     >
@@ -345,10 +429,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
         </div>
         <button
           type="button"
+          disabled={saving}
           onClick={() => onSave(taskName, JSON.stringify({ nodes, edges }))}
-          className={`${t.btnPrimary} px-4 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm`}
+          className={`${t.btnPrimary} px-4 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm disabled:cursor-wait disabled:opacity-70`}
         >
-          Lưu Sơ Đồ Quy Trình
+          {saving ? 'Đang lưu...' : 'Lưu Sơ Đồ Quy Trình'}
         </button>
       </div>
 
@@ -359,6 +444,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
           <h3 className={`text-xs font-bold uppercase tracking-wider mb-2 ${t.sidebarTitle}`}>Thêm Widget</h3>
           {[
             { type: 'article', label: 'Article (Input)', icon: <Icons.Article /> },
+            { type: 'article_filter', label: 'Lọc bài viết', icon: <Icons.Filter /> },
             { type: 'prompt', label: 'AI Prompt block', icon: <Icons.Prompt /> },
             { type: 'filter', label: 'Filter block', icon: <Icons.Filter /> },
             {
@@ -381,14 +467,27 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
           onMouseMove={handleMouseMove} 
           onMouseUp={handleMouseUp} 
           onClick={() => setConnecting(null)} 
+          onWheel={(e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            e.preventDefault();
+            changeZoom(e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
+          }}
           className={`flex-1 relative overflow-hidden select-none transition-colors duration-200 ${t.canvas}`}
           style={{
             backgroundImage: t.gridImage,
-            backgroundSize: '24px 24px',
+            backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
           }}
         >
-          {/* Edges */}
-          <svg className="absolute inset-0 pointer-events-none w-full h-full z-0">
+          <div
+            className="absolute left-0 top-0 origin-top-left"
+            style={{
+              width: `${100 / zoom}%`,
+              height: `${100 / zoom}%`,
+              transform: `scale(${zoom})`,
+            }}
+          >
+            {/* Edges */}
+            <svg className="absolute inset-0 pointer-events-none w-full h-full z-0">
             {edges.map(edge => {
               const srcNode = nodes.find(n => n.id === edge.sourceNode);
               const tgtNode = nodes.find(n => n.id === edge.targetNode);
@@ -426,10 +525,10 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
               const startX = getOutputPortCenterX(srcNode.x);
               return <line x1={startX} y1={startY} x2={startX + 48} y2={startY} stroke="#f59e0b" strokeWidth="2" strokeDasharray="4" />;
             })()}
-          </svg>
+            </svg>
 
-          {/* Nodes */}
-          {nodes.map(node => {
+            {/* Nodes */}
+            {nodes.map(node => {
             const isSelected = node.id === selectedNodeId;
             const nodeClass = `absolute w-[220px] rounded-xl border shadow-lg cursor-grab z-10 flex flex-col transition-colors duration-200 ${t.nodeBg} ${nodeBorderClass(node.type, isSelected, isDark)}`;
             const outputPorts = node.type === 'prompt'
@@ -446,7 +545,7 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                 
                 <div className={`p-3 flex items-center justify-between border-b ${t.nodeHeaderBorder}`}>
                   <div className={`flex items-center gap-2 font-bold text-sm ${t.nodeTitle}`}>
-                    {node.type === 'article' && <Icons.Article />} {node.type === 'prompt' && <Icons.Prompt />}
+                    {node.type === 'article' && <Icons.Article />} {node.type === 'article_filter' && <Icons.Filter />} {node.type === 'prompt' && <Icons.Prompt />}
                     {node.type === 'filter' && <Icons.Filter />} {node.type === 'action' && <Icons.Play />}
                     {node.title}
                   </div>
@@ -457,17 +556,10 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                   {node.type === 'article' && (
                     <div className="space-y-1">
                       <span>Hành động: <span className={`font-semibold ${t.accentEmerald}`}>{formatSelection(node.data.actions, actionLabels)}</span></span><br/>
-                      {node.data.actions?.includes('add_comment_review') ? (
-                        <>
-                          <span>
-                            Bình luận/review:{' '}
-                            <span className={`font-semibold ${t.accentEmerald}`}>
-                              {formatSelection(node.data.commentReview, commentReviewLabels)}
-                            </span>
-                          </span>
-                          <br />
-                        </>
-                      ) : null}
+                    </div>
+                  )}
+                  {node.type === 'article_filter' && (
+                    <div className="space-y-1">
                       <span>Loại: {formatSelection(node.data.postTypes)}</span><br/>
                       <span>Tax: {formatSelection(node.data.taxonomies)}</span>
                     </div>
@@ -543,7 +635,42 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                 ))}
               </div>
             );
-          })}
+            })}
+          </div>
+
+          <div
+            className={`absolute bottom-4 left-4 z-30 flex items-center overflow-hidden rounded-lg border shadow-lg ${isDark ? 'border-slate-600 bg-slate-800 text-slate-100' : 'border-gray-200 bg-white text-gray-700'}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              title="Thu nhỏ"
+              aria-label="Thu nhỏ sơ đồ"
+              disabled={zoom <= MIN_ZOOM}
+              onClick={() => changeZoom(-ZOOM_STEP)}
+              className="flex h-9 w-9 items-center justify-center border-r border-inherit transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-slate-700"
+            >
+              <Icons.ZoomOut />
+            </button>
+            <button
+              type="button"
+              title="Đặt lại 100%"
+              onClick={() => setZoom(1)}
+              className="h-9 min-w-14 px-2 text-xs font-semibold transition-colors hover:bg-gray-100 dark:hover:bg-slate-700"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              title="Phóng to"
+              aria-label="Phóng to sơ đồ"
+              disabled={zoom >= MAX_ZOOM}
+              onClick={() => changeZoom(ZOOM_STEP)}
+              className="flex h-9 w-9 items-center justify-center border-l border-inherit transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-slate-700"
+            >
+              <Icons.ZoomIn />
+            </button>
+          </div>
         </div>
 
         {/* RIGHT SETTINGS */}
@@ -576,32 +703,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, taskName, setT
                       ))}
                     </div>
                   </div>
-                  {selectedNode.data.actions?.includes('add_comment_review') ? (
-                    <div>
-                      <label className={`text-xs block mb-1 ${t.label}`}>
-                        Bình luận/review (Để trống = Tất cả)
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        {commentReviewFilters.map((opt) => (
-                          <button
-                            type="button"
-                            key={opt.id}
-                            onClick={() => {
-                              const cur = selectedNode.data.commentReview || [];
-                              updateNodeData(
-                                selectedNode.id,
-                                'commentReview',
-                                cur.includes(opt.id) ? cur.filter((x) => x !== opt.id) : [...cur, opt.id],
-                              );
-                            }}
-                            className={`text-xs px-3 py-1.5 rounded-md border transition-colors shadow-sm ${actionChipClass(selectedNode.data.commentReview?.includes(opt.id))}`}
-                          >
-                            {opt.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
+                </div>
+              )}
+
+              {selectedNode.type === 'article_filter' && (
+                <div className="space-y-4">
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Post Type (Để trống = Lấy tất cả)</label>
                     <div className="flex flex-wrap gap-2">

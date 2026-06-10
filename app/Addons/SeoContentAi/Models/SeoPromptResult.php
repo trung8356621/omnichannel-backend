@@ -11,6 +11,8 @@ use Illuminate\Database\Eloquent\Relations\MorphToMany;
  */
 class SeoPromptResult extends PromptResult
 {
+    protected $table = 'prompt_results';
+
     /**
      * Các bài viết (và ngữ cảnh pivot `type`) gắn với kết quả prompt này.
      */
@@ -20,6 +22,8 @@ class SeoPromptResult extends PromptResult
             SeoArticle::class,
             'prompt_resultable',
             'seo_prompt_resultables',
+            'prompt_result_id',
+            'prompt_resultable_id',
         )
             ->withPivot('type')
             ->withTimestamps();

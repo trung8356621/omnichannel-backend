@@ -12,8 +12,6 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_PUBLISH_ARTICLE = 'publish_article_task_id';
 
-    public const KEY_EDIT_ARTICLE = 'edit_article_task_id';
-
     public const KEY_POST_REVIEW = 'post_review_task_id';
 
     public const KEY_CREATE_IMAGE = 'create_image_prompt_id';
@@ -32,7 +30,6 @@ final class SeoCreateArticleSettingsService
     /**
      * @return array{
      *     publish_article_task_id: ?int,
-     *     edit_article_task_id: ?int,
      *     post_review_task_id: ?int,
      *     create_image_task_id: ?int,
      *     create_video_task_id: ?int,
@@ -53,7 +50,6 @@ final class SeoCreateArticleSettingsService
 
         return [
             self::KEY_PUBLISH_ARTICLE => $publish,
-            self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($data[self::KEY_EDIT_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($data[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
@@ -79,16 +75,6 @@ final class SeoCreateArticleSettingsService
     public function getPublishArticleTaskId(): ?int
     {
         return $this->getSettings()[self::KEY_PUBLISH_ARTICLE];
-    }
-
-    /**
-     * Quy trình «Sửa bài viết» — fallback sang Đăng bài viết nếu chưa cấu hình.
-     */
-    public function getEditArticleTaskId(): ?int
-    {
-        $settings = $this->getSettings();
-
-        return $settings[self::KEY_EDIT_ARTICLE] ?? $settings[self::KEY_PUBLISH_ARTICLE];
     }
 
     public function getPostReviewTaskId(): ?int
@@ -147,7 +133,6 @@ final class SeoCreateArticleSettingsService
 
         WpOption::set(self::OPTION_KEY, [
             self::KEY_PUBLISH_ARTICLE => $publish,
-            self::KEY_EDIT_ARTICLE => $this->positiveIntOrNull($settings[self::KEY_EDIT_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($settings[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
@@ -161,7 +146,6 @@ final class SeoCreateArticleSettingsService
     /**
      * @return array{
      *     publish_article_task_id: ?int,
-     *     edit_article_task_id: ?int,
      *     post_review_task_id: ?int,
      *     create_image_task_id: ?int,
      *     create_video_task_id: ?int,
@@ -171,7 +155,6 @@ final class SeoCreateArticleSettingsService
     {
         return [
             self::KEY_PUBLISH_ARTICLE => null,
-            self::KEY_EDIT_ARTICLE => null,
             self::KEY_POST_REVIEW => null,
             self::KEY_CREATE_IMAGE => null,
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => null,

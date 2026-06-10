@@ -1383,6 +1383,45 @@ class EditArticle extends EditRecord
         return $this->productGallery;
     }
 
+    /**
+     * @param  array{url?: string, wp_attachment_id?: int, wpAttachmentId?: int, seo_media_id?: int, seoMediaId?: int}  $item
+     */
+    public function persistFeaturedImageFromClient(array $item): void
+    {
+        if ($this->supportsProductGallery()) {
+            $this->skipRender();
+
+            return;
+        }
+
+        $url = trim((string) ($item['url'] ?? ''));
+        if ($url === '') {
+            $this->skipRender();
+
+            return;
+        }
+
+        $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
+        $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? 0));
+        $localRefId = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+        $localMedia = app(ArticleMediaLocalService::class);
+
+        if ($localRefId <= 0) {
+            $localRefId = $localMedia->resolveLocalRefIdFromImageUrl(
+                (int) ($this->record->site_id ?? 0),
+                $url,
+            );
+        }
+
+        if ($localRefId > 0) {
+            $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
+            $this->featuredImageUrl = $url;
+            $this->record->refresh();
+        }
+
+        $this->skipRender();
+    }
+
     public function requestSaveArticle(): void
     {
         if ($this->articleHeavyActionBusy) {
@@ -1855,9 +1894,7 @@ class EditArticle extends EditRecord
             $this->record->refresh();
             app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
 
-            app(SeoAnalyzerService::class)->analyze($this->record->fresh());
-
-            $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
+            $seoResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
                 $this->record->fresh(),
                 $html,
                 $seoTitle,
@@ -1895,7 +1932,16 @@ class EditArticle extends EditRecord
     public function syncArticleToWordPress(string $html): void
     {
         try {
-            $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
+            $html = $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
+
+            $slug = Str::slug($this->articleSlug);
+            app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                $this->record->fresh(),
+                $html,
+                trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+            );
 
             $syncService = app(WordPressArticleSyncService::class);
             $article = $this->record->fresh();
@@ -1965,7 +2011,7 @@ class EditArticle extends EditRecord
         }
     }
 
-    private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): void
+    private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): string
     {
         $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
 
@@ -2005,6 +2051,8 @@ class EditArticle extends EditRecord
         if ($syncVirtualCommentsToWordPress) {
             $this->syncVirtualCommentsToWordPressIfLinked();
         }
+
+        return $html;
     }
 
     private function syncVirtualCommentsToWordPressIfLinked(): void
@@ -2532,8 +2580,6 @@ class EditArticle extends EditRecord
                 ->warning()
                 ->send();
 
-            $this->releaseHeavyArticleActionIfAborted();
-
             return;
         }
 
@@ -2564,8 +2610,6 @@ class EditArticle extends EditRecord
                     ->success()
                     ->send();
 
-                $this->releaseHeavyArticleActionIfAborted();
-
                 return;
             }
 
@@ -2582,8 +2626,6 @@ class EditArticle extends EditRecord
                 ->body((string) ($restore['message'] ?? 'FAQ has been removed from SEO system.'))
                 ->warning()
                 ->send();
-
-            $this->releaseHeavyArticleActionIfAborted();
 
             return;
         }
@@ -2615,8 +2657,6 @@ class EditArticle extends EditRecord
                     ->success()
                     ->send();
 
-                $this->releaseHeavyArticleActionIfAborted();
-
                 return;
             }
         }
@@ -2635,14 +2675,6 @@ class EditArticle extends EditRecord
             ->success()
             ->send();
 
-        $this->releaseHeavyArticleActionIfAborted();
-    }
-
-    private function releaseHeavyArticleActionIfAborted(): void
-    {
-        if ($this->articleHeavyActionBusy && $this->pendingEditorCollectTarget === null) {
-            $this->cancelHeavyArticleAction();
-        }
     }
 
     /**
@@ -2922,7 +2954,7 @@ class EditArticle extends EditRecord
     {
         $mode = $mode === 'content' ? 'content' : 'title';
 
-        $taskId = app(SeoCreateArticleSettingsService::class)->getEditArticleTaskId();
+        $taskId = app(SeoCreateArticleSettingsService::class)->getPublishArticleTaskId();
         if ($taskId === null) {
             return [
                 'success' => false,

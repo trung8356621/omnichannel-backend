@@ -24,7 +24,7 @@ trait InteractsWithTaskWorkflow
                 $tasks = $prompt->resolvedParts()
                     ->where('role', 'task')
                     ->map(static fn ($part, int $index): array => [
-                        'id' => 'part_' . $prompt->id . '_' . (int) ($part->position ?? $index),
+                        'id' => 'part_'.$prompt->id.'_'.(int) ($part->position ?? $index),
                         'name' => (string) ($part->name ?: 'Task'),
                     ])
                     ->values()
@@ -94,13 +94,18 @@ trait InteractsWithTaskWorkflow
      */
     public function saveFlow(array $data): void
     {
-        $this->persistTaskFlow(
+        $saved = $this->persistTaskFlow(
             trim((string) ($data['name'] ?? '')),
             $this->normalizeFlowPayload($data['flow_data'] ?? null),
         );
+
+        $this->dispatch(
+            $saved ? 'task-flow-saved' : 'task-flow-save-failed',
+            message: $saved ? 'Đã lưu quy trình thành công.' : 'Không thể lưu quy trình.',
+        );
     }
 
-    abstract protected function persistTaskFlow(string $taskName, array $flowData): void;
+    abstract protected function persistTaskFlow(string $taskName, array $flowData): bool;
 
     private function promptSupportsMergeOutlineSave(SeoPrompt $prompt): bool
     {

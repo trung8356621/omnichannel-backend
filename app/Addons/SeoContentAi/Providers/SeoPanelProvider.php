@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
+use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
@@ -25,14 +26,14 @@ use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
-use Illuminate\Support\Facades\Route;
-use Illuminate\Support\Facades\Blade;
-use Illuminate\Support\HtmlString;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Route;
+use Illuminate\Support\HtmlString;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Livewire\Livewire;
 
@@ -54,9 +55,9 @@ class SeoPanelProvider extends PanelProvider
 
         Livewire::component('global-seo-bar', \App\Addons\SeoContentAi\Livewire\GlobalSeoBar::class);
 
-        $this->loadViewsFrom($addonRoot . '/resources/views', 'seo-content-ai');
-        $this->loadTranslationsFrom($addonRoot . '/lang', 'seo-content-ai');
-        $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot . '/database/migrations');
+        $this->loadViewsFrom($addonRoot.'/resources/views', 'seo-content-ai');
+        $this->loadTranslationsFrom($addonRoot.'/lang', 'seo-content-ai');
+        $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot.'/database/migrations');
 
         FilamentView::registerRenderHook(
             'panels::global-search.after',
@@ -71,18 +72,38 @@ class SeoPanelProvider extends PanelProvider
         );
 
         FilamentView::registerRenderHook(
+            PanelsRenderHook::BODY_END,
+            function (): HtmlString {
+                if (! auth()->check() || ! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                if (
+                    request()->routeIs('filament.seo.resources.articles.edit')
+                    || preg_match('#^seo/articles/\d+/edit/?$#', request()->path()) === 1
+                ) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::components.global-ai-chat')->render(),
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
             PanelsRenderHook::HEAD_END,
             fn (): HtmlString => new HtmlString(
                 '<script>'
-                . 'window.__SEO_I18N_LOCALE__ = ' . json_encode(app()->getLocale()) . ';'
-                . 'document.documentElement.setAttribute("lang", ' . json_encode(str_replace('_', '-', app()->getLocale())) . ');'
-                . '</script>'
+                .'window.__SEO_I18N_LOCALE__ = '.json_encode(app()->getLocale()).';'
+                .'document.documentElement.setAttribute("lang", '.json_encode(str_replace('_', '-', app()->getLocale())).');'
+                .'</script>'
             ),
         );
 
         Route::middleware('api')
             ->prefix('api')
-            ->group(dirname(__DIR__) . '/routes/api.php');
+            ->group(dirname(__DIR__).'/routes/api.php');
 
         Route::middleware([
             EncryptCookies::class,
@@ -168,6 +189,25 @@ class SeoPanelProvider extends PanelProvider
             Authenticate::class,
             CheckMainRole::class,
         ])
+            ->prefix('api/ai')
+            ->group(function (): void {
+                Route::get('/chat/models', [GlobalAiChatController::class, 'models'])
+                    ->name('seo.global-ai-chat.models');
+                Route::post('/chat', [GlobalAiChatController::class, 'store'])
+                    ->name('seo.global-ai-chat.store');
+            });
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
+            CheckMainRole::class,
+        ])
             ->prefix('seo')
             ->group(function (): void {
                 Route::get('/articles/{article}/media-picker', ArticleMediaPickerController::class)
@@ -196,11 +236,11 @@ class SeoPanelProvider extends PanelProvider
                 'primary' => Color::Emerald,
             ])
             ->discoverResources(
-                in: __DIR__ . '/../Filament/Resources',
+                in: __DIR__.'/../Filament/Resources',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Resources'
             )
             ->discoverPages(
-                in: __DIR__ . '/../Filament/Pages',
+                in: __DIR__.'/../Filament/Pages',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Pages'
             )
             ->pages([

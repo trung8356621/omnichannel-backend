@@ -3,6 +3,113 @@
 @endpush
 
 <x-filament-panels::page @class(['seo-article-edit-page'])>
+@once
+<script>
+        window.__seoArticleHeavyActionOverlay = {
+            id: 'seo-article-heavy-action-overlay',
+            locked: false,
+            action: null,
+            guardTimer: null,
+            show(action = 'sync') {
+                this.locked = true;
+                this.action = action === 'save' ? 'save' : 'sync';
+                let overlay = document.getElementById(this.id);
+
+                if (!overlay) {
+                    overlay = document.createElement('div');
+                    overlay.id = this.id;
+                    overlay.className = 'seo-article-sync-overlay';
+                    overlay.setAttribute('role', 'alert');
+                    overlay.setAttribute('aria-live', 'assertive');
+                    overlay.setAttribute('aria-busy', 'true');
+
+                    const panel = document.createElement('div');
+                    panel.className = 'seo-article-sync-overlay__panel';
+
+                    const spinner = document.createElement('div');
+                    spinner.className = 'seo-article-sync-overlay__spinner';
+                    spinner.setAttribute('aria-hidden', 'true');
+
+                    const title = document.createElement('strong');
+                    title.setAttribute('data-heavy-action-title', '');
+
+                    const message = document.createElement('span');
+                    message.textContent = 'Vui lòng chờ. Trang sẽ tự tải lại sau khi hoàn tất.';
+
+                    const skeleton = document.createElement('div');
+                    skeleton.className = 'seo-article-sync-overlay__skeleton';
+                    skeleton.setAttribute('aria-hidden', 'true');
+                    for (let index = 0; index < 3; index += 1) {
+                        skeleton.appendChild(document.createElement('i'));
+                    }
+
+                    panel.append(spinner, title, message, skeleton);
+                    overlay.appendChild(panel);
+                    document.body.appendChild(overlay);
+                }
+
+                const title = overlay.querySelector('[data-heavy-action-title]');
+                if (title) {
+                    title.textContent = this.action === 'save'
+                        ? 'Đang cập nhật bài viết'
+                        : 'Đang đồng bộ với WordPress';
+                }
+
+                document.documentElement.classList.add('seo-article-sync-locked');
+                document.querySelectorAll('body > *').forEach((element) => {
+                    if (element.id !== this.id && !element.hasAttribute('inert')) {
+                        element.setAttribute('data-seo-heavy-action-inert', '1');
+                        element.setAttribute('inert', '');
+                    }
+                });
+
+                if (!window.__seoArticleHeavyActionKeyBlocker) {
+                    window.__seoArticleHeavyActionKeyBlocker = (event) => {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                    };
+                    window.addEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
+                }
+
+                if (!this.guardTimer) {
+                    this.guardTimer = window.setInterval(() => {
+                        if (!this.locked) {
+                            return;
+                        }
+
+                        if (
+                            !document.getElementById(this.id)
+                            || !document.documentElement.classList.contains('seo-article-sync-locked')
+                        ) {
+                            this.show(this.action ?? 'sync');
+                        }
+                    }, 150);
+                }
+            },
+            hide() {
+                this.locked = false;
+                this.action = null;
+                if (this.guardTimer) {
+                    window.clearInterval(this.guardTimer);
+                    this.guardTimer = null;
+                }
+
+                document.getElementById(this.id)?.remove();
+                document.documentElement.classList.remove('seo-article-sync-locked');
+                document.querySelectorAll('[data-seo-heavy-action-inert]').forEach((element) => {
+                    element.removeAttribute('inert');
+                    element.removeAttribute('data-seo-heavy-action-inert');
+                });
+
+                if (window.__seoArticleHeavyActionKeyBlocker) {
+                    window.removeEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
+                    delete window.__seoArticleHeavyActionKeyBlocker;
+                }
+            },
+        };
+</script>
+@endonce
+
     <div
         x-data="{
             syncPageLocked: false,
@@ -10,6 +117,14 @@
             mediaModalOpen: false,
             mediaModalMode: 'featured',
             mediaModalTargetBlockId: null,
+            articleId: @js((int) $record->getKey()),
+            featuredImageDraft: @js($featuredImageUrl ? [
+                'url' => $featuredImageUrl,
+                'wp_attachment_id' => (int) ($record->articleMetas->firstWhere('meta_key', \App\Addons\SeoContentAi\Services\ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0),
+                'seo_media_id' => 0,
+                'alt' => '',
+                'slug' => '',
+            ] : null),
             pickerLoading: false,
             pickerSearching: false,
             pickerSearchQuery: '',
@@ -25,62 +140,13 @@
             galleryPickerSelectedKeys: [],
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
-            showHeavyActionOverlay(action) {
-                const overlayId = 'seo-article-heavy-action-overlay';
-                let overlay = document.getElementById(overlayId);
-
-                if (!overlay) {
-                    overlay = document.createElement('div');
-                    overlay.id = overlayId;
-                    overlay.className = 'seo-article-sync-overlay';
-                    overlay.setAttribute('role', 'alert');
-                    overlay.setAttribute('aria-live', 'assertive');
-                    overlay.setAttribute('aria-busy', 'true');
-                    overlay.innerHTML = `
-                        <div class='seo-article-sync-overlay__panel'>
-                            <div class='seo-article-sync-overlay__spinner' aria-hidden='true'></div>
-                            <strong data-heavy-action-title></strong>
-                            <span>Vui lòng chờ. Trang sẽ tự tải lại sau khi hoàn tất.</span>
-                            <div class='seo-article-sync-overlay__skeleton' aria-hidden='true'>
-                                <i></i><i></i><i></i>
-                            </div>
-                        </div>
-                    `;
-                    document.body.appendChild(overlay);
-                }
-
-                const title = overlay.querySelector('[data-heavy-action-title]');
-                if (title) {
-                    title.textContent = action === 'save'
-                        ? 'Đang cập nhật bài viết'
-                        : 'Đang đồng bộ với WordPress';
-                }
-
-                document.querySelectorAll('body > *:not(#' + overlayId + ')').forEach((element) => {
-                    if (!element.hasAttribute('inert')) {
-                        element.setAttribute('data-seo-heavy-action-inert', '1');
-                        element.setAttribute('inert', '');
-                    }
-                });
-
-                if (!window.__seoArticleHeavyActionKeyBlocker) {
-                    window.__seoArticleHeavyActionKeyBlocker = (event) => {
-                        event.preventDefault();
-                        event.stopImmediatePropagation();
-                    };
-                    window.addEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
-                }
+            init() {
+                this.syncFeaturedImageDraft();
             },
-            hideHeavyActionOverlay() {
-                document.getElementById('seo-article-heavy-action-overlay')?.remove();
-                document.querySelectorAll('[data-seo-heavy-action-inert]').forEach((element) => {
-                    element.removeAttribute('inert');
-                    element.removeAttribute('data-seo-heavy-action-inert');
-                });
-
-                if (window.__seoArticleHeavyActionKeyBlocker) {
-                    window.removeEventListener('keydown', window.__seoArticleHeavyActionKeyBlocker, true);
-                    delete window.__seoArticleHeavyActionKeyBlocker;
+            syncFeaturedImageDraft() {
+                const stored = window.__seoFeaturedImageStorage?.load?.(this.articleId);
+                if (stored) {
+                    this.featuredImageDraft = stored;
                 }
             },
             lockPageForHeavyAction(action = 'sync') {
@@ -90,8 +156,7 @@
 
                 this.syncPageLocked = true;
                 this.heavyPageAction = action === 'save' ? 'save' : 'sync';
-                document.documentElement.classList.add('seo-article-sync-locked');
-                this.showHeavyActionOverlay(this.heavyPageAction);
+                window.__seoArticleHeavyActionOverlay?.show(this.heavyPageAction);
                 window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
 
                 return true;
@@ -99,8 +164,7 @@
             unlockPageAfterHeavyActionFailure() {
                 this.syncPageLocked = false;
                 this.heavyPageAction = null;
-                document.documentElement.classList.remove('seo-article-sync-locked');
-                this.hideHeavyActionOverlay();
+                window.__seoArticleHeavyActionOverlay?.hide();
                 window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
             },
             galleryPickerSelectedCount() {
@@ -567,23 +631,48 @@
                     return;
                 }
 
-                $wire
-                    .selectMediaFromPicker(
-                        Number(image.wp_attachment_id || 0),
-                        String(image.url || ''),
-                        String(image.alt || ''),
-                        String(image.slug || ''),
-                        Number(image.seo_media_id || 0),
-                        String(image.media_type || 'image'),
-                        String(this.mediaModalMode || 'featured'),
-                        String(this.pickerTab || 'article'),
-                        String(this.mediaModalTargetBlockId || ''),
-                    )
-                    .then(() => {
-                        if (this.mediaModalMode === 'editor-block') {
-                            this.closeArticleMediaModal();
-                        }
-                    });
+                const mediaType = String(image.media_type || 'image').toLowerCase() === 'video'
+                    ? 'video'
+                    : 'image';
+                const payload = {
+                    url: String(image.url || '').trim(),
+                    alt: String(image.alt || '').trim(),
+                    slug: String(image.slug || '').trim(),
+                    wpAttachmentId: Number(image.wp_attachment_id || 0),
+                    seoMediaId: Number(image.seo_media_id || 0),
+                    mediaType,
+                };
+
+                if (this.mediaModalMode === 'editor-block') {
+                    window.dispatchEvent(new CustomEvent('editor-block-image-selected', {
+                        detail: {
+                            ...payload,
+                            blockId: String(this.mediaModalTargetBlockId || ''),
+                            attachmentId: payload.wpAttachmentId,
+                        },
+                    }));
+                    this.closeArticleMediaModal();
+
+                    return;
+                }
+
+                if (mediaType !== 'image') {
+                    return;
+                }
+
+                const featured = window.__seoFeaturedImageStorage?.save?.(this.articleId, payload) ?? {
+                    ...payload,
+                    wp_attachment_id: payload.wpAttachmentId,
+                    seo_media_id: payload.seoMediaId,
+                };
+                this.featuredImageDraft = featured;
+                window.dispatchEvent(new CustomEvent('article-media-selected', {
+                    detail: {
+                        ...payload,
+                        mode: 'featured',
+                    },
+                }));
+                this.closeArticleMediaModal();
             },
             localMediaUploading: false,
             openLocalMediaUploadPicker() {
@@ -650,6 +739,7 @@
             },
         }"
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
+        x-on:seo-featured-image-storage-ready.window="syncFeaturedImageDraft()"
         x-on:article-wordpress-sync-lock.window="lockPageForHeavyAction($event.detail?.action ?? 'sync')"
         x-on:article-wordpress-sync-unlock.window="unlockPageAfterHeavyActionFailure()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
@@ -688,19 +778,22 @@
             const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
             const articleId = @js((int) $record->getKey());
             const persistAlbum = window.__seoPersistProductAlbumDraft;
-            const runAfterAlbum = (fn) => {
-                if (typeof persistAlbum === 'function' && articleId) {
-                    persistAlbum(articleId, $wire).then(() => fn(detail));
-                } else {
-                    fn(detail);
+            const persistFeatured = window.__seoPersistFeaturedImageDraft;
+            const runAfterMediaDrafts = async (fn) => {
+                if (typeof persistFeatured === 'function' && articleId) {
+                    await persistFeatured(articleId, $wire);
                 }
+                if (typeof persistAlbum === 'function' && articleId) {
+                    await persistAlbum(articleId, $wire);
+                }
+                fn(detail);
             };
             if (detail.target === 'sync') {
-                runAfterAlbum((d) => $wire.syncArticleToWordPress(d.html ?? ''));
+                runAfterMediaDrafts((d) => $wire.syncArticleToWordPress(d.html ?? ''));
             } else if (detail.target === 'generate-faq') {
-                runAfterAlbum((d) => $wire.generateArticleFaqs(d.html ?? ''));
+                runAfterMediaDrafts((d) => $wire.generateArticleFaqs(d.html ?? ''));
             } else {
-                runAfterAlbum((d) => $wire.persistArticleLocal(d.html ?? ''));
+                runAfterMediaDrafts((d) => $wire.persistArticleLocal(d.html ?? ''));
             }
         "
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
@@ -749,16 +842,6 @@
         @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
         x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [])"
         x-on:seo-analyze-draft.window="$wire.analyzeSeoDraft($event.detail.html)"
-        x-on:seo-rewrite-outline.window="
-            const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
-            $wire.rewriteOutlineFromWorkflow(
-                detail.mode ?? 'title',
-                detail.title ?? '',
-                detail.html ?? '',
-            ).then((result) => {
-                window.dispatchEvent(new CustomEvent('seo-outline-rewritten', { detail: result || {} }));
-            });
-        "
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
         x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"
@@ -893,7 +976,6 @@
                 </div>
 
                 <script type="application/json" id="seo-article-initial-html">@json($editorHtml)</script>
-                <script type="application/json" id="seo-article-initial-outline">@json($this->getEditorOutlineMarkdown())</script>
                 <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
                 <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
@@ -957,28 +1039,28 @@
                                 class="wp-featured-image-picker"
                                 title="Chọn ảnh từ thư viện WordPress"
                             >
-                                @if ($featuredImageUrl)
+                                <template x-if="featuredImageDraft?.url">
                                     <img
-                                        src="{{ $featuredImageUrl }}"
+                                        x-bind:src="featuredImageDraft.url"
                                         alt="Ảnh đại diện"
                                         class="wp-featured-image-picker__img"
                                     />
-                                @else
+                                </template>
+                                <template x-if="!featuredImageDraft?.url">
                                     <span class="wp-featured-image-picker__empty">
                                         <svg class="mx-auto h-12 w-12 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                                         </svg>
                                         <span class="wp-featured-image-picker__label">Đặt ảnh đại diện</span>
                                     </span>
-                                @endif
+                                </template>
                             </button>
-                            <p class="mt-2 text-xs text-gray-500">
-                                @if ($featuredImageUrl)
-                                    Đã lưu cục bộ · «Đồng bộ» để đẩy lên WordPress
-                                @else
-                                    Bấm để chọn từ thư viện Media
-                                @endif
-                            </p>
+                            <p
+                                class="mt-2 text-xs text-gray-500"
+                                x-text="featuredImageDraft?.url
+                                    ? 'Đã lưu nháp cục bộ · bấm Lưu hoặc Đồng bộ để ghi database'
+                                    : 'Bấm để chọn từ thư viện Media'"
+                            ></p>
                         </div>
                     </div>
                 @endif

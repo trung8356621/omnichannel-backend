@@ -17,6 +17,7 @@ class WordPressArticleContentService
 {
     public function __construct(
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
+        private readonly WordPressArticleTimestampService $timestampService,
     ) {}
 
     public function resolveEditorHtml(SeoArticle $article): string
@@ -415,6 +416,7 @@ class WordPressArticleContentService
         }
 
         $this->importSeoFromFetchedPost($article, $post, $forceSeoImport);
+        $this->timestampService->sync($article, $post);
     }
 
     /**

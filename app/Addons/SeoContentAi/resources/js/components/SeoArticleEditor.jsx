@@ -29,7 +29,6 @@ import {
 } from '../utils/articleLinkSuggestionFilter';
 import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
 import SeoScorePanel from './SeoScorePanel';
-import OutlineMarkdownPanel from './OutlineMarkdownPanel';
 import ArticleImagesTab from './ArticleImagesTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
@@ -68,7 +67,11 @@ import { t } from '../utils/i18n';
 import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
-import { loadDraft, saveDraft } from '../utils/articleEditorStorage';
+import {
+    ARTICLE_EDITOR_DRAFT_VERSION,
+    loadDraft,
+    saveDraft,
+} from '../utils/articleEditorStorage';
 import {
     htmlToPlainText,
     isMeaningfulHtml,
@@ -161,6 +164,55 @@ const stripLeadingH1FromHtml = (html) => {
         return doc.body.innerHTML.trim();
     } catch {
         return trimmed.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>\s*/i, '').trim();
+    }
+};
+
+const requiresClassicInlineRegroup = (html) => {
+    const source = String(html || '').trim();
+    if (!source) {
+        return false;
+    }
+
+    try {
+        const doc = new DOMParser().parseFromString(source, 'text/html');
+        const nodes = Array.from(doc.body.childNodes);
+        const hasLooseText = nodes.some(
+            (node) => node.nodeType === 3 && Boolean(node.textContent?.trim()),
+        );
+        const hasTopLevelInline = nodes.some(
+            (node) =>
+                node.nodeType === 1 &&
+                ![
+                    'ADDRESS',
+                    'ASIDE',
+                    'BLOCKQUOTE',
+                    'DETAILS',
+                    'DL',
+                    'FIELDSET',
+                    'FIGURE',
+                    'FOOTER',
+                    'FORM',
+                    'H1',
+                    'H2',
+                    'H3',
+                    'H4',
+                    'H5',
+                    'H6',
+                    'HEADER',
+                    'HR',
+                    'MAIN',
+                    'NAV',
+                    'OL',
+                    'P',
+                    'PRE',
+                    'TABLE',
+                    'UL',
+                ].includes(node.tagName),
+        );
+
+        return hasLooseText && hasTopLevelInline;
+    } catch {
+        return false;
     }
 };
 
@@ -1245,7 +1297,6 @@ function BlockEditor({
 const BASE_TABS = [
     { id: 'editor', label: 'Editor' },
     { id: 'images', label: t('image_block_label') },
-    { id: 'outline', label: 'Outline' },
     { id: 'seo', label: 'SEO point' },
 ];
 
@@ -1255,7 +1306,6 @@ export default function SeoArticleEditor({
     articleId,
     siteId = null,
     initialHtml,
-    initialOutline = '',
     initialSeo,
     initialPostImages = [],
     initialSupplementalImages = [],
@@ -1669,21 +1719,6 @@ export default function SeoArticleEditor({
 
     const getExportHtml = useCallback(() => exportBlocksToHtml(blocksRef.current), []);
 
-    const requestOutlineRewrite = useCallback(
-        (mode) => {
-            window.dispatchEvent(
-                new CustomEvent('seo-rewrite-outline', {
-                    detail: {
-                        mode: mode === 'content' ? 'content' : 'title',
-                        title: String(articleTitle || '').trim(),
-                        html: getExportHtml(),
-                    },
-                }),
-            );
-        },
-        [articleTitle, getExportHtml],
-    );
-
     const requestAnalyze = useCallback(() => {
         window.dispatchEvent(
             new CustomEvent('seo-analyze-draft', {
@@ -1810,8 +1845,13 @@ export default function SeoArticleEditor({
         const draft = loadDraft(articleId);
         const serverRevision = String(contentRevision ?? '').trim();
         const draftRevision = String(draft?.contentRevision ?? '').trim();
+        const draftParserVersion = Number(draft?.parserVersion ?? 0);
+        const acceptsLegacyDraft =
+            !requiresClassicInlineRegroup(initialHtml) ||
+            draftParserVersion >= ARTICLE_EDITOR_DRAFT_VERSION;
         const canUseDraft =
             draft &&
+            acceptsLegacyDraft &&
             (serverRevision === '' || draftRevision === serverRevision);
         let parsed = [];
         if (canUseDraft && draft?.blocks?.length) {
@@ -4324,6 +4364,29 @@ export default function SeoArticleEditor({
 
         window.addEventListener('seo-editor-image-generate-request', onImageGenerateRequest);
 
+        const persistSelectedMediaBlock = (blockId, content, image) => {
+            const nextBlocks = blocksRef.current.map((block) =>
+                block.id === blockId
+                    ? {
+                          ...block,
+                          content,
+                          image,
+                      }
+                    : block,
+            );
+
+            blocksRef.current = nextBlocks;
+            setBlocks(nextBlocks);
+
+            if (articleId) {
+                saveDraft(articleId, {
+                    blocks: nextBlocks,
+                    html: exportBlocksToHtml(nextBlocks),
+                });
+                setSaveStatus('saved');
+            }
+        };
+
         const onEditorBlockImageSelected = (event) => {
             const blockId = String(event.detail?.blockId ?? '').trim();
             const rawUrl = (event.detail?.url ?? '').trim();
@@ -4363,7 +4426,7 @@ export default function SeoArticleEditor({
                     .replace(/"/g, '&quot;')
                     .replace(/'/g, '&#39;')
                     .replace(/</g, '&lt;');
-                updateBlockContent(
+                persistSelectedMediaBlock(
                     blockId,
                     `<figure class="wp-block-video"><video controls src="${safeUrl}"></video></figure>`,
                     video,
@@ -4385,7 +4448,7 @@ export default function SeoArticleEditor({
                 wpSrc: url,
             };
             const html = renderImageFigure(image);
-            updateBlockContent(blockId, html, image);
+            persistSelectedMediaBlock(blockId, html, image);
         };
 
         window.addEventListener('editor-block-image-selected', onEditorBlockImageSelected);
@@ -5484,14 +5547,6 @@ export default function SeoArticleEditor({
                     initialReviews={virtualReviews}
                     onRefresh={() => callEditArticleLivewire('refreshVirtualReviewsForEditor')}
                 />
-            ) : activeTab === 'outline' ? (
-                <div className="seo-tab-panel seo-outline-tab">
-                    <OutlineMarkdownPanel
-                        articleId={articleId}
-                        initialOutline={initialOutline}
-                        onRewriteOutline={requestOutlineRewrite}
-                    />
-                </div>
             ) : (
                 <div className="seo-tab-panel">
                     <SeoScorePanel

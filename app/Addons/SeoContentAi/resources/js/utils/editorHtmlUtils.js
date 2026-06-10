@@ -2,6 +2,35 @@ import { stripEditorTransientMarkup } from './articleEditorTransientMarkup';
 
 const HEADING_TAG_RE = /^h([1-6])$/i;
 const BLOCK_WRAPPER_TAGS = new Set(['p', 'div']);
+const CLASSIC_BLOCK_TAGS = new Set([
+    'address',
+    'aside',
+    'blockquote',
+    'details',
+    'dl',
+    'fieldset',
+    'figcaption',
+    'figure',
+    'footer',
+    'form',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'header',
+    'hr',
+    'img',
+    'main',
+    'nav',
+    'ol',
+    'p',
+    'pre',
+    'table',
+    'ul',
+    'video',
+]);
 
 export const FAQ_SHORTCODE_PLACEHOLDER = '[omi_faq]';
 
@@ -289,12 +318,54 @@ export function coalesceTiptapExportHtml(originalHtml, exportedHtml) {
  */
 export function flattenHtmlBodyNodes(parent) {
     const result = [];
+    let inlineParagraph = null;
+
+    const ensureInlineParagraph = () => {
+        if (!inlineParagraph) {
+            inlineParagraph = parent.ownerDocument.createElement('p');
+        }
+
+        return inlineParagraph;
+    };
+
+    const flushInlineParagraph = () => {
+        if (!inlineParagraph) {
+            return;
+        }
+
+        const text = (inlineParagraph.textContent || '').replace(/\u00a0/g, ' ').trim();
+        const hasMedia = Boolean(inlineParagraph.querySelector('img,video,iframe'));
+        if (text || hasMedia) {
+            result.push(inlineParagraph);
+        }
+
+        inlineParagraph = null;
+    };
+
+    const appendLooseText = (text) => {
+        const source = String(text || '').replace(/\r\n?/g, '\n');
+        const blankLinePattern = /\n[ \t]*\n+/g;
+        let offset = 0;
+        let match;
+
+        while ((match = blankLinePattern.exec(source)) !== null) {
+            const segment = source.slice(offset, match.index).replace(/\n+/g, ' ');
+            if (segment) {
+                ensureInlineParagraph().appendChild(parent.ownerDocument.createTextNode(segment));
+            }
+            flushInlineParagraph();
+            offset = blankLinePattern.lastIndex;
+        }
+
+        const tail = source.slice(offset).replace(/\n+/g, ' ');
+        if (tail) {
+            ensureInlineParagraph().appendChild(parent.ownerDocument.createTextNode(tail));
+        }
+    };
 
     Array.from(parent.childNodes).forEach((node) => {
         if (node.nodeType === 3) {
-            if (node.textContent?.trim()) {
-                result.push(node);
-            }
+            appendLooseText(node.textContent);
             return;
         }
 
@@ -309,12 +380,21 @@ export function flattenHtmlBodyNodes(parent) {
             !node.classList?.contains('wp-caption');
 
         if (unwrap) {
+            flushInlineParagraph();
             result.push(...flattenHtmlBodyNodes(node));
             return;
         }
 
-        result.push(node);
+        if (CLASSIC_BLOCK_TAGS.has(tag)) {
+            flushInlineParagraph();
+            result.push(node);
+            return;
+        }
+
+        ensureInlineParagraph().appendChild(node.cloneNode(true));
     });
+
+    flushInlineParagraph();
 
     return result;
 }

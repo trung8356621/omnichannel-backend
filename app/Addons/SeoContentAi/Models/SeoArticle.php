@@ -30,13 +30,22 @@ class SeoArticle extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'blocks'          => 'array',
-        'seo_score'       => 'decimal:2',
-        'skip_seo_score'  => 'boolean',
-        'is_reviewed'     => 'boolean',
-        'reviewed_at'     => 'datetime',
-        'published_at'    => 'datetime',
+        'blocks' => 'array',
+        'seo_score' => 'decimal:2',
+        'skip_seo_score' => 'boolean',
+        'is_reviewed' => 'boolean',
+        'reviewed_at' => 'datetime',
+        'published_at' => 'datetime',
     ];
+
+    public function updateTimestamps()
+    {
+        if ((int) ($this->wp_post_id ?? 0) > 0) {
+            return $this;
+        }
+
+        return parent::updateTimestamps();
+    }
 
     public function countsTowardSeoScore(): bool
     {
@@ -73,6 +82,8 @@ class SeoArticle extends Model
             SeoPromptResult::class,
             'prompt_resultable',
             'seo_prompt_resultables',
+            'prompt_resultable_id',
+            'prompt_result_id',
         )
             ->withPivot('type')
             ->withTimestamps();

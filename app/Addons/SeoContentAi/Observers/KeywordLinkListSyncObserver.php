@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Observers;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Services\DomainLinkListKeywordSyncService;
+use App\Addons\SeoContentAi\Services\KeywordPhraseUpdateService;
 
 final class KeywordLinkListSyncObserver
 {
@@ -13,10 +14,6 @@ final class KeywordLinkListSyncObserver
 
     public function updating(Keyword $keyword): void
     {
-        if ($keyword->type !== Keyword::TYPE_FOCUS) {
-            return;
-        }
-
         if ($keyword->isDirty('phrase')) {
             $this->previousPhrase = trim((string) $keyword->getOriginal('phrase'));
         }
@@ -24,7 +21,13 @@ final class KeywordLinkListSyncObserver
 
     public function saved(Keyword $keyword): void
     {
+        if ($this->previousPhrase !== null && $this->previousPhrase !== '') {
+            app(KeywordPhraseUpdateService::class)->propagate($keyword, $this->previousPhrase);
+        }
+
         if ($keyword->type !== Keyword::TYPE_FOCUS) {
+            $this->previousPhrase = null;
+
             return;
         }
 

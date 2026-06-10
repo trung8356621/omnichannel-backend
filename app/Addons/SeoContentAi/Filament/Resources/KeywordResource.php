@@ -97,7 +97,7 @@ class KeywordResource extends Resource
                     ->required()
                     ->maxLength(255)
                     ->unique(
-                        table: 'keywords',
+                        table: Keyword::class,
                         column: 'phrase',
                         ignoreRecord: true,
                         modifyRuleUsing: function (Unique $rule, Get $get): Unique {
@@ -115,6 +115,30 @@ class KeywordResource extends Resource
                         : [])
                     ->columnSpanFull(),
 
+                Forms\Components\Select::make('parent_id')
+                    ->label('Từ khóa cha')
+                    ->options(function (Get $get, ?Keyword $record): array {
+                        $siteId = (int) ($get('site_id') ?? $record?->site_id ?? 0);
+                        if ($siteId <= 0) {
+                            return [];
+                        }
+
+                        return Keyword::query()
+                            ->where('site_id', $siteId)
+                            ->where('type', Keyword::TYPE_FOCUS)
+                            ->whereNull('parent_id')
+                            ->when($record, fn (Builder $query): Builder => $query->where('id', '!=', $record->id))
+                            ->orderBy('phrase')
+                            ->pluck('phrase', 'id')
+                            ->all();
+                    })
+                    ->visible(fn (Get $get): bool => $get('type') === Keyword::TYPE_FOCUS)
+                    ->searchable()
+                    ->preload()
+                    ->native(false)
+                    ->nullable()
+                    ->helperText('Chọn parent sẽ chuyển keyword sang tab Pillar / Cluster.'),
+
                 Forms\Components\Select::make('type')
                     ->label(__('seo-content-ai::filament.keyword.type'))
                     ->options([
@@ -126,15 +150,6 @@ class KeywordResource extends Resource
                     ->native(false)
                     ->live(),
 
-                Forms\Components\TextInput::make('target_url')
-                    ->label(__('seo-content-ai::filament.keyword.target_url'))
-                    ->maxLength(2000)
-                    ->url()
-                    ->visible(fn (Get $get): bool => in_array($get('type'), [Keyword::TYPE_FOCUS, Keyword::TYPE_INTERNAL], true))
-                    ->helperText(fn (Get $get): ?string => $get('type') === Keyword::TYPE_FOCUS
-                        ? __('seo-content-ai::filament.keyword.target_url_focus_hint')
-                        : null)
-                    ->columnSpanFull(),
             ]);
     }
 
@@ -186,6 +201,7 @@ class KeywordResource extends Resource
                     ->searchable()
                     ->sortable()
                     ->weight('bold')
+                    ->color(fn (?string $state): ?string => mb_strlen(trim((string) $state)) > 10 ? 'danger' : null)
                     ->wrap(),
 
                 Tables\Columns\TextColumn::make('word_count')
@@ -263,6 +279,44 @@ class KeywordResource extends Resource
                     }),
             ])
             ->actions([
+                Tables\Actions\EditAction::make()
+                    ->modalHeading('Sửa keyword')
+                    ->form(fn (Keyword $record): array => [
+                        Forms\Components\TextInput::make('phrase')
+                            ->label(__('seo-content-ai::filament.keyword.phrase'))
+                            ->required()
+                            ->maxLength(255)
+                            ->unique(
+                                table: Keyword::class,
+                                column: 'phrase',
+                                ignoreRecord: true,
+                                modifyRuleUsing: fn (Unique $rule): Unique => $rule
+                                    ->where('site_id', $record->site_id)
+                                    ->where('type', $record->type),
+                            )
+                            ->rule($record->type === Keyword::TYPE_INTERNAL
+                                ? [function (string $attribute, mixed $value, \Closure $fail): void {
+                                    if (! InternalAnchorKeywordFilter::isUsableAnchorPhrase((string) $value)) {
+                                        $fail(__('seo-content-ai::filament.keyword.anchor_text_invalid'));
+                                    }
+                                }]
+                                : []),
+                        Forms\Components\Select::make('parent_id')
+                            ->label('Từ khóa cha')
+                            ->options(fn (): array => Keyword::query()
+                                ->where('site_id', $record->site_id)
+                                ->where('type', Keyword::TYPE_FOCUS)
+                                ->whereNull('parent_id')
+                                ->where('id', '!=', $record->id)
+                                ->orderBy('phrase')
+                                ->pluck('phrase', 'id')
+                                ->all())
+                            ->visible($record->type === Keyword::TYPE_FOCUS)
+                            ->searchable()
+                            ->preload()
+                            ->native(false)
+                            ->nullable(),
+                    ]),
                 Tables\Actions\Action::make('write_article')
                     ->label(__('seo-content-ai::filament.keyword.write_article'))
                     ->icon('heroicon-o-pencil-square')
@@ -388,7 +442,6 @@ class KeywordResource extends Resource
     {
         return [
             'index' => Pages\ListKeywords::route('/'),
-            'create' => Pages\CreateKeyword::route('/create'),
         ];
     }
 }

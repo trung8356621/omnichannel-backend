@@ -5,9 +5,14 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support;
 
 use App\Models\User;
+use Illuminate\Support\Facades\Cookie;
 
 final class SeoAccessControl
 {
+    private const GLOBAL_SITE_COOKIE = 'seo_global_site_id';
+
+    private const GLOBAL_SITE_COOKIE_MINUTES = 60 * 24 * 365;
+
     public const ROLE_MANAGER = 'manager';
 
     public const ROLE_PLANNER = 'planner';
@@ -97,14 +102,32 @@ final class SeoAccessControl
 
     public static function globalSiteId(): ?int
     {
-        $siteId = session('seo_global_site_id');
+        $cookieSiteId = request()->cookie(self::GLOBAL_SITE_COOKIE);
+        $siteId = $cookieSiteId !== null && $cookieSiteId !== ''
+            ? $cookieSiteId
+            : session('seo_global_site_id');
+
         if ($siteId === null || $siteId === '') {
             return null;
         }
 
         $siteId = (int) $siteId;
 
-        return $siteId > 0 ? $siteId : null;
+        if ((int) session('seo_global_site_id', -1) !== $siteId) {
+            session(['seo_global_site_id' => $siteId]);
+        }
+
+        if ($siteId <= 0) {
+            return null;
+        }
+
+        return $siteId;
+    }
+
+    public static function hasGlobalSiteSelection(): bool
+    {
+        return request()->cookie(self::GLOBAL_SITE_COOKIE) !== null
+            || session()->has('seo_global_site_id');
     }
 
     public static function hasGlobalSiteScope(): bool
@@ -114,13 +137,26 @@ final class SeoAccessControl
 
     public static function setGlobalSiteId(?int $siteId): void
     {
-        if ($siteId === null || $siteId <= 0) {
-            session()->forget('seo_global_site_id');
+        $storedSiteId = $siteId !== null && $siteId > 0 ? $siteId : 0;
 
-            return;
-        }
+        session(['seo_global_site_id' => $storedSiteId]);
+        Cookie::queue(cookie(
+            self::GLOBAL_SITE_COOKIE,
+            (string) $storedSiteId,
+            self::GLOBAL_SITE_COOKIE_MINUTES,
+            '/',
+            null,
+            request()->isSecure(),
+            true,
+            false,
+            'lax',
+        ));
+    }
 
-        session(['seo_global_site_id' => $siteId]);
+    public static function clearGlobalSiteSelection(): void
+    {
+        session()->forget('seo_global_site_id');
+        Cookie::queue(Cookie::forget(self::GLOBAL_SITE_COOKIE, '/'));
     }
 
     public static function normalizeRole(string $role): string

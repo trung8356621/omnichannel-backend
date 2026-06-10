@@ -17,12 +17,22 @@ class GlobalSeoBar extends Component
 
     public function mount(): void
     {
+        $hasStoredSelection = SeoAccessControl::hasGlobalSiteSelection();
         $this->globalSiteId = SeoAccessControl::globalSiteId();
 
-        if ($this->globalSiteId === null) {
+        if (
+            $this->globalSiteId !== null
+            && ! $this->resolveSitesQuery()->whereKey($this->globalSiteId)->exists()
+        ) {
+            SeoAccessControl::clearGlobalSiteSelection();
+            $this->globalSiteId = null;
+            $hasStoredSelection = false;
+        }
+
+        if ($this->globalSiteId === null && ! $hasStoredSelection) {
             $this->globalSiteId = $this->resolveSitesQuery()->value('id');
             if ($this->globalSiteId !== null) {
-                session(['seo_global_site_id' => $this->globalSiteId]);
+                SeoAccessControl::setGlobalSiteId($this->globalSiteId);
             }
         }
 
@@ -42,10 +52,17 @@ class GlobalSeoBar extends Component
             $siteId = null;
         }
 
-        $this->globalSiteId = $siteId;
-        session(['seo_global_site_id' => $siteId]);
+        if ($siteId !== null && ! $this->resolveSitesQuery()->whereKey($siteId)->exists()) {
+            $this->globalSiteId = SeoAccessControl::globalSiteId();
 
-        $this->redirect($this->resolveReturnUrl(), navigate: true);
+            return;
+        }
+
+        $this->globalSiteId = $siteId;
+        SeoAccessControl::setGlobalSiteId($siteId);
+        session()->save();
+
+        $this->redirect($this->resolveReturnUrl(), navigate: false);
     }
 
     public function updatedSimulatedRole($value): void
@@ -91,7 +108,7 @@ class GlobalSeoBar extends Component
         $query = Site::query()->orderBy('domain');
 
         if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? auth()->id());
         }
 
         return $query;
@@ -114,4 +131,3 @@ class GlobalSeoBar extends Component
         return $referer;
     }
 }
-

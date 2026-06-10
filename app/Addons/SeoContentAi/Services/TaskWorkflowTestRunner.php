@@ -202,6 +202,16 @@ final class TaskWorkflowTestRunner
             ];
         }
 
+        if ($type === 'article_filter') {
+            return [
+                'node_id' => $nodeId,
+                'type' => $type,
+                'title' => $title,
+                'status' => 'ok',
+                'message' => 'Đã áp dụng cấu hình lọc bài viết.',
+            ];
+        }
+
         if ($type === 'filter') {
             return $this->executeFilterNode($node, $state, $edges);
         }

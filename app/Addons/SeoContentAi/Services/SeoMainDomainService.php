@@ -37,7 +37,7 @@ final class SeoMainDomainService
             ['meta_value' => '1'],
         );
 
-        session(['seo_global_site_id' => (int) $site->getKey()]);
+        SeoAccessControl::setGlobalSiteId((int) $site->getKey());
     }
 
     /**
@@ -101,7 +101,7 @@ final class SeoMainDomainService
             return 'Chưa có miền chính';
         }
 
-        return trim((string) $site->domain) ?: ('Site #' . $site->id);
+        return trim((string) $site->domain) ?: ('Site #'.$site->id);
     }
 
     public function primarySiteIdForOwner(int $ownerId): ?int

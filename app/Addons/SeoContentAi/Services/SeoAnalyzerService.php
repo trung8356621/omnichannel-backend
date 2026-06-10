@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleLink;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
+use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
+use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -138,6 +139,62 @@ class SeoAnalyzerService
         return array_merge($computed['scoreData'], [
             'extracted_links' => $extractedLinks,
             'content_bonus' => $contentBonus,
+            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+                $article,
+                $content,
+                $extractedLinks['internal'] ?? [],
+            ),
+        ]);
+    }
+
+    /**
+     * Chấm và lưu điểm bằng nội dung editor vừa submit.
+     *
+     * Luồng đồng bộ WordPress sẽ xóa articles.body sau khi thành công, nên không
+     * thể gọi analyze() sau sync vì khi đó nội dung dùng để chấm đã không còn.
+     *
+     * @return array{
+     *   score:int,
+     *   good:array<int,string>,
+     *   errors:array<int,string>,
+     *   warnings:array<int,string>,
+     *   extracted_links:array{internal:array<int,array{href:string,text:string}>,external:array<int,array{href:string,text:string,is_nofollow:bool}>},
+     *   content_bonus:array<string,mixed>
+     * }
+     */
+    public function analyzeSubmittedContent(
+        SeoArticle $article,
+        string $content,
+        ?string $seoTitle = null,
+        ?string $slug = null,
+        ?string $metaDescription = null,
+        ?string $domainOverride = null,
+    ): array {
+        $focusKeyword = $this->resolveFocusKeyword($article);
+        $domain = $this->resolveArticleDomain($article, $domainOverride);
+
+        if ($focusKeyword === null) {
+            $extractedLinks = $this->extractLinks($content, $domain);
+            $scoreData = $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], []);
+        } else {
+            $computed = $this->computeAnalysis(
+                $article,
+                $focusKeyword,
+                $seoTitle ?? $this->resolveSeoTitle($article),
+                $content,
+                $slug ?? trim((string) ($article->slug ?? '')),
+                $metaDescription ?? $this->resolveMetaDescription($article),
+                $domain,
+            );
+            $scoreData = $computed['scoreData'];
+            $extractedLinks = $computed['extractedLinks'];
+        }
+
+        $persisted = $this->persistScoreResult($article, $scoreData, $extractedLinks);
+
+        return array_merge($persisted, [
+            'extracted_links' => $extractedLinks,
+            'content_bonus' => app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content),
             'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
                 $article,
                 $content,
@@ -369,6 +426,11 @@ class SeoAnalyzerService
      */
     private function persistExtractedLinks(SeoArticle $article, array $extractedLinks): void
     {
+        $previousKeywordIds = $article->links()
+            ->whereNotNull('keyword_id')
+            ->pluck('keyword_id')
+            ->all();
+
         $article->links()->delete();
 
         $article->loadMissing('site');
@@ -430,13 +492,11 @@ class SeoAnalyzerService
             ];
         }
 
-        if ($linksToInsert === []) {
-            return;
-        }
-
         foreach (array_chunk($linksToInsert, 500) as $chunk) {
             SeoArticleLink::insert($chunk);
         }
+
+        KeywordOrphanCleanup::deleteUnusedByIds($previousKeywordIds);
     }
 
     private function resolveArticleDomain(SeoArticle $article, ?string $domainOverride = null): string
@@ -602,6 +662,7 @@ class SeoAnalyzerService
 
             if ($this->isInternalLink($href, $domain)) {
                 $result['internal'][] = $item;
+
                 continue;
             }
 
@@ -652,7 +713,7 @@ class SeoAnalyzerService
         }
 
         if (str_starts_with($href, '//')) {
-            $href = 'https:' . $href;
+            $href = 'https:'.$href;
         }
 
         $host = parse_url($href, PHP_URL_HOST);
@@ -699,7 +760,7 @@ class SeoAnalyzerService
         foreach ($links as $link) {
             $href = $this->normalizeLinkHrefForDedup((string) ($link['href'] ?? ''));
             $text = mb_strtolower(trim((string) ($link['text'] ?? '')));
-            $key = $href . "\0" . $text;
+            $key = $href."\0".$text;
 
             if ($href === '' || isset($seen[$key])) {
                 continue;
@@ -783,9 +844,9 @@ class SeoAnalyzerService
             return '';
         }
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
-        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
         libxml_clear_errors();
 
         $xpath = new DOMXPath($dom);
@@ -809,9 +870,9 @@ class SeoAnalyzerService
             return '';
         }
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
-        $dom->loadHTML('<?xml encoding="utf-8" ?>' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
         libxml_clear_errors();
 
         $xpath = new DOMXPath($dom);
@@ -842,7 +903,7 @@ class SeoAnalyzerService
     /**
      * Ghi meta an toàn cho relation name thực tế.
      *
-     * @param array<string, mixed> $value
+     * @param  array<string, mixed>  $value
      */
     private function storeMeta(SeoArticle $article, string $key, array $value): void
     {
@@ -873,4 +934,3 @@ class SeoAnalyzerService
         return Schema::connection('omi_seo_ai')->hasColumn('articles', $column);
     }
 }
-

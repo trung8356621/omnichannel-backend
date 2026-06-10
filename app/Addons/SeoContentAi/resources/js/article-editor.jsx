@@ -17,6 +17,11 @@ import {
 import { clearArticleLocalState } from './utils/articleLocalState';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
+    loadFeaturedImage,
+    persistFeaturedImageDraftToServer,
+    saveFeaturedImage,
+} from './utils/articleFeaturedImageStorage';
+import {
     appendProductAlbumItems,
     loadProductAlbum,
     normalizeProductAlbumList,
@@ -31,6 +36,12 @@ installArticleAutosaveLock();
 
 window.normalizeArticleSlug = normalizeArticleSlug;
 window.__seoClearArticleLocalState = clearArticleLocalState;
+window.__seoFeaturedImageStorage = {
+    load: loadFeaturedImage,
+    save: saveFeaturedImage,
+};
+window.__seoPersistFeaturedImageDraft = persistFeaturedImageDraftToServer;
+window.dispatchEvent(new CustomEvent('seo-featured-image-storage-ready'));
 
 window.__seoArticleMediaPickerCache = {
     read: readArticleMediaPickerCache,
@@ -229,7 +240,6 @@ const rootElement = document.getElementById('seo-article-editor-root');
 
 if (rootElement) {
     let initialHtml = '';
-    let initialOutline = '';
     let initialSeo = null;
     let editorSettings = { history_step: 20, autosave_interval_seconds: 60 };
     let initialPostImages = [];
@@ -274,16 +284,6 @@ if (rootElement) {
         }
     } catch (e) {
         console.warn('Invalid editor settings JSON', e);
-    }
-
-    try {
-        const outlineEl = document.getElementById('seo-article-initial-outline');
-        const rawOutline = outlineEl?.textContent?.trim();
-        if (rawOutline) {
-            initialOutline = JSON.parse(rawOutline);
-        }
-    } catch (e) {
-        console.warn('Invalid article outline JSON', e);
     }
 
     try {
@@ -346,7 +346,6 @@ if (rootElement) {
             articleId={articleId}
             siteId={siteId}
             initialHtml={initialHtml}
-            initialOutline={initialOutline}
             initialSeo={initialSeo}
             initialPostImages={initialPostImages}
             initialSupplementalImages={initialSupplementalImages}

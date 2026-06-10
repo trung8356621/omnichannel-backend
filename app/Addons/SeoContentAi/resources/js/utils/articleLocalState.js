@@ -1,4 +1,5 @@
 import { clearArticleEditorStorage } from './articleEditorStorage';
+import { clearFeaturedImageStorage } from './articleFeaturedImageStorage';
 import { clearArticleMediaPickerCache } from './articleMediaPickerCache';
 import { clearProductAlbumStorage } from './articleProductAlbumStorage';
 
@@ -6,6 +7,7 @@ const BLOCK_HEIGHT_PREFIX = 'seo-block-editor-h:';
 
 export function clearArticleLocalState(articleId, siteId) {
     clearArticleEditorStorage(articleId);
+    clearFeaturedImageStorage(articleId);
     clearProductAlbumStorage(articleId);
     clearArticleMediaPickerCache(siteId);
 

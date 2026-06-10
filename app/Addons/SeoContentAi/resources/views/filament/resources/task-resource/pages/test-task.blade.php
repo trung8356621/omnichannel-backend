@@ -83,9 +83,9 @@
                                     <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">{{ $step['message'] }}</p>
                                 @endif
                                 @if (! empty($step['output']))
-                                    <div class="seo-task-test-pre-wrap">
-                                        <pre class="seo-task-test-pre text-xs">{{ $step['output'] }}</pre>
-                                    </div>
+                                    <x-seo-content-ai::ai-result
+                                        :label="'Kết quả bước ' . ($index + 1)"
+                                    >{{ $step['output'] }}</x-seo-content-ai::ai-result>
                                 @endif
                             </li>
                         @endforeach
@@ -470,29 +470,5 @@
             flex-shrink: 0;
         }
 
-        .seo-task-test-pre-wrap {
-            max-height: 320px;
-            overflow: auto;
-            border-radius: 0.5rem;
-            border: 1px solid #e5e7eb;
-            background: #f9fafb;
-        }
-
-        .dark .seo-task-test-pre-wrap {
-            border-color: #374151;
-            background: #111827;
-        }
-
-        .seo-task-test-pre {
-            margin: 0;
-            padding: 0.75rem 1rem;
-            white-space: pre-wrap;
-            word-break: break-word;
-            color: #111827;
-        }
-
-        .dark .seo-task-test-pre {
-            color: #e5e7eb;
-        }
     </style>
 </x-filament-panels::page>

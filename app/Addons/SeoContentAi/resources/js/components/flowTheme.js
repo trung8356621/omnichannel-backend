@@ -13,6 +13,7 @@ export function buildFlowTheme(isDark) {
         'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-100 shadow-sm',
       widgetIcon: {
         article: 'text-sky-300 bg-sky-500/25',
+        article_filter: 'text-cyan-300 bg-cyan-500/25',
         prompt: 'text-violet-300 bg-violet-500/25',
         filter: 'text-amber-300 bg-amber-500/25',
         action: 'text-rose-300 bg-rose-500/25',
@@ -56,6 +57,7 @@ export function buildFlowTheme(isDark) {
       'bg-white hover:bg-gray-50 border-gray-300 text-gray-800 shadow-sm',
     widgetIcon: {
       article: 'text-sky-700 bg-sky-100',
+      article_filter: 'text-cyan-700 bg-cyan-100',
       prompt: 'text-violet-700 bg-violet-100',
       filter: 'text-amber-800 bg-amber-100',
       action: 'text-rose-700 bg-rose-100',
@@ -90,6 +92,7 @@ export function buildFlowTheme(isDark) {
 export function nodeBorderClass(type, isSelected, isDark) {
   if (isSelected) {
     if (type === 'article') return 'border-sky-500';
+    if (type === 'article_filter') return 'border-cyan-500';
     if (type === 'prompt') return 'border-violet-500';
     if (type === 'filter') return 'border-amber-500';
     if (type === 'action' || type === 'end') return 'border-rose-500';

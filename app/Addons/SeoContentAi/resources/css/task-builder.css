@@ -4,6 +4,33 @@
 
 @source '../js/**/*.{js,jsx}';
 
+body:has(#seo-task-workflow-builder-root) {
+  overflow: hidden;
+}
+
+body:has(#seo-task-workflow-builder-root) .fi-sidebar,
+body:has(#seo-task-workflow-builder-root) .fi-topbar,
+body:has(#seo-task-workflow-builder-root) .seo-global-chat {
+  display: none !important;
+}
+
+body:has(#seo-task-workflow-builder-root) .fi-main-ctn,
+body:has(#seo-task-workflow-builder-root) .fi-main {
+  width: 100% !important;
+  max-width: none !important;
+  height: 100dvh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body:has(#seo-task-workflow-builder-root) .seo-task-builder-page {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  width: 100vw;
+  height: 100dvh;
+}
+
 /* Filament theme.css is unlayered and overrides @layer utilities on <button>. */
 .seo-flow-builder .seo-flow-btn-primary {
   background-color: #059669 !important;

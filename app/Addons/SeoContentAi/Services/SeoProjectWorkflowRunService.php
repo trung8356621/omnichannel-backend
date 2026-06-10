@@ -300,7 +300,13 @@ final class SeoProjectWorkflowRunService
                     $this->storeArticleRunMeta($articleId, $run, $task);
                 }
 
-                return $this->buildItemRow($task, true, $articleId, (string) $result['message']);
+                return $this->buildItemRow(
+                    $task,
+                    true,
+                    $articleId,
+                    (string) $result['message'],
+                    $this->promptSteps($result['steps'] ?? []),
+                );
             }
 
             $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
@@ -311,6 +317,7 @@ final class SeoProjectWorkflowRunService
                 $task,
                 isset($result['article_id']) ? (int) $result['article_id'] : null,
                 $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep),
+                $this->promptSteps($result['steps'] ?? []),
             );
             $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
 
@@ -448,6 +455,7 @@ final class SeoProjectWorkflowRunService
         bool $success,
         ?int $articleId,
         string $message,
+        array $steps = [],
     ): array {
         return [
             'task_id' => (int) $task->id,
@@ -461,6 +469,7 @@ final class SeoProjectWorkflowRunService
             'article_id' => $articleId,
             'article_edit_url' => $articleId > 0 ? ArticleResource::panelUrl('edit', ['record' => $articleId]) : null,
             'message' => $message,
+            'steps' => $steps,
         ];
     }
 
@@ -474,9 +483,13 @@ final class SeoProjectWorkflowRunService
      * }  $error
      * @return array<string, mixed>
      */
-    private function buildFailedItemRow(SeoProjectTask $task, ?int $articleId, array $error): array
-    {
-        $row = $this->buildItemRow($task, false, $articleId, $error['message']);
+    private function buildFailedItemRow(
+        SeoProjectTask $task,
+        ?int $articleId,
+        array $error,
+        array $steps = [],
+    ): array {
+        $row = $this->buildItemRow($task, false, $articleId, $error['message'], $steps);
 
         $row['error_detail'] = $error['error_detail'];
 
@@ -493,6 +506,21 @@ final class SeoProjectWorkflowRunService
         }
 
         return $row;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function promptSteps(mixed $steps): array
+    {
+        if (! is_array($steps)) {
+            return [];
+        }
+
+        return collect($steps)
+            ->filter(fn (mixed $step): bool => is_array($step) && ($step['type'] ?? '') === 'prompt')
+            ->values()
+            ->all();
     }
 
     private function storeArticleRunMeta(int $articleId, SeoProjectRun $run, SeoProjectTask $task): void

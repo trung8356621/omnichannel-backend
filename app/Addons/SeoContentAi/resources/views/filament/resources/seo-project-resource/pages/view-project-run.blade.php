@@ -129,6 +129,18 @@
                                 <td class="px-3 py-3">
                                     @if ($taskId > 0 && in_array($itemStatus, ['success', 'failed', 'pending'], true))
                                         <div class="flex flex-wrap gap-2">
+                                            @if ($stepsUrl = $this->itemStepsUrl($item))
+                                                <x-filament::button
+                                                    size="xs"
+                                                    color="gray"
+                                                    tag="a"
+                                                    href="{{ $stepsUrl }}"
+                                                    target="_blank"
+                                                >
+                                                    Xem runs
+                                                </x-filament::button>
+                                            @endif
+
                                             @if ($itemStatus === 'success')
                                                 <x-filament::button
                                                     size="xs"

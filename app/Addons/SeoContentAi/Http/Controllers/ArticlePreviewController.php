@@ -12,26 +12,38 @@ use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
 use Illuminate\Contracts\View\View;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Response;
 
 class ArticlePreviewController extends Controller
 {
-    public function __invoke(SeoArticle $article, ArticleFaqHtmlRenderer $faqRenderer): View|Response
-    {
+    public function __invoke(
+        SeoArticle $article,
+        ArticleFaqHtmlRenderer $faqRenderer,
+        WordPressArticleContentService $wordPressContent,
+    ): View|Response|RedirectResponse {
         abort_unless($this->canViewArticle($article), 403);
 
         $article->loadMissing(['site', 'keywords']);
 
+        if ($article->body === null && (int) ($article->wp_post_id ?? 0) > 0) {
+            $permalink = trim($wordPressContent->resolvePermalink($article));
+
+            if ($permalink !== '') {
+                return redirect()->away($permalink);
+            }
+        }
+
         $contentHtml = $faqRenderer->renderBodyWithFaqs($article);
         if ($contentHtml === '') {
-            $contentHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($article);
+            $contentHtml = $wordPressContent->resolveEditorHtml($article);
         }
 
         return view('seo-content-ai::articles.preview', [
             'article' => $article,
             'contentHtml' => $contentHtml,
             'focusKeyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
-            'permalink' => app(WordPressArticleContentService::class)->resolvePermalink($article),
+            'permalink' => $wordPressContent->resolvePermalink($article),
             'editUrl' => ArticleResource::panelUrl('edit', ['record' => $article]),
         ]);
     }

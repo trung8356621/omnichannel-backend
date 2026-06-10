@@ -13,6 +13,10 @@ use Throwable;
 
 final class WordPressArticleSyncService
 {
+    public function __construct(
+        private readonly WordPressArticleTimestampService $timestampService,
+    ) {}
+
     /**
      * Tạo post/product mới trên WordPress và liên kết lại với bản ghi Laravel.
      *
@@ -96,6 +100,7 @@ final class WordPressArticleSyncService
                 'wp_post_id' => $wpPostId,
                 'slug' => $remoteSlug !== '' ? $remoteSlug : null,
             ], static fn (mixed $value): bool => $value !== null));
+            $this->timestampService->sync($article, $decoded);
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_type'],
                 ['meta_value' => $postType],
@@ -216,7 +221,14 @@ final class WordPressArticleSyncService
      * Đẩy tiêu đề, slug, trạng thái, nội dung và FAQ lên WordPress (nút «Đồng bộ»).
      *
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
-     * @return array{success: bool, message: string, faq_count?: int, faq_extract_debug?: array<string, mixed>|null}
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     faq_count?: int,
+     *     faq_extract_debug?: array<string, mixed>|null,
+     *     post_type?: string,
+     *     post_type_changed?: bool
+     * }
      */
     public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
     {
@@ -294,11 +306,15 @@ final class WordPressArticleSyncService
         }
 
         $virtualComments = app(VirtualCommentService::class)->getFromArticle($article);
+        $requestedPostType = strtolower(trim((string) ($article->type ?? 'article'))) === 'product'
+            ? 'product'
+            : 'post';
 
         $payload = [
             'title' => (string) ($article->title ?? ''),
             'slug' => (string) ($article->slug ?? ''),
             'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
+            'post_type' => $requestedPostType,
             'post_content' => $postContent !== '' ? $postContent : null,
             'faqs' => $faqs,
             'virtual_comments' => $virtualComments,
@@ -346,6 +362,18 @@ final class WordPressArticleSyncService
 
             $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
             $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
+            $remotePostType = strtolower(trim((string) ($decoded['post_type'] ?? $requestedPostType)));
+            if (! in_array($remotePostType, ['post', 'product'], true)) {
+                $remotePostType = $requestedPostType;
+            }
+
+            $article->update([
+                'type' => $remotePostType === 'product' ? 'product' : 'article',
+            ]);
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_type'],
+                ['meta_value' => $remotePostType],
+            );
             if ($remoteSlug !== '') {
                 $article->update(['slug' => $remoteSlug]);
                 $article->articleMetas()->updateOrCreate(
@@ -414,12 +442,15 @@ final class WordPressArticleSyncService
 
             $article->update(['body' => null]);
             app(ArticleWordPressSyncFlagService::class)->clearAll($article);
+            $this->timestampService->sync($article, $decoded);
 
             return [
                 'success' => true,
                 'message' => $message,
                 'faq_count' => count($faqs),
                 'faq_extract_debug' => $faqExtractDebug,
+                'post_type' => $remotePostType,
+                'post_type_changed' => (bool) ($decoded['post_type_changed'] ?? false),
             ];
         } catch (Throwable $e) {
             Log::warning('WordPress article sync exception', [

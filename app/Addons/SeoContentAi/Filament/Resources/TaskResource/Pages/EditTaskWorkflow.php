@@ -57,7 +57,7 @@ class EditTaskWorkflow extends Page
         /** @var SeoTask $task */
         $task = $this->getRecord();
 
-        return 'Workflow: ' . $task->name;
+        return 'Workflow: '.$task->name;
     }
 
     protected function getHeaderActions(): array
@@ -74,7 +74,7 @@ class EditTaskWorkflow extends Page
         ];
     }
 
-    protected function persistTaskFlow(string $taskName, array $flowData): void
+    protected function persistTaskFlow(string $taskName, array $flowData): bool
     {
         /** @var SeoTask $task */
         $task = $this->getRecord();
@@ -85,7 +85,7 @@ class EditTaskWorkflow extends Page
                 ->danger()
                 ->send();
 
-            return;
+            return false;
         }
 
         $task->update([
@@ -97,6 +97,8 @@ class EditTaskWorkflow extends Page
             ->title('Workflow saved successfully')
             ->success()
             ->send();
+
+        return true;
     }
 
     /**

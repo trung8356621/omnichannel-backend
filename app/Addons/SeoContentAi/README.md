@@ -17,6 +17,7 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 - **Bài viết / sản phẩm / danh mục** — Editor block (TipTap/React), FAQ, SEO meta, preview Google SERP, điểm SEO, review ảo.
 - **Đồng bộ WordPress** — Lưu local, đồng bộ full (`WordPressArticleSyncService`), sửa slug trực tiếp lên WP + refresh permalink, lấy nội dung từ WP, redirect sửa bài từ frontend WP.
 - **Prompt & Task** — Quản lý prompt, workflow builder, chạy thử, tích hợp AI (Gemini và kết nối AI).
+- **Trợ lý AI toàn cục** — Sidebar chat Gemini/Claude trên các trang SEO, hỗ trợ ảnh và dùng model active từ AI settings; không render trong `/admin` hoặc trang sửa bài viết vì editor có panel AI riêng.
 - **Domain** — Cấu hình site, từ khóa, internal link list, CTA, tone, prompt theo domain.
 - **Thư viện media** — Upload local, sync WP, watermark, split ảnh, tối ưu ảnh, job AI generate.
 - **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain; widget tải plugin WP trên dashboard.
@@ -138,6 +139,7 @@ Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên fronten
 | Media API | `/api/seo/media` | Upload, watermark, rename, AI jobs |
 | Watermark API | `/api/seo/watermark` | Cấu hình & batch watermark |
 | Article | `/seo/articles/{id}/preview`, `seo-preview`, `wp-edit-redirect` | Preview & redirect WP |
+| Global AI chat | `GET /api/ai/chat/models`, `POST /api/ai/chat` | Danh sách model được phép và chat text/image có session auth |
 | WP bridge | `/api/seo-wp-bridge/*` | Webhook push content từ WP |
 | Plugin | `/api/seo/plugin/*` | Update check / download bridge |
 

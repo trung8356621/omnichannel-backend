@@ -420,50 +420,20 @@ class SeoProjectResource extends Resource
                     }),
             ])
             ->actions([
-                Tables\Actions\Action::make('run_workflow')
-                    ->label(__('seo-content-ai::filament.projects.run_workflow'))
-                    ->icon('heroicon-o-play')
-                    ->color('success')
-                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
-                    ->requiresConfirmation()
-                    ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
-                    ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
-                        $record,
-                    ))
-                    ->action(function (SeoProject $record): mixed {
-                        return static::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_FULL);
-                    }),
-                Tables\Actions\Action::make('test_run_workflow')
-                    ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
-                    ->icon('heroicon-o-beaker')
-                    ->color('warning')
-                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
-                    ->requiresConfirmation()
-                    ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
-                    ->modalDescription(fn (SeoProject $record): HtmlString => static::runWorkflowModalDescription(
-                        $record,
-                        SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
-                    ))
-                    ->action(function (SeoProject $record): mixed {
-                        return static::dispatchProjectWorkflowRun($record, SeoProjectRun::MODE_TEST);
-                    }),
                 Tables\Actions\Action::make('view_runs')
                     ->label(__('seo-content-ai::filament.projects.view_runs'))
                     ->icon('heroicon-o-queue-list')
                     ->color('gray')
-                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessPlannerFeatures()
-                        && $record->runs()->exists())
-                    ->url(fn (SeoProject $record): string => static::getLatestRunUrl($record) ?? static::getUrl('edit', [
-                        'record' => $record,
-                    ])),
+                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
+                    ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
                 Tables\Actions\Action::make('merge_completed_tasks')
                     ->label(__('seo-content-ai::filament.projects.merge_projects'))
                     ->icon('heroicon-o-arrows-pointing-in')
                     ->color('info')
                     ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessPlannerFeatures()
                         && $record->tasks()
-                        ->where('status', SeoProjectTask::STATUS_COMPLETED)
-                        ->exists()
+                            ->where('status', SeoProjectTask::STATUS_COMPLETED)
+                            ->exists()
                         && app(SeoProjectMergeService::class)->availableTargets($record)->isNotEmpty())
                     ->modalHeading(__('seo-content-ai::filament.projects.merge_projects_heading'))
                     ->modalDescription(__('seo-content-ai::filament.projects.merge_projects_description'))
@@ -581,9 +551,16 @@ class SeoProjectResource extends Resource
         return [
             'index' => Pages\ListSeoProjects::route('/'),
             'create' => Pages\CreateSeoProject::route('/create'),
+            'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
+            'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
             'edit' => Pages\EditSeoProject::route('/{record}/edit'),
         ];
+    }
+
+    public static function getRunHistoryUrl(SeoProject $project): string
+    {
+        return static::getUrl('run-history', ['record' => $project]);
     }
 
     public static function getLatestRunUrl(SeoProject $project): ?string
