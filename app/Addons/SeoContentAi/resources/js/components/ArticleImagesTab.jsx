@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
 import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
@@ -341,7 +341,11 @@ function ImageRow({
     };
 
     return (
-        <li className="seo-article-images-row">
+        <li
+            className="seo-article-images-row"
+            data-seo-media-id={Number(row.seoMediaId ?? 0) > 0 ? Number(row.seoMediaId) : undefined}
+            data-image-src={String(row.src || '').trim()}
+        >
             <div className="seo-article-images-preview">
                 <button
                     type="button"
@@ -524,6 +528,7 @@ export default function ArticleImagesTab({
     extraImages = [],
     siteId = null,
     articleId = null,
+    jumpTarget = null,
     focusKeyword,
     articleTitle = '',
     onPatchImage,
@@ -635,6 +640,7 @@ export default function ArticleImagesTab({
         }));
     }, [blockImages, extraImages]);
     const [aiJobs, setAiJobs] = useState([]);
+    const lastJumpTokenRef = useRef(null);
 
     const loadAiJobs = useCallback(async () => {
         if (!articleId) {
@@ -680,6 +686,42 @@ export default function ArticleImagesTab({
         const timer = window.setInterval(loadAiJobs, AI_JOBS_POLL_MS);
         return () => window.clearInterval(timer);
     }, [articleId, aiJobs, loadAiJobs]);
+
+    useEffect(() => {
+        if (!jumpTarget || jumpTarget.token === lastJumpTokenRef.current) {
+            return;
+        }
+
+        lastJumpTokenRef.current = jumpTarget.token;
+        const targetMediaId = Number(jumpTarget?.seoMediaId ?? 0);
+        const targetSrc = String(jumpTarget?.src ?? '').trim();
+
+        const jump = () => {
+            let targetNode = null;
+            if (targetMediaId > 0) {
+                targetNode = document.querySelector(
+                    `.seo-article-images-row[data-seo-media-id="${targetMediaId}"]`,
+                );
+            }
+
+            if (!targetNode && targetSrc !== '') {
+                const rows = Array.from(document.querySelectorAll('.seo-article-images-row[data-image-src]'));
+                targetNode = rows.find(
+                    (node) => String(node?.dataset?.imageSrc ?? '').trim() === targetSrc,
+                ) ?? null;
+            }
+
+            if (!targetNode) {
+                return;
+            }
+
+            targetNode.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetNode.classList.add('is-jump-focus');
+            window.setTimeout(() => targetNode?.classList.remove('is-jump-focus'), 2000);
+        };
+
+        window.setTimeout(jump, 80);
+    }, [jumpTarget, mergedImages, aiJobs]);
 
     const totalCount = aiJobs.length + mergedImages.length;
     const hasWpImages = mergedImages.some((row) => row.wpAttachmentId);

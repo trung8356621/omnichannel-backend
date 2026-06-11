@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlignCenter, AlignLeft, AlignRight, Images, Maximize2, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, ExternalLink, Images, Maximize2, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
 import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
 import { importSeoMediaFromUrl, processClipboardImagePaste } from '../utils/seoMediaApi';
 import { ImageBlockPickerBox } from './BlockInsertMenu';
@@ -428,6 +428,22 @@ export default function ImageBlockEditor({
         }]);
     }, [image, articleId]);
 
+    const handleJumpToImagesTab = useCallback(() => {
+        const src = String(image?.src ?? '').trim();
+        if (!src) {
+            return;
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-open-images-tab', {
+                detail: {
+                    seoMediaId: Number(image?.seoMediaId ?? image?.seo_media_id ?? 0),
+                    src,
+                },
+            }),
+        );
+    }, [image]);
+
     useEffect(() => {
         if (!isActive) {
             return undefined;
@@ -669,6 +685,15 @@ export default function ImageBlockEditor({
                             }}
                         >
                             <Pencil size={18} strokeWidth={1.75} />
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-image-toolbar-btn"
+                            title="Mở trong tab Hình ảnh"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={handleJumpToImagesTab}
+                        >
+                            <ExternalLink size={18} strokeWidth={1.75} />
                         </button>
                         <button
                             type="button"

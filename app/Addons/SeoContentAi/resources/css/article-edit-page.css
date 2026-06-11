@@ -5,6 +5,32 @@
     --wp-article-sidebar-gap: 1rem;
 }
 
+/* Edit Article dùng canvas riêng: ẩn heading và sidebar trái toàn cục của Filament. */
+body:has(.seo-article-edit-page) .fi-sidebar,
+body:has(.seo-article-edit-page) .fi-sidebar-close-overlay {
+    display: none !important;
+}
+
+body:has(.seo-article-edit-page) .fi-main-ctn,
+body:has(.seo-article-edit-page) .fi-main,
+body:has(.seo-article-edit-page) .fi-page,
+body:has(.seo-article-edit-page) .fi-page-content {
+    max-width: none !important;
+    width: 100% !important;
+}
+
+body:has(.seo-article-edit-page) .fi-main {
+    padding-inline: 0.75rem !important;
+}
+
+body:has(.seo-article-edit-page) .fi-header {
+    display: none !important;
+}
+
+body:has(.seo-article-edit-page) .fi-topbar {
+    left: 0 !important;
+}
+
 /* User bar (Filament topbar z-20) must sit above fixed article sidebar rail (z-index: 20) */
 body:has(.seo-article-edit-page) .fi-topbar {
     z-index: 30;

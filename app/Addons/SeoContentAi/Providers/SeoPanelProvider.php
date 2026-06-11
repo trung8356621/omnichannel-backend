@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Providers;
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
@@ -150,6 +151,35 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{media}/save-edited', [SeoMediaController::class, 'saveEditedImage'])
                     ->whereNumber('media')
                     ->name('seo.media.save-edited');
+            });
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
+            CheckMainRole::class,
+        ])
+            ->prefix('api/seo/articles')
+            ->group(function (): void {
+                Route::get('/{article}/outline', [ArticleOutlineController::class, 'index'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.outline.index');
+                Route::post('/{article}/outline/check-duplicates', [ArticleOutlineController::class, 'checkDuplicates'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.outline.check-duplicates');
+                Route::put('/{article}/outline/{heading}', [ArticleOutlineController::class, 'update'])
+                    ->whereNumber('article')
+                    ->whereNumber('heading')
+                    ->name('seo.articles.outline.update');
+                Route::post('/{article}/outline/{heading}/generate', [ArticleOutlineController::class, 'generate'])
+                    ->whereNumber('article')
+                    ->whereNumber('heading')
+                    ->name('seo.articles.outline.generate');
             });
 
         Route::middleware([

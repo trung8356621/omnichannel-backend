@@ -125,16 +125,6 @@
                         </p>
                     @endforelse
                 </section>
-
-                <form wire:submit="saveOverviewSettings" class="max-w-3xl space-y-6 mt-8">
-                    {{ $this->form }}
-
-                    <div class="flex justify-end">
-                        <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('Save FAQ settings') }}
-                        </x-filament::button>
-                    </div>
-                </form>
             </div>
         </div>
     </x-filament-panels::page>

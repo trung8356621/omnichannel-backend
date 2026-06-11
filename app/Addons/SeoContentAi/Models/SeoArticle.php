@@ -130,6 +130,11 @@ class SeoArticle extends Model
         return $this->hasMany(SeoArticleLink::class, 'article_id');
     }
 
+    public function headings(): HasMany
+    {
+        return $this->hasMany(SeoArticleHeading::class, 'article_id')->orderBy('sort_order');
+    }
+
     public function faqs(): HasMany
     {
         return $this->hasMany(SeoFaq::class, 'article_id')->orderBy('sort_order');

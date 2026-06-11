@@ -15,6 +15,16 @@ final class SeoOverviewSettingsService
 
     public const KEY_FAQ_CATCH_KEYWORDS = 'faq_catch_keywords';
 
+    public const KEY_OUTLINE_SKIP_WORDS = 'outline_skip_words';
+
+    /** @var list<string> */
+    private const DEFAULT_OUTLINE_SKIP_WORDS = [
+        'giới thiệu',
+        'kết luận',
+        'faq',
+        'câu hỏi thường gặp',
+    ];
+
     /** @var list<string> */
     private const DEFAULT_FAQ_CATCH_KEYWORDS = [
         'faq',
@@ -51,7 +61,7 @@ final class SeoOverviewSettingsService
     }
 
     /**
-     * @return array{faq_catch_keywords: list<string>}
+     * @return array{faq_catch_keywords: list<string>, outline_skip_words: list<string>}
      */
     public function getSettings(): array
     {
@@ -66,9 +76,13 @@ final class SeoOverviewSettingsService
         }
 
         $keywords = $this->normalizeKeywords($data[self::KEY_FAQ_CATCH_KEYWORDS] ?? null);
+        $skipWords = array_key_exists(self::KEY_OUTLINE_SKIP_WORDS, $data)
+            ? $this->normalizeKeywords($data[self::KEY_OUTLINE_SKIP_WORDS])
+            : self::DEFAULT_OUTLINE_SKIP_WORDS;
 
         return [
             self::KEY_FAQ_CATCH_KEYWORDS => $keywords !== [] ? $keywords : self::DEFAULT_FAQ_CATCH_KEYWORDS,
+            self::KEY_OUTLINE_SKIP_WORDS => $skipWords,
         ];
     }
 
@@ -83,14 +97,26 @@ final class SeoOverviewSettingsService
     }
 
     /**
+     * @return list<string> các từ/tiêu đề được phép trùng (đã lowercase)
+     */
+    public function getOutlineSkipWords(): array
+    {
+        return $this->getSettings()[self::KEY_OUTLINE_SKIP_WORDS];
+    }
+
+    /**
      * @param  array<string, mixed>  $settings
      */
     public function saveSettings(array $settings): void
     {
         $keywords = $this->normalizeKeywords($settings[self::KEY_FAQ_CATCH_KEYWORDS] ?? null);
+        $skipWords = array_key_exists(self::KEY_OUTLINE_SKIP_WORDS, $settings)
+            ? $this->normalizeKeywords($settings[self::KEY_OUTLINE_SKIP_WORDS])
+            : $this->getOutlineSkipWords();
 
         WpOption::set(self::OPTION_KEY, [
             self::KEY_FAQ_CATCH_KEYWORDS => $keywords !== [] ? $keywords : self::DEFAULT_FAQ_CATCH_KEYWORDS,
+            self::KEY_OUTLINE_SKIP_WORDS => $skipWords,
         ], 'no');
 
         $this->inMemorySettings = null;
@@ -112,12 +138,13 @@ final class SeoOverviewSettingsService
     }
 
     /**
-     * @return array{faq_catch_keywords: list<string>}
+     * @return array{faq_catch_keywords: list<string>, outline_skip_words: list<string>}
      */
     private function defaultSettings(): array
     {
         return [
             self::KEY_FAQ_CATCH_KEYWORDS => self::DEFAULT_FAQ_CATCH_KEYWORDS,
+            self::KEY_OUTLINE_SKIP_WORDS => self::DEFAULT_OUTLINE_SKIP_WORDS,
         ];
     }
 

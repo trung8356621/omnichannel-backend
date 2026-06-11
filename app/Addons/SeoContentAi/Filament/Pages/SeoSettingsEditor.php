@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
+use App\Addons\SeoContentAi\Services\SeoOverviewSettingsService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -28,9 +29,20 @@ class SeoSettingsEditor extends Page implements HasForms
     /** @var array<string, mixed> */
     public array $editorSettingsData = [];
 
-    public function mount(ArticleEditorHistoryService $settings): void
+    public function mount(ArticleEditorHistoryService $editorSettings, SeoOverviewSettingsService $overviewSettings): void
     {
-        $this->editorSettingsData = $settings->getSettings();
+        $overviewRaw = $overviewSettings->getSettings();
+
+        $this->editorSettingsData = array_merge(
+            $editorSettings->getSettings(),
+            [
+                SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS => $overviewSettings->keywordsToTextarea(
+                    $overviewRaw[SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS],
+                ),
+                SeoOverviewSettingsService::KEY_OUTLINE_SKIP_WORDS => $overviewRaw[SeoOverviewSettingsService::KEY_OUTLINE_SKIP_WORDS],
+            ],
+        );
+
         $this->form->fill($this->editorSettingsData);
     }
 
@@ -60,14 +72,45 @@ class SeoSettingsEditor extends Page implements HasForms
                             ->suffix(__('seo-content-ai::filament.settings_editor.seconds_suffix')),
                     ])
                     ->columns(2),
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_overview.faq_catch'))
+                    ->description(__('seo-content-ai::filament.settings_overview.faq_catch_description'))
+                    ->schema([
+                        Forms\Components\Textarea::make(SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS)
+                            ->label(__('seo-content-ai::filament.settings_overview.faq_keywords_label'))
+                            ->rows(10)
+                            ->required()
+                            ->columnSpanFull()
+                            ->helperText(__('seo-content-ai::filament.settings_overview.faq_keywords_hint')),
+                    ]),
+                Forms\Components\Section::make('Dò trùng lặp Outline')
+                    ->description('Cấu hình bộ lọc khi dò heading trùng lặp giữa các bài viết trong site.')
+                    ->schema([
+                        Forms\Components\TagsInput::make(SeoOverviewSettingsService::KEY_OUTLINE_SKIP_WORDS)
+                            ->label('Các từ/tiêu đề bỏ qua khi dò trùng (Skip List)')
+                            ->placeholder('Nhập tiêu đề rồi nhấn Enter')
+                            ->columnSpanFull()
+                            ->helperText('Nhập các tiêu đề được phép trùng lặp giữa các bài (VD: Giới thiệu, Kết luận, FAQ, Câu hỏi thường gặp,...). Nhấn Enter để thêm.'),
+                    ]),
             ])
             ->statePath('editorSettingsData');
     }
 
-    public function saveEditorSettings(ArticleEditorHistoryService $settings): void
-    {
+    public function saveEditorSettings(
+        ArticleEditorHistoryService $editorSettings,
+        SeoOverviewSettingsService $overviewSettings,
+    ): void {
         $data = $this->form->getState();
-        $settings->saveSettings($data);
+
+        $editorSettings->saveSettings([
+            'history_step' => $data['history_step'] ?? ArticleEditorHistoryService::DEFAULT_HISTORY_STEP,
+            'autosave_interval_seconds' => $data['autosave_interval_seconds'] ?? ArticleEditorHistoryService::DEFAULT_AUTOSAVE_INTERVAL_SECONDS,
+        ]);
+
+        $faqRaw = (string) ($data[SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS] ?? '');
+        $overviewSettings->saveSettings([
+            SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS => $overviewSettings->keywordsFromTextarea($faqRaw),
+            SeoOverviewSettingsService::KEY_OUTLINE_SKIP_WORDS => $data[SeoOverviewSettingsService::KEY_OUTLINE_SKIP_WORDS] ?? [],
+        ]);
 
         Notification::make()
             ->title(__('seo-content-ai::filament.settings_editor.saved'))

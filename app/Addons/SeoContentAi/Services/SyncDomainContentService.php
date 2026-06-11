@@ -17,6 +17,7 @@ class SyncDomainContentService
 {
     public function __construct(
         private readonly WordPressArticleTimestampService $timestampService,
+        private readonly ArticleTocExtractionService $tocExtraction,
     ) {}
 
     /**
@@ -320,6 +321,7 @@ class SyncDomainContentService
             );
 
             app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $content);
+            $this->extractTocAfterWordPressContentSync($article);
         }
 
         $slug = trim((string) ($item['slug'] ?? ''));
@@ -445,6 +447,18 @@ class SyncDomainContentService
                 ['meta_key' => $metaKey],
                 ['meta_value' => $metaValue],
             );
+        }
+    }
+
+    private function extractTocAfterWordPressContentSync(SeoArticle $article): void
+    {
+        try {
+            $this->tocExtraction->extractForArticle($article);
+        } catch (Throwable $e) {
+            Log::warning('TOC extraction failed after WordPress content sync', [
+                'article_id' => $article->id,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

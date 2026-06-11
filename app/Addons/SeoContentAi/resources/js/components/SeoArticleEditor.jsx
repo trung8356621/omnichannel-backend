@@ -30,6 +30,7 @@ import {
 import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
 import SeoScorePanel from './SeoScorePanel';
 import ArticleImagesTab from './ArticleImagesTab';
+import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
@@ -234,6 +235,66 @@ const extractSectionHeading = (block) => {
     const text = (heading.textContent || '').replace(/\s+/g, ' ').trim();
 
     return text !== '' ? text : t('editor_section_untitled');
+};
+
+const blockHasOutlineHeading = (block) => {
+    if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
+        return false;
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(block.content, 'text/html');
+
+    return doc.body.querySelector('h2, h3, h4') !== null;
+};
+
+const normalizeOutlineHeadingText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+const extractOutlineHeadingFromBlock = (block) => {
+    if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
+        return null;
+    }
+
+    const doc = new DOMParser().parseFromString(block.content, 'text/html');
+    const heading = doc.body.querySelector('h2, h3, h4');
+    if (!heading) {
+        return null;
+    }
+
+    const text = normalizeOutlineHeadingText(heading.textContent);
+    if (text === '') {
+        return null;
+    }
+
+    return {
+        level: Number.parseInt(heading.tagName.charAt(1), 10),
+        headingText: text,
+    };
+};
+
+const findBlockIdForOutlineHeading = (blocks, level, headingText) => {
+    const target = normalizeOutlineHeadingText(headingText);
+    if (!target) {
+        return null;
+    }
+
+    const selector = level >= 2 && level <= 4 ? `h${level}` : 'h2, h3, h4';
+
+    for (const block of blocks) {
+        if (block.type !== 'text' || !block.content) {
+            continue;
+        }
+
+        const doc = new DOMParser().parseFromString(block.content, 'text/html');
+        const match = Array.from(doc.body.querySelectorAll(selector)).find(
+            (node) => normalizeOutlineHeadingText(node.textContent) === target,
+        );
+        if (match) {
+            return block.id;
+        }
+    }
+
+    return null;
 };
 
 const INTRO_SECTION_ID = 'section-intro';
@@ -1166,6 +1227,63 @@ function ActiveBlockEditor({
     );
 }
 
+function OutlineLockedHeadingBlock({ block, onActivate, onOutlineHeadingCommand }) {
+    const lockedClickTimerRef = useRef(null);
+
+    useEffect(
+        () => () => {
+            if (lockedClickTimerRef.current) {
+                window.clearTimeout(lockedClickTimerRef.current);
+            }
+        },
+        [],
+    );
+
+    const dispatchOutlineCommand = useCallback(
+        (action, event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onOutlineHeadingCommand?.(action, block);
+        },
+        [block, onOutlineHeadingCommand],
+    );
+
+    return (
+        <div
+            className="seo-block-preview seo-block-preview--outline-locked seo-wp-content p-3 -mx-1 rounded border prose prose-slate max-w-none dark:prose-invert"
+            dangerouslySetInnerHTML={{
+                __html: block.content || `<p class="text-gray-400 italic">${t('editor_click_to_edit')}</p>`,
+            }}
+            onClick={(event) => {
+                if (lockedClickTimerRef.current) {
+                    window.clearTimeout(lockedClickTimerRef.current);
+                }
+                lockedClickTimerRef.current = window.setTimeout(() => {
+                    lockedClickTimerRef.current = null;
+                    onActivate?.();
+                    dispatchOutlineCommand('focus', event);
+                }, 220);
+            }}
+            onDoubleClick={(event) => {
+                if (lockedClickTimerRef.current) {
+                    window.clearTimeout(lockedClickTimerRef.current);
+                    lockedClickTimerRef.current = null;
+                }
+                onActivate?.();
+                dispatchOutlineCommand('edit', event);
+            }}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    dispatchOutlineCommand('focus', e);
+                }
+            }}
+            role="button"
+            tabIndex={0}
+            title="Click: focus Outline · Double-click: sửa trong Outline"
+        />
+    );
+}
+
 function BlockEditor({
     block,
     isActive,
@@ -1186,9 +1304,12 @@ function BlockEditor({
     supportsProductGallery = false,
     panelFaqs,
     introImagesLocked = false,
+    outlineHeadingsLocked = false,
+    onOutlineHeadingCommand,
 }) {
     const blockHtml = displayContent ?? block.content;
     const isFaqShortcodeBlock = block.type === 'text' && isFaqPlaceholderHtml(blockHtml);
+    const isOutlineHeadingLocked = outlineHeadingsLocked && blockHasOutlineHeading(block);
 
     if (block.type === 'image') {
         return (
@@ -1246,6 +1367,16 @@ function BlockEditor({
             >
                 <FaqAccordionPreview faqs={panelFaqs} />
             </div>
+        );
+    }
+
+    if (isOutlineHeadingLocked) {
+        return (
+            <OutlineLockedHeadingBlock
+                block={block}
+                onActivate={onActivate}
+                onOutlineHeadingCommand={onOutlineHeadingCommand}
+            />
         );
     }
 
@@ -1335,6 +1466,7 @@ export default function SeoArticleEditor({
     const [tempMerge, setTempMerge] = useState(null);
     const [globalEditor, setGlobalEditor] = useState(null);
     const [activeTab, setActiveTab] = useState('editor');
+    const outlineRailRef = useRef(null);
     const [virtualReviews, setVirtualReviews] = useState(() =>
         Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
     );
@@ -1370,6 +1502,9 @@ export default function SeoArticleEditor({
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
+    const [imagesTabJumpTarget, setImagesTabJumpTarget] = useState(null);
+    const [outlineHasSavedHeadings, setOutlineHasSavedHeadings] = useState(false);
+    const [outlineHeadingCommand, setOutlineHeadingCommand] = useState(null);
     const [insertMenu, setInsertMenu] = useState(null);
     const [collapsedSectionIds, setCollapsedSectionIds] = useState({});
     const [supplementalImages, setSupplementalImages] = useState(() =>
@@ -1389,6 +1524,37 @@ export default function SeoArticleEditor({
     const [generateImageModalOpen, setGenerateImageModalOpen] = useState(false);
     const [generateImageModalPrompt, setGenerateImageModalPrompt] = useState('');
     const [generateImageModalTarget, setGenerateImageModalTarget] = useState('editor');
+
+    useEffect(() => {
+        if (!articleId) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        const loadOutlineStatus = async () => {
+            try {
+                const response = await fetch(`/api/seo/articles/${articleId}/outline`, {
+                    headers: { Accept: 'application/json' },
+                    credentials: 'same-origin',
+                });
+                const data = await response.json().catch(() => ({}));
+                if (cancelled || !response.ok || data.success === false) {
+                    return;
+                }
+
+                setOutlineHasSavedHeadings(Array.isArray(data.outline) && data.outline.length > 0);
+            } catch {
+                // Không khóa editor nếu không đọc được trạng thái outline.
+            }
+        };
+
+        void loadOutlineStatus();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [articleId]);
 
     const parseGalleryUrlList = useCallback((items) => {
         if (!Array.isArray(items)) {
@@ -3412,6 +3578,20 @@ export default function SeoArticleEditor({
         return () => window.removeEventListener('seo-editor-intra-selection', onIntra);
     }, [activeTab, activeBlockId, blocks, tempMerge, articleId]);
 
+    const syncOutlineFocusFromBlock = useCallback((block, action = 'focus') => {
+        const meta = extractOutlineHeadingFromBlock(block);
+        if (!meta) {
+            return;
+        }
+
+        setOutlineHeadingCommand({
+            token: Date.now(),
+            level: meta.level,
+            headingText: meta.headingText,
+            action,
+        });
+    }, []);
+
     const activateBlock = useCallback(
         (id) => {
             setInsertMenu(null);
@@ -3423,14 +3603,36 @@ export default function SeoArticleEditor({
                 clearTempMerge();
                 setGlobalEditor(null);
                 setActiveBlockId(id);
+                if (outlineHasSavedHeadings) {
+                    const block = blocksRef.current.find((item) => item.id === id);
+                    if (block) {
+                        syncOutlineFocusFromBlock(block);
+                    }
+                }
                 return;
             }
-            if (id === activeBlockId) return;
+            if (id === activeBlockId) {
+                return;
+            }
             commitActiveBlock();
             setActiveBlockId(id);
             setGlobalEditor(null);
+            if (outlineHasSavedHeadings) {
+                const block = blocksRef.current.find((item) => item.id === id);
+                if (block) {
+                    syncOutlineFocusFromBlock(block);
+                }
+            }
         },
-        [activeBlockId, collapsedSectionIds, commitActiveBlock, clearTempMerge, sectionByBlockId],
+        [
+            activeBlockId,
+            collapsedSectionIds,
+            commitActiveBlock,
+            clearTempMerge,
+            outlineHasSavedHeadings,
+            sectionByBlockId,
+            syncOutlineFocusFromBlock,
+        ],
     );
 
     const insertBlockRelative = useCallback(
@@ -4803,8 +5005,50 @@ export default function SeoArticleEditor({
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
 
+    // Sync text heading từ tab Outline về block tương ứng trong editor chính.
+    const applyOutlineHeadingText = useCallback(({ level, oldText, newText }) => {
+        const normalizeText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const targetLevel = Number(level) || 0;
+        const target = normalizeText(oldText);
+        const replacement = normalizeText(newText);
+        if (target === '' || replacement === '' || target === replacement) {
+            return;
+        }
+
+        const selector = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2, h3, h4';
+        let replaced = false;
+
+        setBlocks((prev) =>
+            prev.map((block) => {
+                if (replaced || block.type !== 'text' || !block.content) {
+                    return block;
+                }
+
+                const doc = new DOMParser().parseFromString(block.content, 'text/html');
+                const headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
+                    (node) => normalizeText(node.textContent) === target,
+                );
+                if (!headingNode) {
+                    return block;
+                }
+
+                headingNode.textContent = replacement;
+                replaced = true;
+
+                return { ...block, content: doc.body.innerHTML };
+            }),
+        );
+    }, []);
+
+    const handleOutlineLoaded = useCallback((outline) => {
+        setOutlineHasSavedHeadings(Array.isArray(outline) && outline.length > 0);
+    }, []);
+
     const switchTab = useCallback(
         (tabId) => {
+            if (tabId === 'outline') {
+                return;
+            }
             if (tabId !== 'editor' && activeBlockId) {
                 commitActiveBlock();
                 setActiveBlockId(null);
@@ -4815,6 +5059,73 @@ export default function SeoArticleEditor({
         },
         [activeBlockId, commitActiveBlock],
     );
+
+    const openOutlineRail = useCallback(() => {
+        setActiveTab('editor');
+        const rail = outlineRailRef.current;
+        if (!rail) {
+            return;
+        }
+
+        rail.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
+        rail.classList.add('is-pulse');
+        window.setTimeout(() => rail.classList.remove('is-pulse'), 1200);
+    }, []);
+
+    const handleOutlineHeadingFromEditor = useCallback(
+        (action, block) => {
+            syncOutlineFocusFromBlock(block, action);
+            openOutlineRail();
+        },
+        [openOutlineRail, syncOutlineFocusFromBlock],
+    );
+
+    const jumpToOutlineHeading = useCallback(
+        (node) => {
+            const blockId = findBlockIdForOutlineHeading(
+                blocksRef.current,
+                Number(node?.level ?? 0),
+                String(node?.heading_text ?? ''),
+            );
+            if (!blockId) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Outline',
+                            body: 'Không tìm thấy heading tương ứng trong editor.',
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            focusImageBlock(blockId);
+        },
+        [focusImageBlock],
+    );
+
+    useEffect(() => {
+        const onOpenImagesTab = (event) => {
+            const detail = event?.detail ?? {};
+            const src = String(detail?.src ?? '').trim();
+            const seoMediaId = Number(detail?.seoMediaId ?? detail?.seo_media_id ?? 0);
+
+            switchTab('images');
+            setImagesTabJumpTarget({
+                token: Date.now(),
+                seoMediaId: seoMediaId > 0 ? seoMediaId : null,
+                src,
+            });
+        };
+
+        window.addEventListener('seo-open-images-tab', onOpenImagesTab);
+
+        return () => {
+            window.removeEventListener('seo-open-images-tab', onOpenImagesTab);
+        };
+    }, [switchTab]);
 
     useEffect(() => {
         if (!activeBlockId) {
@@ -5132,6 +5443,27 @@ export default function SeoArticleEditor({
                         : t('editor_please_wait')
                 }
             />
+            <div className="seo-article-editor-workspace">
+                <aside
+                    ref={outlineRailRef}
+                    className="seo-article-editor-outline-rail"
+                    aria-label="Outline / Dàn ý"
+                >
+                    <ArticleOutlineTab
+                        articleId={articleId}
+                        headingCommand={outlineHeadingCommand}
+                        onOutlineLoaded={handleOutlineLoaded}
+                        onHeadingTextChange={applyOutlineHeadingText}
+                        onJumpToEditorHeading={jumpToOutlineHeading}
+                        onNotify={(payload) => {
+                            window.dispatchEvent(
+                                new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                            );
+                        }}
+                    />
+                </aside>
+
+                <div className="seo-article-editor-mainpane">
             <div className="seo-editor-tabs">
                 {editorTabs.map((tab) => (
                     <button
@@ -5474,6 +5806,8 @@ export default function SeoArticleEditor({
                                                                 }
                                                                 setGlobalEditor={setGlobalEditor}
                                                                 panelFaqs={panelFaqs}
+                                                                outlineHeadingsLocked={outlineHasSavedHeadings}
+                                                                onOutlineHeadingCommand={handleOutlineHeadingFromEditor}
                                                                 onDelete={() => deleteBlock(block.id)}
                                                                 canDeleteBlock={blocks.length > 1}
                                                             />
@@ -5527,6 +5861,7 @@ export default function SeoArticleEditor({
                     extraImages={supplementalImages}
                     siteId={siteId}
                     articleId={articleId}
+                    jumpTarget={imagesTabJumpTarget}
                     focusKeyword={focusKeyword}
                     articleTitle={articleTitle}
                     onPatchImage={patchImageInBlocks}
@@ -5568,6 +5903,8 @@ export default function SeoArticleEditor({
                 articleId={articleId}
                 productGalleryUrls={productGalleryUrls}
             />
+                </div>
+            </div>
         </div>
     );
 }

@@ -6,7 +6,10 @@ namespace App\Addons\SeoContentAi;
 
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
+use App\Addons\SeoContentAi\Console\ExtractOldArticleTocsCommand;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Observers\SeoArticleObserver;
 use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use Illuminate\Console\Scheduling\Schedule;
@@ -41,10 +44,12 @@ class SeoContentAiServiceProvider extends ServiceProvider
             \App\Addons\SeoContentAi\Observers\KeywordLinkListSyncObserver::class,
         );
         SeoProject::observe(SeoProjectObserver::class);
+        SeoArticle::observe(SeoArticleObserver::class);
 
         if ($this->app->runningInConsole()) {
             $this->commands([
                 BackfillPromptResultLinksCommand::class,
+                ExtractOldArticleTocsCommand::class,
             ]);
         }
 
