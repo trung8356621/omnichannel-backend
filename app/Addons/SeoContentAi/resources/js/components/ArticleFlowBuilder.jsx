@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import SeoSelect from './SeoSelect';
 import {
   buildFlowTheme,
+  getArticleFilterOutputPorts,
   getDefaultNodeHeight,
   getInputPortCenterX,
   getInputPortCenterY,
@@ -21,6 +22,7 @@ const Icons = {
   Trash: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>,
   ZoomIn: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0ZM11 8v6m-3-3h6" /></svg>,
   ZoomOut: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-13 0h6" /></svg>,
+  ArrowLeft: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" /></svg>,
 };
 
 const MIN_ZOOM = 0.5;
@@ -206,6 +208,46 @@ function normalizeFlowData(initialData = {}) {
   let edges = Array.isArray(initialData.edges) ? [...initialData.edges] : [];
   const nodes = [];
 
+  edges = edges.map((edge) => {
+    const sourceNode = sourceNodes.find((candidate) => candidate.id === edge.sourceNode);
+    if (sourceNode?.type === 'article_filter') {
+      const sourcePort = edge.sourcePort ?? 'out_main';
+      if (sourcePort === 'out_main') {
+        return { ...edge, sourcePort: 'out_keyword' };
+      }
+
+      if (sourcePort === 'out_description') {
+        return { ...edge, sourcePort: 'out_gallery_description' };
+      }
+    }
+
+    if (sourceNode?.type !== 'article') {
+      return edge;
+    }
+
+    const sourcePort = edge.sourcePort ?? 'out_main';
+    const filterId = `${sourceNode.id}_article_filter`;
+    const hasFilterNode = sourceNodes.some((candidate) => candidate.id === filterId && candidate.type === 'article_filter');
+
+    if (hasFilterNode && edge.targetNode !== filterId) {
+      const mappedPort = sourcePort === 'out_description'
+        ? 'out_gallery_description'
+        : 'out_keyword';
+
+      return { ...edge, sourceNode: filterId, sourcePort: mappedPort };
+    }
+
+    if (sourcePort === 'out_main' || sourcePort === 'out_keyword') {
+      return { ...edge, sourcePort: 'out_main' };
+    }
+
+    if (sourcePort === 'out_description') {
+      return { ...edge, sourcePort: 'out_gallery_description' };
+    }
+
+    return edge;
+  });
+
   sourceNodes.forEach((node) => {
     const legacyPostTypes = Array.isArray(node.data?.postTypes) ? node.data.postTypes : [];
     const legacyTaxonomies = Array.isArray(node.data?.taxonomies) ? node.data.taxonomies : [];
@@ -233,7 +275,11 @@ function normalizeFlowData(initialData = {}) {
     const outgoing = edges.filter((edge) => edge.sourceNode === node.id);
     edges = edges
       .filter((edge) => edge.sourceNode !== node.id)
-      .concat(outgoing.map((edge) => ({ ...edge, sourceNode: filterId })))
+      .concat(outgoing.map((edge) => {
+        const sourcePort = edge.sourcePort === 'out_main' ? 'out_keyword' : edge.sourcePort;
+
+        return { ...edge, sourceNode: filterId, sourcePort };
+      }))
       .concat([{
         id: `edge_${node.id}_article_filter`,
         sourceNode: node.id,
@@ -282,7 +328,15 @@ function useDarkMode() {
   return isDark;
 }
 
-export default function ArticleFlowBuilder({ initialData, onSave, saving = false, taskName, setTaskName }) {
+export default function ArticleFlowBuilder({
+  initialData,
+  onSave,
+  saving = false,
+  taskName,
+  setTaskName,
+  backUrl = '',
+  backLabel = 'Back',
+}) {
   const isDark = useDarkMode();
   const t = buildFlowTheme(isDark);
   const initialFlowRef = useRef(null);
@@ -417,7 +471,16 @@ export default function ArticleFlowBuilder({ initialData, onSave, saving = false
     >
       {/* HEADER */}
       <div className={`px-6 py-4 border-b flex items-center justify-between transition-colors duration-200 ${t.header}`}>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 min-w-0">
+            {backUrl ? (
+              <a
+                href={backUrl}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-semibold transition-colors ${t.widgetBtn}`}
+              >
+                <Icons.ArrowLeft />
+                <span>{backLabel}</span>
+              </a>
+            ) : null}
             <h1 className={`text-lg font-bold flex items-center gap-2 ${t.title}`}><Icons.Filter /> SEO Flow</h1>
             <input 
               type="text" 
@@ -492,7 +555,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, saving = false
               const srcNode = nodes.find(n => n.id === edge.sourceNode);
               const tgtNode = nodes.find(n => n.id === edge.targetNode);
               if (!srcNode || !tgtNode) return null;
-              const srcPorts = srcNode.type === 'prompt' ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark) : [{id: 'out_main'}];
+              const srcPorts = srcNode.type === 'prompt'
+                ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark)
+                : srcNode.type === 'article_filter'
+                  ? getArticleFilterOutputPorts(isDark)
+                  : [{ id: 'out_main' }];
               const tgtOutPorts = tgtNode.type === 'prompt' ? getPromptOutputPorts(tgtNode.data.promptId, mockPrompts, isDark) : [{ id: 'out_main' }];
               const srcPortIndex = srcPorts.findIndex(p => p.id === edge.sourcePort);
               const srcNodeHeight = getDefaultNodeHeight(srcNode.type, srcPorts.length);
@@ -517,7 +584,11 @@ export default function ArticleFlowBuilder({ initialData, onSave, saving = false
             {connecting && (() => {
               const srcNode = nodes.find(n => n.id === connecting.nodeId);
               if (!srcNode) return null;
-              const connectPorts = srcNode.type === 'prompt' ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark) : [{ id: 'out_main' }];
+              const connectPorts = srcNode.type === 'prompt'
+                ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark)
+                : srcNode.type === 'article_filter'
+                  ? getArticleFilterOutputPorts(isDark)
+                  : [{ id: 'out_main' }];
               const connectHeight = getDefaultNodeHeight(srcNode.type, connectPorts.length);
               const connectIndex = connectPorts.findIndex((p) => p.id === connecting.portId);
               const ix = Math.max(0, connectIndex);
@@ -533,7 +604,9 @@ export default function ArticleFlowBuilder({ initialData, onSave, saving = false
             const nodeClass = `absolute w-[220px] rounded-xl border shadow-lg cursor-grab z-10 flex flex-col transition-colors duration-200 ${t.nodeBg} ${nodeBorderClass(node.type, isSelected, isDark)}`;
             const outputPorts = node.type === 'prompt'
               ? getPromptOutputPorts(node.data.promptId, mockPrompts, isDark)
-              : [{ id: 'out_main', label: 'Connect', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
+              : node.type === 'article_filter'
+                ? getArticleFilterOutputPorts(isDark)
+                : [{ id: 'out_main', label: 'Connect', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
             const nodeHeight = getDefaultNodeHeight(node.type, outputPorts.length);
 
             return (
@@ -623,9 +696,9 @@ export default function ArticleFlowBuilder({ initialData, onSave, saving = false
                     }}
                   >
                     <div onClick={(e) => handlePortClick(node.id, port.id, 'output', e)} className={`w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center z-20 ${t.portBorder} ${connecting?.nodeId === node.id && connecting?.portId === port.id ? 'bg-amber-500 animate-pulse' : port.color}`}><div className="w-1.5 h-1.5 bg-white rounded-full"></div></div>
-                    {node.type === 'prompt' && (
+                    {(node.type === 'prompt' || node.type === 'article_filter') && (
                       <div
-                        className={`mr-3 max-w-[9.5rem] truncate text-[10px] font-semibold px-1.5 py-0.5 rounded border ${t.portLabel}`}
+                        className={`mr-3 max-w-38 truncate text-[10px] font-semibold px-1.5 py-0.5 rounded border ${t.portLabel}`}
                         title={port.label}
                       >
                         {port.label}

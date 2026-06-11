@@ -67,6 +67,7 @@ export default function GenerateImageModal({
     onClose,
     onSubmit,
     initialPrompt = '',
+    initialLoaiSanPhamCustom = '',
     mode = 'editor',
     productCategoryOptions = [],
     articleId = null,
@@ -74,7 +75,7 @@ export default function GenerateImageModal({
 }) {
     const [prompt, setPrompt] = useState(initialPrompt);
     const [productCategoryId, setProductCategoryId] = useState('');
-    const [loaiSanPhamCustom, setLoaiSanPhamCustom] = useState('');
+    const [loaiSanPhamCustom, setLoaiSanPhamCustom] = useState(initialLoaiSanPhamCustom);
     const [submitting, setSubmitting] = useState(false);
     const [renderedPrompt, setRenderedPrompt] = useState('');
     const [renderedPromptMeta, setRenderedPromptMeta] = useState({ promptId: 0, promptName: '' });
@@ -115,7 +116,7 @@ export default function GenerateImageModal({
         if (open) {
             setPrompt(initialPrompt);
             setProductCategoryId('');
-            setLoaiSanPhamCustom('');
+            setLoaiSanPhamCustom(initialLoaiSanPhamCustom);
             setSubmitting(false);
             setRenderedPrompt('');
             setRenderedPromptMeta({ promptId: 0, promptName: '' });
@@ -126,7 +127,7 @@ export default function GenerateImageModal({
             setGenerationError('');
             refreshGalleryUrls();
         }
-    }, [open, initialPrompt, refreshGalleryUrls]);
+    }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryUrls]);
 
     const applyGalleryPreviewFromPayload = useCallback((payload) => {
         const url = String(payload?.url ?? '').trim();

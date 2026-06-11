@@ -19,6 +19,8 @@
             id="seo-task-workflow-builder-root"
             data-task-id="{{ $this->taskId }}"
             data-task-name="{{ $this->getTaskName() }}"
+            data-back-url="{{ \App\Addons\SeoContentAi\Filament\Resources\TaskResource::getUrl('index') }}"
+            data-back-label="{{ __('seo-content-ai::filament.task.back_to_tasks') }}"
             class="w-full h-full"
         ></div>
     </div>

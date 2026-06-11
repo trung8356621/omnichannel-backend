@@ -121,14 +121,15 @@ class TestTask extends Page implements HasForms
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('back')
+                ->label(__('seo-content-ai::filament.task.back_to_tasks'))
+                ->icon('heroicon-o-arrow-left')
+                ->color('gray')
+                ->url(TaskResource::getUrl('index')),
             Actions\Action::make('builder')
                 ->label('Open builder')
                 ->icon('heroicon-o-squares-2x2')
                 ->url(fn (): string => TaskResource::getUrl('builder', ['record' => $this->getRecord()])),
-            Actions\Action::make('back')
-                ->label('List')
-                ->icon('heroicon-o-arrow-left')
-                ->url(TaskResource::getUrl('index')),
         ];
     }
 

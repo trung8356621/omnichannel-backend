@@ -6,10 +6,12 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 use App\Models\Site;
@@ -33,7 +35,11 @@ final class TaskWorkflowTestRunner
     public function run(SeoTask $task, TaskTestContext $context): array
     {
         $flow = is_array($task->flow_data) ? $task->flow_data : [];
-        $edges = is_array($flow['edges'] ?? null) ? $flow['edges'] : [];
+        $nodes = is_array($flow['nodes'] ?? null) ? $flow['nodes'] : [];
+        $edges = $this->normalizeWorkflowEdges(
+            is_array($flow['edges'] ?? null) ? $flow['edges'] : [],
+            $nodes,
+        );
         $ordered = $this->orderedNodesForTask($task);
         $state = $this->initialState($context);
         $steps = [];
@@ -68,7 +74,11 @@ final class TaskWorkflowTestRunner
     ): array {
         $ordered = $this->orderedNodesForTask($task);
         $flow = is_array($task->flow_data) ? $task->flow_data : [];
-        $edges = is_array($flow['edges'] ?? null) ? $flow['edges'] : [];
+        $nodes = is_array($flow['nodes'] ?? null) ? $flow['nodes'] : [];
+        $edges = $this->normalizeWorkflowEdges(
+            is_array($flow['edges'] ?? null) ? $flow['edges'] : [],
+            $nodes,
+        );
         $state = $this->buildStateFromSteps($priorSteps, $context);
 
         foreach ($ordered as $node) {
@@ -139,6 +149,16 @@ final class TaskWorkflowTestRunner
             }
         }
 
+        if (in_array($type, ['article', 'article_filter'], true)) {
+            $nodeId = (string) ($step['node_id'] ?? '');
+            if ($nodeId !== '' && is_array($step['outputs'] ?? null)) {
+                $state->nodeOutputs[$nodeId] = array_map(
+                    static fn ($value): string => is_string($value) ? $value : (string) $value,
+                    $step['outputs'],
+                );
+            }
+        }
+
         if ($type === 'filter' && ($step['status'] ?? '') === 'completed') {
             $nodeId = (string) ($step['node_id'] ?? '');
             if ($nodeId !== '' && filled($step['output'] ?? null)) {
@@ -193,22 +213,30 @@ final class TaskWorkflowTestRunner
         $variables = $context->variables;
 
         if ($type === 'article') {
+            $outputs = ['out_main' => $this->resolveKeywordOrTitle($variables)];
+            $state->nodeOutputs[$nodeId] = $outputs;
+
             return [
                 'node_id' => $nodeId,
                 'type' => $type,
                 'title' => $title,
                 'status' => 'ok',
                 'message' => $context->summary,
+                'outputs' => $outputs,
             ];
         }
 
         if ($type === 'article_filter') {
+            $outputs = $this->buildArticleFilterNodeOutputs($variables);
+            $state->nodeOutputs[$nodeId] = $outputs;
+
             return [
                 'node_id' => $nodeId,
                 'type' => $type,
                 'title' => $title,
                 'status' => 'ok',
                 'message' => 'Đã áp dụng cấu hình lọc bài viết.',
+                'outputs' => $outputs,
             ];
         }
 
@@ -271,13 +299,21 @@ final class TaskWorkflowTestRunner
                 }
 
                 $model = trim((string) ($node['data']['aiModel'] ?? ''));
-                $result = $this->promptRunner->run(
-                    $prompt,
-                    $variables,
-                    $model !== '' ? $model : null,
-                    isTaskMode: true,
+                $result = PromptMediaPersistContext::using(
+                    $this->resolveMediaContextSiteId($context, $state),
+                    $state->article?->id ?? $context->article?->id,
+                    (int) $prompt->id,
+                    fn () => $this->promptRunner->run(
+                        $prompt,
+                        $variables,
+                        $model !== '' ? $model : null,
+                        isTaskMode: true,
+                    ),
                 );
                 $output = trim((string) ($result->output_text ?? ''));
+                if ($output !== '') {
+                    $output = $this->applyPromptPostProcessing($prompt, $output);
+                }
 
                 if ($output !== '') {
                     $state->lastPromptOutput = $output;
@@ -581,6 +617,8 @@ final class TaskWorkflowTestRunner
             ];
         }
 
+        $this->persistProductPromptMeta($article, $context->variables);
+
         $messages = [];
         $preserveExistingBody = (bool) ($state->meta['preserve_existing_article_body'] ?? false);
         $articleMarkdown = $preserveExistingBody
@@ -644,6 +682,23 @@ final class TaskWorkflowTestRunner
             }
         }
 
+        $galleryImagesCount = $this->appendGalleryImagesFromActionEdges($article, $nodeId, $edges, $state);
+        if ($galleryImagesCount > 0) {
+            $messages[] = sprintf('Đã thêm %d ảnh vào product gallery.', $galleryImagesCount);
+
+            // Rải ảnh gallery vào các section còn trống sau khi lưu thành công
+            $article->unsetRelation('articleMetas');
+            $mediaService = app(ArticleMediaLocalService::class);
+            $galleryItems = $mediaService->resolveProductAlbum($article);
+            if ($galleryItems !== []) {
+                $distributedCount = app(ArticleProductGalleryDistributeService::class)
+                    ->distribute($article, $galleryItems);
+                if ($distributedCount > 0) {
+                    $messages[] = sprintf('Đã rải %d ảnh vào các section.', $distributedCount);
+                }
+            }
+        }
+
         $savedKeys = $this->persistWorkflowMeta($article, $state);
         if ($savedKeys !== []) {
             $messages[] = 'Đã lưu meta: '.implode(', ', $savedKeys);
@@ -652,11 +707,7 @@ final class TaskWorkflowTestRunner
         if ($this->keywordResearch->shouldSyncKeywords($actionType, $state)) {
             try {
                 $sync = $this->syncKeywordResearchForArticle($article, $context, $state);
-                $messages[] = sprintf(
-                    'Đã lưu nghiên cứu từ vựng — cụm «%s» + %d từ khóa con.',
-                    $sync['parent_phrase'],
-                    $sync['children_count'],
-                );
+                $messages[] = $this->formatVocabularyResearchSyncMessage($sync);
             } catch (\InvalidArgumentException $exception) {
                 if ($actionType === 'save_vocabulary_research') {
                     return [
@@ -800,13 +851,7 @@ final class TaskWorkflowTestRunner
             'action_type' => $actionType,
             'status' => 'completed',
             'article_id' => $article->id,
-            'message' => sprintf(
-                'Đã lưu nghiên cứu từ vựng — cụm «%s» (#%d) + %d từ khóa con (Topic Cluster).%s',
-                $sync['parent_phrase'],
-                $sync['parent_id'],
-                $sync['children_count'],
-                $metaNote,
-            ),
+            'message' => $this->formatVocabularyResearchSyncMessage($sync, true).$metaNote,
             'output' => json_encode([
                 'topic_cluster' => $sync,
                 'meta' => $state->meta,
@@ -815,7 +860,35 @@ final class TaskWorkflowTestRunner
     }
 
     /**
-     * @return array{parent_id: int, parent_phrase: string, children_count: int}
+     * @param  array{parent_id: int, parent_phrase: string, children_count: int, suggest_count?: int}  $sync
+     */
+    private function formatVocabularyResearchSyncMessage(array $sync, bool $includeParentId = false): string
+    {
+        $parts = [];
+        $childrenCount = (int) ($sync['children_count'] ?? 0);
+        $suggestCount = (int) ($sync['suggest_count'] ?? 0);
+        $parentPhrase = trim((string) ($sync['parent_phrase'] ?? ''));
+
+        if ($parentPhrase !== '') {
+            $clusterMessage = $includeParentId
+                ? sprintf('cụm «%s» (#%d) + %d từ khóa con (Topic Cluster)', $parentPhrase, (int) ($sync['parent_id'] ?? 0), $childrenCount)
+                : sprintf('cụm «%s» + %d từ khóa con', $parentPhrase, $childrenCount);
+            $parts[] = $clusterMessage;
+        }
+
+        if ($suggestCount > 0) {
+            $parts[] = sprintf('%d gợi ý chủ đề (Related topics)', $suggestCount);
+        }
+
+        if ($parts === []) {
+            return 'Đã lưu nghiên cứu từ vựng.';
+        }
+
+        return 'Đã lưu nghiên cứu từ vựng — '.implode('; ', $parts).'.';
+    }
+
+    /**
+     * @return array{parent_id: int, parent_phrase: string, children_count: int, suggest_count: int}
      */
     private function syncKeywordResearchForArticle(
         SeoArticle $article,
@@ -895,7 +968,37 @@ final class TaskWorkflowTestRunner
             $savedKeys[] = $scoreLabel;
         }
 
+        // Safety net: nếu publishArticle đã chạy thì seo_meta_description đã lưu.
+        // Nếu chưa (vd bước Action bị skip), extract từ article markdown và lưu.
+        $articleMarkdownForMeta = trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
+        if ($articleMarkdownForMeta !== '' && ! ($state->meta['article_markdown_published'] ?? false)) {
+            $this->persistMetaDescriptionFromMarkdown($article, $articleMarkdownForMeta);
+        }
+
         return $savedKeys;
+    }
+
+    private function persistMetaDescriptionFromMarkdown(SeoArticle $article, string $markdown): void
+    {
+        $existing = trim((string) ($article->articleMetas()
+            ->where('meta_key', 'seo_meta_description')
+            ->value('meta_value') ?? ''));
+        if ($existing !== '') {
+            return; // Already saved by publishArticle
+        }
+
+        $prepared = app(ArticleMarkdownToHtmlService::class)->prepareImport($markdown);
+        $metaDescription = trim((string) ($prepared['meta_description'] ?? ''));
+        if ($metaDescription === '') {
+            return;
+        }
+
+        foreach (['seo_meta_description', 'meta_description'] as $key) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => $key],
+                ['meta_value' => $metaDescription],
+            );
+        }
     }
 
     private function applyFaqStrippedArticleContent(SeoArticle $article, WorkflowExecutionState $state): void
@@ -1102,6 +1205,8 @@ final class TaskWorkflowTestRunner
             ['meta_value' => $postType],
         );
 
+        $this->persistProductPromptMeta($article, $variables);
+
         $focusKeyword = trim((string) ($variables['focus_keyword'] ?? ''));
         if ($focusKeyword !== '') {
             $article->articleMetas()->updateOrCreate(
@@ -1118,6 +1223,218 @@ final class TaskWorkflowTestRunner
         }
 
         return $article;
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function persistProductPromptMeta(SeoArticle $article, array $variables): void
+    {
+        $galleryDescription = trim((string) ($variables['gallery_description'] ?? ''));
+        if ($galleryDescription !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'gallery_description'],
+                ['meta_value' => $galleryDescription],
+            );
+        }
+
+        $loaiSanPham = trim((string) ($variables['loai_san_pham'] ?? $variables['LOAI_SAN_PHAM'] ?? ''));
+        if ($loaiSanPham !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'loai_san_pham'],
+                ['meta_value' => $loaiSanPham],
+            );
+        }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     */
+    private function appendGalleryImagesFromActionEdges(
+        SeoArticle $article,
+        string $actionNodeId,
+        array $edges,
+        WorkflowExecutionState $state,
+    ): int {
+        if ($actionNodeId === '') {
+            return 0;
+        }
+
+        $added = 0;
+        $seen = [];
+
+        foreach ($edges as $edge) {
+            if (! is_array($edge) || (string) ($edge['targetNode'] ?? '') !== $actionNodeId) {
+                continue;
+            }
+
+            $sourceNodeId = (string) ($edge['sourceNode'] ?? '');
+            $sourcePort = (string) ($edge['sourcePort'] ?? 'out_main');
+            $output = $this->resolvePortOutput($state, $sourceNodeId, $sourcePort);
+            if ($output === '') {
+                continue;
+            }
+
+            foreach ($this->extractGalleryImageUrls($output) as $url) {
+                if (isset($seen[$url])) {
+                    continue;
+                }
+
+                $seen[$url] = true;
+                $media = $this->resolveSeoMediaFromUrl($url);
+                if (! $media instanceof SeoMedia) {
+                    continue;
+                }
+
+                $this->attachMediaToArticleScope($media, $article);
+
+                $mediaService = app(ArticleMediaLocalService::class);
+                $article->unsetRelation('articleMetas');
+                $beforeCount = count($mediaService->resolveGallery($article));
+                $article->unsetRelation('articleMetas');
+                $after = $mediaService->appendGalleryLocal($article, (int) $media->id, $url);
+                if (count($after) > $beforeCount) {
+                    $added++;
+                }
+            }
+        }
+
+        return $added;
+    }
+
+    private function attachMediaToArticleScope(SeoMedia $media, SeoArticle $article): void
+    {
+        $updates = [];
+        $siteId = (int) ($article->site_id ?? 0);
+        $articleId = (int) ($article->id ?? 0);
+
+        if ($siteId > 0 && (int) ($media->site_id ?? 0) <= 0) {
+            $updates['site_id'] = $siteId;
+        }
+
+        if ($articleId > 0) {
+            $articleIds = SeoMedia::normalizeArticleIds($media->article_id);
+            if (! in_array($articleId, $articleIds, true)) {
+                $articleIds[] = $articleId;
+                $updates['article_id'] = array_values(array_unique($articleIds));
+            }
+        }
+
+        if (array_key_exists('primary_article_id', $media->getAttributes()) && (int) ($media->primary_article_id ?? 0) <= 0) {
+            $updates['primary_article_id'] = $articleId > 0 ? $articleId : null;
+        }
+
+        if ($updates !== []) {
+            $media->fill($updates)->save();
+        }
+    }
+
+    private function applyPromptPostProcessing(SeoPrompt $prompt, string $output): string
+    {
+        $media = $this->resolveSeoMediaFromOutput($output);
+        if (! $media instanceof SeoMedia) {
+            return $output;
+        }
+
+        try {
+            $result = app(PromptPostProcessingApplyService::class)->applyIfConfigured($media, $prompt);
+        } catch (\Throwable $exception) {
+            logger()->warning(sprintf(
+                'Workflow prompt post-processing failed [prompt_id=%d, media_id=%d]: %s',
+                (int) $prompt->id,
+                (int) $media->id,
+                $exception->getMessage(),
+            ));
+
+            return $output;
+        }
+
+        if (! $result->applied || $result->pieces === []) {
+            return $output;
+        }
+
+        $urls = array_values(array_filter(
+            $result->publicUrls(),
+            static fn (string $url): bool => trim($url) !== '',
+        ));
+
+        return $urls !== [] ? implode("\n", $urls) : $output;
+    }
+
+    private function resolveSeoMediaFromOutput(string $output): ?SeoMedia
+    {
+        foreach ($this->extractGalleryImageUrls($output) as $url) {
+            $media = $this->resolveSeoMediaFromUrl($url);
+            if ($media instanceof SeoMedia) {
+                return $media;
+            }
+        }
+
+        return null;
+    }
+
+    private function resolveMediaContextSiteId(TaskTestContext $context, WorkflowExecutionState $state): ?int
+    {
+        $siteId = (int) ($state->article?->site_id ?? $context->article?->site_id ?? $context->siteId ?? 0);
+
+        return $siteId > 0 ? $siteId : null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractGalleryImageUrls(string $output): array
+    {
+        $urls = [];
+
+        $count = preg_match_all('~(?:https?://[^\s<>"\']+|/storage/[^\s<>"\']+)~iu', $output, $matches);
+        if ($count === false || $count < 1) {
+            return [];
+        }
+
+        foreach ($matches[0] as $rawUrl) {
+            $url = rtrim(trim((string) $rawUrl), '.,);]');
+            $path = (string) parse_url($url, PHP_URL_PATH);
+            if ($path === '') {
+                $path = $url;
+            }
+
+            if (preg_match('/\.(?:jpe?g|png|webp|gif)(?:$|\?)/iu', $path) !== 1) {
+                continue;
+            }
+
+            $urls[] = $url;
+        }
+
+        return array_values(array_unique($urls));
+    }
+
+    private function resolveSeoMediaFromUrl(string $url): ?SeoMedia
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return null;
+        }
+
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $relativePath = str_starts_with($path, '/storage/')
+            ? ltrim(substr($path, strlen('/storage/')), '/')
+            : '';
+
+        return SeoMedia::query()
+            ->where(function ($query) use ($url, $path, $relativePath): void {
+                $query->where('url', $url);
+
+                if ($path !== '') {
+                    $query->orWhere('url', $path);
+                }
+
+                if ($relativePath !== '') {
+                    $query->orWhere('path', $relativePath);
+                }
+            })
+            ->latest('id')
+            ->first();
     }
 
     private function resolveSiteIdForNewArticle(TaskTestContext $context): ?int
@@ -1189,26 +1506,24 @@ final class TaskWorkflowTestRunner
             $inDegree[$target] = ($inDegree[$target] ?? 0) + 1;
         }
 
-        $starts = [];
-        foreach ($byId as $id => $node) {
-            if (($node['type'] ?? '') === 'article') {
-                $starts[] = $id;
+        $queue = [];
+        foreach ($inDegree as $id => $degree) {
+            if ($degree === 0) {
+                $queue[] = $id;
             }
         }
 
-        if ($starts === []) {
-            foreach ($inDegree as $id => $degree) {
-                if ($degree === 0) {
-                    $starts[] = $id;
-                }
-            }
+        usort($queue, static function (string $left, string $right) use ($byId): int {
+            $leftIsArticle = ($byId[$left]['type'] ?? '') === 'article';
+            $rightIsArticle = ($byId[$right]['type'] ?? '') === 'article';
+
+            return (int) $rightIsArticle <=> (int) $leftIsArticle;
+        });
+
+        if ($queue === []) {
+            $queue[] = array_key_first($byId);
         }
 
-        if ($starts === []) {
-            $starts[] = array_key_first($byId);
-        }
-
-        $queue = $starts;
         $visited = [];
         $ordered = [];
 
@@ -1221,7 +1536,8 @@ final class TaskWorkflowTestRunner
             $ordered[] = $byId[$id];
 
             foreach ($adjacency[$id] ?? [] as $nextId) {
-                if (! isset($visited[$nextId])) {
+                $inDegree[$nextId] = max(0, (int) ($inDegree[$nextId] ?? 0) - 1);
+                if (! isset($visited[$nextId]) && $inDegree[$nextId] === 0) {
                     $queue[] = $nextId;
                 }
             }
@@ -1294,11 +1610,111 @@ final class TaskWorkflowTestRunner
 
         $outputs = $state->nodeOutputs[$sourceNodeId] ?? [];
 
-        if (isset($outputs[$sourcePort]) && trim($outputs[$sourcePort]) !== '') {
-            return trim($outputs[$sourcePort]);
+        if ($sourcePort === 'out_main' && ! array_key_exists('out_main', $outputs)) {
+            $sourcePort = 'out_keyword';
         }
 
-        return trim((string) ($outputs['out_main'] ?? ''));
+        if (array_key_exists($sourcePort, $outputs)) {
+            return trim((string) $outputs[$sourcePort]);
+        }
+
+        if (in_array($sourcePort, ['out_description', 'out_gallery_description'], true)) {
+            return '';
+        }
+
+        return trim((string) ($outputs['out_main'] ?? $outputs['out_keyword'] ?? ''));
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @return array{out_keyword: string, out_gallery_description: string, out_combined: string, out_main: string}
+     */
+    private function buildArticleFilterNodeOutputs(array $variables): array
+    {
+        $keywordOrTitle = $this->resolveKeywordOrTitle($variables);
+        $galleryDescription = trim((string) ($variables['gallery_description'] ?? ''));
+        $combined = trim($keywordOrTitle."\n\n".$galleryDescription);
+
+        return [
+            'out_keyword' => $keywordOrTitle,
+            'out_gallery_description' => $galleryDescription,
+            'out_combined' => $combined,
+            'out_main' => $keywordOrTitle,
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function resolveKeywordOrTitle(array $variables): string
+    {
+        $keywordOrTitle = trim((string) ($variables['focus_keyword'] ?? ''));
+        if ($keywordOrTitle !== '') {
+            return $keywordOrTitle;
+        }
+
+        return trim((string) ($variables['post_title'] ?? ''));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     * @param  list<array<string, mixed>>  $nodes
+     * @return list<array<string, mixed>>
+     */
+    private function normalizeWorkflowEdges(array $edges, array $nodes): array
+    {
+        $articleNodeIds = [];
+        $articleFilterNodeIds = [];
+        foreach ($nodes as $node) {
+            if (! is_array($node)) {
+                continue;
+            }
+
+            $nodeId = (string) ($node['id'] ?? '');
+            if ((string) ($node['type'] ?? '') === 'article') {
+                $articleNodeIds[$nodeId] = true;
+            }
+
+            if ((string) ($node['type'] ?? '') === 'article_filter') {
+                $articleFilterNodeIds[$nodeId] = true;
+            }
+        }
+
+        $normalized = [];
+        foreach ($edges as $edge) {
+            if (! is_array($edge)) {
+                continue;
+            }
+
+            $sourceNodeId = (string) ($edge['sourceNode'] ?? '');
+            $sourcePort = (string) ($edge['sourcePort'] ?? 'out_main');
+
+            if ($sourceNodeId !== '' && isset($articleFilterNodeIds[$sourceNodeId]) && $sourcePort === 'out_main') {
+                $edge['sourcePort'] = 'out_keyword';
+            }
+
+            if ($sourceNodeId !== '' && isset($articleFilterNodeIds[$sourceNodeId]) && $sourcePort === 'out_description') {
+                $edge['sourcePort'] = 'out_gallery_description';
+            }
+
+            if ($sourceNodeId !== '' && isset($articleNodeIds[$sourceNodeId])) {
+                $filterNodeId = $sourceNodeId.'_article_filter';
+                $targetNodeId = (string) ($edge['targetNode'] ?? '');
+
+                if (isset($articleFilterNodeIds[$filterNodeId]) && $targetNodeId !== $filterNodeId) {
+                    $edge['sourceNode'] = $filterNodeId;
+                    $edge['sourcePort'] = $sourcePort === 'out_description'
+                        ? 'out_gallery_description'
+                        : 'out_keyword';
+                } elseif (in_array($sourcePort, ['out_main', 'out_keyword'], true)) {
+                    $edge['sourcePort'] = 'out_main';
+                }
+            }
+
+            $normalized[] = $edge;
+        }
+
+        return $normalized;
     }
 
     private function resolvePrompt(mixed $promptId): ?SeoPrompt

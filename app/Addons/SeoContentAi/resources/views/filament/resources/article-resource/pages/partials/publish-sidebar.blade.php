@@ -435,61 +435,63 @@
                 </div>
             </div>
 
-            <div class="text-xs">
-                <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.review') }}:</span>
-                <strong class="{{ $record->is_reviewed ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
-                    {{ $this->getReviewStatusLabel() }}
-                </strong>
-                @if ($this->getReviewedAtLabel())
-                    <span class="text-gray-500 dark:text-gray-400">({{ $this->getReviewedAtLabel() }})</span>
-                @endif
-                @if ($this->getVirtualCommentsCount() > 0)
-                    <span class="text-gray-500 dark:text-gray-400">
-                        · {{ __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => $this->getVirtualCommentsCount()]) }}
-                    </span>
-                @endif
-                @if ($this->getVirtualCommentsCount() > 0)
-                    <button
-                        type="button"
-                        wire:click.stop="syncVirtualReviewsToWordPress"
-                        wire:loading.attr="disabled"
-                        wire:target="syncVirtualReviewsToWordPress"
-                        class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
-                        title="{{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp_hint') }}"
-                    >
-                        <span wire:loading.remove wire:target="syncVirtualReviewsToWordPress">
-                            {{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp') }}
+            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                <div class="text-xs">
+                    <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.review') }}:</span>
+                    <strong class="{{ $record->is_reviewed ? 'text-emerald-700 dark:text-emerald-300' : 'text-gray-800 dark:text-gray-100' }}">
+                        {{ $this->getReviewStatusLabel() }}
+                    </strong>
+                    @if ($this->getReviewedAtLabel())
+                        <span class="text-gray-500 dark:text-gray-400">({{ $this->getReviewedAtLabel() }})</span>
+                    @endif
+                    @if ($this->getVirtualCommentsCount() > 0)
+                        <span class="text-gray-500 dark:text-gray-400">
+                            · {{ __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => $this->getVirtualCommentsCount()]) }}
                         </span>
-                        <span wire:loading wire:target="syncVirtualReviewsToWordPress">
-                            {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
-                        </span>
-                    </button>
-                @elseif ($this->shouldShowQuickCreateReviewsButton())
-                    <button
-                        type="button"
-                        wire:click.stop="generateQuickPostReviews"
-                        wire:loading.attr="disabled"
-                        wire:target="generateQuickPostReviews"
-                        class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
-                        title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_hint') }}"
-                    >
-                        <span wire:loading.remove wire:target="generateQuickPostReviews">
-                            {{ __('seo-content-ai::filament.article_list.quick_create_reviews') }}
-                        </span>
-                        <span wire:loading wire:target="generateQuickPostReviews">
-                            {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
-                        </span>
-                    </button>
-                @elseif (! $this->canGenerateQuickPostReviews())
-                    <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows::getUrl() }}"
-                        class="ml-1 text-sky-600 hover:underline"
-                        title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure_hint') }}"
-                    >
-                        {{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure') }}
-                    </a>
-                @endif
-            </div>
+                    @endif
+                    @if ($this->getVirtualCommentsCount() > 0)
+                        <button
+                            type="button"
+                            wire:click.stop="syncVirtualReviewsToWordPress"
+                            wire:loading.attr="disabled"
+                            wire:target="syncVirtualReviewsToWordPress"
+                            class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
+                            title="{{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp_hint') }}"
+                        >
+                            <span wire:loading.remove wire:target="syncVirtualReviewsToWordPress">
+                                {{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp') }}
+                            </span>
+                            <span wire:loading wire:target="syncVirtualReviewsToWordPress">
+                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
+                            </span>
+                        </button>
+                    @elseif ($this->shouldShowQuickCreateReviewsButton())
+                        <button
+                            type="button"
+                            wire:click.stop="generateQuickPostReviews"
+                            wire:loading.attr="disabled"
+                            wire:target="generateQuickPostReviews"
+                            class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
+                            title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_hint') }}"
+                        >
+                            <span wire:loading.remove wire:target="generateQuickPostReviews">
+                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews') }}
+                            </span>
+                            <span wire:loading wire:target="generateQuickPostReviews">
+                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
+                            </span>
+                        </button>
+                    @elseif (! $this->canGenerateQuickPostReviews())
+                        <a
+                            href="{{ \App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows::getUrl() }}"
+                            class="ml-1 text-sky-600 hover:underline"
+                            title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure_hint') }}"
+                        >
+                            {{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure') }}
+                        </a>
+                    @endif
+                </div>
+            @endif
         </div>
 
         <div class="seo-publish-icon-actions">
@@ -514,27 +516,29 @@
                 @endif
             </button>
 
-            <button
-                type="button"
-                x-on:click="requestSync()"
-                wire:loading.attr="disabled"
-                wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
-                @disabled($articleHeavyActionBusy)
-                class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
-                title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
-                aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
-                @if ($articleHeavyActionBusy) aria-busy="true" @endif
-            >
-                @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync')
-                    <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
-                @else
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
-                    </svg>
-                @endif
-            </button>
+            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                <button
+                    type="button"
+                    x-on:click="requestSync()"
+                    wire:loading.attr="disabled"
+                    wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
+                    @disabled($articleHeavyActionBusy)
+                    class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
+                    title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
+                    aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
+                    @if ($articleHeavyActionBusy) aria-busy="true" @endif
+                >
+                    @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync')
+                        <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
+                    @else
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
+                        </svg>
+                    @endif
+                </button>
+            @endif
 
             @php
                 $approvedToggleTitle = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()

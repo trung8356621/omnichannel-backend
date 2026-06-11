@@ -20,6 +20,8 @@ if (rootElement) {
     }
 
     const initialTaskName = rootElement.dataset.taskName || 'Quy trình SEO mới';
+    const backUrl = rootElement.dataset.backUrl || '';
+    const backLabel = rootElement.dataset.backLabel || 'Quay lại';
 
     const AppBridge = () => {
         const [taskName, setTaskName] = useState(initialTaskName);
@@ -88,6 +90,8 @@ if (rootElement) {
                     saving={saving}
                     taskName={taskName}
                     setTaskName={setTaskName}
+                    backUrl={backUrl}
+                    backLabel={backLabel}
                 />
 
                 {toast ? (

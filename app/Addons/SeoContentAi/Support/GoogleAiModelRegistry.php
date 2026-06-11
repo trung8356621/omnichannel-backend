@@ -119,27 +119,39 @@ final class GoogleAiModelRegistry
     }
 
     /**
-     * Thứ tự thử khi công cụ prompt = Hình ảnh (ưu tiên Imagen 4 Fast → Nano Banana 2).
+     * Thứ tự thử khi công cụ prompt = Hình ảnh.
+     *
+     * Ưu tiên Nano Banana (Gemini native image) trước: model này hiểu prompt
+     * hướng dẫn dài (grid layout, mô tả tiếng Việt) và vẽ sản phẩm thay vì
+     * render chữ trong prompt thành ảnh như Imagen.
+     *
+     * $excludeImagen = true (ảnh sản phẩm): Imagen render chữ trong prompt
+     * thành ảnh text → loại hẳn khỏi danh sách, chỉ dùng Nano Banana.
      *
      * @return list<string>
      */
-    public static function imageModelsToTry(?string $preferred = null): array
+    public static function imageModelsToTry(?string $preferred = null, bool $excludeImagen = false): array
     {
         $preferred = self::normalizeSlug((string) $preferred);
         $defaults = [
-            'imagen-4.0-fast-generate-001',
-            'imagen-4.0-generate-001',
             'gemini-3.1-flash-image-preview',
             'gemini-2.5-flash-image',
             'gemini-3-pro-image-preview',
+            'imagen-4.0-fast-generate-001',
+            'imagen-4.0-generate-001',
             'imagen-4.0-ultra-generate-001',
         ];
 
+        $models = $defaults;
         if ($preferred !== '' && self::categoryOf($preferred) !== self::CATEGORY_TEXT) {
-            return array_values(array_unique(array_merge([$preferred], $defaults)));
+            $models = array_merge([$preferred], $defaults);
         }
 
-        return $defaults;
+        if ($excludeImagen) {
+            $models = array_filter($models, fn (string $model): bool => ! self::isImagenModel($model));
+        }
+
+        return array_values(array_unique($models));
     }
 
     /**

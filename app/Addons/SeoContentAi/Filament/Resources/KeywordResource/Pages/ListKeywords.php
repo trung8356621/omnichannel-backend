@@ -89,15 +89,19 @@ class ListKeywords extends ListRecords
     public function getTabs(): array
     {
         return [
+            'all' => Tab::make('Tất cả'),
             'free' => Tab::make('Free')
                 ->modifyQueryUsing(fn (Builder $query): Builder => $query
                     ->whereNull('parent_id')
-                    ->whereDoesntHave('children')),
+                    ->whereDoesntHave('children')
+                    ->where('type', '!=', Keyword::TYPE_SUGGEST)),
+            'suggest' => Tab::make(__('seo-content-ai::filament.keyword.suggest_short'))
+                ->modifyQueryUsing(fn (Builder $query): Builder => $query
+                    ->where('type', Keyword::TYPE_SUGGEST)),
             'pillar_cluster' => Tab::make('Pillar / Cluster')
                 ->modifyQueryUsing(fn (Builder $query): Builder => $query
-                    ->where(fn (Builder $clusterQuery): Builder => $clusterQuery
-                        ->whereNotNull('parent_id')
-                        ->orWhereHas('children'))),
+                    ->whereNull('parent_id')
+                    ->whereHas('children')),
         ];
     }
 }

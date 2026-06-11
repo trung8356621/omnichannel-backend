@@ -816,7 +816,7 @@
                         .catch(() => unlockPageAfterHeavyActionFailure());
                 }
             } else if (action === 'sync') {
-                @if ($record->wp_post_id)
+                @if ($record->wp_post_id && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                     if (!lockPageForHeavyAction('sync')) {
                         return;
                     }
@@ -885,6 +885,18 @@
         <div class="wp-article-edit-layout">
             {{-- Cột chính (giống WP post editor) --}}
             <div class="wp-article-edit-main space-y-4">
+                <div class="seo-article-edit-back">
+                    <a
+                        href="{{ \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index') }}"
+                        class="seo-article-edit-back-link"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+                        </svg>
+                        {{ __('seo-content-ai::filament.article_list.back_to_articles') }}
+                    </a>
+                </div>
+
                 <div class="wp-postbox">
                     <input
                         type="text"
@@ -1022,9 +1034,11 @@
                     >
                         <div class="wp-article-edit-sidebar-window">
                             <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-sidebar-scroll space-y-4">
-                                <div wire:ignore id="seo-article-links-root" style="margin: 0;"></div>
+                                @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                                    <div wire:ignore id="seo-article-links-root" style="margin: 0;"></div>
 
-                                <div wire:ignore id="seo-article-domain-widgets-root" style="margin: 0;"></div>
+                                    <div wire:ignore id="seo-article-domain-widgets-root" style="margin: 0;"></div>
+                                @endif
 
                                 @if (! $this->supportsProductGallery())
                     {{-- Ảnh đại diện --}}
@@ -1516,13 +1530,8 @@
             <script>
                 (function () {
                     function mountDebugMarkdownHeaderButton() {
-                        const page = document.querySelector('.seo-article-edit-page');
-                        if (!page) {
-                            return;
-                        }
-
-                        const headerActions = page.querySelector('.fi-header > div:last-child');
-                        if (!headerActions || headerActions.querySelector('[data-seo-debug-md-import]')) {
+                        const slot = document.querySelector('[data-seo-page-actions-slot]');
+                        if (!slot || slot.querySelector('[data-seo-debug-md-import]')) {
                             return;
                         }
 
@@ -1536,11 +1545,13 @@
                             window.dispatchEvent(new CustomEvent('open-debug-markdown-import'));
                         });
 
-                        headerActions.insertBefore(button, headerActions.firstChild);
+                        slot.insertBefore(button, slot.firstChild);
+                        window.dispatchEvent(new CustomEvent('seo-article-editor-toolbar-refresh'));
                     }
 
                     document.addEventListener('DOMContentLoaded', mountDebugMarkdownHeaderButton);
                     document.addEventListener('livewire:navigated', mountDebugMarkdownHeaderButton);
+                    document.addEventListener('seo-article-editor-header-actions-mounted', mountDebugMarkdownHeaderButton);
                 })();
             </script>
         @endif

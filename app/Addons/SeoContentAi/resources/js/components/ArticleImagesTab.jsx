@@ -535,6 +535,7 @@ export default function ArticleImagesTab({
     onSlugChange,
     onFocusBlock,
     onQuickFixSlugAll,
+    quickFixSlugAllBusy = false,
     onQuickFixSlugOne,
     onQuickFixAltTitleAll,
     onQuickFixAltTitleOne,
@@ -765,17 +766,24 @@ export default function ArticleImagesTab({
                 <div className="seo-images-tab-toolbar-actions">
                     <button
                         type="button"
-                        className="seo-images-quick-fix-btn"
-                        disabled={!canQuickFix}
+                        className={`seo-images-quick-fix-btn${quickFixSlugAllBusy ? ' is-loading' : ''}`}
+                        disabled={!canQuickFix || quickFixSlugAllBusy}
                         title={
-                            canQuickFix
-                                ? t('images_tab_quick_fix_slug_all_hint')
-                                : t('image_quick_fix_missing_keyword')
+                            quickFixSlugAllBusy
+                                ? t('fix_slug_all_loading')
+                                : canQuickFix
+                                  ? t('images_tab_quick_fix_slug_all_hint')
+                                  : t('image_quick_fix_missing_keyword')
                         }
+                        aria-busy={quickFixSlugAllBusy}
                         onClick={() => onQuickFixSlugAll?.(mergedImages)}
                     >
-                        <Link2 size={16} />
-                        {t('fix_slug_all')}
+                        {quickFixSlugAllBusy ? (
+                            <Loader2 size={16} className="seo-images-quick-fix-btn__spinner" aria-hidden="true" />
+                        ) : (
+                            <Link2 size={16} aria-hidden="true" />
+                        )}
+                        {quickFixSlugAllBusy ? t('fix_slug_all_loading') : t('fix_slug_all')}
                     </button>
                     <button
                         type="button"

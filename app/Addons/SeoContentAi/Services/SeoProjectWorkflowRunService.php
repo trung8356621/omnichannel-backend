@@ -329,6 +329,7 @@ final class SeoProjectWorkflowRunService
 
             $failedArticleId = (int) ($result['article_id'] ?? 0);
             if ($failedArticleId > 0) {
+                $this->storeArticleRunMeta($failedArticleId, $run, $task);
                 $this->promptResultLinks->linkFromWorkflowSteps(
                     steps: is_array($result['steps'] ?? null) ? $result['steps'] : [],
                     articleId: $failedArticleId,
@@ -376,6 +377,7 @@ final class SeoProjectWorkflowRunService
             'post_type' => $failedTask->type === SeoProjectTask::TYPE_NEW_KEYWORD
                 ? SeoProjectTask::normalizePostType($failedTask->post_type)
                 : null,
+            'loai_san_pham' => $failedTask->loai_san_pham,
             'source_content' => $failedTask->source_content,
             'description' => $failedTask->description,
             'target_date' => $failedTask->target_date,
@@ -396,8 +398,9 @@ final class SeoProjectWorkflowRunService
             'post_type' => (string) ($item['type'] ?? '') === SeoProjectTask::TYPE_NEW_KEYWORD
                 ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
                 : null,
+            'loai_san_pham' => trim((string) ($item['loai_san_pham'] ?? '')) ?: null,
             'source_content' => trim((string) ($item['source_content'] ?? '')),
-            'description' => null,
+            'description' => trim((string) ($item['gallery_description'] ?? $item['description'] ?? '')) ?: null,
             'target_date' => $item['target_date'] ?? null,
             'status' => SeoProjectTask::STATUS_PENDING,
         ]);
@@ -483,6 +486,14 @@ final class SeoProjectWorkflowRunService
             'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
                 ? SeoProjectTask::normalizePostType($task->post_type)
                 : null,
+            'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                    ? (string) ($task->loai_san_pham ?? '')
+                    : null,
+            'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                    ? (string) ($task->description ?? '')
+                    : null,
             'target_date' => $task->target_date?->format('Y-m-d'),
             'status' => $success ? 'success' : 'failed',
             'article_id' => $articleId,
@@ -560,5 +571,27 @@ final class SeoProjectWorkflowRunService
                 ], JSON_UNESCAPED_UNICODE),
             ],
         );
+
+        if (
+            (string) $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+            && filled($task->description)
+        ) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'gallery_description'],
+                ['meta_value' => (string) $task->description],
+            );
+        }
+
+        if (
+            (string) $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+            && filled($task->loai_san_pham)
+        ) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'loai_san_pham'],
+                ['meta_value' => (string) $task->loai_san_pham],
+            );
+        }
     }
 }

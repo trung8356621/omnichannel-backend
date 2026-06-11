@@ -6,21 +6,25 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
-use App\Addons\SeoContentAi\Support\CreateArticleWorkflowNotification;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
+use Filament\Forms\Set;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Validation\Rules\Unique;
 
 class KeywordResource extends Resource
@@ -144,6 +148,7 @@ class KeywordResource extends Resource
                     ->options([
                         Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus'),
                         Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal'),
+                        Keyword::TYPE_SUGGEST => __('seo-content-ai::filament.keyword.suggest'),
                     ])
                     ->default(Keyword::TYPE_FOCUS)
                     ->required()
@@ -188,11 +193,13 @@ class KeywordResource extends Resource
                     ->color(fn (string $state): string => match ($state) {
                         Keyword::TYPE_FOCUS => 'success',
                         Keyword::TYPE_INTERNAL => 'warning',
+                        Keyword::TYPE_SUGGEST => 'info',
                         default => 'gray',
                     })
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus_short'),
                         Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal_short'),
+                        Keyword::TYPE_SUGGEST => __('seo-content-ai::filament.keyword.suggest_short'),
                         default => $state,
                     }),
 
@@ -202,6 +209,15 @@ class KeywordResource extends Resource
                     ->sortable()
                     ->weight('bold')
                     ->color(fn (?string $state): ?string => mb_strlen(trim((string) $state)) > 10 ? 'danger' : null)
+                    ->wrap(),
+
+                Tables\Columns\TextColumn::make('children.phrase')
+                    ->label('Từ khóa con')
+                    ->badge()
+                    ->separator(',')
+                    ->limitList(12)
+                    ->expandableLimitedList()
+                    ->placeholder('—')
                     ->wrap(),
 
                 Tables\Columns\TextColumn::make('word_count')
@@ -260,7 +276,14 @@ class KeywordResource extends Resource
                     ->options([
                         Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus_short'),
                         Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal_short'),
+                        Keyword::TYPE_SUGGEST => __('seo-content-ai::filament.keyword.suggest_short'),
                     ]),
+                Tables\Filters\SelectFilter::make('parent_id')
+                    ->label('Cụm cha')
+                    ->options(fn (): array => static::clusterParentOptions())
+                    ->searchable()
+                    ->preload()
+                    ->native(false),
                 Tables\Filters\Filter::make('word_count')
                     ->label('Số từ')
                     ->form([
@@ -281,73 +304,33 @@ class KeywordResource extends Resource
             ->actions([
                 Tables\Actions\EditAction::make()
                     ->modalHeading('Sửa keyword')
-                    ->form(fn (Keyword $record): array => [
-                        Forms\Components\TextInput::make('phrase')
-                            ->label(__('seo-content-ai::filament.keyword.phrase'))
-                            ->required()
-                            ->maxLength(255)
-                            ->unique(
-                                table: Keyword::class,
-                                column: 'phrase',
-                                ignoreRecord: true,
-                                modifyRuleUsing: fn (Unique $rule): Unique => $rule
-                                    ->where('site_id', $record->site_id)
-                                    ->where('type', $record->type),
-                            )
-                            ->rule($record->type === Keyword::TYPE_INTERNAL
-                                ? [function (string $attribute, mixed $value, \Closure $fail): void {
-                                    if (! InternalAnchorKeywordFilter::isUsableAnchorPhrase((string) $value)) {
-                                        $fail(__('seo-content-ai::filament.keyword.anchor_text_invalid'));
-                                    }
-                                }]
-                                : []),
-                        Forms\Components\Select::make('parent_id')
-                            ->label('Từ khóa cha')
-                            ->options(fn (): array => Keyword::query()
-                                ->where('site_id', $record->site_id)
-                                ->where('type', Keyword::TYPE_FOCUS)
-                                ->whereNull('parent_id')
-                                ->where('id', '!=', $record->id)
-                                ->orderBy('phrase')
-                                ->pluck('phrase', 'id')
-                                ->all())
-                            ->visible($record->type === Keyword::TYPE_FOCUS)
-                            ->searchable()
-                            ->preload()
-                            ->native(false)
-                            ->nullable(),
-                    ]),
-                Tables\Actions\Action::make('write_article')
-                    ->label(__('seo-content-ai::filament.keyword.write_article'))
-                    ->icon('heroicon-o-pencil-square')
-                    ->color('success')
-                    ->visible(fn (Keyword $record): bool => $record->type === Keyword::TYPE_INTERNAL
-                        && (int) ($record->main_articles_count ?? 0) < 1)
+                    ->form(fn (Keyword $record): array => static::editKeywordFormSchema($record)),
+                Tables\Actions\Action::make('assign_to_content_project')
+                    ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                    ->icon('heroicon-o-folder-plus')
+                    ->color('warning')
+                    ->visible(fn (Keyword $record): bool => static::canAssignKeywordToContentProject($record))
                     ->requiresConfirmation()
-                    ->modalHeading(__('seo-content-ai::filament.keyword.write_article_from_keyword'))
-                    ->modalDescription(fn (Keyword $record): string => sprintf(
-                        __('seo-content-ai::filament.keyword.write_article_description'),
-                        $record->phrase,
-                    ))
-                    ->modalSubmitActionLabel(__('seo-content-ai::filament.keyword.run_workflow_create_article'))
-                    ->action(function (Keyword $record, CreateArticlesFromTaskService $service): void {
-                        try {
-                            $result = $service->runFromSingleKeyword(
-                                (string) $record->phrase,
-                                (int) $record->site_id,
-                            );
+                    ->form(fn (Keyword $record): array => [
+                        ArticleResource::assignContentProjectSelectField(
+                            fn (): ?int => static::resolveKeywordSiteId($record),
+                        ),
+                    ])
+                    ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                    ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                    ->action(function (Keyword $record, array $data): void {
+                        $projectId = (int) ($data['project_id'] ?? 0);
+                        $summary = static::assignKeywordsToContentProject(
+                            Collection::make([$record]),
+                            $projectId,
+                        );
 
-                            CreateArticleWorkflowNotification::send(
-                                $result,
-                                __('seo-content-ai::filament.keyword.write_article'),
-                            );
-                        } catch (\InvalidArgumentException $exception) {
-                            Notification::make()
-                                ->title(__('seo-content-ai::filament.keyword.cannot_create_article'))
-                                ->body($exception->getMessage())
-                                ->danger()
-                                ->send();
-                        }
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.keyword.assign_completed'))
+                            ->body(ArticleResource::buildAssignContentProjectBody($summary))
+                            ->success()
+                            ->send();
                     }),
                 Tables\Actions\Action::make('view_main_articles')
                     ->label(__('seo-content-ai::filament.keyword.main_articles'))
@@ -367,10 +350,96 @@ class KeywordResource extends Resource
                         (int) $record->site_id,
                         (int) $record->id,
                     )),
+                Tables\Actions\Action::make('view_cluster_children')
+                    ->label('Chi tiết cụm')
+                    ->icon('heroicon-o-tag')
+                    ->color('gray')
+                    ->visible(fn (Keyword $record): bool => (int) ($record->children_count ?? 0) > 0)
+                    ->url(fn (Keyword $record): string => static::getUrl('index', [
+                        'activeTab' => 'all',
+                        'tableFilters' => [
+                            'parent_id' => ['value' => (string) $record->id],
+                        ],
+                    ])),
                 Tables\Actions\DeleteAction::make()
                     ->visible(fn (Keyword $record): bool => static::isUnused($record)),
             ])
-            ->bulkActions([]);
+            ->bulkActions([
+                Tables\Actions\BulkActionGroup::make([
+                    Tables\Actions\BulkAction::make('switch_type')
+                        ->label(__('seo-content-ai::filament.keyword.bulk_switch_type'))
+                        ->icon('heroicon-o-arrows-right-left')
+                        ->form([
+                            Forms\Components\Select::make('type')
+                                ->label(__('seo-content-ai::filament.keyword.type'))
+                                ->options([
+                                    Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus'),
+                                    Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal'),
+                                    Keyword::TYPE_SUGGEST => __('seo-content-ai::filament.keyword.suggest'),
+                                ])
+                                ->required()
+                                ->native(false),
+                        ])
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records, array $data): void {
+                            $type = (string) ($data['type'] ?? '');
+                            $updated = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof Keyword || $type === '') {
+                                    continue;
+                                }
+
+                                $updates = ['type' => $type];
+                                if ($type !== Keyword::TYPE_FOCUS) {
+                                    $updates['parent_id'] = null;
+                                }
+
+                                if ($record->type === $type && ($type === Keyword::TYPE_FOCUS || $record->parent_id === null)) {
+                                    continue;
+                                }
+
+                                $record->update($updates);
+                                $updated++;
+                            }
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.keyword.bulk_switch_type_completed'))
+                                ->body(__('seo-content-ai::filament.keyword.bulk_switch_type_body', [
+                                    'count' => $updated,
+                                ]))
+                                ->success()
+                                ->send();
+                        }),
+                    Tables\Actions\BulkAction::make('assign_to_content_project')
+                        ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                        ->icon('heroicon-o-folder-plus')
+                        ->color('warning')
+                        ->requiresConfirmation()
+                        ->deselectRecordsAfterCompletion()
+                        ->form(fn (Collection $records): array => [
+                            ArticleResource::assignContentProjectSelectField(
+                                fn (): ?int => static::resolveBulkKeywordsSiteId($records),
+                                fn (): ?string => static::resolveBulkKeywordsSiteId($records) === null
+                                    ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
+                                    : null,
+                            ),
+                        ])
+                        ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                        ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
+                        ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+                        ->action(function (Collection $records, array $data): void {
+                            $projectId = (int) ($data['project_id'] ?? 0);
+                            $summary = static::assignKeywordsToContentProject($records, $projectId);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.keyword.assign_completed'))
+                                ->body(ArticleResource::buildAssignContentProjectBody($summary))
+                                ->success()
+                                ->send();
+                        }),
+                ]),
+            ]);
     }
 
     /**
@@ -387,10 +456,33 @@ class KeywordResource extends Resource
         return $query->pluck('domain', 'id')->all();
     }
 
+    /**
+     * @return array<int|string, string>
+     */
+    public static function clusterParentOptions(): array
+    {
+        $query = Keyword::query()
+            ->where('type', Keyword::TYPE_FOCUS)
+            ->whereNull('parent_id')
+            ->whereHas('children')
+            ->whereRaw(static::wordCountExpression().' >= 2')
+            ->orderBy('phrase');
+
+        if (auth()->user()?->role !== 'admin') {
+            $query->where('user_id', auth()->id());
+        }
+
+        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
+            $query->where('site_id', $globalSiteId);
+        }
+
+        return $query->pluck('phrase', 'id')->all();
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery()
-            ->with(['site'])
+            ->with(['site', 'children' => fn (HasMany $query): HasMany => $query->orderBy('phrase')])
             ->selectRaw('keywords.*, '.static::wordCountExpression().' as word_count')
             ->withCount([
                 'articles as articles_count',
@@ -408,27 +500,98 @@ class KeywordResource extends Resource
             $query->where('site_id', $globalSiteId);
         }
 
-        return InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);
+        return static::applyMinimumKeywordWordCount(
+            InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query),
+        );
+    }
+
+    /**
+     * @return list<Forms\Components\Component>
+     */
+    public static function editKeywordFormSchema(Keyword $record): array
+    {
+        return [
+            Forms\Components\Select::make('type')
+                ->label(__('seo-content-ai::filament.keyword.type'))
+                ->options([
+                    Keyword::TYPE_FOCUS => __('seo-content-ai::filament.keyword.focus'),
+                    Keyword::TYPE_INTERNAL => __('seo-content-ai::filament.keyword.internal'),
+                    Keyword::TYPE_SUGGEST => __('seo-content-ai::filament.keyword.suggest'),
+                ])
+                ->required()
+                ->native(false)
+                ->live()
+                ->afterStateUpdated(function (Set $set, ?string $state): void {
+                    if ($state !== Keyword::TYPE_FOCUS) {
+                        $set('parent_id', null);
+                    }
+                }),
+
+            Forms\Components\TextInput::make('phrase')
+                ->label(__('seo-content-ai::filament.keyword.phrase'))
+                ->required()
+                ->maxLength(255)
+                ->unique(
+                    table: Keyword::class,
+                    column: 'phrase',
+                    ignoreRecord: true,
+                    modifyRuleUsing: fn (Unique $rule, Get $get): Unique => $rule
+                        ->where('site_id', $record->site_id)
+                        ->where('type', $get('type') ?? $record->type),
+                )
+                ->rule(fn (Get $get): array => ($get('type') ?? $record->type) === Keyword::TYPE_INTERNAL
+                    ? [function (string $attribute, mixed $value, \Closure $fail): void {
+                        if (! InternalAnchorKeywordFilter::isUsableAnchorPhrase((string) $value)) {
+                            $fail(__('seo-content-ai::filament.keyword.anchor_text_invalid'));
+                        }
+                    }]
+                    : []),
+
+            Forms\Components\Select::make('parent_id')
+                ->label('Từ khóa cha')
+                ->options(fn (): array => Keyword::query()
+                    ->where('site_id', $record->site_id)
+                    ->where('type', Keyword::TYPE_FOCUS)
+                    ->whereNull('parent_id')
+                    ->where('id', '!=', $record->id)
+                    ->orderBy('phrase')
+                    ->pluck('phrase', 'id')
+                    ->all())
+                ->visible(fn (Get $get): bool => ($get('type') ?? $record->type) === Keyword::TYPE_FOCUS)
+                ->searchable()
+                ->preload()
+                ->native(false)
+                ->nullable()
+                ->helperText('Chọn parent sẽ chuyển keyword sang tab Pillar / Cluster.'),
+        ];
     }
 
     public static function isUnused(Keyword $keyword): bool
     {
-        if ($keyword->parent_id !== null) {
+        $attributes = $keyword->getAttributes();
+        if (
+            ! array_key_exists('inbound_links_count', $attributes)
+            || ! array_key_exists('children_count', $attributes)
+            || (in_array($keyword->type, [Keyword::TYPE_FOCUS, Keyword::TYPE_SUGGEST], true) && ! array_key_exists('main_articles_count', $attributes))
+            || ($keyword->type === Keyword::TYPE_INTERNAL && ! array_key_exists('articles_count', $attributes))
+        ) {
+            $keyword->loadCount([
+                'articles',
+                'mainArticles',
+                'inboundLinks',
+                'children',
+            ]);
+        }
+
+        if ((int) $keyword->inbound_links_count > 0 || (int) $keyword->children_count > 0) {
             return false;
         }
 
-        $attributes = $keyword->getAttributes();
-        if (
-            ! array_key_exists('articles_count', $attributes)
-            || ! array_key_exists('inbound_links_count', $attributes)
-            || ! array_key_exists('children_count', $attributes)
-        ) {
-            $keyword->loadCount(['articles', 'inboundLinks', 'children']);
+        if (in_array($keyword->type, [Keyword::TYPE_FOCUS, Keyword::TYPE_SUGGEST], true)) {
+            return (int) $keyword->main_articles_count === 0;
         }
 
-        return (int) $keyword->articles_count === 0
-            && (int) $keyword->inbound_links_count === 0
-            && (int) $keyword->children_count === 0;
+        return (int) $keyword->articles_count === 0;
     }
 
     private static function wordCountExpression(): string
@@ -436,6 +599,185 @@ class KeywordResource extends Resource
         return "CASE WHEN TRIM(phrase) = '' THEN 0 ELSE "
             ."LENGTH(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' ')) "
             ."- LENGTH(REPLACE(REGEXP_REPLACE(TRIM(phrase), '[[:space:]]+', ' '), ' ', '')) + 1 END";
+    }
+
+    public static function applyMinimumKeywordWordCount(Builder $query): Builder
+    {
+        return $query->whereRaw(static::wordCountExpression().' >= 2');
+    }
+
+    public static function canAssignKeywordToContentProject(Keyword $keyword): bool
+    {
+        return in_array($keyword->type, [Keyword::TYPE_INTERNAL, Keyword::TYPE_FOCUS, Keyword::TYPE_SUGGEST], true)
+            && (int) ($keyword->main_articles_count ?? 0) < 1
+            && ! static::keywordIsInContentProject($keyword);
+    }
+
+    public static function resolveKeywordSiteId(Keyword $keyword): ?int
+    {
+        $siteId = (int) ($keyword->site_id ?? 0);
+
+        return $siteId > 0 ? $siteId : SeoAccessControl::globalSiteId();
+    }
+
+    /**
+     * @param  Collection<int, mixed>  $records
+     */
+    public static function resolveBulkKeywordsSiteId(Collection $records): ?int
+    {
+        $siteIds = $records
+            ->filter(static fn (mixed $record): bool => $record instanceof Keyword)
+            ->map(static fn (Keyword $keyword): ?int => static::resolveKeywordSiteId($keyword))
+            ->filter(static fn (?int $siteId): bool => $siteId !== null && $siteId > 0)
+            ->unique()
+            ->values();
+
+        return $siteIds->count() === 1 ? (int) $siteIds->first() : null;
+    }
+
+    public static function keywordAssignedContentProjectId(Keyword $keyword): ?int
+    {
+        $needle = mb_strtolower(trim((string) $keyword->phrase));
+        $siteId = static::resolveKeywordSiteId($keyword) ?? 0;
+
+        $query = SeoProjectTask::query()
+            ->where('type', SeoProjectTask::TYPE_NEW_KEYWORD)
+            ->whereRaw('LOWER(TRIM(source_content)) = ?', [$needle]);
+
+        if ($siteId > 0) {
+            $query->where(function (Builder $builder) use ($siteId): void {
+                $builder
+                    ->where('site_id', $siteId)
+                    ->orWhereNull('site_id');
+            });
+        }
+
+        $projectId = $query->value('project_id');
+
+        return $projectId !== null ? (int) $projectId : null;
+    }
+
+    public static function keywordIsInContentProject(Keyword $keyword): bool
+    {
+        return static::keywordAssignedContentProjectId($keyword) !== null;
+    }
+
+    /**
+     * @param  Collection<int, Keyword>|Collection<int, mixed>  $records
+     * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}
+     */
+    public static function assignKeywordsToContentProject(Collection $records, int $projectId): array
+    {
+        $project = SeoProject::query()->find($projectId);
+        if (! $project instanceof SeoProject) {
+            return [
+                'added' => 0,
+                'duplicate' => 0,
+                'overflow' => $records->count(),
+                'domain_mismatch' => 0,
+                'already_in_project' => 0,
+            ];
+        }
+
+        if (! in_array((string) $project->status, [
+            SeoProject::STATUS_PENDING,
+            SeoProject::STATUS_MANUAL,
+            SeoProject::STATUS_RUNNING,
+        ], true)) {
+            return [
+                'added' => 0,
+                'duplicate' => 0,
+                'overflow' => $records->count(),
+                'domain_mismatch' => 0,
+                'already_in_project' => 0,
+            ];
+        }
+
+        $records = $records
+            ->filter(fn (mixed $record): bool => $record instanceof Keyword && static::canAssignKeywordToContentProject($record))
+            ->values();
+
+        $added = 0;
+        $duplicate = 0;
+        $overflow = 0;
+        $domainMismatch = 0;
+        $alreadyInProject = 0;
+        $projectSiteId = (int) ($project->site_id ?? 0);
+        $targetProjectId = (int) $project->id;
+
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
+            $project->refresh();
+            $max = $project->maxTasksAllowed();
+            $currentTotal = (int) ($project->total_tasks ?? 0);
+
+            $existingKeys = SeoProjectTask::query()
+                ->where('project_id', (int) $project->id)
+                ->get(['site_id', 'type', 'source_content'])
+                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id.'|'.SeoProjectTask::TYPE_NEW_KEYWORD.'|'.mb_strtolower(trim((string) $task->source_content)))
+                ->all();
+            $existingMap = array_fill_keys($existingKeys, true);
+
+            foreach ($records as $record) {
+                if ($currentTotal >= $max) {
+                    $overflow++;
+
+                    continue;
+                }
+
+                $assignedProjectId = static::keywordAssignedContentProjectId($record);
+                if ($assignedProjectId !== null) {
+                    if ($assignedProjectId === $targetProjectId) {
+                        $duplicate++;
+                    } else {
+                        $alreadyInProject++;
+                    }
+
+                    continue;
+                }
+
+                $keywordSiteId = static::resolveKeywordSiteId($record) ?? 0;
+                if ($projectSiteId > 0 && $keywordSiteId !== $projectSiteId) {
+                    $domainMismatch++;
+
+                    continue;
+                }
+
+                $sourceContent = trim((string) $record->phrase);
+                $siteId = $projectSiteId > 0 ? $projectSiteId : $keywordSiteId;
+                $key = $siteId.'|'.SeoProjectTask::TYPE_NEW_KEYWORD.'|'.mb_strtolower($sourceContent);
+                if (isset($existingMap[$key])) {
+                    $duplicate++;
+
+                    continue;
+                }
+
+                SeoProjectTask::query()->create([
+                    'project_id' => (int) $project->id,
+                    'site_id' => $siteId > 0 ? $siteId : null,
+                    'article_id' => null,
+                    'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
+                    'source_content' => $sourceContent,
+                    'description' => null,
+                    'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
+                    'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
+                    'status' => SeoProjectTask::STATUS_PENDING,
+                ]);
+
+                $existingMap[$key] = true;
+                $currentTotal++;
+                $added++;
+            }
+
+            $project->update(['total_tasks' => $currentTotal]);
+        });
+
+        return [
+            'added' => $added,
+            'duplicate' => $duplicate,
+            'overflow' => $overflow,
+            'domain_mismatch' => $domainMismatch,
+            'already_in_project' => $alreadyInProject,
+        ];
     }
 
     public static function getPages(): array

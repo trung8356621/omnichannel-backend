@@ -17,13 +17,23 @@ class HeadingDuplicateCheckService
 {
     private const DEFAULT_LIMIT = 10;
 
+    public function __construct(
+        private readonly OutlineSkipListMatcher $skipListMatcher,
+    ) {}
+
     /**
      * Tìm heading trùng slug tuyệt đối trong site.
      *
+     * @param  list<string>  $skipSqlPatterns  pattern SQL LIKE đã normalize (Lớp 2)
      * @return Collection<int, SeoArticleHeading>
      */
-    public function checkExactMatch(string $slug, int $siteId, ?int $excludeArticleId = null, ?int $level = null): Collection
-    {
+    public function checkExactMatch(
+        string $slug,
+        int $siteId,
+        ?int $excludeArticleId = null,
+        ?int $level = null,
+        array $skipSqlPatterns = [],
+    ): Collection {
         $slug = trim($slug);
         if ($slug === '') {
             return new Collection;
@@ -36,16 +46,27 @@ class HeadingDuplicateCheckService
             $query->where('level', $level);
         }
 
+        if ($skipSqlPatterns !== []) {
+            $this->skipListMatcher->applyNotLikeFilters($query, $skipSqlPatterns);
+        }
+
         return $query->limit(self::DEFAULT_LIMIT)->get();
     }
 
     /**
      * Tìm heading trùng ngữ nghĩa, trả về kèm `score` (relevance) giảm dần.
+     * Giữ Natural Language Mode; loại kết quả thuộc Skip List bằng NOT LIKE.
      *
+     * @param  list<string>  $skipSqlPatterns  pattern SQL LIKE đã normalize (Lớp 2)
      * @return Collection<int, SeoArticleHeading> mỗi record có thêm thuộc tính ảo `score`
      */
-    public function checkSemanticMatch(string $text, int $siteId, ?int $excludeArticleId = null, ?int $level = null): Collection
-    {
+    public function checkSemanticMatch(
+        string $text,
+        int $siteId,
+        ?int $excludeArticleId = null,
+        ?int $level = null,
+        array $skipSqlPatterns = [],
+    ): Collection {
         $text = trim($text);
         if ($text === '') {
             return new Collection;
@@ -58,6 +79,10 @@ class HeadingDuplicateCheckService
 
         if ($level !== null && $level > 0) {
             $query->where('level', $level);
+        }
+
+        if ($skipSqlPatterns !== []) {
+            $this->skipListMatcher->applyNotLikeFilters($query, $skipSqlPatterns);
         }
 
         return $query

@@ -90,6 +90,14 @@ class ViewSeoProjectRun extends Page
                 'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
                     ? SeoProjectTask::normalizePostType($task->post_type)
                     : null,
+                'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                    && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                        ? (string) ($task->loai_san_pham ?? '')
+                        : null,
+                'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                    && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                        ? (string) ($task->description ?? '')
+                        : null,
                 'target_date' => $task->target_date?->format('Y-m-d'),
                 'status' => 'pending',
                 'article_id' => null,
@@ -151,13 +159,17 @@ class ViewSeoProjectRun extends Page
      */
     private function enrichItemArticleLink(array $item): array
     {
-        if (filled($item['article_edit_url'] ?? null)) {
-            return $item;
-        }
-
         $articleId = (int) ($item['article_id'] ?? 0);
         if ($articleId > 0) {
-            $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $articleId]);
+            $article = SeoArticle::query()
+                ->select(['id', 'is_reviewed'])
+                ->whereKey($articleId)
+                ->first();
+
+            if (! filled($item['article_edit_url'] ?? null)) {
+                $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $articleId]);
+            }
+            $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
 
             return $item;
         }
@@ -169,8 +181,14 @@ class ViewSeoProjectRun extends Page
 
         $resolvedId = $this->resolveArticleIdForSource($source);
         if ($resolvedId > 0) {
+            $article = SeoArticle::query()
+                ->select(['id', 'is_reviewed'])
+                ->whereKey($resolvedId)
+                ->first();
+
             $item['article_id'] = $resolvedId;
             $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $resolvedId]);
+            $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
         }
 
         return $item;

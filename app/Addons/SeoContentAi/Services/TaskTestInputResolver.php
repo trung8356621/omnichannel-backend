@@ -47,16 +47,56 @@ final class TaskTestInputResolver
             throw new \InvalidArgumentException('Hạng mục dự án thiếu từ khóa / tiêu đề.');
         }
 
+        $galleryDescription = $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+            ? trim((string) ($task->description ?? ''))
+            : '';
+        $loaiSanPham = $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+            ? trim((string) ($task->loai_san_pham ?? ''))
+            : '';
+
         if ($task->type === SeoProjectTask::TYPE_REWRITE) {
-            return $this->resolve(null, $keyword, $keyword, $scopeArticles)
-                ->withProjectTaskType($task->type);
+            return $this->withProductPromptVariables(
+                $this->resolve(null, $keyword, $keyword, $scopeArticles)
+                    ->withProjectTaskType($task->type),
+                $galleryDescription,
+                $loaiSanPham,
+            );
         }
 
         $siteId = (int) ($task->site_id ?? 0);
         $postType = SeoProjectTask::normalizePostType($task->post_type);
 
-        return $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
-            ->withProjectTaskType($task->type);
+        return $this->withProductPromptVariables(
+            $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
+                ->withProjectTaskType($task->type),
+            $galleryDescription,
+            $loaiSanPham,
+        );
+    }
+
+    private function withProductPromptVariables(
+        TaskTestContext $context,
+        string $galleryDescription,
+        string $loaiSanPham,
+    ): TaskTestContext
+    {
+        $variables = $context->variables;
+        $variables['gallery_description'] = $galleryDescription;
+        $variables['loai_san_pham'] = $loaiSanPham;
+        $variables['LOAI_SAN_PHAM'] = $loaiSanPham;
+
+        return new TaskTestContext(
+            article: $context->article,
+            isNewArticle: $context->isNewArticle,
+            matchedBy: $context->matchedBy,
+            variables: $variables,
+            summary: $context->summary,
+            siteId: $context->siteId,
+            postType: $context->postType,
+            projectTaskType: $context->projectTaskType,
+        );
     }
 
     private function resolveScoped(?int $articleId, ?string $title, ?string $keyword): TaskTestContext

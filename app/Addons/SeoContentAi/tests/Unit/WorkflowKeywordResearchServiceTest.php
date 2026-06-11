@@ -25,4 +25,23 @@ final class WorkflowKeywordResearchServiceTest extends TestCase
 
         $this->assertTrue($service->shouldSyncKeywords('create_article', $state));
     }
+
+    public function test_partition_keyword_groups_extracts_related_topics(): void
+    {
+        $service = new WorkflowKeywordResearchService();
+
+        [$clusterGroups, $relatedTopics] = $service->partitionKeywordGroups([
+            'Synonyms' => ['ba lô học sinh'],
+            'Related topics' => [
+                'Cách chọn cặp theo phong thủy',
+                'Review các loại balo học sinh',
+            ],
+            'RELATED TOPICS' => ['Top quà tặng cho người cung Cự Giải'],
+        ]);
+
+        $this->assertSame(['ba lô học sinh'], $clusterGroups['Synonyms']);
+        $this->assertCount(3, $relatedTopics);
+        $this->assertSame('Cách chọn cặp theo phong thủy', $relatedTopics[0]);
+        $this->assertArrayNotHasKey('Related topics', $clusterGroups);
+    }
 }

@@ -25,7 +25,7 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null, post_type?: string|null}>  $tasksData
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
      */
     public function assertWithinMonthlyLimit(Carbon|string $month, array $tasksData): void
     {
@@ -44,7 +44,7 @@ final class SeoProjectTaskSyncService
     /**
      * Đồng bộ danh sách task: xóa cũ, tạo mới, gán target_date tuần tự (ngày 1..n trong tháng).
      *
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, description?: string|null, post_type?: string|null}>  $tasksData
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
      */
     public function sync(SeoProject $project, array $tasksData): void
     {
@@ -77,6 +77,7 @@ final class SeoProjectTaskSyncService
                     'article_id' => $previous?->article_id,
                     'type' => $task['type'],
                     'post_type' => $task['post_type'] ?? null,
+                    'loai_san_pham' => $task['loai_san_pham'] ?? null,
                     'source_content' => $task['source_content'],
                     'description' => $task['description'] ?? null,
                     'target_date' => $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
@@ -91,8 +92,8 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string|null, description?: string|null}>  $tasksData
-     * @return list<array{type: string, site_id: int, source_content: string, description: ?string}>
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string|null, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
+     * @return list<array{type: string, site_id: int, source_content: string, loai_san_pham: ?string, description: ?string, post_type: ?string}>
      */
     public function sanitizeTasksData(array $tasksData, ?int $defaultSiteId = null): array
     {
@@ -130,14 +131,22 @@ final class SeoProjectTaskSyncService
                 'site_id' => $siteId,
                 'type' => $type,
                 'source_content' => $content,
+                'loai_san_pham' => null,
                 'description' => null,
                 'post_type' => null,
             ];
 
             if ($type === SeoProjectTask::TYPE_NEW_KEYWORD) {
-                $description = trim((string) ($row['description'] ?? ''));
-                $item['description'] = $description !== '' ? $description : null;
-                $item['post_type'] = SeoProjectTask::normalizePostType($row['post_type'] ?? null);
+                $postType = SeoProjectTask::normalizePostType($row['post_type'] ?? null);
+                $item['post_type'] = $postType;
+
+                if ($postType === SeoProjectTask::POST_TYPE_PRODUCT) {
+                    $loaiSanPham = trim((string) ($row['loai_san_pham'] ?? ''));
+                    $item['loai_san_pham'] = $loaiSanPham !== '' ? $loaiSanPham : null;
+
+                    $galleryDescription = trim((string) ($row['gallery_description'] ?? $row['description'] ?? ''));
+                    $item['description'] = $galleryDescription !== '' ? $galleryDescription : null;
+                }
             }
 
             $out[] = $item;
@@ -147,7 +156,7 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @return list<array{type: string, site_id: int, source_content: string, description: ?string, post_type: ?string}>
+     * @return list<array{type: string, site_id: int|null, source_content: string, loai_san_pham: ?string, gallery_description: ?string, post_type: ?string}>
      */
     public function tasksDataFromProject(SeoProject $project): array
     {
@@ -159,7 +168,14 @@ final class SeoProjectTaskSyncService
                 'site_id' => $task->site_id !== null ? (int) $task->site_id : null,
                 'type' => $task->type,
                 'source_content' => $task->source_content,
-                'description' => $task->description,
+                'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                    && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                        ? $task->loai_san_pham
+                        : null,
+                'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                    && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                        ? $task->description
+                        : null,
                 'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
                     ? SeoProjectTask::normalizePostType($task->post_type)
                     : null,

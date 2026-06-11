@@ -20,6 +20,8 @@ class Keyword extends Model
 
     public const TYPE_INTERNAL = 'internal';
 
+    public const TYPE_SUGGEST = 'suggest';
+
     protected $connection = 'omi_seo_ai';
 
     protected $guarded = [];

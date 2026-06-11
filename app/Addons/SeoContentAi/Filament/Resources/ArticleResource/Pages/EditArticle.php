@@ -74,6 +74,10 @@ class EditArticle extends EditRecord
 
     public string $seoMetaDescription = '';
 
+    public string $seoTitleHydrated = '';
+
+    public string $seoMetaDescriptionHydrated = '';
+
     public string $focusKeyword = '';
 
     public string $articleStatus = 'draft';
@@ -326,6 +330,11 @@ class EditArticle extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('back_to_articles')
+                ->label(__('seo-content-ai::filament.article_list.back_to_articles'))
+                ->icon('heroicon-o-arrow-left')
+                ->color('gray')
+                ->url(ArticleResource::getUrl('index')),
             Actions\Action::make('view_content_project_runs')
                 ->label('Prompts')
                 ->icon('heroicon-o-queue-list')
@@ -338,17 +347,9 @@ class EditArticle extends EditRecord
                 ->color('warning')
                 ->visible(fn (): bool => ! ArticleResource::articleIsInContentProject($this->record))
                 ->form([
-                    Forms\Components\Select::make('project_id')
-                        ->label(__('seo-content-ai::filament.article_list.content_project'))
-                        ->options(
-                            fn (): array => ArticleResource::contentProjectOptions(
-                                ArticleResource::resolveArticleSiteId($this->record),
-                            ),
-                        )
-                        ->required()
-                        ->searchable()
-                        ->preload()
-                        ->native(false),
+                    ArticleResource::assignContentProjectSelectField(
+                        fn (): ?int => ArticleResource::resolveArticleSiteId($this->record),
+                    ),
                 ])
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
@@ -1441,6 +1442,8 @@ class EditArticle extends EditRecord
 
     public function requestSyncToWordPress(): void
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         if ($this->articleHeavyActionBusy) {
             return;
         }
@@ -1555,6 +1558,8 @@ class EditArticle extends EditRecord
 
     public function generateQuickPostReviews(): void
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         if (! $this->canGenerateQuickPostReviews()) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
@@ -1639,6 +1644,8 @@ class EditArticle extends EditRecord
 
     public function syncVirtualReviewsToWordPress(): void
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
@@ -1969,6 +1976,8 @@ class EditArticle extends EditRecord
      */
     public function syncArticleToWordPress(string $html): void
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         try {
             $html = $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
 
@@ -2268,7 +2277,12 @@ class EditArticle extends EditRecord
      */
     public function getEditorSettingsPayload(): array
     {
-        return app(ArticleEditorHistoryService::class)->getSettings();
+        return [
+            ...app(ArticleEditorHistoryService::class)->getSettings(),
+            'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
+            'show_link_widgets' => ! SeoAccessControl::isContentManager(),
+            'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
+        ];
     }
 
     /**
@@ -2311,6 +2325,16 @@ class EditArticle extends EditRecord
                 ->all(),
             'preview_url' => $this->getArticlePreviewUrl(),
             'can_sync_wp' => filled($this->record->wp_post_id),
+            'loai_san_pham' => $this->supportsProductGallery()
+                ? trim((string) ($this->record->articleMetas()
+                    ->where('meta_key', 'loai_san_pham')
+                    ->value('meta_value') ?? ''))
+                : '',
+            'gallery_description' => $this->supportsProductGallery()
+                ? trim((string) ($this->record->articleMetas()
+                    ->where('meta_key', 'gallery_description')
+                    ->value('meta_value') ?? ''))
+                : '',
             'ai_debug' => $this->getEditorAiDebugPayload(),
             'supplemental_images' => $this->getEditorSupplementalImagesPayload(),
         ];
@@ -3229,6 +3253,11 @@ class EditArticle extends EditRecord
             )?->meta_value ?? ''
         ));
 
+        // Snapshot lúc mount — dùng để phân biệt «người dùng chủ động xóa»
+        // với «state cũ từ tab mở trước khi workflow ghi meta».
+        $this->seoTitleHydrated = $this->seoTitle;
+        $this->seoMetaDescriptionHydrated = $this->seoMetaDescription;
+
         $this->focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '';
     }
 
@@ -3240,9 +3269,13 @@ class EditArticle extends EditRecord
         $seoDescription = trim($this->seoMetaDescription);
 
         if ($seoTitle === '') {
-            $this->record->articleMetas()
-                ->where('meta_key', 'seo_title')
-                ->delete();
+            // Chỉ xóa khi lúc mount field có giá trị (người dùng chủ động xóa).
+            // Nếu mount đã rỗng mà DB có giá trị → workflow vừa ghi sau khi tab mở → giữ nguyên.
+            if (trim($this->seoTitleHydrated) !== '') {
+                $this->record->articleMetas()
+                    ->where('meta_key', 'seo_title')
+                    ->delete();
+            }
         } else {
             $this->record->articleMetas()->updateOrCreate(
                 ['meta_key' => 'seo_title'],
@@ -3252,9 +3285,11 @@ class EditArticle extends EditRecord
 
         foreach (['seo_meta_description', 'meta_description'] as $key) {
             if ($seoDescription === '') {
-                $this->record->articleMetas()
-                    ->where('meta_key', $key)
-                    ->delete();
+                if (trim($this->seoMetaDescriptionHydrated) !== '') {
+                    $this->record->articleMetas()
+                        ->where('meta_key', $key)
+                        ->delete();
+                }
 
                 continue;
             }

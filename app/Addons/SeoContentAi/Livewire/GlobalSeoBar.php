@@ -77,8 +77,9 @@ class GlobalSeoBar extends Component
 
         $this->simulatedRole = $role;
         session(['seo_simulated_role' => $role]);
+        session()->save();
 
-        $this->redirect($this->resolveReturnUrl(), navigate: true);
+        $this->redirect($this->resolveReturnUrl(), navigate: false);
     }
 
     public function render()

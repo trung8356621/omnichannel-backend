@@ -89,7 +89,12 @@ class SeoSettingsEditor extends Page implements HasForms
                             ->label('Các từ/tiêu đề bỏ qua khi dò trùng (Skip List)')
                             ->placeholder('Nhập tiêu đề rồi nhấn Enter')
                             ->columnSpanFull()
-                            ->helperText('Nhập các tiêu đề được phép trùng lặp giữa các bài (VD: Giới thiệu, Kết luận, FAQ, Câu hỏi thường gặp,...). Nhấn Enter để thêm.'),
+                            ->helperText(
+                                'Nhập các tiêu đề cần bỏ qua. Hỗ trợ cú pháp SQL: '
+                                . "'So sánh%' (bắt đầu bằng), '%Kết luận' (kết thúc bằng), '%FAQ%' (chứa từ). "
+                                . "Nếu nhập text thường (ví dụ: 'Giới thiệu'), hệ thống tự động hiểu là '%Giới thiệu%'. "
+                                . 'Nhấn Enter để thêm.',
+                            ),
                     ]),
             ])
             ->statePath('editorSettingsData');

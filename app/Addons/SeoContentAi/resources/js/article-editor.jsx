@@ -15,6 +15,7 @@ import {
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
 import { clearArticleLocalState } from './utils/articleLocalState';
+import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     loadFeaturedImage,
@@ -236,9 +237,15 @@ if (typeof Livewire !== 'undefined') {
     registerArticleEditorLivewireBridge();
 }
 
-const rootElement = document.getElementById('seo-article-editor-root');
+function getOrCreateReactRoot(element) {
+    if (!element.__seoArticleReactRoot) {
+        element.__seoArticleReactRoot = createRoot(element);
+    }
 
-if (rootElement) {
+    return element.__seoArticleReactRoot;
+}
+
+function readArticleEditorBootstrap() {
     let initialHtml = '';
     let initialSeo = null;
     let editorSettings = { history_step: 20, autosave_interval_seconds: 60 };
@@ -255,6 +262,9 @@ if (rootElement) {
     let aiDebug = { enabled: false };
     let initialVirtualReviews = [];
     let mediaPickerUrl = '';
+    let initialFaqs = [];
+    let initialLoaiSanPham = '';
+    let initialGalleryDescription = '';
 
     try {
         const htmlEl = document.getElementById('seo-article-initial-html');
@@ -319,16 +329,12 @@ if (rootElement) {
                 ? meta.virtual_reviews
                 : [];
             mediaPickerUrl = String(meta?.media_picker_url ?? '').trim();
+            initialLoaiSanPham = String(meta?.loai_san_pham ?? '').trim();
+            initialGalleryDescription = String(meta?.gallery_description ?? '').trim();
         }
     } catch (e) {
         console.warn('Invalid article meta JSON', e);
     }
-
-    if (articleId && initialProductGallery.length > 0 && loadProductAlbum(articleId).length === 0) {
-        saveProductAlbum(articleId, initialProductGallery);
-    }
-
-    let initialFaqs = [];
 
     try {
         const faqsEl = document.getElementById('seo-article-initial-faqs');
@@ -340,8 +346,63 @@ if (rootElement) {
         console.warn('Invalid article FAQs JSON for editor', e);
     }
 
-    const root = createRoot(rootElement);
-    root.render(
+    return {
+        initialHtml,
+        initialSeo,
+        editorSettings,
+        initialPostImages,
+        initialSupplementalImages,
+        articleId,
+        siteId,
+        articleTitle,
+        articlePostType,
+        contentRevision,
+        supportsProductGallery,
+        productCategoryOptions,
+        initialProductGallery,
+        aiDebug,
+        initialVirtualReviews,
+        mediaPickerUrl,
+        initialFaqs,
+        initialLoaiSanPham,
+        initialGalleryDescription,
+    };
+}
+
+function mountArticleEditorPage() {
+    const rootElement = document.getElementById('seo-article-editor-root');
+    if (!rootElement) {
+        return;
+    }
+
+    const bootstrap = readArticleEditorBootstrap();
+    const {
+        initialHtml,
+        initialSeo,
+        editorSettings,
+        initialPostImages,
+        initialSupplementalImages,
+        articleId,
+        siteId,
+        articleTitle,
+        articlePostType,
+        contentRevision,
+        supportsProductGallery,
+        productCategoryOptions,
+        initialProductGallery,
+        aiDebug,
+        initialVirtualReviews,
+        mediaPickerUrl,
+        initialFaqs,
+        initialLoaiSanPham,
+        initialGalleryDescription,
+    } = bootstrap;
+
+    if (articleId && initialProductGallery.length > 0 && loadProductAlbum(articleId).length === 0) {
+        saveProductAlbum(articleId, initialProductGallery);
+    }
+
+    getOrCreateReactRoot(rootElement).render(
         <SeoArticleEditor
             articleId={articleId}
             siteId={siteId}
@@ -359,17 +420,21 @@ if (rootElement) {
             articleTitle={articleTitle}
             editorSettings={editorSettings}
             mediaPickerUrl={mediaPickerUrl}
+            initialLoaiSanPham={initialLoaiSanPham}
+            initialGalleryDescription={initialGalleryDescription}
         />,
     );
 
+    const showLinkWidgets = editorSettings?.show_link_widgets !== false;
+
     const linksRoot = document.getElementById('seo-article-links-root');
-    if (linksRoot) {
-        createRoot(linksRoot).render(<ArticleLinksSidebar />);
+    if (showLinkWidgets && linksRoot) {
+        getOrCreateReactRoot(linksRoot).render(<ArticleLinksSidebar />);
     }
 
     const domainWidgetsRoot = document.getElementById('seo-article-domain-widgets-root');
-    if (domainWidgetsRoot) {
-        createRoot(domainWidgetsRoot).render(
+    if (showLinkWidgets && domainWidgetsRoot) {
+        getOrCreateReactRoot(domainWidgetsRoot).render(
             <ArticleDomainWidgetsSidebar
                 initialDomainLinkList={initialSeo?.domain_link_list ?? []}
                 initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
@@ -380,17 +445,17 @@ if (rootElement) {
 
     const launcherRoot = document.getElementById('seo-article-ai-launcher-root');
     if (launcherRoot) {
-        createRoot(launcherRoot).render(<ArticleAiFloatingLauncher />);
+        getOrCreateReactRoot(launcherRoot).render(<ArticleAiFloatingLauncher />);
     }
 
     const chatRoot = document.getElementById('seo-article-ai-chat-root');
     if (chatRoot) {
-        createRoot(chatRoot).render(<ArticleAiChatPanel articleId={articleId} aiDebug={aiDebug} />);
+        getOrCreateReactRoot(chatRoot).render(<ArticleAiChatPanel articleId={articleId} aiDebug={aiDebug} />);
     }
 
     const faqRoot = document.getElementById('seo-article-faq-root');
     if (faqRoot) {
-        let initialFaqs = [];
+        let faqInitialFaqs = initialFaqs;
         let initialExtractDebug = null;
         let canGenerateFaq = false;
         try {
@@ -407,7 +472,7 @@ if (rootElement) {
             const faqsEl = document.getElementById('seo-article-initial-faqs');
             const rawFaqs = faqsEl?.textContent?.trim();
             if (rawFaqs) {
-                initialFaqs = JSON.parse(rawFaqs);
+                faqInitialFaqs = JSON.parse(rawFaqs);
             }
         } catch (e) {
             console.warn('Invalid article FAQs JSON', e);
@@ -422,13 +487,17 @@ if (rootElement) {
             console.warn('Invalid FAQ extract debug JSON', e);
         }
 
-        createRoot(faqRoot).render(
+        getOrCreateReactRoot(faqRoot).render(
             <ArticleFaqEditor
                 articleId={articleId}
-                initialFaqs={initialFaqs}
+                initialFaqs={faqInitialFaqs}
                 initialExtractDebug={initialExtractDebug}
                 canGenerateFaq={canGenerateFaq}
             />,
         );
     }
 }
+
+mountArticleEditorPage();
+registerFilamentHeaderActionsPersistence();
+document.addEventListener('livewire:navigated', mountArticleEditorPage);

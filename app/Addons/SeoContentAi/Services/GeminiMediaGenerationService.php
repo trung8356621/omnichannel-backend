@@ -25,10 +25,10 @@ final class GeminiMediaGenerationService
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    public function generateImage(ApiConnection $connection, string $prompt, ?string $preferredModel = null): array
+    public function generateImage(ApiConnection $connection, string $prompt, ?string $preferredModel = null, bool $excludeImagen = false): array
     {
         $prompt = $this->normalizeImagePrompt(Utf8Sanitizer::string($prompt));
-        $models = GoogleAiModelRegistry::imageModelsToTry($preferredModel);
+        $models = GoogleAiModelRegistry::imageModelsToTry($preferredModel, $excludeImagen);
         $lastError = null;
 
         foreach ($models as $model) {
@@ -72,7 +72,7 @@ final class GeminiMediaGenerationService
             ],
             'parameters' => [
                 'sampleCount' => 1,
-                'aspectRatio' => '4:5',
+                'aspectRatio' => $this->resolveImagenAspectRatio($prompt),
             ],
         ]);
 
@@ -218,6 +218,39 @@ final class GeminiMediaGenerationService
         }
 
         return $prompt;
+    }
+
+    private function resolveImagenAspectRatio(string $prompt): string
+    {
+        $normalized = mb_strtolower($prompt);
+
+        if (
+            str_contains($normalized, '2x3')
+            || str_contains($normalized, '2 x 3')
+            || str_contains($normalized, '2 dòng 3 cột')
+            || str_contains($normalized, '2 hàng, 3 cột')
+            || str_contains($normalized, '2 rows')
+        ) {
+            return '4:3';
+        }
+
+        if (
+            str_contains($normalized, 'landscape')
+            || str_contains($normalized, 'horizontal')
+            || str_contains($normalized, '16:9')
+        ) {
+            return '16:9';
+        }
+
+        if (
+            str_contains($normalized, 'portrait')
+            || str_contains($normalized, 'vertical')
+            || str_contains($normalized, '9:16')
+        ) {
+            return '3:4';
+        }
+
+        return '3:4';
     }
 
     private function geminiHttpClient(ApiConnection $connection): \Illuminate\Http\Client\PendingRequest

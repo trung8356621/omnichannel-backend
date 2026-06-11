@@ -424,6 +424,14 @@
     gap: 0.5rem;
 }
 
+.wp-seo-fields-toolbar-end {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
 .article-editor-shortcuts-trigger {
     display: inline-flex;
     align-items: center;
@@ -3337,6 +3345,54 @@
     padding-right: 0.5rem;
 }
 
+.seo-editor-page-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+}
+
+.seo-editor-page-actions .fi-btn,
+.seo-editor-page-actions a.fi-btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: auto !important;
+    min-width: auto !important;
+    height: auto !important;
+    min-height: 1.75rem !important;
+    padding: 0.3rem 0.55rem !important;
+    border-radius: 0.375rem !important;
+    font-size: 0.75rem !important;
+    line-height: 1.2 !important;
+    gap: 0.3rem !important;
+}
+
+.seo-editor-page-actions .fi-btn .fi-btn-label {
+    display: inline !important;
+}
+
+.seo-editor-page-actions .fi-btn .fi-icon,
+.seo-editor-page-actions a.fi-btn .fi-icon {
+    width: 0.9rem !important;
+    height: 0.9rem !important;
+    margin: 0 !important;
+}
+
+.seo-editor-page-actions .fi-icon-btn {
+    width: 1.75rem !important;
+    height: 1.75rem !important;
+    min-height: 1.75rem !important;
+    padding: 0 !important;
+    border-radius: 0.375rem !important;
+}
+
+.seo-editor-page-actions [data-seo-shortcuts-wrap] {
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
 .seo-history-btn {
     display: inline-flex !important;
     align-items: center;
@@ -5413,6 +5469,17 @@
 .seo-images-quick-fix-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+}
+
+.seo-images-quick-fix-btn.is-loading {
+    opacity: 0.85;
+    cursor: wait;
+}
+
+.seo-images-quick-fix-btn__spinner {
+    width: 1rem;
+    height: 1rem;
+    animation: seo-publish-spin 0.65s linear infinite;
 }
 
 .dark .seo-images-quick-fix-btn {

@@ -54,6 +54,7 @@
                                 $taskId = (int) ($item['task_id'] ?? 0);
                                 $itemStatus = (string) ($item['status'] ?? '');
                                 $articleId = (int) ($item['article_id'] ?? 0);
+                                $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
                             @endphp
                             <tr
                                 class="align-top {{ $itemStatus === 'pending' ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
@@ -67,18 +68,33 @@
                                 </td>
                                 <td class="px-3 py-3">{{ $this->postTypeLabel($item['post_type'] ?? null) }}</td>
                                 <td class="px-3 py-3 font-medium text-gray-950 dark:text-white">
-                                    @if ($editUrl = $this->itemKeywordEditUrl($item))
-                                        <a
-                                            href="{{ $editUrl }}"
-                                            class="text-primary-600 hover:underline dark:text-primary-400"
-                                            target="_blank"
-                                            rel="noopener"
-                                        >
+                                    <div>
+                                        @if ($editUrl = $this->itemKeywordEditUrl($item))
+                                            <a
+                                                href="{{ $editUrl }}"
+                                                class="text-primary-600 hover:underline dark:text-primary-400"
+                                                target="_blank"
+                                                rel="noopener"
+                                            >
+                                                {{ $this->itemKeywordLabel($item) }}
+                                            </a>
+                                        @else
                                             {{ $this->itemKeywordLabel($item) }}
-                                        </a>
-                                    @else
-                                        {{ $this->itemKeywordLabel($item) }}
-                                    @endif
+                                        @endif
+
+                                        @if (filled($item['loai_san_pham'] ?? null))
+                                            <p class="mt-1 max-w-xl text-xs font-normal leading-5 text-gray-500 dark:text-gray-400">
+                                                {{ __('seo-content-ai::filament.projects.loai_san_pham') }}:
+                                                {{ $item['loai_san_pham'] }}
+                                            </p>
+                                        @endif
+
+                                        @if (filled($item['gallery_description'] ?? null))
+                                            <p class="mt-1 max-w-xl text-xs font-normal leading-5 text-gray-500 dark:text-gray-400">
+                                                {{ $item['gallery_description'] }}
+                                            </p>
+                                        @endif
+                                    </div>
                                 </td>
                                 <td class="px-3 py-3">
                                     @if ($itemStatus === 'success')
@@ -141,7 +157,7 @@
                                                 </x-filament::button>
                                             @endif
 
-                                            @if ($itemStatus === 'success')
+                                            @if (! $isReviewed && $itemStatus === 'success')
                                                 <x-filament::button
                                                     size="xs"
                                                     color="warning"
@@ -157,7 +173,7 @@
                                                         {{ __('seo-content-ai::filament.projects.run_retry_running') }}
                                                     </span>
                                                 </x-filament::button>
-                                            @else
+                                            @elseif (! $isReviewed)
                                                 <x-filament::button
                                                     size="xs"
                                                     color="{{ $itemStatus === 'pending' ? 'success' : 'warning' }}"

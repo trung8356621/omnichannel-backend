@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 
@@ -101,15 +102,44 @@ final class MediaGenerationService
         }
 
         $imagePrompt = $this->buildImageGenerationInput($compiled, $variables);
-        $imageModel = $this->resolveImageModelSlug($connection, $routedModel);
-        [$output, $usage] = $this->geminiMediaGeneration->generateImage($connection, $imagePrompt, $imageModel);
+        $excludeImagen = $this->isProductImageContext($variables);
+        $imageModel = $excludeImagen ? null : $this->resolveImageModelSlug($connection, $routedModel);
+        [$output, $usage] = $this->geminiMediaGeneration->generateImage(
+            $connection,
+            $imagePrompt,
+            $imageModel,
+            excludeImagen: $excludeImagen,
+        );
 
         $firstLine = trim(explode("\n", trim($output), 2)[0] ?? '');
         if (! str_starts_with($firstLine, '/storage/')) {
-            throw new PromptRunException('Hình ảnh lỗi: model không trả file ảnh hợp lệ (' . $imageModel . ').');
+            throw new PromptRunException(
+                'Hình ảnh lỗi: model không trả file ảnh hợp lệ (' . ($imageModel ?? 'nano-banana-auto') . ').',
+            );
         }
 
         return [$output, $usage];
+    }
+
+    /**
+     * Ảnh sản phẩm (post_type = product / có loai_san_pham, gallery_description):
+     * Imagen render chữ trong prompt thành ảnh text → chỉ dùng Nano Banana.
+     *
+     * @param  array<string, string>  $variables
+     */
+    private function isProductImageContext(array $variables): bool
+    {
+        if (trim((string) ($variables['post_type'] ?? '')) === 'product') {
+            return true;
+        }
+
+        foreach (['loai_san_pham', 'LOAI_SAN_PHAM', 'gallery_description', PromptLoaiSanPhamVariable::CUSTOM_FIELD] as $key) {
+            if (trim((string) ($variables[$key] ?? '')) !== '') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

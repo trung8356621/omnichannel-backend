@@ -729,7 +729,10 @@ const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleI
             return;
         }
 
-        const wpId = Number(item?.id ?? item?.wp_attachment_id ?? 0) || null;
+        const isLocal = src.includes('/storage/uploads/seo_media/');
+        const itemId = Number(item?.id ?? 0) || null;
+        const wpId = Number(item?.wp_attachment_id ?? item?.wpAttachmentId ?? 0) || null;
+        const seoId = Number(item?.seo_media_id ?? item?.seoMediaId ?? 0) || null;
         append({
             src,
             slug: String(item?.slug || '').trim() || src.split('/').pop()?.replace(/\.\w+$/, '') || '',
@@ -737,10 +740,10 @@ const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleI
             title: String(item?.alt || '').trim(),
             caption: '',
             align: 'none',
-            wpAttachmentId: wpId,
-            seoMediaId: null,
-            wpSrc: src.includes('/storage/uploads/seo_media/') ? '' : src,
-            localSrc: src.includes('/storage/uploads/seo_media/') ? src : '',
+            wpAttachmentId: isLocal ? null : (wpId || itemId),
+            seoMediaId: isLocal ? (seoId || itemId) : seoId,
+            wpSrc: isLocal ? '' : src,
+            localSrc: isLocal ? src : '',
             origin: 'gallery',
         });
     });
@@ -1450,6 +1453,8 @@ export default function SeoArticleEditor({
     articleTitle = '',
     editorSettings = {},
     mediaPickerUrl = '',
+    initialLoaiSanPham = '',
+    initialGalleryDescription = '',
 }) {
     const historyStep = editorSettings?.history_step ?? 20;
 
@@ -1471,8 +1476,9 @@ export default function SeoArticleEditor({
         Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
     );
     const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
+    const showReviewsTab = editorSettings?.show_reviews_tab !== false;
     const editorTabs = useMemo(() => {
-        if (!isProductPost) {
+        if (!isProductPost || !showReviewsTab) {
             return BASE_TABS;
         }
 
@@ -1480,7 +1486,13 @@ export default function SeoArticleEditor({
         tabs.splice(2, 0, REVIEWS_TAB);
 
         return tabs;
-    }, [isProductPost]);
+    }, [isProductPost, showReviewsTab]);
+
+    useEffect(() => {
+        if (activeTab === 'reviews' && !showReviewsTab) {
+            setActiveTab('editor');
+        }
+    }, [activeTab, showReviewsTab]);
 
     useEffect(() => {
         const onReviewsUpdated = (event) => {
@@ -1501,6 +1513,7 @@ export default function SeoArticleEditor({
     const [analyzing, setAnalyzing] = useState(false);
     const [imageRenameBusy, setImageRenameBusy] = useState(false);
     const [imageRenameBusyCount, setImageRenameBusyCount] = useState(0);
+    const [quickFixSlugAllBusy, setQuickFixSlugAllBusy] = useState(false);
     const [imagesReloadKey, setImagesReloadKey] = useState(0);
     const [imagesTabJumpTarget, setImagesTabJumpTarget] = useState(null);
     const [outlineHasSavedHeadings, setOutlineHasSavedHeadings] = useState(false);
@@ -1524,6 +1537,7 @@ export default function SeoArticleEditor({
     const [generateImageModalOpen, setGenerateImageModalOpen] = useState(false);
     const [generateImageModalPrompt, setGenerateImageModalPrompt] = useState('');
     const [generateImageModalTarget, setGenerateImageModalTarget] = useState('editor');
+    const [generateImageModalInitialCustom, setGenerateImageModalInitialCustom] = useState('');
 
     useEffect(() => {
         if (!articleId) {
@@ -1635,9 +1649,19 @@ export default function SeoArticleEditor({
             setGenerateImageModalTarget(target);
 
             const preset = String(detail.prompt ?? detail.userBrief ?? '').trim();
-            setGenerateImageModalPrompt(
-                preset || (target === 'product-gallery' ? mainKeyword : ''),
-            );
+            if (target === 'product-gallery') {
+                // Custom field ← loai_san_pham, Image prompt ← gallery_description (nếu có)
+                setGenerateImageModalInitialCustom(
+                    String(detail.loaiSanPhamCustom ?? '').trim() || initialLoaiSanPham,
+                );
+                const galleryPrompt = String(detail.prompt ?? '').trim()
+                    || initialGalleryDescription
+                    || mainKeyword;
+                setGenerateImageModalPrompt(galleryPrompt);
+            } else {
+                setGenerateImageModalInitialCustom('');
+                setGenerateImageModalPrompt(preset || '');
+            }
             setGenerateImageModalOpen(true);
         };
 
@@ -1646,7 +1670,7 @@ export default function SeoArticleEditor({
         return () => {
             window.removeEventListener('seo-open-generate-image-modal', onOpenGenerateImageModal);
         };
-    }, [mainKeyword]);
+    }, [mainKeyword, initialLoaiSanPham, initialGalleryDescription]);
 
     useEffect(() => {
         setArticleAutosaveLock('generate-image-modal', generateImageModalOpen);
@@ -2392,7 +2416,7 @@ export default function SeoArticleEditor({
     const runSupplementalLocalRenames = useCallback(
         (localRenames, supplementalOnlyRows) => {
             if (!localRenames.length) {
-                return;
+                return Promise.resolve();
             }
 
             const supplementalLocalRenameKeys = new Set();
@@ -2409,7 +2433,7 @@ export default function SeoArticleEditor({
                 uniqueLocalRenames.push(item);
             });
 
-            (async () => {
+            return (async () => {
                 for (const item of uniqueLocalRenames) {
                     try {
                         const newSlug = String(item.new_slug ?? '').trim();
@@ -2463,9 +2487,30 @@ export default function SeoArticleEditor({
                 return null;
             }
 
-            const sourceRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
+            const baseRows = (Array.isArray(imageRows) ? imageRows : supplementalImages ?? []).filter(
                 (row) => !row?.excludeQuickFix,
             );
+            const sourceRows = [];
+            const seenRows = new Set();
+            const appendSourceRow = (row) => {
+                if (!row || row?.excludeQuickFix) {
+                    return;
+                }
+
+                const key =
+                    normalizeImageSrcKey(row?.src) ||
+                    String(row?.blockId ?? row?.block_id ?? '').trim() ||
+                    `row:${sourceRows.length}`;
+                if (!key || seenRows.has(key)) {
+                    return;
+                }
+
+                seenRows.add(key);
+                sourceRows.push(row);
+            };
+
+            baseRows.forEach(appendSourceRow);
+            buildGallerySupplementalRows(baseRows, null, articleId).forEach(appendSourceRow);
 
             const indexByBlockId = {};
             sourceRows.forEach((row) => {
@@ -2482,7 +2527,7 @@ export default function SeoArticleEditor({
 
             return { keyword, sourceRows, indexByBlockId, supplementalOnlyRows };
         },
-        [focusKeyword, articleTitle, supplementalImages],
+        [focusKeyword, articleTitle, supplementalImages, articleId],
     );
 
     const applyQuickFixSlugPreview = useCallback(
@@ -2493,6 +2538,8 @@ export default function SeoArticleEditor({
             setBlocks(preview.blocks);
             pendingQuickFixKeywordRef.current = keyword;
 
+            const tasks = [];
+
             if (renameCount > 0) {
                 requestWordPressRenames(preview.renameQueue);
             } else if (localRenameCount === 0) {
@@ -2500,81 +2547,112 @@ export default function SeoArticleEditor({
             }
 
             if (localRenameCount > 0) {
-                (async () => {
-                    for (const item of preview.localRenameQueue) {
-                        try {
-                            const newSlug = String(item.new_slug ?? '').trim();
-                            const src = String(item.src ?? '').trim();
-                            const blockId = String(item.block_id ?? '').trim();
-                            const id = Number(item.seo_media_id ?? 0);
+                tasks.push(
+                    (async () => {
+                        for (const item of preview.localRenameQueue) {
+                            try {
+                                const newSlug = String(item.new_slug ?? '').trim();
+                                const src = String(item.src ?? '').trim();
+                                const blockId = String(item.block_id ?? '').trim();
+                                const id = Number(item.seo_media_id ?? 0);
 
-                            if (!newSlug || !src || !blockId) {
-                                continue;
+                                if (!newSlug || !src || !blockId) {
+                                    continue;
+                                }
+
+                                const data = id > 0
+                                    ? await renameSeoMedia(id, newSlug)
+                                    : await renameLocalMediaByUrl(src, newSlug);
+
+                                const oldSrc = normalizeImageSrcKey(src);
+                                const resolvedSeoId = Number(data.id ?? id ?? 0);
+                                setBlocks((prev) =>
+                                    prev.map((block) => {
+                                        if (block.type !== 'image') {
+                                            return block;
+                                        }
+
+                                        const image = block.image ?? parseImageFromBlockContent(block.content);
+                                        if (!image?.src) {
+                                            return block;
+                                        }
+
+                                        const imageSeoId = Number(image.seoMediaId ?? image.seo_media_id ?? 0);
+                                        const imageSrc = normalizeImageSrcKey(image.src);
+                                        const matched =
+                                            (resolvedSeoId > 0 && imageSeoId > 0 && imageSeoId === resolvedSeoId) ||
+                                            (resolvedSeoId <= 0 && oldSrc !== '' && imageSrc === oldSrc);
+                                        if (!matched) {
+                                            return block;
+                                        }
+
+                                        const nextImage = {
+                                            ...image,
+                                            slug: data.slug,
+                                            src: data.url,
+                                            seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
+                                            originalSlug: item.old_slug ?? '',
+                                        };
+
+                                        return {
+                                            ...block,
+                                            image: nextImage,
+                                            content: renderImageFigure(nextImage),
+                                        };
+                                    }),
+                                );
+                            } catch (error) {
+                                window.dispatchEvent(
+                                    new CustomEvent('seo-article-editor-notify', {
+                                        detail: {
+                                            title: t('editor_cannot_rename_local_image_slug'),
+                                            body: error?.message ?? t('editor_try_again_later'),
+                                            status: 'danger',
+                                        },
+                                    }),
+                                );
                             }
-
-                            const data = id > 0
-                                ? await renameSeoMedia(id, newSlug)
-                                : await renameLocalMediaByUrl(src, newSlug);
-
-                            const oldSrc = normalizeImageSrcKey(src);
-                            const resolvedSeoId = Number(data.id ?? id ?? 0);
-                            setBlocks((prev) =>
-                                prev.map((block) => {
-                                    if (block.type !== 'image') {
-                                        return block;
-                                    }
-
-                                    const image = block.image ?? parseImageFromBlockContent(block.content);
-                                    if (!image?.src) {
-                                        return block;
-                                    }
-
-                                    const imageSeoId = Number(image.seoMediaId ?? image.seo_media_id ?? 0);
-                                    const imageSrc = normalizeImageSrcKey(image.src);
-                                    const matched =
-                                        (resolvedSeoId > 0 && imageSeoId > 0 && imageSeoId === resolvedSeoId) ||
-                                        (resolvedSeoId <= 0 && oldSrc !== '' && imageSrc === oldSrc);
-                                    if (!matched) {
-                                        return block;
-                                    }
-
-                                    const nextImage = {
-                                        ...image,
-                                        slug: data.slug,
-                                        src: data.url,
-                                        seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
-                                        originalSlug: item.old_slug ?? '',
-                                    };
-
-                                    return {
-                                        ...block,
-                                        image: nextImage,
-                                        content: renderImageFigure(nextImage),
-                                    };
-                                }),
-                            );
-                        } catch (error) {
-                            window.dispatchEvent(
-                                new CustomEvent('seo-article-editor-notify', {
-                                    detail: {
-                                        title: t('editor_cannot_rename_local_image_slug'),
-                                        body: error?.message ?? t('editor_try_again_later'),
-                                        status: 'danger',
-                                    },
-                                }),
-                            );
                         }
-                    }
 
-                    setImagesReloadKey((k) => k + 1);
-                })();
+                        setImagesReloadKey((k) => k + 1);
+                    })(),
+                );
             }
+
+            return tasks.length > 0 ? Promise.all(tasks) : Promise.resolve();
         },
-        [requestWordPressRenames],
+        [renameLocalMediaByUrl, requestWordPressRenames],
     );
 
+    const waitForWordPressSlugRenameFinished = useCallback((batchCount = 1) => {
+        const total = Number(batchCount);
+        if (total <= 0) {
+            return Promise.resolve();
+        }
+
+        return new Promise((resolve) => {
+            let remaining = total;
+
+            const onFinished = () => {
+                remaining -= 1;
+                if (remaining > 0) {
+                    return;
+                }
+
+                window.removeEventListener('seo-attachment-slugs-rename-finished', onFinished);
+                resolve();
+            };
+
+            window.addEventListener('seo-attachment-slugs-rename-finished', onFinished);
+        });
+    }, []);
+
     const quickFixSlugAllImages = useCallback(
-        (imageRows = null) => {
+        async (imageRows = null) => {
+            if (quickFixSlugAllBusy) {
+                return;
+            }
+
             const context = buildQuickFixContext(imageRows);
             if (!context) {
                 return;
@@ -2598,7 +2676,9 @@ export default function SeoArticleEditor({
                 .map(({ outcome }) => outcome.localRename)
                 .filter(Boolean);
 
-            const totalWpRenames = preview.renameQueue.length + supplementalWpRenames.length;
+            const previewWpRenameCount = preview.renameQueue.length;
+            const supplementalWpRenameCount = supplementalWpRenames.length;
+            const totalWpRenames = previewWpRenameCount + supplementalWpRenameCount;
             const totalLocalRenames =
                 (preview.localRenameQueue ?? []).length + supplementalLocalRenames.length;
 
@@ -2610,28 +2690,46 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            applyQuickFixSlugPreview(preview, keyword);
-
-            supplementalOutcomes.forEach(({ row, outcome }) => {
-                if (Object.keys(outcome.patch ?? {}).length > 0) {
-                    patchSupplementalImageRow(row, outcome.patch);
-                }
+            setQuickFixSlugAllBusy(true);
+            await new Promise((resolve) => {
+                window.requestAnimationFrame(() => resolve());
             });
 
-            if (supplementalWpRenames.length > 0) {
-                requestWordPressRenames(supplementalWpRenames);
-            }
+            try {
+                const localTasks = [applyQuickFixSlugPreview(preview, keyword)];
 
-            if (supplementalLocalRenames.length > 0) {
-                runSupplementalLocalRenames(supplementalLocalRenames, supplementalOnlyRows);
+                supplementalOutcomes.forEach(({ row, outcome }) => {
+                    if (Object.keys(outcome.patch ?? {}).length > 0) {
+                        patchSupplementalImageRow(row, outcome.patch);
+                    }
+                });
+
+                let wpBatchCount = 0;
+                if (previewWpRenameCount > 0) {
+                    wpBatchCount += 1;
+                }
+
+                if (supplementalWpRenames.length > 0) {
+                    wpBatchCount += 1;
+                    requestWordPressRenames(supplementalWpRenames);
+                }
+
+                localTasks.push(runSupplementalLocalRenames(supplementalLocalRenames, supplementalOnlyRows));
+                localTasks.push(waitForWordPressSlugRenameFinished(wpBatchCount));
+
+                await Promise.all(localTasks);
+            } finally {
+                setQuickFixSlugAllBusy(false);
             }
         },
         [
             applyQuickFixSlugPreview,
             buildQuickFixContext,
             patchSupplementalImageRow,
+            quickFixSlugAllBusy,
             requestWordPressRenames,
             runSupplementalLocalRenames,
+            waitForWordPressSlugRenameFinished,
         ],
     );
 
@@ -5868,6 +5966,7 @@ export default function SeoArticleEditor({
                     onSlugChange={handleImageSlugChange}
                     onFocusBlock={focusImageBlock}
                     onQuickFixSlugAll={quickFixSlugAllImages}
+                    quickFixSlugAllBusy={quickFixSlugAllBusy}
                     onQuickFixSlugOne={quickFixSlugSingleImage}
                     onQuickFixAltTitleAll={quickFixAltTitleAllImages}
                     onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
@@ -5898,6 +5997,7 @@ export default function SeoArticleEditor({
                 onClose={() => setGenerateImageModalOpen(false)}
                 onSubmit={submitGenerateImageFromModal}
                 initialPrompt={generateImageModalPrompt}
+                initialLoaiSanPhamCustom={generateImageModalInitialCustom}
                 mode={generateImageModalTarget === 'product-gallery' ? 'product-gallery' : 'editor'}
                 productCategoryOptions={productCategoryOptions}
                 articleId={articleId}

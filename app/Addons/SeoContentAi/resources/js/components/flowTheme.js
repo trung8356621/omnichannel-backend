@@ -172,23 +172,41 @@ export function getPromptNodeHeight(outputPortsCount) {
   return FLOW_NODE_HEADER_HEIGHT + bodyRows * FLOW_PORT_ROW_HEIGHT + FLOW_NODE_VERTICAL_PADDING;
 }
 
+export function getArticleFilterOutputPorts(isDark) {
+  const sky = isDark ? 'bg-sky-500' : 'bg-sky-600';
+  const cyan = isDark ? 'bg-cyan-500' : 'bg-cyan-600';
+  const emerald = isDark ? 'bg-emerald-500' : 'bg-emerald-600';
+
+  return [
+    { id: 'out_keyword', label: 'Keyword / Tiêu đề', color: sky },
+    { id: 'out_gallery_description', label: 'Gallery description', color: cyan },
+    { id: 'out_combined', label: 'Cả 2', color: emerald },
+  ];
+}
+
+export function getArticleFilterNodeHeight(outputPortsCount = 3) {
+  const rows = Math.max(3, outputPortsCount);
+  return FLOW_NODE_HEADER_HEIGHT + rows * FLOW_PORT_ROW_HEIGHT + FLOW_NODE_VERTICAL_PADDING;
+}
+
 export function getArticleNodeHeight() {
   return 140;
 }
 
 export function getDefaultNodeHeight(nodeType, outputPortsCount = 1) {
   if (nodeType === 'prompt') return getPromptNodeHeight(outputPortsCount);
+  if (nodeType === 'article_filter') return getArticleFilterNodeHeight(outputPortsCount);
   if (nodeType === 'article') return getArticleNodeHeight();
   return 100;
 }
 
 /** Output port top position in px. */
 export function getOutputPortTop(nodeType, nodeHeight, outputPortsCount, portIndex) {
-  if (nodeType !== 'prompt') {
-    return nodeHeight / 2;
+  if (nodeType === 'prompt' || nodeType === 'article_filter') {
+    const bodyHeight = nodeHeight - FLOW_NODE_HEADER_HEIGHT;
+    const step = bodyHeight / (outputPortsCount + 1);
+    return FLOW_NODE_HEADER_HEIGHT + step * (portIndex + 1);
   }
 
-  const bodyHeight = nodeHeight - FLOW_NODE_HEADER_HEIGHT;
-  const step = bodyHeight / (outputPortsCount + 1);
-  return FLOW_NODE_HEADER_HEIGHT + step * (portIndex + 1);
+  return nodeHeight / 2;
 }

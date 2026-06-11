@@ -262,6 +262,7 @@ class SeoProjectResource extends Resource
                                     ->default(SeoProjectTask::POST_TYPE_ARTICLE)
                                     ->required()
                                     ->native(false)
+                                    ->live()
                                     ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD),
 
                                 Forms\Components\Select::make('source_content')
@@ -285,11 +286,20 @@ class SeoProjectResource extends Resource
                                             : null,
                                     ),
 
+                                Forms\Components\TextInput::make('loai_san_pham')
+                                    ->label(__('seo-content-ai::filament.projects.loai_san_pham'))
+                                    ->placeholder(__('seo-content-ai::filament.projects.loai_san_pham_placeholder'))
+                                    ->maxLength(500)
+                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD
+                                        && $get('post_type') === SeoProjectTask::POST_TYPE_PRODUCT)
+                                    ->columnSpanFull(),
+
                                 Forms\Components\Textarea::make('description')
-                                    ->label(__('seo-content-ai::filament.projects.description'))
-                                    ->placeholder(__('seo-content-ai::filament.projects.description_placeholder'))
+                                    ->label(__('seo-content-ai::filament.projects.gallery_description'))
+                                    ->placeholder(__('seo-content-ai::filament.projects.gallery_description_placeholder'))
                                     ->rows(3)
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD)
+                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD
+                                        && $get('post_type') === SeoProjectTask::POST_TYPE_PRODUCT)
                                     ->columnSpanFull(),
                             ])
                             ->columns(2)

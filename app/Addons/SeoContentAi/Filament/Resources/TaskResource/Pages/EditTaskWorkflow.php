@@ -63,14 +63,15 @@ class EditTaskWorkflow extends Page
     protected function getHeaderActions(): array
     {
         return [
+            Actions\Action::make('back')
+                ->label(__('seo-content-ai::filament.task.back_to_tasks'))
+                ->icon('heroicon-o-arrow-left')
+                ->color('gray')
+                ->url(TaskResource::getUrl('index')),
             Actions\Action::make('edit_task')
                 ->label('Workflow settings')
                 ->icon('heroicon-o-cog-6-tooth')
                 ->url(fn (): string => TaskResource::getUrl('edit', ['record' => $this->record])),
-            Actions\Action::make('back')
-                ->label('List')
-                ->icon('heroicon-o-arrow-left')
-                ->url(TaskResource::getUrl('index')),
         ];
     }
 

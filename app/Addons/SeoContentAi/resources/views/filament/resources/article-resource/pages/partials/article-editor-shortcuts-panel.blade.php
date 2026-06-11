@@ -10,12 +10,14 @@
                     </span>
                     <span class="article-editor-shortcuts-desc">Lưu bài viết</span>
                 </li>
-                <li>
-                    <span class="article-editor-shortcuts-keys">
-                        <kbd>Ctrl</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>Shift</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>S</kbd>
-                    </span>
-                    <span class="article-editor-shortcuts-desc">Đồng bộ WordPress</span>
-                </li>
+                @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                    <li>
+                        <span class="article-editor-shortcuts-keys">
+                            <kbd>Ctrl</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>Shift</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>S</kbd>
+                        </span>
+                        <span class="article-editor-shortcuts-desc">Đồng bộ WordPress</span>
+                    </li>
+                @endif
                 <li>
                     <span class="article-editor-shortcuts-keys">
                         <kbd>Ctrl</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>Shift</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>P</kbd>

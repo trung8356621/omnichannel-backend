@@ -20,7 +20,9 @@ use App\Models\Site;
 use Carbon\Carbon;
 use Filament\Notifications\Notification;
 use Filament\Forms;
+use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Form;
+use Filament\Forms\Set;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Enums\FiltersLayout;
@@ -452,23 +454,13 @@ class ArticleResource extends Resource
                         ->color('warning')
                         ->requiresConfirmation()
                         ->deselectRecordsAfterCompletion()
-                        ->form([
-                            Forms\Components\Select::make('project_id')
-                                ->label(__('seo-content-ai::filament.article_list.content_project'))
-                                ->options(
-                                    fn (Collection $records): array => static::contentProjectOptions(
-                                        static::resolveBulkArticlesSiteId($records),
-                                    ),
-                                )
-                                ->helperText(
-                                    fn (Collection $records): ?string => static::resolveBulkArticlesSiteId($records) === null
-                                        ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
-                                        : null,
-                                )
-                                ->required()
-                                ->searchable()
-                                ->preload()
-                                ->native(false),
+                        ->form(fn (Collection $records): array => [
+                            static::assignContentProjectSelectField(
+                                fn (): ?int => static::resolveBulkArticlesSiteId($records),
+                                fn (): ?string => static::resolveBulkArticlesSiteId($records) === null
+                                    ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
+                                    : null,
+                            ),
                         ])
                         ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
@@ -754,18 +746,10 @@ class ArticleResource extends Resource
                     ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                     ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
                     ->requiresConfirmation()
-                    ->form([
-                        Forms\Components\Select::make('project_id')
-                            ->label(__('seo-content-ai::filament.article_list.content_project'))
-                            ->options(
-                                fn (SeoArticle $record): array => static::contentProjectOptions(
-                                    static::resolveArticleSiteId($record),
-                                ),
-                            )
-                            ->required()
-                            ->searchable()
-                            ->preload()
-                            ->native(false),
+                    ->form(fn (SeoArticle $record): array => [
+                        static::assignContentProjectSelectField(
+                            fn (): ?int => static::resolveArticleSiteId($record),
+                        ),
                     ])
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
@@ -882,6 +866,99 @@ class ArticleResource extends Resource
             ->values();
 
         return $siteIds->count() === 1 ? (int) $siteIds->first() : null;
+    }
+
+    /**
+     * @param  callable(): ?int  $resolveSiteId
+     * @param  (callable(): ?string)|null  $resolveHelperText
+     */
+    public static function assignContentProjectSelectField(
+        callable $resolveSiteId,
+        ?callable $resolveHelperText = null,
+    ): Forms\Components\Select {
+        $select = Forms\Components\Select::make('project_id')
+            ->label(__('seo-content-ai::filament.article_list.content_project'))
+            ->options(fn (): array => static::contentProjectOptions($resolveSiteId()))
+            ->required()
+            ->searchable()
+            ->preload()
+            ->native(false)
+            ->suffixAction(
+                FormAction::make('quick_create_content_project')
+                    ->label(__('seo-content-ai::filament.article_list.quick_create_content_project'))
+                    ->icon('heroicon-o-plus')
+                    ->action(function (Set $set) use ($resolveSiteId): void {
+                        $siteId = (int) ($resolveSiteId() ?? 0);
+                        if ($siteId <= 0) {
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                                ->body(__('seo-content-ai::filament.article_list.assign_projects_mixed_domains'))
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
+
+                        try {
+                            $project = static::quickCreateContentProject($siteId);
+                            $set('project_id', $project->id);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_success'))
+                                ->body(__('seo-content-ai::filament.article_list.quick_create_content_project_success_body', [
+                                    'name' => $project->name,
+                                ]))
+                                ->success()
+                                ->send();
+                        } catch (\InvalidArgumentException $exception) {
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                                ->body($exception->getMessage())
+                                ->danger()
+                                ->send();
+                        }
+                    }),
+            );
+
+        if ($resolveHelperText !== null) {
+            $select->helperText(fn (): ?string => $resolveHelperText());
+        }
+
+        return $select;
+    }
+
+    public static function quickCreateContentProject(int $siteId): SeoProject
+    {
+        if ($siteId <= 0) {
+            throw new \InvalidArgumentException(__('seo-content-ai::filament.article_list.quick_create_content_project_no_domain'));
+        }
+
+        $userId = (int) auth()->id();
+        if ($userId <= 0) {
+            throw new \InvalidArgumentException(__('seo-content-ai::filament.article_list.quick_create_content_project_no_user'));
+        }
+
+        $currentMonth = Carbon::now()->startOfMonth();
+        $targetMonth = $currentMonth->copy();
+
+        $projectQuery = SeoProject::query()->where('site_id', $siteId);
+        if (SeoAccessControl::isContentManager()) {
+            $projectQuery->where('user_id', $userId);
+        }
+
+        if ((clone $projectQuery)->whereDate('month', $currentMonth->format('Y-m-d'))->exists()) {
+            $targetMonth = $currentMonth->copy()->addMonth();
+        }
+
+        return SeoProject::query()->create([
+            'name' => SeoProject::defaultNameFromMonth($targetMonth),
+            'user_id' => $userId,
+            'site_id' => $siteId,
+            'month' => $targetMonth->format('Y-m-d'),
+            'status' => SeoProject::STATUS_MANUAL,
+            'total_tasks' => 0,
+            'description' => null,
+        ]);
     }
 
     /**

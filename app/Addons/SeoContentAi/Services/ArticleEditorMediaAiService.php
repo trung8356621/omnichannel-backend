@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Jobs\GenerateMediaJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -285,12 +287,17 @@ final class ArticleEditorMediaAiService
         $postTitle = trim((string) ($article->title ?? ''));
         $focusKeyword = $this->seoAnalyzer->resolveFocusKeywordForArticle($article) ?? '';
         $bodyPlain = trim(strip_tags((string) ($article->body ?? '')));
+        $galleryDescription = $this->resolveGalleryDescription($article);
+        $loaiSanPham = $this->resolveLoaiSanPham($article);
 
         $selectionText = trim($selectionText);
         $selectionHtml = trim($selectionHtml);
+        if ($galleryDescription !== '') {
+            $userBrief = str_replace('{{gallery_description}}', $galleryDescription, $userBrief);
+        }
         $userBrief = $this->compactVariableValue($userBrief);
 
-        // Theo yêu cầu: không trộn "Đoạn ngữ cảnh" vào prompt input gửi AI.
+        // Không trộn "Đoạn ngữ cảnh" vào prompt input gửi AI; Product gallery dùng input làm loại sản phẩm.
         $input = $userBrief;
 
         $postType = ArticlePostTypeResolver::resolve($article);
@@ -303,6 +310,9 @@ final class ArticleEditorMediaAiService
                 'selected_text' => '',
                 'selected_html' => '',
                 'user_brief' => $userBrief,
+                'gallery_description' => $galleryDescription,
+                'loai_san_pham' => $loaiSanPham,
+                'LOAI_SAN_PHAM' => $loaiSanPham,
                 'input' => $input,
             ],
             $promptVars,
@@ -321,7 +331,9 @@ final class ArticleEditorMediaAiService
             $loaiInputs = [
                 PromptLoaiSanPhamVariable::SITE_FIELD => (string) (int) ($article->site_id ?? 0),
                 PromptLoaiSanPhamVariable::CATEGORY_FIELD => (string) $loaiSanPhamCategoryArticleId,
-                PromptLoaiSanPhamVariable::CUSTOM_FIELD => trim($loaiSanPhamCustom),
+                PromptLoaiSanPhamVariable::CUSTOM_FIELD => $loaiSanPham !== ''
+                    ? $loaiSanPham
+                    : trim($loaiSanPhamCustom),
             ];
             $variables = array_merge($variables, PromptLoaiSanPhamVariable::mergeIntoVariables($loaiInputs));
             $variables = PromptLoaiSanPhamVariable::withAliases($variables);
@@ -385,6 +397,180 @@ final class ArticleEditorMediaAiService
         }
 
         return $filtered;
+    }
+
+    private function resolveGalleryDescription(SeoArticle $article): string
+    {
+        $article->loadMissing('articleMetas');
+
+        $fromMeta = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', 'gallery_description')?->meta_value ?? ''));
+        if ($fromMeta !== '') {
+            return $fromMeta;
+        }
+
+        $runMeta = $article->articleMetas->firstWhere('meta_key', 'content_project_run')?->meta_value;
+        $runPayload = is_string($runMeta) && $runMeta !== ''
+            ? json_decode($runMeta, true)
+            : null;
+        $taskId = is_array($runPayload) ? (int) ($runPayload['task_id'] ?? 0) : 0;
+        if ($taskId > 0) {
+            $task = SeoProjectTask::query()->find($taskId);
+            $fromTask = $this->galleryDescriptionFromTask($task);
+            if ($fromTask !== '') {
+                return $fromTask;
+            }
+        }
+
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId <= 0) {
+            return '';
+        }
+
+        $task = SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->latest('id')
+            ->first();
+        $fromTask = $this->galleryDescriptionFromTask($task);
+        if ($fromTask !== '') {
+            return $fromTask;
+        }
+
+        $title = trim((string) ($article->title ?? ''));
+        if ($title !== '') {
+            $task = SeoProjectTask::query()
+                ->where('source_content', $title)
+                ->latest('id')
+                ->first();
+            $fromTask = $this->galleryDescriptionFromTask($task);
+            if ($fromTask !== '') {
+                return $fromTask;
+            }
+        }
+
+        $runs = SeoProjectRun::query()
+            ->latest('id')
+            ->limit(200)
+            ->get(['items']);
+        foreach ($runs as $run) {
+            $items = is_array($run->items) ? $run->items : [];
+            foreach ($items as $item) {
+                if (! is_array($item) || (int) ($item['article_id'] ?? 0) !== $articleId) {
+                    continue;
+                }
+
+                $fromItem = trim((string) ($item['gallery_description'] ?? ''));
+                if ($fromItem !== '') {
+                    return $fromItem;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveLoaiSanPham(SeoArticle $article): string
+    {
+        $article->loadMissing('articleMetas');
+
+        $fromMeta = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', 'loai_san_pham')?->meta_value ?? ''));
+        if ($fromMeta !== '') {
+            return $fromMeta;
+        }
+
+        $runMeta = $article->articleMetas->firstWhere('meta_key', 'content_project_run')?->meta_value;
+        $runPayload = is_string($runMeta) && $runMeta !== ''
+            ? json_decode($runMeta, true)
+            : null;
+        $taskId = is_array($runPayload) ? (int) ($runPayload['task_id'] ?? 0) : 0;
+        if ($taskId > 0) {
+            $task = SeoProjectTask::query()->find($taskId);
+            $fromTask = $this->loaiSanPhamFromTask($task);
+            if ($fromTask !== '') {
+                return $fromTask;
+            }
+        }
+
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId <= 0) {
+            return '';
+        }
+
+        $task = SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->latest('id')
+            ->first();
+        $fromTask = $this->loaiSanPhamFromTask($task);
+        if ($fromTask !== '') {
+            return $fromTask;
+        }
+
+        $title = trim((string) ($article->title ?? ''));
+        if ($title !== '') {
+            $task = SeoProjectTask::query()
+                ->where('source_content', $title)
+                ->latest('id')
+                ->first();
+            $fromTask = $this->loaiSanPhamFromTask($task);
+            if ($fromTask !== '') {
+                return $fromTask;
+            }
+        }
+
+        $runs = SeoProjectRun::query()
+            ->latest('id')
+            ->limit(200)
+            ->get(['items']);
+        foreach ($runs as $run) {
+            $items = is_array($run->items) ? $run->items : [];
+            foreach ($items as $item) {
+                if (! is_array($item) || (int) ($item['article_id'] ?? 0) !== $articleId) {
+                    continue;
+                }
+
+                $fromItem = trim((string) ($item['loai_san_pham'] ?? ''));
+                if ($fromItem !== '') {
+                    return $fromItem;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function loaiSanPhamFromTask(?SeoProjectTask $task): string
+    {
+        if (! $task instanceof SeoProjectTask) {
+            return '';
+        }
+
+        if ((string) $task->type !== SeoProjectTask::TYPE_NEW_KEYWORD) {
+            return '';
+        }
+
+        if (SeoProjectTask::normalizePostType($task->post_type) !== SeoProjectTask::POST_TYPE_PRODUCT) {
+            return '';
+        }
+
+        return trim((string) ($task->loai_san_pham ?? ''));
+    }
+
+    private function galleryDescriptionFromTask(?SeoProjectTask $task): string
+    {
+        if (! $task instanceof SeoProjectTask) {
+            return '';
+        }
+
+        if ((string) $task->type !== SeoProjectTask::TYPE_NEW_KEYWORD) {
+            return '';
+        }
+
+        if (SeoProjectTask::normalizePostType($task->post_type) !== SeoProjectTask::POST_TYPE_PRODUCT) {
+            return '';
+        }
+
+        return trim((string) ($task->description ?? ''));
     }
 
     private function shouldMergeLoaiSanPham(

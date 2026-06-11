@@ -29,6 +29,7 @@ class HeadingDuplicateCheckerService
     public function __construct(
         private readonly HeadingDuplicateCheckService $duplicateCheck,
         private readonly SeoOverviewSettingsService $overviewSettings,
+        private readonly OutlineSkipListMatcher $skipListMatcher,
     ) {}
 
     /**
@@ -41,7 +42,9 @@ class HeadingDuplicateCheckerService
      */
     public function check(array $headings, int $siteId, ?int $excludeArticleId = null): array
     {
-        $skipWords = $this->overviewSettings->getOutlineSkipWords();
+        $skipSqlPatterns = $this->skipListMatcher->normalizeSqlPatterns(
+            $this->overviewSettings->getOutlineSkipWords(),
+        );
 
         $normalized = [];
         foreach ($headings as $key => $item) {
@@ -50,8 +53,8 @@ class HeadingDuplicateCheckerService
                 continue;
             }
 
-            // Skip List: tiêu đề được phép trùng -> không dò, không báo đỏ.
-            if ($this->isSkipped($text, $skipWords)) {
+            // Lớp 1: Skip List (PHP Str::is) — không gọi DB.
+            if ($this->skipListMatcher->isSkipped($text, $skipSqlPatterns)) {
                 continue;
             }
 
@@ -66,22 +69,26 @@ class HeadingDuplicateCheckerService
             return ['is_duplicate' => false, 'duplicates' => []];
         }
 
-        $exactByLevelSlug = $this->exactMatchesByLevelSlug($normalized, $siteId, $excludeArticleId);
+        $exactByLevelSlug = $this->exactMatchesByLevelSlug($normalized, $siteId, $excludeArticleId, $skipSqlPatterns);
 
         $duplicates = [];
         foreach ($normalized as $key => $item) {
             $exact = $exactByLevelSlug[$item['level'] . ':' . $item['slug']] ?? null;
-            if ($exact !== null) {
+            if ($exact !== null && ! $this->skipListMatcher->isSkipped((string) $exact->heading_text, $skipSqlPatterns)) {
                 $duplicates[] = $this->formatDuplicate($key, $item['text'], $exact, 'exact');
 
                 continue;
             }
 
             // Vòng 1: FTS (cùng level) lấy tập ứng viên; vòng 2: double-check word overlap bằng PHP.
+            // Hậu kiểm skip list bằng PHP vì NOT LIKE không bắt được heading DB có tiền tố đánh số.
             $semantic = $this->duplicateCheck
-                ->checkSemanticMatch($item['text'], $siteId, $excludeArticleId, $item['level'])
+                ->checkSemanticMatch($item['text'], $siteId, $excludeArticleId, $item['level'], $skipSqlPatterns)
                 ->filter(
                     fn (SeoArticleHeading $row): bool => (float) ($row->getAttribute('score') ?? 0) > self::SEMANTIC_SCORE_THRESHOLD,
+                )
+                ->reject(
+                    fn (SeoArticleHeading $row): bool => $this->skipListMatcher->isSkipped((string) $row->heading_text, $skipSqlPatterns),
                 )
                 ->first(
                     fn (SeoArticleHeading $row): bool => $this->wordOverlapRatio($item['text'], (string) $row->heading_text) >= self::WORD_OVERLAP_THRESHOLD,
@@ -99,35 +106,19 @@ class HeadingDuplicateCheckerService
     }
 
     /**
-     * Heading có nằm trong Skip List không (so sánh lowercase, exact hoặc chứa cụm skip).
-     *
-     * @param  list<string>  $skipWords  đã lowercase sẵn từ settings
-     */
-    private function isSkipped(string $text, array $skipWords): bool
-    {
-        if ($skipWords === []) {
-            return false;
-        }
-
-        $lower = mb_strtolower($text, 'UTF-8');
-
-        foreach ($skipWords as $skipWord) {
-            if ($skipWord !== '' && str_contains($lower, $skipWord)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
      * Gom exact match của toàn bộ slug trong 1 query, ràng buộc cùng level.
+     * Lớp 2: NOT LIKE skip patterns loại heading cũ trong DB.
      *
      * @param  array<int|string, array{text: string, slug: string, level: int}>  $normalized
+     * @param  list<string>  $skipSqlPatterns
      * @return array<string, SeoArticleHeading> "level:slug" => heading trùng đầu tiên
      */
-    private function exactMatchesByLevelSlug(array $normalized, int $siteId, ?int $excludeArticleId): array
-    {
+    private function exactMatchesByLevelSlug(
+        array $normalized,
+        int $siteId,
+        ?int $excludeArticleId,
+        array $skipSqlPatterns = [],
+    ): array {
         $slugs = array_values(array_unique(array_filter(
             array_column($normalized, 'slug'),
             static fn (string $slug): bool => $slug !== '',
@@ -148,6 +139,10 @@ class HeadingDuplicateCheckerService
 
         if ($excludeArticleId !== null && $excludeArticleId > 0) {
             $query->where('article_id', '!=', $excludeArticleId);
+        }
+
+        if ($skipSqlPatterns !== []) {
+            $this->skipListMatcher->applyNotLikeFilters($query, $skipSqlPatterns);
         }
 
         return $query
