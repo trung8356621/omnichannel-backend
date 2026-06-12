@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -77,7 +78,10 @@ final class WordPressArticleSyncService
                 ->withToken($writeToken)
                 ->post($base.'/wp-json/omi-seo-ai/v1/posts', [
                     'title' => trim((string) ($article->title ?? '')),
+                    // Luôn gửi slug từ focus keyword — không để WordPress tự sinh slug từ tiêu đề.
+                    'slug' => $this->resolveSlugForNewPost($article),
                     'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
+                    'post_date' => $this->formatPostDateForWordPress($article),
                     'post_type' => $postType,
                 ]);
 
@@ -317,6 +321,7 @@ final class WordPressArticleSyncService
             'title' => (string) ($article->title ?? ''),
             'slug' => (string) ($article->slug ?? ''),
             'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
+            'post_date' => $this->formatPostDateForWordPress($article),
             'post_type' => $requestedPostType,
             'post_content' => $postContent !== '' ? $postContent : null,
             'faqs' => $faqs,
@@ -521,6 +526,26 @@ final class WordPressArticleSyncService
         ];
     }
 
+    /**
+     * Slug khi đăng bài mới: ưu tiên focus keyword, sau đó slug đã lưu, cuối cùng mới đến tiêu đề.
+     * WordPress sẽ tự thêm hậu tố (-2, -3...) nếu trùng — slug trả về được ghi lại vào article.
+     */
+    private function resolveSlugForNewPost(SeoArticle $article): string
+    {
+        $keyword = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
+        $slug = \Illuminate\Support\Str::slug($keyword);
+        if ($slug !== '') {
+            return $slug;
+        }
+
+        $slug = \Illuminate\Support\Str::slug((string) ($article->slug ?? ''));
+        if ($slug !== '') {
+            return $slug;
+        }
+
+        return \Illuminate\Support\Str::slug((string) ($article->title ?? ''));
+    }
+
     private function mapStatusForWordPress(string $status): string
     {
         return match ($status) {
@@ -529,6 +554,18 @@ final class WordPressArticleSyncService
             'scheduled' => 'future',
             default => 'draft',
         };
+    }
+
+    private function formatPostDateForWordPress(SeoArticle $article): ?string
+    {
+        if (! $article->published_at instanceof Carbon) {
+            return null;
+        }
+
+        return $article->published_at
+            ->copy()
+            ->timezone(config('app.timezone'))
+            ->format('Y-m-d H:i:s');
     }
 
     private function storeWpPostContentMeta(SeoArticle $article, string $html): void

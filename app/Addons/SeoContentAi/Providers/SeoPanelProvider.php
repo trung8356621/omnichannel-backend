@@ -148,6 +148,8 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{media}/rename', [SeoMediaController::class, 'rename'])
                     ->whereNumber('media')
                     ->name('seo.media.rename');
+                Route::post('/update-meta', [SeoMediaController::class, 'updateMeta'])
+                    ->name('seo.media.update-meta');
                 Route::post('/{media}/save-edited', [SeoMediaController::class, 'saveEditedImage'])
                     ->whereNumber('media')
                     ->name('seo.media.save-edited');

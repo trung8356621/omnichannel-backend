@@ -30,7 +30,8 @@ final class SeoProjectTaskSyncService
     public function assertWithinMonthlyLimit(Carbon|string $month, array $tasksData): void
     {
         $carbonMonth = $this->normalizeMonth($month);
-        $count = count($this->sanitizeTasksData($tasksData, null));
+        $count = count(array_filter($tasksData, static fn (mixed $row): bool => is_array($row)
+            && trim((string) ($row['source_content'] ?? '')) !== ''));
         $max = $carbonMonth->daysInMonth;
 
         if ($count > $max) {
@@ -156,7 +157,7 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * @return list<array{type: string, site_id: int|null, source_content: string, loai_san_pham: ?string, gallery_description: ?string, post_type: ?string}>
+     * @return list<array{type: string, site_id: int|null, source_content: string, loai_san_pham: ?string, description: ?string, post_type: ?string}>
      */
     public function tasksDataFromProject(SeoProject $project): array
     {
@@ -172,7 +173,7 @@ final class SeoProjectTaskSyncService
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? $task->loai_san_pham
                         : null,
-                'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? $task->description
                         : null,

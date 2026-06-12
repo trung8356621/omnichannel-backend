@@ -399,6 +399,9 @@ final class WordPressLocalMediaSyncService
         }
 
         try {
+            $altText = trim((string) ($media->alt_text ?? ''));
+            $slug = (string) ($media->slug ?? '');
+
             $response = Http::timeout(120)
                 ->acceptJson()
                 ->withToken($writeToken)
@@ -406,9 +409,9 @@ final class WordPressLocalMediaSyncService
                     'Content-Type' => $uploadMime,
                 ])
                 ->post($base . '/wp-json/omi-seo-ai/v1/attachments/import', [
-                    'slug' => (string) ($media->slug ?? ''),
-                    'title' => (string) ($media->slug ?? ''),
-                    'alt_text' => (string) ($media->alt_text ?? $media->slug ?? ''),
+                    'slug' => $slug,
+                    'title' => $altText !== '' ? $altText : $slug,
+                    'alt_text' => $altText !== '' ? $altText : $slug,
                 ]);
         } catch (Throwable $exception) {
             Log::warning('WordPress local media import failed', [

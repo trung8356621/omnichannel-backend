@@ -307,6 +307,8 @@ class ViewSeoProjectRun extends Page
                     ->success()
                     ->send();
 
+                $this->reloadCurrentRunPage();
+
                 return;
             }
 
@@ -316,6 +318,8 @@ class ViewSeoProjectRun extends Page
                 ->danger()
                 ->persistent()
                 ->send();
+
+            $this->reloadCurrentRunPage();
         } catch (\Throwable $exception) {
             $error = $formatter->fromThrowable($exception);
 
@@ -329,7 +333,21 @@ class ViewSeoProjectRun extends Page
                 ->danger()
                 ->persistent()
                 ->send();
+
+            $this->reloadCurrentRunPage();
         }
+    }
+
+    private function reloadCurrentRunPage(): void
+    {
+        if ($this->projectRun === null) {
+            return;
+        }
+
+        $this->redirect(
+            SeoProjectResource::getUrl('view-run', ['run' => $this->projectRun]),
+            navigate: false,
+        );
     }
 
     public function markItemFixed(int $taskId, int $articleId): void

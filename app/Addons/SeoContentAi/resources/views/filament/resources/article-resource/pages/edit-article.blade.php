@@ -817,6 +817,11 @@
                 }
             } else if (action === 'sync') {
                 @if ($record->wp_post_id && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                    // Cùng validation danh mục như nút Đồng bộ ở publish-sidebar.
+                    if (typeof window.__seoEnsureCategoriesBeforeSync === 'function'
+                        && !window.__seoEnsureCategoriesBeforeSync()) {
+                        return;
+                    }
                     if (!lockPageForHeavyAction('sync')) {
                         return;
                     }
@@ -1019,9 +1024,10 @@
             {{-- Cột phải: preview + sidebar giữa + xuất bản --}}
             <aside
                 class="wp-article-edit-sidebar"
-                x-data="{ aiChatOpen: false }"
+                x-data="{ aiChatOpen: false, sidebarTab: 'seo' }"
                 x-on:seo-article-ai-chat-open.window="aiChatOpen = true"
                 x-on:seo-article-ai-chat-close.window="aiChatOpen = false"
+                x-on:seo-sidebar-open-publish-tab.window="sidebarTab = 'publish'; aiChatOpen = false"
             >
                 <div class="wp-article-edit-rail">
                     <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-rail-top">
@@ -1034,6 +1040,41 @@
                     >
                         <div class="wp-article-edit-sidebar-window">
                             <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-sidebar-scroll space-y-4">
+                                {{-- Tab switcher: SEO (nội dung sidebar hiện tại) / Publish (chọn danh mục WordPress) --}}
+                                <div class="flex border-b border-gray-200 dark:border-gray-700" role="tablist">
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        x-on:click="sidebarTab = 'seo'"
+                                        x-bind:aria-selected="sidebarTab === 'seo'"
+                                        class="flex-1 px-3 py-2 text-xs font-semibold transition-colors"
+                                        x-bind:class="sidebarTab === 'seo'
+                                            ? 'border-b-2 border-sky-600 text-sky-600 dark:text-sky-400'
+                                            : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+                                    >
+                                        SEO
+                                    </button>
+                                    <button
+                                        type="button"
+                                        role="tab"
+                                        x-on:click="sidebarTab = 'publish'"
+                                        x-bind:aria-selected="sidebarTab === 'publish'"
+                                        class="flex-1 px-3 py-2 text-xs font-semibold transition-colors"
+                                        x-bind:class="sidebarTab === 'publish'
+                                            ? 'border-b-2 border-sky-600 text-sky-600 dark:text-sky-400'
+                                            : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+                                    >
+                                        Publish
+                                    </button>
+                                </div>
+
+                                {{-- Tab Publish: bộ chọn danh mục kiểu WordPress --}}
+                                <div x-show="sidebarTab === 'publish'" x-cloak class="space-y-4">
+                                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-categories')
+                                </div>
+
+                                {{-- Tab SEO: toàn bộ nội dung sidebar hiện tại (Links, widgets, ảnh đại diện / album) --}}
+                                <div x-show="sidebarTab === 'seo'" class="space-y-4">
                                 @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                                     <div wire:ignore id="seo-article-links-root" style="margin: 0;"></div>
 
@@ -1163,6 +1204,7 @@
                         </div>
                     </div>
                 @endif
+                                </div>{{-- /Tab SEO --}}
 
                             </div>
 

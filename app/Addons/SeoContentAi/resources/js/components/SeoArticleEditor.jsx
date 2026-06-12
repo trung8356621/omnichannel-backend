@@ -63,6 +63,7 @@ import {
     fetchSeoMediaStatus,
     renameSeoMedia,
     renameSeoMediaByUrl,
+    updateSeoMediaMeta,
 } from '../utils/seoMediaApi';
 import { t } from '../utils/i18n';
 import { articleEditorExtensions } from '../utils/editorExtensions';
@@ -1042,6 +1043,13 @@ function dispatchActiveBlockContext(articleId, text, html, open, activeBlockId) 
     );
 }
 
+function isSameTiptapBlockContent(sourceHtml, currentHtml, nextHtml) {
+    return (
+        persistBlockHtmlFromEditor(sourceHtml, currentHtml) ===
+        persistBlockHtmlFromEditor(sourceHtml, nextHtml)
+    );
+}
+
 function ActiveBlockEditor({
     block,
     displayContent,
@@ -1098,8 +1106,15 @@ function ActiveBlockEditor({
     useEffect(() => {
         if (!editor) return;
 
+        const nextHtml = ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>';
+        // Khi user đang gõ, parent state đổi theo từng key stroke. Nếu hydrate lại
+        // bằng setContent dù HTML tương đương, Tiptap sẽ reset selection/caret về cuối đoạn.
+        if (isSameTiptapBlockContent(sourceHtml, editor.getHTML(), nextHtml)) {
+            return;
+        }
+
         isHydratingRef.current = true;
-        editor.commands.setContent(ensureTiptapHeadingCursorParagraph(sourceHtml) || '<p></p>', {
+        editor.commands.setContent(nextHtml, {
             emitUpdate: false,
         });
         isHydratingRef.current = false;
@@ -2740,7 +2755,7 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const { keyword, supplementalOnlyRows } = context;
+            const { keyword, sourceRows, supplementalOnlyRows } = context;
 
             const supplementalOutcomes = supplementalOnlyRows.map((row, index) => ({
                 row,
@@ -2769,6 +2784,18 @@ export default function SeoArticleEditor({
                 dedupedMeta.push(item);
             });
 
+            const localMetaQueue = [];
+            const seenLocalMeta = new Set();
+            sourceRows.forEach((row) => {
+                const id = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+                if (id <= 0 || seenLocalMeta.has(id)) {
+                    return;
+                }
+
+                seenLocalMeta.add(id);
+                localMetaQueue.push({ id, alt_text: keyword, title: keyword });
+            });
+
             if (preview.applied === 0 && supplementalOutcomes.length === 0) {
                 return;
             }
@@ -2779,12 +2806,30 @@ export default function SeoArticleEditor({
 
             setBlocks(preview.blocks);
 
+            sourceRows.forEach((row) => {
+                patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+            });
+
             supplementalOutcomes.forEach(({ row, outcome }) => {
                 patchSupplementalImageRow(row, outcome.patch);
             });
 
             if (dedupedMeta.length > 0) {
                 requestWordPressAttachmentMetaUpdate(dedupedMeta);
+            }
+
+            if (localMetaQueue.length > 0) {
+                updateSeoMediaMeta(localMetaQueue).catch((error) => {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: t('editor_cannot_update_image_meta'),
+                                body: error?.message ?? t('editor_try_again_later'),
+                                status: 'danger',
+                            },
+                        }),
+                    );
+                });
             }
 
             setImagesReloadKey((k) => k + 1);
@@ -3480,21 +3525,6 @@ export default function SeoArticleEditor({
             commitActiveBlock();
 
             const currentBlocks = blocksRef.current;
-            const hasActiveEditor = Boolean(activeId && blockEditorsRef.current.has(activeId));
-
-            if (hasActiveEditor) {
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: t('editor_cta_insert_failed'),
-                            body: t('editor_cta_insert_failed_body'),
-                            status: 'warning',
-                        },
-                    }),
-                );
-
-                return;
-            }
 
             if (!plainText) {
                 for (const block of currentBlocks) {

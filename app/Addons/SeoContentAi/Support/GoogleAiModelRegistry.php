@@ -149,6 +149,15 @@ final class GoogleAiModelRegistry
 
         if ($excludeImagen) {
             $models = array_filter($models, fn (string $model): bool => ! self::isImagenModel($model));
+
+            // Ảnh product gallery chạy theo batch nhiều ảnh. Gemini Pro Image thường chậm và
+            // hay timeout ở mốc HTTP 120s; chỉ dùng Pro khi người dùng chủ động chọn model đó.
+            if ($preferred === '') {
+                $models = array_filter(
+                    $models,
+                    static fn (string $model): bool => $model !== 'gemini-3-pro-image-preview',
+                );
+            }
         }
 
         return array_values(array_unique($models));

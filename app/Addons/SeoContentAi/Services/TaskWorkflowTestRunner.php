@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 use App\Models\Site;
+use Illuminate\Support\Str;
 
 final class TaskWorkflowTestRunner
 {
@@ -27,6 +28,7 @@ final class TaskWorkflowTestRunner
         private readonly WordPressCommentReviewService $commentReviewPublisher,
         private readonly PromptTestPublishService $promptPublisher,
         private readonly WorkflowExistingAiOutputService $existingAiOutput,
+        private readonly SeoMediaStorageService $mediaStorage,
     ) {}
 
     /**
@@ -103,7 +105,34 @@ final class TaskWorkflowTestRunner
             throw new \InvalidArgumentException('Quy trình chưa có sơ đồ (flow). Mở Builder để thiết kế.');
         }
 
-        return $this->orderedNodes($nodes, $edges);
+        return $this->deferReviewActionsToEnd($this->orderedNodes($nodes, $edges));
+    }
+
+    /**
+     * Action «Đăng bình luận / review» tự nhận bài viết đích từ state (bài vừa tạo/cập nhật),
+     * nên phải chạy SAU action lưu bài — kể cả khi nhánh review nằm tách rời trong sơ đồ
+     * (in-degree 0 → thứ tự topo có thể xếp nó chạy trước khi bài được tạo).
+     *
+     * @param  list<array<string, mixed>>  $ordered
+     * @return list<array<string, mixed>>
+     */
+    private function deferReviewActionsToEnd(array $ordered): array
+    {
+        $reviewActions = [];
+        $others = [];
+
+        foreach ($ordered as $node) {
+            $isReviewAction = (string) ($node['type'] ?? '') === 'action'
+                && (string) ($node['data']['actionType'] ?? '') === 'post_comment_review';
+
+            if ($isReviewAction) {
+                $reviewActions[] = $node;
+            } else {
+                $others[] = $node;
+            }
+        }
+
+        return array_merge($others, $reviewActions);
     }
 
     private function initialState(TaskTestContext $context): WorkflowExecutionState
@@ -689,6 +718,12 @@ final class TaskWorkflowTestRunner
             // Rải ảnh gallery vào các section còn trống sau khi lưu thành công
             $article->unsetRelation('articleMetas');
             $mediaService = app(ArticleMediaLocalService::class);
+            $fixedMediaCount = $this->quickFixProductGalleryMedia($article, $context, $mediaService);
+            if ($fixedMediaCount > 0) {
+                $messages[] = sprintf('Đã fix slug/alt/title cho %d ảnh product gallery.', $fixedMediaCount);
+                $article->unsetRelation('articleMetas');
+            }
+
             $galleryItems = $mediaService->resolveProductAlbum($article);
             if ($galleryItems !== []) {
                 $distributedCount = app(ArticleProductGalleryDistributeService::class)
@@ -1188,6 +1223,9 @@ final class TaskWorkflowTestRunner
         $postType = SeoProjectTask::normalizePostType(
             (string) ($context->postType ?? $variables['_project_post_type'] ?? 'article'),
         );
+        $scheduleAt = $this->shouldScheduleProjectArticle($context)
+            ? now(config('app.timezone'))->addDay()->startOfDay()
+            : null;
 
         $article = SeoArticle::query()->create([
             'site_id' => $siteId,
@@ -1195,7 +1233,8 @@ final class TaskWorkflowTestRunner
             'type' => $postType,
             'title' => $title,
             'slug' => $slug !== '' ? $slug : null,
-            'status' => 'draft',
+            'status' => $scheduleAt !== null ? 'scheduled' : 'draft',
+            'published_at' => $scheduleAt,
             'body' => '',
             'language' => 'vi',
         ]);
@@ -1223,6 +1262,11 @@ final class TaskWorkflowTestRunner
         }
 
         return $article;
+    }
+
+    private function shouldScheduleProjectArticle(TaskTestContext $context): bool
+    {
+        return $context->projectTaskType === SeoProjectTask::TYPE_NEW_KEYWORD;
     }
 
     /**
@@ -1300,6 +1344,97 @@ final class TaskWorkflowTestRunner
         }
 
         return $added;
+    }
+
+    private function quickFixProductGalleryMedia(
+        SeoArticle $article,
+        TaskTestContext $context,
+        ArticleMediaLocalService $mediaService,
+    ): int {
+        $keyword = $this->resolveGalleryQuickFixKeyword($article, $context);
+        if ($keyword === '') {
+            return 0;
+        }
+
+        $album = $mediaService->resolveProductAlbum($article);
+        if ($album === []) {
+            return 0;
+        }
+
+        $fixedCount = 0;
+        $nextAlbum = [];
+        foreach ($album as $index => $item) {
+            $url = trim((string) ($item['url'] ?? ''));
+            $media = $this->resolveSeoMediaFromGalleryItem($item, $url);
+
+            if ($media instanceof SeoMedia) {
+                $media->alt_text = $keyword;
+                $media->save();
+                $fixedCount++;
+
+                $targetSlug = Str::slug($keyword.'-'.($index + 1));
+                if ($targetSlug !== '' && (string) ($media->slug ?? '') !== $targetSlug) {
+                    try {
+                        $media = $this->mediaStorage->renameBySlug($media, $targetSlug);
+                    } catch (\Throwable $exception) {
+                        logger()->warning('Workflow quick fix gallery media slug failed', [
+                            'article_id' => (int) $article->id,
+                            'media_id' => (int) $media->id,
+                            'slug' => $targetSlug,
+                            'error' => $exception->getMessage(),
+                        ]);
+                    }
+                }
+
+                $url = $media->publicUrl();
+                $item['id'] = (int) $media->id;
+                $item['url'] = $url;
+            }
+
+            $nextAlbum[] = [
+                'id' => max(0, (int) ($item['id'] ?? 0)),
+                'url' => $url,
+            ];
+        }
+
+        if ($fixedCount > 0) {
+            $mediaService->saveProductAlbumLocal($article, $nextAlbum);
+        }
+
+        return $fixedCount;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function resolveSeoMediaFromGalleryItem(array $item, string $url): ?SeoMedia
+    {
+        $mediaId = (int) ($item['id'] ?? 0);
+        if ($mediaId > 0) {
+            $media = SeoMedia::query()->find($mediaId);
+            if ($media instanceof SeoMedia) {
+                return $media;
+            }
+        }
+
+        return $this->resolveSeoMediaFromUrl($url);
+    }
+
+    private function resolveGalleryQuickFixKeyword(SeoArticle $article, TaskTestContext $context): string
+    {
+        $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
+        if ($keyword !== '') {
+            return $keyword;
+        }
+
+        $keyword = trim((string) ($article->articleMetas()
+            ->where('meta_key', 'seo_focus_keyword')
+            ->value('meta_value') ?? ''));
+        if ($keyword !== '') {
+            return $keyword;
+        }
+
+        return trim((string) ($article->title ?? ''));
     }
 
     private function attachMediaToArticleScope(SeoMedia $media, SeoArticle $article): void
@@ -1441,6 +1576,10 @@ final class TaskWorkflowTestRunner
     {
         if ($context->article !== null) {
             return (int) $context->article->site_id;
+        }
+
+        if ($context->siteId !== null && $context->siteId > 0) {
+            return $context->siteId;
         }
 
         $query = Site::query()->orderBy('id');

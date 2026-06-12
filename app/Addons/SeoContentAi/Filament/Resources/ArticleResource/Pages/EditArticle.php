@@ -137,6 +137,9 @@ class EditArticle extends EditRecord
 
     public bool $quickReviewsJobPending = false;
 
+    /** @var list<int> Danh mục WordPress đã chọn (term/article id) cho tab Publish. */
+    public array $articleCategoryIds = [];
+
     public string $editorHtml = '';
 
     public ?int $reviewsCountForEditor = null;
@@ -144,6 +147,12 @@ class EditArticle extends EditRecord
     public function mount(int|string $record): void
     {
         parent::mount($record);
+
+        // Filament resolve record qua getEloquentQuery() có eager-load articleMetas
+        // bị whitelist 5 key (tối ưu cho trang list). Relation đã "loaded" khiến mọi
+        // loadMissing('articleMetas') sau đó bị skip → meta description/gallery trống.
+        // Ép load lại ĐẦY ĐỦ metas trước khi hydrate.
+        $this->record->load('articleMetas');
 
         if (! ArticleResource::canContentManagerAccessArticle($this->record)) {
             $this->redirect(
@@ -158,12 +167,7 @@ class EditArticle extends EditRecord
         $globalSiteId = SeoAccessControl::globalSiteId();
 
         if ($globalSiteId !== null && $articleSiteId > 0 && $globalSiteId !== $articleSiteId) {
-            $this->redirect(
-                ArticleResource::getUrl('domain-mismatch', ['record' => $this->record]),
-                navigate: true,
-            );
-
-            return;
+            SeoAccessControl::setGlobalSiteId($articleSiteId);
         }
 
         ArticleResource::syncGlobalSiteForArticle($this->record);
@@ -437,7 +441,85 @@ class EditArticle extends EditRecord
             (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
         );
         $this->hydrateSeoMetaState();
+        $this->loadArticleCategoryIdsFromMeta();
         $this->syncPublishDatePartsFromRecord();
+        $this->syncProductGalleryToEditor();
+    }
+
+    /** Không đặt tên hydrate{Property} — Livewire sẽ coi là lifecycle hook và gọi từ ngoài. */
+    private function loadArticleCategoryIdsFromMeta(): void
+    {
+        $raw = (string) ($this->record->articleMetas()
+            ->where('meta_key', 'category_ids')
+            ->value('meta_value') ?? '');
+
+        $decoded = json_decode($raw, true);
+
+        $this->articleCategoryIds = is_array($decoded)
+            ? collect($decoded)
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all()
+            : [];
+    }
+
+    /**
+     * Danh mục đã đồng bộ từ WordPress theo site, tách theo taxonomy
+     * (post → category, product → product_category) cho tab Publish.
+     *
+     * @return array{category: list<array{id: int, label: string}>, product_category: list<array{id: int, label: string}>}
+     */
+    public function getPublishCategoryOptions(): array
+    {
+        $options = ['category' => [], 'product_category' => []];
+
+        $siteId = (int) ($this->record->site_id ?? 0);
+        if ($siteId <= 0) {
+            return $options;
+        }
+
+        SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->whereIn('type', ['category', 'product_category'])
+            ->orderBy('title')
+            ->get(['id', 'title', 'type', 'wp_post_id'])
+            ->each(static function (SeoArticle $term) use (&$options): void {
+                $type = (string) $term->type;
+                $title = trim((string) ($term->title ?? ''));
+                $wpId = (int) ($term->wp_post_id ?? 0);
+
+                $options[$type][] = [
+                    // Ưu tiên WP term ID để dùng được khi đẩy categories sang WordPress.
+                    'id' => $wpId > 0 ? $wpId : (int) $term->id,
+                    'label' => $title !== '' ? $title : 'Danh mục #'.$term->id,
+                ];
+            });
+
+        return $options;
+    }
+
+    /**
+     * Lưu danh mục đã chọn từ tab Publish (client Alpine) vào article meta.
+     *
+     * @param  list<int|string>  $categoryIds
+     */
+    public function applyArticleCategoriesFromClient(array $categoryIds): void
+    {
+        $this->articleCategoryIds = collect($categoryIds)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'category_ids'],
+            ['meta_value' => json_encode($this->articleCategoryIds)],
+        );
+
+        $this->skipRender();
     }
 
     public function isProduct(): bool

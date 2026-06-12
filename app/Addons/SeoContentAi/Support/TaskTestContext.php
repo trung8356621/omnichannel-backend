@@ -36,6 +36,20 @@ final class TaskTestContext
         );
     }
 
+    public function withSiteId(int $siteId): self
+    {
+        return new self(
+            article: $this->article,
+            isNewArticle: $this->isNewArticle,
+            matchedBy: $this->matchedBy,
+            variables: $this->variables,
+            summary: $this->summary,
+            siteId: $siteId,
+            postType: $this->postType,
+            projectTaskType: $this->projectTaskType,
+        );
+    }
+
     /**
      * @return array<string, mixed>
      */

@@ -138,6 +138,39 @@ class SeoMediaController extends Controller
         ]);
     }
 
+    public function updateMeta(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.id' => ['required', 'integer', 'min:1'],
+            'items.*.alt_text' => ['nullable', 'string', 'max:255'],
+            'items.*.title' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $updated = [];
+        foreach ($validated['items'] as $item) {
+            $media = SeoMedia::query()->find((int) $item['id']);
+            if (! $media instanceof SeoMedia || ! $this->canAccessMedia($media)) {
+                continue;
+            }
+
+            $media->alt_text = trim((string) ($item['alt_text'] ?? ''));
+            $media->save();
+
+            $updated[] = [
+                'id' => (int) $media->id,
+                'alt_text' => (string) $media->alt_text,
+                'title' => trim((string) ($item['title'] ?? '')),
+            ];
+        }
+
+        return response()->json([
+            'success' => true,
+            'updated_count' => count($updated),
+            'updated' => $updated,
+        ]);
+    }
+
     public function renameByUrl(Request $request): JsonResponse
     {
         $validated = $request->validate([

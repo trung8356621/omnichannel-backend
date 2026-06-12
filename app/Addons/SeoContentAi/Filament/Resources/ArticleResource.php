@@ -491,8 +491,11 @@ class ArticleResource extends Resource
 
     public static function getRecordRouteBindingEloquentQuery(): Builder
     {
+        // Trang edit/view cần ĐẦY ĐỦ articleMetas (seo_meta_description, wp_product_gallery...).
+        // Không dùng whitelist articleEagerLoads() ở đây — whitelist đó chỉ dành cho trang list,
+        // vì relation đã loaded sẽ khiến mọi loadMissing('articleMetas') sau đó bị bỏ qua.
         return static::applyArticleAccessScopes(
-            parent::getEloquentQuery()->with(static::articleEagerLoads()),
+            parent::getEloquentQuery()->with(['keywords', 'user', 'site', 'articleMetas']),
             includeGlobalSiteScope: false,
             includeReviewScope: false,
             includeContentManagerOwnershipScope: false,

@@ -4,6 +4,7 @@ const PREPARE_EDITOR_URL = '/api/seo/media/prepare-editor';
 const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
 const RENAME_BY_URL = '/api/seo/media/rename-by-url';
+const UPDATE_META_URL = '/api/seo/media/update-meta';
 const SAVE_EDITED_URL_TEMPLATE = '/api/seo/media/{id}/save-edited';
 const MEDIA_IMAGE_EDITOR_PATH = '/seo/media-image-editor';
 const SPLITTER_SOURCE_URL = '/api/seo/media/splitter-source';
@@ -461,6 +462,40 @@ export async function renameSeoMediaByUrl(mediaUrl, newSlug, { siteId = null, ar
 
     if (data.url) {
         data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
+export async function updateSeoMediaMeta(items) {
+    const normalized = (Array.isArray(items) ? items : [])
+        .map((item) => ({
+            id: Number(item?.id ?? item?.seoMediaId ?? item?.seo_media_id ?? 0),
+            alt_text: String(item?.alt_text ?? item?.alt ?? '').trim(),
+            title: String(item?.title ?? '').trim(),
+        }))
+        .filter((item) => item.id > 0);
+
+    if (normalized.length === 0) {
+        return { success: true, updated_count: 0, updated: [] };
+    }
+
+    const response = await fetch(UPDATE_META_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ items: normalized }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.success) {
+        const message = data.message ?? data.errors?.items?.[0] ?? 'Không thể cập nhật alt/title ảnh.';
+        throw new Error(message);
     }
 
     return data;

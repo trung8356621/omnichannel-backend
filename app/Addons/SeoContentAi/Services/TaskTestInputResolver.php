@@ -57,12 +57,16 @@ final class TaskTestInputResolver
             : '';
 
         if ($task->type === SeoProjectTask::TYPE_REWRITE) {
-            return $this->withProductPromptVariables(
-                $this->resolve(null, $keyword, $keyword, $scopeArticles)
-                    ->withProjectTaskType($task->type),
-                $galleryDescription,
-                $loaiSanPham,
-            );
+            $taskSiteId = (int) ($task->site_id ?? 0);
+            $rewriteContext = $this->resolve(null, $keyword, $keyword, $scopeArticles)
+                ->withProjectTaskType($task->type);
+
+            // Nếu không tìm thấy bài cũ (sẽ tạo bài mới), đảm bảo site đúng với task/project
+            if ($rewriteContext->siteId === null && $taskSiteId > 0) {
+                $rewriteContext = $rewriteContext->withSiteId($taskSiteId);
+            }
+
+            return $this->withProductPromptVariables($rewriteContext, $galleryDescription, $loaiSanPham);
         }
 
         $siteId = (int) ($task->site_id ?? 0);

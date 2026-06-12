@@ -398,7 +398,7 @@ function mountArticleEditorPage() {
         initialGalleryDescription,
     } = bootstrap;
 
-    if (articleId && initialProductGallery.length > 0 && loadProductAlbum(articleId).length === 0) {
+    if (articleId && initialProductGallery.length > 0) {
         saveProductAlbum(articleId, initialProductGallery);
     }
 

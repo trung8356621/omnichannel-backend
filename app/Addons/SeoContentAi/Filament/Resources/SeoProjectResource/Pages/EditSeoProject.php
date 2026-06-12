@@ -95,6 +95,6 @@ class EditSeoProject extends EditRecord
 
     protected function getRedirectUrl(): string
     {
-        return SeoProjectResource::getUrl('index');
+        return SeoProjectResource::getUrl('edit', ['record' => $this->getRecord()]);
     }
 }

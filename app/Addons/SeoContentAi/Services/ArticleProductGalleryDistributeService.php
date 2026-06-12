@@ -124,7 +124,10 @@ final class ArticleProductGalleryDistributeService
 
         $mediaId = (int) ($item['id'] ?? 0);
         $slug = $this->resolveSlug($url, $mediaId, $siteId);
-        $alt = $slug !== '' ? str_replace('-', ' ', $slug) : '';
+        $alt = $this->resolveAltText($mediaId);
+        if ($alt === '') {
+            $alt = $slug !== '' ? str_replace('-', ' ', $slug) : '';
+        }
 
         $attrs = [
             'src="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '"',
@@ -132,13 +135,27 @@ final class ArticleProductGalleryDistributeService
 
         if ($alt !== '') {
             $attrs[] = 'alt="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
+            $attrs[] = 'title="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
         }
 
         if ($mediaId > 0) {
             $attrs[] = 'data-seo-media-id="' . $mediaId . '"';
         }
 
-        return '<img ' . implode(' ', $attrs) . " />\n";
+        $attrs[] = 'class="aligncenter"';
+
+        return '<figure class="wp-caption aligncenter"><img ' . implode(' ', $attrs) . " /></figure>\n";
+    }
+
+    private function resolveAltText(int $mediaId): string
+    {
+        if ($mediaId <= 0) {
+            return '';
+        }
+
+        $media = SeoMedia::query()->whereKey($mediaId)->first();
+
+        return $media instanceof SeoMedia ? trim((string) ($media->alt_text ?? '')) : '';
     }
 
     private function resolveSlug(string $url, int $mediaId, int $siteId): string

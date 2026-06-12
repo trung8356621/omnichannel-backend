@@ -251,6 +251,13 @@
                         return;
                     }
 
+                    // Interceptor: chặn đăng/đồng bộ WordPress khi chưa chọn danh mục.
+                    // Guard tự mở Tab Publish + viền đỏ + toast cảnh báo (xem publish-categories.blade.php).
+                    if (typeof window.__seoEnsureCategoriesBeforeSync === 'function'
+                        && !window.__seoEnsureCategoriesBeforeSync()) {
+                        return;
+                    }
+
                     window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
                         detail: { action: 'sync' },
                     }));

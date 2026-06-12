@@ -114,26 +114,13 @@ class SeoProjectResource extends Resource
                             ->dehydrated()
                             ->native(false),
 
-                        Forms\Components\Placeholder::make('site_id_display')
-                            ->label(__('seo-content-ai::filament.projects.domain'))
-                            ->content(function (): string {
-                                $siteId = SeoAccessControl::globalSiteId();
-                                if ($siteId === null) {
-                                    return '—';
-                                }
-
-                                return (string) (Site::query()->whereKey($siteId)->value('domain') ?? '—');
-                            })
-                            ->visible(fn (): bool => SeoAccessControl::hasGlobalSiteScope()),
-
                         Forms\Components\Select::make('site_id')
                             ->label(__('seo-content-ai::filament.projects.domain'))
                             ->options(fn (): array => static::siteSelectOptions())
                             ->default(fn (): ?int => SeoAccessControl::globalSiteId())
-                            ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
                             ->searchable()
                             ->preload()
-                            ->required(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
+                            ->required()
                             ->native(false)
                             ->live()
                             ->dehydrateStateUsing(fn (mixed $state): ?int => $state !== null && $state !== ''
@@ -306,6 +293,27 @@ class SeoProjectResource extends Resource
                             ->defaultItems(1)
                             ->addActionLabel(__('seo-content-ai::filament.projects.add_article'))
                             ->reorderable()
+                            ->collapsible()
+                            ->collapsed()
+                            ->itemLabel(function (array $state): ?string {
+                                $type = $state['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD;
+                                $content = trim((string) ($state['source_content'] ?? ''));
+
+                                if ($type === SeoProjectTask::TYPE_REWRITE) {
+                                    $prefix = '[Viết lại]';
+                                } else {
+                                    $postTypeLabels = [
+                                        SeoProjectTask::POST_TYPE_ARTICLE => 'Article',
+                                        SeoProjectTask::POST_TYPE_PRODUCT => 'Product',
+                                        SeoProjectTask::POST_TYPE_CATEGORY => 'Category',
+                                        SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'Product Category',
+                                    ];
+                                    $postType = SeoProjectTask::normalizePostType($state['post_type'] ?? null);
+                                    $prefix = '[' . ($postTypeLabels[$postType] ?? 'Article') . ']';
+                                }
+
+                                return $content !== '' ? "{$prefix} {$content}" : __('seo-content-ai::filament.projects.article_items');
+                            })
                             ->live()
                             ->columnSpanFull()
                             ->rules([
@@ -541,7 +549,8 @@ class SeoProjectResource extends Resource
      */
     public static function normalizeProjectSiteId(array $data): array
     {
-        if (SeoAccessControl::hasGlobalSiteScope()) {
+        // Nếu form chưa có site_id (trường hợp ẩn cũ), fallback về global site
+        if (empty($data['site_id'])) {
             $globalSiteId = SeoAccessControl::globalSiteId();
             if ($globalSiteId !== null) {
                 $data['site_id'] = $globalSiteId;
