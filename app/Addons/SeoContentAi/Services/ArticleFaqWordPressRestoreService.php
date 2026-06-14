@@ -128,6 +128,7 @@ final class ArticleFaqWordPressRestoreService
             'editor_html' => $html !== '' ? $html : null,
             'title' => $title !== '' ? $title : null,
             'slug' => $slug !== '' ? $slug : null,
+            'category_ids' => $this->wordpressContent->extractCategoryIdsFromPost($post),
             'message' => $wpFaqs !== []
                 ? 'Đã khôi phục bài viết và FAQ từ WordPress.'
                 : 'Đã khôi phục bài viết gốc từ WordPress.',

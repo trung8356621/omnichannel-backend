@@ -46,6 +46,20 @@ class PluginUpdateController extends Controller
     }
 
     /**
+     * GET /api/seo/plugin/info.json
+     * GET /storage/plugins/omi-seo-ai-bridge/info.json
+     */
+    public function infoJson(): JsonResponse
+    {
+        $metadata = $this->releases->loadMetadata();
+        if ($metadata === null) {
+            return response()->json(['error' => 'Plugin metadata not found'], 404);
+        }
+
+        return response()->json($metadata, 200, [], JSON_UNESCAPED_UNICODE);
+    }
+
+    /**
      * GET /api/seo/plugin/download/{version}
      */
     public function download(Request $request, string $version): BinaryFileResponse|JsonResponse

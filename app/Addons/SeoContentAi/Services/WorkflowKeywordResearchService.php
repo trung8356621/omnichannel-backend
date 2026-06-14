@@ -6,32 +6,41 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\Tag;
+use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
+use Illuminate\Support\Str;
 
 final class WorkflowKeywordResearchService
 {
+    public function __construct(
+        private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
+        private readonly KeywordPersistenceService $keywordPersistence,
+    ) {}
+
     /**
      * @param  array<string, list<string>>  $keywordGroups
-     * @return array{parent_id: int, parent_phrase: string, children_count: int, suggest_count: int}
+     * @return array{parent_id: int, parent_phrase: string, children_count: int, suggest_count: int, tags_count: int}
      */
     public function syncTopicCluster(SeoArticle $article, array $keywordGroups, ?string $focusPhrase = null): array
     {
-        [$clusterGroups, $relatedTopics] = $this->partitionKeywordGroups($keywordGroups);
+        [$clusterGroups, $relatedTopics, $holonymyPhrases] = $this->partitionKeywordGroups($keywordGroups);
 
-        if ($clusterGroups === [] && $relatedTopics === []) {
+        if ($clusterGroups === [] && $relatedTopics === [] && $holonymyPhrases === []) {
             throw new \InvalidArgumentException('Không có dữ liệu từ khóa ngữ nghĩa để lưu.');
         }
 
-        $userId = (int) ($article->user_id ?: auth()->id());
-        $suggestCount = $this->syncRelatedTopicSuggestions($article, $relatedTopics, $userId);
+        $siteId = (int) $article->site_id;
+        $suggestCount = $this->syncRelatedTopicSuggestions($article, $relatedTopics, $siteId);
 
-        if ($clusterGroups === []) {
+        if ($clusterGroups === [] && $holonymyPhrases === []) {
             return [
                 'parent_id' => 0,
                 'parent_phrase' => '',
                 'children_count' => 0,
                 'suggest_count' => $suggestCount,
+                'tags_count' => 0,
             ];
         }
 
@@ -44,21 +53,27 @@ final class WorkflowKeywordResearchService
             throw new \InvalidArgumentException('Từ khóa chính quá rộng, cần ít nhất 2 từ để lưu Topic Cluster.');
         }
 
-        $parentKeyword = Keyword::query()->updateOrCreate(
-            [
-                'phrase' => $focusPhrase,
-                'site_id' => $article->site_id,
-                'type' => Keyword::TYPE_FOCUS,
-            ],
-            [
-                'user_id' => $userId,
-                'parent_id' => null,
-            ],
+        if ($this->ctaKeywordBlacklistFilter->isBlocked($focusPhrase)) {
+            throw new \InvalidArgumentException('Từ khóa chính khớp CTA blacklist, không lưu Topic Cluster.');
+        }
+
+        $parentKeyword = $this->keywordPersistence->upsert(
+            $focusPhrase,
+            Keyword::TYPE_NORMAL,
+            $siteId,
+            null,
+            null,
         );
+
+        if ($parentKeyword === null) {
+            throw new \InvalidArgumentException('Không lưu được từ khóa chính cho cụm chủ đề.');
+        }
 
         $article->keywords()->syncWithoutDetaching([
             $parentKeyword->id => ['weight' => 1.0, 'is_main' => true],
         ]);
+
+        $tagsCount = $this->syncHolonymyTags($parentKeyword, $holonymyPhrases, $siteId);
 
         $childrenCount = 0;
 
@@ -75,22 +90,23 @@ final class WorkflowKeywordResearchService
 
                 if ($this->wordCount($phrase) < 2
                     || $this->samePhrase($phrase, $focusPhrase)
-                    || $this->samePhrase($phrase, (string) $article->title)) {
+                    || $this->samePhrase($phrase, (string) $article->title)
+                    || $this->ctaKeywordBlacklistFilter->isBlocked($phrase)) {
                     continue;
                 }
 
-                $childKeyword = Keyword::query()->updateOrCreate(
-                    [
-                        'phrase' => $phrase,
-                        'site_id' => $article->site_id,
-                        'type' => Keyword::TYPE_FOCUS,
-                    ],
-                    [
-                        'user_id' => $userId,
-                        'parent_id' => $parentKeyword->id,
-                        'metrics' => ['group' => (string) $groupName],
-                    ],
+                $childKeyword = $this->keywordPersistence->upsert(
+                    $phrase,
+                    Keyword::TYPE_NORMAL,
+                    $siteId,
+                    null,
+                    (int) $parentKeyword->id,
+                    ['group' => (string) $groupName],
                 );
+
+                if ($childKeyword === null) {
+                    continue;
+                }
 
                 $article->keywords()->syncWithoutDetaching([
                     $childKeyword->id => ['weight' => 0.5],
@@ -105,19 +121,21 @@ final class WorkflowKeywordResearchService
             'parent_phrase' => $focusPhrase,
             'children_count' => $childrenCount,
             'suggest_count' => $suggestCount,
+            'tags_count' => $tagsCount,
         ];
     }
 
     /**
-     * Tách nhóm Related topics (gợi ý bài mới) khỏi Topic Cluster.
+     * Tách Related topics (gợi ý bài mới) và Holonymy (tags) khỏi Topic Cluster.
      *
      * @param  array<string, list<string>>  $groups
-     * @return array{0: array<string, list<string>>, 1: list<string>}
+     * @return array{0: array<string, list<string>>, 1: list<string>, 2: list<string>}
      */
     public function partitionKeywordGroups(array $groups): array
     {
         $clusterGroups = [];
         $relatedTopics = [];
+        $holonymyPhrases = [];
 
         foreach ($groups as $groupName => $keywordsList) {
             if ($this->isRelatedTopicsGroup((string) $groupName)) {
@@ -130,16 +148,26 @@ final class WorkflowKeywordResearchService
                 continue;
             }
 
+            if ($this->isHolonymyGroup((string) $groupName)) {
+                if (is_array($keywordsList)) {
+                    foreach ($keywordsList as $phrase) {
+                        $holonymyPhrases[] = (string) $phrase;
+                    }
+                }
+
+                continue;
+            }
+
             $clusterGroups[$groupName] = $keywordsList;
         }
 
-        return [$clusterGroups, $relatedTopics];
+        return [$clusterGroups, $relatedTopics, $holonymyPhrases];
     }
 
     /**
      * @param  list<string>  $phrases
      */
-    private function syncRelatedTopicSuggestions(SeoArticle $article, array $phrases, int $userId): int
+    private function syncRelatedTopicSuggestions(SeoArticle $article, array $phrases, int $siteId): int
     {
         $count = 0;
 
@@ -153,16 +181,19 @@ final class WorkflowKeywordResearchService
                 continue;
             }
 
-            Keyword::query()->updateOrCreate(
+            if ($this->ctaKeywordBlacklistFilter->isBlocked($phrase)) {
+                continue;
+            }
+
+            $this->keywordPersistence->upsert(
+                $phrase,
+                Keyword::TYPE_SUGGEST,
+                $siteId,
+                null,
+                null,
                 [
-                    'phrase' => $phrase,
-                    'site_id' => $article->site_id,
-                    'type' => Keyword::TYPE_SUGGEST,
-                ],
-                [
-                    'user_id' => $userId,
-                    'parent_id' => null,
-                    'metrics' => ['source' => 'vocabulary_related_topics'],
+                    'source' => 'vocabulary_related_topics',
+                    Keyword::METRIC_RESCRAPE_KEEP => true,
                 ],
             );
 
@@ -172,9 +203,90 @@ final class WorkflowKeywordResearchService
         return $count;
     }
 
+    /**
+     * @param  list<string>  $phrases
+     */
+    private function syncHolonymyTags(Keyword $parentKeyword, array $phrases, int $siteId): int
+    {
+        $tagIds = [];
+
+        foreach ($phrases as $keywordPhrase) {
+            $name = trim((string) $keywordPhrase);
+            if ($name === '' || $this->ctaKeywordBlacklistFilter->isBlocked($name)) {
+                continue;
+            }
+
+            $tag = $this->findOrCreateTag($siteId, $name);
+            if ($tag === null) {
+                continue;
+            }
+
+            $tagIds[] = (int) $tag->id;
+        }
+
+        $tagIds = array_values(array_unique($tagIds));
+        if ($tagIds === []) {
+            return 0;
+        }
+
+        $parentKeyword->tags()->syncWithoutDetaching($tagIds);
+
+        return count($tagIds);
+    }
+
+    private function findOrCreateTag(int $siteId, string $name): ?Tag
+    {
+        $slug = $this->resolveUniqueTagSlug($siteId, $name);
+        if ($slug === '') {
+            return null;
+        }
+
+        return Tag::query()->firstOrCreate(
+            [
+                'site_id' => $siteId,
+                'slug' => $slug,
+            ],
+            [
+                'name' => $name,
+            ],
+        );
+    }
+
+    private function resolveUniqueTagSlug(int $siteId, string $name): string
+    {
+        $baseSlug = Str::slug($name);
+        if ($baseSlug === '') {
+            $baseSlug = 'tag';
+        }
+
+        $slug = $baseSlug;
+        $suffix = 2;
+
+        while (Tag::query()->where('site_id', $siteId)->where('slug', $slug)->exists()) {
+            $slug = $baseSlug.'-'.$suffix;
+            $suffix++;
+        }
+
+        return $slug;
+    }
+
     private function isRelatedTopicsGroup(string $groupName): bool
     {
-        return mb_strtolower(trim($groupName)) === 'related topics';
+        return $this->normalizeVocabularyGroupName($groupName) === 'related topics';
+    }
+
+    private function isHolonymyGroup(string $groupName): bool
+    {
+        return $this->normalizeVocabularyGroupName($groupName) === 'holonymy';
+    }
+
+    private function normalizeVocabularyGroupName(string $groupName): string
+    {
+        $name = trim($groupName);
+        $name = preg_replace('/^#+\s*/u', '', $name) ?? $name;
+        $name = trim(str_replace(['**', '*'], '', $name));
+
+        return mb_strtolower($name);
     }
 
     public function resolveFocusPhrase(SeoArticle $article, TaskTestContext $context): string

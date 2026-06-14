@@ -11,5 +11,7 @@ Route::post('/seo-wp-bridge/push-content', [SeoWpBridgeController::class, 'pushC
 
 Route::get('/seo/plugin/update-check', [PluginUpdateController::class, 'checkUpdate'])
     ->name('api.seo.plugin.update-check');
+Route::get('/seo/plugin/info.json', [PluginUpdateController::class, 'infoJson'])
+    ->name('api.seo.plugin.info');
 Route::get('/seo/plugin/download/{version}', [PluginUpdateController::class, 'download'])
     ->name('api.seo.plugin.download');

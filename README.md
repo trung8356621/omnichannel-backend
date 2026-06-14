@@ -8,15 +8,14 @@ Backend quản lý đa kênh: **site khách hàng**, **gói dịch vụ / subscr
 
 | Thành phần | Vai trò |
 |------------|--------|
-| **Models chính** | `Site`, `SiteService`, `SiteMeta`, `Service`, `ServicePlan`, `Subscription`, `User`, `Wallet`, `Transaction`, `Order`, `Invoice`, `UsageLog`, `TaskJob`, `FrontendProject`, `WpOption` — lưu trong **database mặc định** (`mysql`). |
+| **Models chính** | `Site`, `SiteService`, `SiteMeta`, `Service`, `ServicePlan`, `Subscription`, `User`, `Wallet`, `Transaction`, `Order`, `Invoice`, `UsageLog`, `TaskJob`, `WpOption` — lưu trong **database mặc định** (`mysql`). |
 | **Site ↔ Service** | Một site có nhiều bản ghi `site_services` (dịch vụ đã kích hoạt trên site), mỗi bản ghi có `settings` (JSON) tùy addon. |
 | **Service (addon)** | Bảng `services` mô tả từng addon: `slug`, `addon_namespace` (class ServiceProvider), `is_active`, `config` (toàn bộ `addon.json`). |
 | **AddonManager** | Quét thư mục `app/Addons/*/addon.json`, đồng bộ/`updateOrCreate` vào bảng `services` theo `slug`. |
 | **AppServiceProvider** | Sau khi app boot (`$this->app->booted(...)`), nếu có bảng `services`, sẽ register mọi addon `is_active = true` bằng `$this->app->register($service->addon_namespace)`. |
 | **AdminPanelProvider (Filament)** | Đăng ký panel `path('admin')`. Với mỗi service active, map `slug` → PascalCase (vd. `wp-headless` → `WpHeadless`), rồi auto **`discoverPages` / `discoverResources`** và **`loadViewsFrom`** (namespace view = `slug`). Riêng `seo-content-ai` được bỏ qua ở `/admin` vì dùng panel riêng `/seo`. |
-| **Proxy frontend** | `FrontendProject` + route `/frontend/{router}/{path?}` proxy sang Next.js/React theo `router`, `port`, `proxy_auto`. Addon WP Headless có thể tự `updateOrCreate` bản ghi project khi boot. |
 
-**Lưu ý:** Một số addon dùng **database riêng** (vd. WP Headless: `omi_wp_headless`, SEO Content AI: `omi_seo_ai`). Connection runtime được đăng ký qua trait `RegistersAddonDatabase` trong ServiceProvider của addon (clone cấu hình từ `mysql`, đổi `database` theo `addon.json`).
+**Lưu ý:** Addon có thể dùng **database riêng** (SEO AI: `omi_seo_ai`, WP Headless: `omi_wp_headless`). Cấu hình nằm trong `app/Addons/{Addon}/addon.json` (object `database`) và tùy chọn `database.local.php` (gitignore, chứa password trên hosting) — **không cần** thêm biến `.env` core. Provider gọi `RegistersAddonDatabase::registerAddonDatabase()` khi boot.
 
 ---
 
@@ -41,7 +40,6 @@ Các bảng dưới đây lấy từ migrations trong `database/migrations/` (t�
 | **orders** | Đơn mua gói: `plan_id`, `amount`, `status`, `payment_method`, `metadata`. |
 | **invoices** | Hóa đơn gắn `order_id`, `invoice_number`, `total_amount`, `pdf_path`. |
 | **task_jobs** | Theo dõi job nặng theo site: `task_type`, `status`, `progress_percent`, `error_log`, … |
-| **frontend_projects** | Project Next/React: `name`, `type`, `package_json_path`, `router`, `proxy_auto`, `port`. |
 | **wp_options** | Key–value kiểu WordPress (`option_name`, `option_value`, `autoload`). |
 | **personal_access_tokens**, **cache**, **jobs**, **sessions**, … | Chuẩn Laravel / Sanctum. |
 
@@ -68,7 +66,7 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 
 2. **Thêm `addon.json`** tại root thư mục addon, tối thiểu:
    - `name`, `slug`, `provider` (class FQCN của `ServiceProvider`, vd. `App\Addons\MyAddon\MyAddonServiceProvider`)
-   - Tùy chọn: `database` — nếu có, khi boot provider cần gọi `RegistersAddonDatabase::registerAddonDatabase()` để đăng ký connection và (nếu muốn) `loadMigrationsFrom(...)`.
+   - Tùy chọn: `database` — object `{ connection, name, host, port, username }` trong `addon.json`; password đặt trong `database.local.php` (copy từ `database.local.php.example`, file này gitignore). Legacy: `"database": "ten_db"` (chuỗi) clone user/pass từ connection `mysql` core.
 
 3. **ServiceProvider**:
    - Trong `register()` / `boot()`: route, config, observer, v.v.
@@ -103,8 +101,6 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 | *(không nhóm)* | **Site Management** | Thực tế là resource **Site** (`SiteResource` — CRUD site; nhãn navigation custom). |
 | **Site Management** | **Activated Services** | `SiteServiceResource` — gán dịch vụ & settings cho từng site. |
 | **Site Management** | **WP Headless** | Chỉ khi addon `wp-headless` **active**; URL: `/admin/wp-headless/manage`. Chỉ role **`admin`**. |
-| **React/Next** | **Frontend (Next/React)** | `FrontendProjectResource` — chỉ **`admin`**. |
-| **React/Next** | **Lệnh NPM** | `FrontendNpmCommandsPage` — chỉ **`admin`**. |
 | **Hệ thống** | **Quản lý Service** | `ManageServices` — bật/tắt addon, sync `addon.json`; chỉ **`admin`**. |
 | *(mặc định)* | **Users** | `UserResource` (hoặc nhãn plural của model) — query scoped theo role. |
 

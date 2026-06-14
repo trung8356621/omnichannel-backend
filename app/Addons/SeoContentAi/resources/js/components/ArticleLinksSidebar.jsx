@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Copy, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Link2, Trash2 } from 'lucide-react';
 import { t } from '../utils/i18n';
 import {
     filterSuggestedInternalLinks,
@@ -63,7 +62,7 @@ function occurrenceCount(item) {
 }
 
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function }} props
  */
 function KeywordList({
     items,
@@ -76,6 +75,7 @@ function KeywordList({
     onKeywordClick,
     onInsertSuggestion,
     onCopyKeyword,
+    onRemoveInternalLink,
 }) {
     if (!items.length) {
         return (
@@ -167,6 +167,21 @@ function KeywordList({
                                     <Copy size={14} aria-hidden />
                                 </button>
                             ) : null}
+                            {variant === 'default' && target === 'editor' && onRemoveInternalLink ? (
+                                <button
+                                    type="button"
+                                    className="wp-article-links-delete-btn"
+                                    aria-label={t('links_remove_keyword', { label })}
+                                    title={t('links_remove_title', { label })}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onRemoveInternalLink(item, index, itemKey);
+                                    }}
+                                >
+                                    <Trash2 size={14} aria-hidden />
+                                </button>
+                            ) : null}
                         </li>
                     );
                 })}
@@ -184,6 +199,7 @@ function InternalLinksSection({
     onSuggestionClick,
     onInsertSuggestion,
     onCopyKeyword,
+    onRemoveInternalLink,
 }) {
     const showSuggestions = internal.length < 10 && suggestedInternal.length > 0;
 
@@ -212,6 +228,7 @@ function InternalLinksSection({
                     hideTitle
                     onKeywordClick={onKeywordClick}
                     onCopyKeyword={onCopyKeyword}
+                    onRemoveInternalLink={onRemoveInternalLink}
                 />
             ) : (
                 <p className="wp-article-links-empty">{t('links_internal_empty')}</p>
@@ -403,6 +420,20 @@ export default function ArticleLinksSidebar() {
         );
     };
 
+    const removeInternalLink = (item) => {
+        const text = String(item?.text ?? '').trim();
+        const href = String(item?.href ?? '').trim();
+        if (!text && !href) {
+            return;
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-remove-internal-link', {
+                detail: { text, href },
+            }),
+        );
+    };
+
     const insertSuggestedLink = (item, _index, itemKey) => {
         hideSuggestionRow(itemKey);
 
@@ -468,6 +499,7 @@ export default function ArticleLinksSidebar() {
                             scrollToKeyword(item, 'internal', index, itemKey)
                         }
                         onCopyKeyword={copyKeyword}
+                        onRemoveInternalLink={removeInternalLink}
                         onSuggestionClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'internal', index, itemKey, { searchPlainText: true })
                         }

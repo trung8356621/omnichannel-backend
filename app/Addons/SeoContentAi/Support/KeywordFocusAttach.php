@@ -6,10 +6,12 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
+use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 
 final class KeywordFocusAttach
 {
-    public static function syncMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): void
+    public static function syncMainKeyword(SeoArticle $article, int $siteId, int $_userId, string $phrase): void
     {
         $phrase = trim($phrase);
         $article->loadMissing('keywords');
@@ -29,7 +31,7 @@ final class KeywordFocusAttach
                 ['meta_value' => $phrase],
             );
 
-            $newMainKeywordId = self::attachMainKeyword($article, $siteId, $userId, $phrase);
+            $newMainKeywordId = self::attachMainKeyword($article, $siteId, $phrase);
         }
 
         $detachedKeywordIds = array_values(array_filter(
@@ -45,23 +47,30 @@ final class KeywordFocusAttach
         $article->unsetRelation('keywords');
     }
 
-    public static function attachMainKeyword(SeoArticle $article, int $siteId, int $userId, string $phrase): ?int
+    public static function attachMainKeyword(SeoArticle $article, int $siteId, string $phrase): ?int
     {
-        $phrase = trim($phrase);
+        $phrase = Keyword::decodePhrase($phrase);
         if ($phrase === '') {
             return null;
         }
 
-        $keyword = Keyword::query()->firstOrCreate(
-            [
-                'site_id' => $siteId,
-                'phrase' => $phrase,
-                'type' => Keyword::TYPE_FOCUS,
-            ],
-            [
-                'user_id' => $userId,
-            ]
+        $persistence = app(KeywordPersistenceService::class);
+        $permalink = trim(app(WordPressArticleContentService::class)->resolvePermalink($article));
+        $targetUrl = $permalink !== '' ? $permalink : null;
+
+        $keyword = $persistence->upsert(
+            $phrase,
+            Keyword::TYPE_NORMAL,
+            $siteId,
+            $targetUrl,
+            targetArticleId: (int) $article->id,
         );
+
+        if ($keyword === null) {
+            return null;
+        }
+
+        $persistence->mergeSuffixTruncatedKeywords($keyword, $siteId);
 
         $article->keywords()->syncWithoutDetaching([
             $keyword->id => [

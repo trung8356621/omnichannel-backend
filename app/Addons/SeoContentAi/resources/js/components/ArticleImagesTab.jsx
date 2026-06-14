@@ -241,6 +241,7 @@ function ImageRow({
     onFocusBlock,
     onQuickFixSlug,
     onQuickFixAltTitle,
+    onRemoveImage,
     canQuickFix = false,
     onNotify,
 }) {
@@ -493,6 +494,20 @@ function ImageRow({
                         </button>
                         <button
                             type="button"
+                            className="seo-article-images-delete-btn"
+                            disabled={busy || !canPatchInEditor}
+                            onClick={() => onRemoveImage?.(row)}
+                            title={
+                                canPatchInEditor
+                                    ? t('image_tab_remove_hint')
+                                    : t('image_tab_remove_no_block')
+                            }
+                        >
+                            <Trash2 size={14} />
+                            {t('remove_image')}
+                        </button>
+                        <button
+                            type="button"
                             className="seo-article-images-edit-btn"
                             disabled={!siteId || busy}
                             onClick={openImageEditor}
@@ -517,6 +532,19 @@ function ImageRow({
                             {t('split_grid')}
                         </button>
                     </div>
+                ) : canPatchInEditor ? (
+                    <div className="seo-article-images-actions">
+                        <button
+                            type="button"
+                            className="seo-article-images-delete-btn"
+                            disabled={busy}
+                            onClick={() => onRemoveImage?.(row)}
+                            title={t('image_tab_remove_hint')}
+                        >
+                            <Trash2 size={14} />
+                            {t('remove_image')}
+                        </button>
+                    </div>
                 ) : null}
             </div>
         </li>
@@ -539,6 +567,7 @@ export default function ArticleImagesTab({
     onQuickFixSlugOne,
     onQuickFixAltTitleAll,
     onQuickFixAltTitleOne,
+    onRemoveImage,
     onNotify,
 }) {
     const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
@@ -822,6 +851,7 @@ export default function ArticleImagesTab({
                         onFocusBlock={onFocusBlock}
                         onQuickFixSlug={onQuickFixSlugOne}
                         onQuickFixAltTitle={onQuickFixAltTitleOne}
+                        onRemoveImage={onRemoveImage}
                         canQuickFix={canQuickFix}
                         onNotify={onNotify}
                     />

@@ -127,12 +127,17 @@ class SeoArticle extends Model
 
     public function links(): HasMany
     {
-        return $this->hasMany(SeoArticleLink::class, 'article_id');
+        return $this->hasMany(SeoLink::class, 'source_article_id');
     }
 
     public function headings(): HasMany
     {
         return $this->hasMany(SeoArticleHeading::class, 'article_id')->orderBy('sort_order');
+    }
+
+    public function revisions(): HasMany
+    {
+        return $this->hasMany(SeoArticleRevision::class, 'article_id')->orderByDesc('created_at');
     }
 
     public function faqs(): HasMany
@@ -224,9 +229,9 @@ class SeoArticle extends Model
             return $this->linksToExtractedArray($this->links);
         }
 
-        if (SeoArticleLink::query()->where('article_id', $this->id)->exists()) {
+        if (SeoLink::query()->where('source_article_id', $this->id)->exists()) {
             return $this->linksToExtractedArray(
-                $this->links()->orderBy('id')->get()
+                $this->links()->with('keywords')->orderBy('id')->get()
             );
         }
 
@@ -234,7 +239,7 @@ class SeoArticle extends Model
     }
 
     /**
-     * @param  \Illuminate\Database\Eloquent\Collection<int, SeoArticleLink>|\Illuminate\Support\Collection<int, SeoArticleLink>  $links
+     * @param  \Illuminate\Database\Eloquent\Collection<int, SeoLink>|\Illuminate\Support\Collection<int, SeoLink>  $links
      * @return array{
      *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
      *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
@@ -248,7 +253,7 @@ class SeoArticle extends Model
         foreach ($links as $link) {
             $row = [
                 'href' => (string) $link->url,
-                'text' => (string) ($link->anchor_text ?? ''),
+                'text' => (string) $link->anchorText(),
                 'is_nofollow' => (bool) $link->is_nofollow,
             ];
 

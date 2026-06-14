@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Filament\Pages\ManagePluginRelease;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsEditor;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsKeywords;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsPrompt;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
@@ -37,6 +39,12 @@ final class SeoSettingsMenu
                 'url' => SeoSettingsEditor::getUrl(),
             ],
             [
+                'id' => 'keywords',
+                'label' => 'Keywords',
+                'icon' => 'heroicon-o-key',
+                'url' => SeoSettingsKeywords::getUrl(),
+            ],
+            [
                 'id' => 'ai',
                 'label' => 'AI settings',
                 'icon' => 'heroicon-o-cpu-chip',
@@ -47,6 +55,12 @@ final class SeoSettingsMenu
                 'label' => 'Prompt settings',
                 'icon' => 'heroicon-o-chat-bubble-left-ellipsis',
                 'url' => SeoSettingsPrompt::getUrl(),
+            ],
+            [
+                'id' => 'wp-plugin-release',
+                'label' => 'WP Plugin release',
+                'icon' => 'heroicon-o-arrow-up-tray',
+                'url' => ManagePluginRelease::getUrl(),
             ],
         ];
     }

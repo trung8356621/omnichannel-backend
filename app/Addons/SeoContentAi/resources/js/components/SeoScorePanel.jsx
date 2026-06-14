@@ -42,6 +42,17 @@ function ScoreRing({ score, loading }) {
     );
 }
 
+function formatScoreSuffix(passed, points, maxPoints = 10) {
+    const max = typeof maxPoints === 'number' ? maxPoints : 10;
+    const earned = typeof points === 'number' ? points : 0;
+
+    if (passed) {
+        return earned > 0 ? ` +${earned}` : '';
+    }
+
+    return ` -${max}`;
+}
+
 function CheckList({ title, icon: Icon, items, tone }) {
     if (!items?.length) return null;
 
@@ -120,7 +131,10 @@ function ContentBonusRow({ item, faqCount }) {
                 </p>
             ) : null}
             {item.message ? (
-                <p className="seo-content-bonus-row__message">{item.message}</p>
+                <p className="seo-content-bonus-row__message">
+                    {item.message}
+                    {formatScoreSuffix(passed, points, maxPoints)}
+                </p>
             ) : null}
         </div>
     );

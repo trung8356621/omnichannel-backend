@@ -1,0 +1,17 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Sao chép thành database.local.php và điền credential hosting.
+ * File database.local.php bị gitignore — không commit password.
+ *
+ * @return array<string, string|int>
+ */
+return [
+    // 'host' => 'mysql.hosting.vn',
+    // 'port' => 3306,
+    // 'name' => 'u123_omi_wp_headless',
+    // 'username' => 'u123_wp',
+    // 'password' => 'your-secret-password',
+];

@@ -32,11 +32,21 @@ import {
     saveProductAlbum,
 } from './utils/articleProductAlbumStorage';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
+import {
+    applyFetchedWpCategories,
+    loadWpCategoryIds,
+    saveWpCategoryIds,
+} from './utils/articleWpCategoriesStorage';
 
 installArticleAutosaveLock();
 
 window.normalizeArticleSlug = normalizeArticleSlug;
 window.__seoClearArticleLocalState = clearArticleLocalState;
+window.__seoWpCategoryStorage = {
+    load: loadWpCategoryIds,
+    save: saveWpCategoryIds,
+    applyFetched: applyFetchedWpCategories,
+};
 window.__seoFeaturedImageStorage = {
     load: loadFeaturedImage,
     save: saveFeaturedImage,
@@ -458,12 +468,14 @@ function mountArticleEditorPage() {
         let faqInitialFaqs = initialFaqs;
         let initialExtractDebug = null;
         let canGenerateFaq = false;
+        let canImportMarkdownFaq = false;
         try {
             const configEl = document.getElementById('seo-article-faq-config');
             const rawConfig = configEl?.textContent?.trim();
             if (rawConfig) {
                 const config = JSON.parse(rawConfig);
                 canGenerateFaq = Boolean(config?.can_generate_faq);
+                canImportMarkdownFaq = Boolean(config?.can_import_markdown_faq);
             }
         } catch (e) {
             console.warn('Invalid article FAQ config JSON', e);
@@ -493,6 +505,7 @@ function mountArticleEditorPage() {
                 initialFaqs={faqInitialFaqs}
                 initialExtractDebug={initialExtractDebug}
                 canGenerateFaq={canGenerateFaq}
+                canImportMarkdownFaq={canImportMarkdownFaq}
             />,
         );
     }

@@ -5,5 +5,11 @@
   "description": "Quản lý prompt SEO, workflow và tích hợp AI cho nội dung.",
   "icon": "heroicon-o-sparkles",
   "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider",
-  "database": "omi_seo_ai"
+  "database": {
+    "connection": "omi_seo_ai",
+    "name": "omi_seo_ai",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "username": "root"
+  }
 }

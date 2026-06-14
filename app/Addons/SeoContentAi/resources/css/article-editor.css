@@ -2604,6 +2604,18 @@
     pointer-events: none;
 }
 
+.seo-block-move-btn--danger:not(:disabled) {
+    color: #dc2626;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.dark .seo-block-move-btn--danger:not(:disabled) {
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(127, 29, 29, 0.35);
+}
+
 .seo-block-editor-body {
     position: relative;
     overflow: visible;
@@ -4578,6 +4590,27 @@
     color: #1e40af;
 }
 
+.wp-article-links-delete-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.65rem;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.wp-article-links-delete-btn:hover {
+    background: #fee2e2;
+    border-color: #f87171;
+    color: #991b1b;
+}
+
 .wp-article-links-insert-btn:hover:not(:disabled) {
     background: #fef3c7;
     border-color: #fbbf24;
@@ -4620,6 +4653,18 @@
     background: rgb(37 99 235 / 0.35);
     border-color: #60a5fa;
     color: #dbeafe;
+}
+
+.dark .wp-article-links-delete-btn {
+    border-color: rgb(248 113 113 / 0.45);
+    background: rgb(69 10 10 / 0.45);
+    color: #fca5a5;
+}
+
+.dark .wp-article-links-delete-btn:hover {
+    background: rgb(127 29 29 / 0.55);
+    border-color: #f87171;
+    color: #fecaca;
 }
 
 .wp-article-links-copy-btn.is-suggestion {
@@ -6040,7 +6085,8 @@
 }
 
 .seo-faq-btn-add,
-.seo-faq-btn-generate {
+.seo-faq-btn-generate,
+.seo-faq-btn-import-md {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
@@ -6051,6 +6097,59 @@
     border-radius: 3px;
     border: 1px solid #c3c4c7;
     background: #f6f7f7;
+}
+
+.seo-faq-btn-import-md {
+    color: #0f766e;
+    border-color: #99f6e4;
+    background: #f0fdfa;
+}
+
+.seo-faq-btn-import-md.is-primary {
+    font-weight: 700;
+}
+
+.seo-faq-btn-import-md:hover:not(:disabled) {
+    background: #fff;
+    border-color: #0d9488;
+}
+
+.seo-faq-btn-import-md:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.seo-faq-markdown-import {
+    border: 1px dashed #99f6e4;
+    background: #f0fdfa;
+    border-radius: 6px;
+    padding: 0.75rem;
+}
+
+.seo-faq-markdown-import__hint {
+    margin: 0 0 0.5rem;
+    font-size: 0.75rem;
+    color: #115e59;
+}
+
+.seo-faq-markdown-import__textarea {
+    width: 100%;
+    min-height: 8rem;
+    border: 1px solid #99f6e4;
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background: #fff;
+    color: #134e4a;
+    resize: vertical;
+}
+
+.seo-faq-markdown-import__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
 }
 
 .seo-faq-btn-generate {
@@ -6618,6 +6717,35 @@
     background: rgb(124 58 237 / 0.28);
     border-color: rgb(167 139 250 / 0.45);
     color: #e9d5ff;
+}
+
+.seo-outline-block__action-btn--danger {
+    color: #dc2626;
+    border-color: #fecaca;
+    background: #fef2f2;
+}
+
+.seo-outline-block__action-btn--danger:hover:not(:disabled) {
+    background: #fee2e2;
+    border-color: #fca5a5;
+}
+
+.dark .seo-outline-block__action-btn--danger {
+    color: #fca5a5;
+    border-color: rgba(248, 113, 113, 0.45);
+    background: rgba(127, 29, 29, 0.35);
+}
+
+.seo-outline-add-section-btn {
+    color: #0369a1;
+    border-color: #bae6fd;
+    background: #f0f9ff;
+}
+
+.dark .seo-outline-add-section-btn {
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.35);
+    background: rgba(12, 74, 110, 0.35);
 }
 
 .seo-outline-spin {

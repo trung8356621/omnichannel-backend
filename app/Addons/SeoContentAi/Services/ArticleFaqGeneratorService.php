@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
+use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 
@@ -21,6 +22,7 @@ final class ArticleFaqGeneratorService
         private readonly WorkflowParserService $workflowParser,
         private readonly ArticleFaqExtractDebugService $extractDebug,
         private readonly ArticleFaqPromptVariablesService $faqPromptVariables,
+        private readonly PromptResultLinkService $promptResultLinks,
     ) {
     }
 
@@ -48,15 +50,19 @@ final class ArticleFaqGeneratorService
             throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
         }
 
+        $this->linkPromptResultToArticle($article, $prompt, $result);
+
         $output = trim((string) ($result->output_text ?? ''));
         if ($output === '') {
-            throw new \InvalidArgumentException('AI không trả về nội dung FAQ.');
+            throw new \InvalidArgumentException(
+                'AI không trả về nội dung FAQ. Kết quả prompt đã lưu — xem tại trang Prompts của bài.',
+            );
         }
 
         $faqs = $this->parseFaqsFromAiOutput($output);
         if ($faqs === []) {
             throw new \InvalidArgumentException(
-                'Không bóc tách được FAQ từ kết quả AI. Kiểm tra prompt (Markdown: ### Câu hỏi / **Trả lời:**).',
+                'Không bóc tách được FAQ từ kết quả AI. Kết quả prompt đã lưu — xem tại trang Prompts của bài, hoặc dùng «Import markdown FAQ (debug)».',
             );
         }
 
@@ -82,6 +88,26 @@ final class ArticleFaqGeneratorService
             'faqs' => $this->faqEditor->payloadForArticle($article),
             'editor_html' => $newHtml,
         ];
+    }
+
+    private function linkPromptResultToArticle(SeoArticle $article, SeoPrompt $prompt, PromptResult $result): void
+    {
+        $resultId = (int) $result->getKey();
+        if ($resultId <= 0) {
+            return;
+        }
+
+        $this->promptResultLinks->linkPromptResult(
+            promptResultId: $resultId,
+            articleId: (int) $article->id,
+            source: 'article_faq_generate',
+            workflowStepTitle: 'Generate FAQ (AI)',
+            meta: [
+                'prompt_id' => (int) $prompt->id,
+                'prompt_name' => (string) ($prompt->name ?? ''),
+                'status' => (string) ($result->status ?? ''),
+            ],
+        );
     }
 
     private function resolvePrompt(): SeoPrompt

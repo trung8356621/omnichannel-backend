@@ -797,6 +797,7 @@
             }
         "
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
+        x-on:import-markdown-faq-debug.window="$wire.importMarkdownFaqDebug($event.detail?.markdown ?? '')"
         x-on:article-editor-shortcut.window="
             const action = $event.detail?.action;
             if (syncPageLocked || $wire.articleHeavyActionBusy) {
@@ -807,32 +808,36 @@
                 if (!lockPageForHeavyAction('save')) {
                     return;
                 }
-                if (typeof pushPublish === 'function') {
-                    pushPublish()
-                        .then(() => $wire.requestSaveArticle())
-                        .catch(() => unlockPageAfterHeavyActionFailure());
-                } else {
-                    $wire.requestSaveArticle()
-                        .catch(() => unlockPageAfterHeavyActionFailure());
-                }
+                const runSave = async () => {
+                    if (typeof pushPublish === 'function') {
+                        await pushPublish();
+                    }
+                    if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
+                        await window.__seoPushPublishCategoriesToWire();
+                    }
+                    await $wire.requestSaveArticle();
+                    window.__seoResetPublishTabPrimed?.();
+                };
+                runSave().catch(() => unlockPageAfterHeavyActionFailure());
             } else if (action === 'sync') {
                 @if ($record->wp_post_id && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
-                    // Cùng validation danh mục như nút Đồng bộ ở publish-sidebar.
-                    if (typeof window.__seoEnsureCategoriesBeforeSync === 'function'
-                        && !window.__seoEnsureCategoriesBeforeSync()) {
-                        return;
-                    }
-                    if (!lockPageForHeavyAction('sync')) {
-                        return;
-                    }
-                    if (typeof pushPublish === 'function') {
-                        pushPublish()
-                            .then(() => $wire.requestSyncToWordPress())
-                            .catch(() => unlockPageAfterHeavyActionFailure());
-                    } else {
-                        $wire.requestSyncToWordPress()
-                            .catch(() => unlockPageAfterHeavyActionFailure());
-                    }
+                    const runSync = async () => {
+                        if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
+                            const allowed = await window.__seoEnsureCategoriesBeforeSync();
+                            if (! allowed) {
+                                return;
+                            }
+                        }
+                        if (!lockPageForHeavyAction('sync')) {
+                            return;
+                        }
+                        if (typeof pushPublish === 'function') {
+                            await pushPublish();
+                        }
+                        await $wire.requestSyncToWordPress();
+                        window.__seoResetPublishTabPrimed?.();
+                    };
+                    runSync().catch(() => unlockPageAfterHeavyActionFailure());
                 @endif
             } else if (action === 'preview') {
                 const url = @js($this->getArticlePreviewUrl());
@@ -998,7 +1003,7 @@
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
                 <script type="application/json" id="seo-article-meta">@json($this->getEditorMetaPayload())</script>
                 <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
-                <script type="application/json" id="seo-article-faq-config">@json(['can_generate_faq' => $this->canGenerateArticleFaqs()])</script>
+                <script type="application/json" id="seo-article-faq-config">@json(['can_generate_faq' => $this->canGenerateArticleFaqs(), 'can_import_markdown_faq' => \App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures()])</script>
                 <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());

@@ -42,6 +42,19 @@ class OutlineSkipListMatcherTest extends TestCase
         $this->assertFalse($this->matcher->isSkipped('Quy trình sản xuất', $patterns));
     }
 
+    public function test_matches_sql_like_pattern_is_case_insensitive(): void
+    {
+        $this->assertTrue($this->matcher->matchesSqlLikePattern(
+            'Báo giá in túi vải',
+            'báo giá%',
+        ));
+
+        $this->assertTrue($this->matcher->matchesSqlLikePattern(
+            'Phối theo phong cách All-Black: điểm nhấn rực rỡ',
+            '%NHẤN%',
+        ));
+    }
+
     public function test_is_skipped_ignores_leading_numbering(): void
     {
         $patterns = $this->matcher->normalizeSqlPatterns(['So sánh%', 'Bảng so sánh%']);

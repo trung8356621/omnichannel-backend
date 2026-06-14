@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, Pencil, RefreshCw, ShieldAlert, Sparkles } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Sparkles, Trash2 } from 'lucide-react';
 
 const outlineUrl = (articleId) => `/api/seo/articles/${articleId}/outline`;
 const checkDuplicatesUrl = (articleId) => `/api/seo/articles/${articleId}/outline/check-duplicates`;
@@ -39,6 +39,24 @@ function normalizeOutlineHeadingText(text) {
     return String(text ?? '').replace(/\s+/g, ' ').trim();
 }
 
+/** Tìm node outline theo id, kèm groupId (H2 container). */
+function findOutlineNodeById(nodes, headingId, groupId = null) {
+    for (const node of nodes) {
+        const ownGroupId = node.level <= 2 ? node.id : groupId;
+        if (Number(node.id) === Number(headingId)) {
+            return { node, groupId: ownGroupId };
+        }
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            const found = findOutlineNodeById(node.children, headingId, ownGroupId);
+            if (found) {
+                return found;
+            }
+        }
+    }
+
+    return null;
+}
+
 /** Tìm node outline theo level + text, kèm groupId (H2 container). */
 function findOutlineNodeWithGroup(nodes, level, headingText, groupId = null) {
     const normalized = normalizeOutlineHeadingText(headingText);
@@ -76,6 +94,52 @@ function patchTreeNode(nodes, headingId, patch) {
     });
 }
 
+function removeTreeNodeById(nodes, headingId) {
+    return nodes
+        .filter((node) => Number(node.id) !== Number(headingId))
+        .map((node) => ({
+            ...node,
+            children: Array.isArray(node.children) ? removeTreeNodeById(node.children, headingId) : [],
+        }));
+}
+
+function swapSiblingInTree(nodes, nodeId, direction) {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+        return nodes;
+    }
+
+    const index = nodes.findIndex((node) => Number(node.id) === Number(nodeId));
+    if (index >= 0) {
+        const targetIndex = direction === 'prev' ? index - 1 : index + 1;
+        if (targetIndex < 0 || targetIndex >= nodes.length) {
+            return nodes;
+        }
+
+        const next = [...nodes];
+        [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+
+        return next;
+    }
+
+    let changed = false;
+    const nextNodes = nodes.map((node) => {
+        if (!Array.isArray(node.children) || node.children.length === 0) {
+            return node;
+        }
+
+        const nextChildren = swapSiblingInTree(node.children, nodeId, direction);
+        if (nextChildren === node.children) {
+            return node;
+        }
+
+        changed = true;
+
+        return { ...node, children: nextChildren };
+    });
+
+    return changed ? nextNodes : nodes;
+}
+
 /**
  * Block 1 heading: click nhảy editor, double-click focus nhóm, icon Pencil/Sparkles để sửa/gen.
  */
@@ -90,6 +154,12 @@ function HeadingBlock({
     onJumpToEditor,
     onSaveText,
     onGenerate,
+    onMoveUp,
+    onMoveDown,
+    onDelete,
+    canMoveUp = false,
+    canMoveDown = false,
+    canDelete = false,
     busyHeadingId,
     duplicateInfo = null,
     onSelectDuplicate,
@@ -226,6 +296,34 @@ function HeadingBlock({
             ) : null}
             {!editing ? (
                 <div className="seo-outline-block__actions-row">
+                    <button
+                        type="button"
+                        className="seo-outline-block__action-btn"
+                        disabled={!canMoveUp || isBusy}
+                        title="Di chuyển lên"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (canMoveUp && !isBusy) {
+                                onMoveUp?.(node);
+                            }
+                        }}
+                    >
+                        <ChevronUp size={14} strokeWidth={1.75} />
+                    </button>
+                    <button
+                        type="button"
+                        className="seo-outline-block__action-btn"
+                        disabled={!canMoveDown || isBusy}
+                        title="Di chuyển xuống"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (canMoveDown && !isBusy) {
+                                onMoveDown?.(node);
+                            }
+                        }}
+                    >
+                        <ChevronDown size={14} strokeWidth={1.75} />
+                    </button>
                     {!isHeadingFocused ? (
                         <button
                             type="button"
@@ -261,6 +359,20 @@ function HeadingBlock({
                             <Sparkles size={14} strokeWidth={1.75} />
                         )}
                     </button>
+                    <button
+                        type="button"
+                        className="seo-outline-block__action-btn seo-outline-block__action-btn--danger"
+                        disabled={!canDelete || isBusy}
+                        title="Xóa heading"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (canDelete && !isBusy) {
+                                onDelete?.(node);
+                            }
+                        }}
+                    >
+                        <Trash2 size={14} strokeWidth={1.75} />
+                    </button>
                 </div>
             ) : null}
         </div>
@@ -279,18 +391,22 @@ function OutlineTree({
     onJumpToEditor,
     onSaveText,
     onGenerate,
+    onMoveHeading,
+    onDeleteHeading,
     busyHeadingId,
     duplicateByHeadingId = null,
     onSelectDuplicate,
 }) {
     return (
         <>
-            {nodes.map((node) => {
+            {nodes.map((node, index) => {
                 const ownGroupId = node.level <= 2 ? node.id : groupId;
                 const hasChildren = Array.isArray(node.children) && node.children.length > 0;
                 const isSectionFocused =
                     node.level <= 2 &&
                     activeHeadingId === node.id;
+                const canMoveUp = index > 0;
+                const canMoveDown = index < nodes.length - 1;
 
                 return (
                     <div
@@ -314,6 +430,12 @@ function OutlineTree({
                             onJumpToEditor={onJumpToEditor}
                             onSaveText={onSaveText}
                             onGenerate={onGenerate}
+                            onMoveUp={(headingNode) => onMoveHeading?.(headingNode, 'prev')}
+                            onMoveDown={(headingNode) => onMoveHeading?.(headingNode, 'next')}
+                            onDelete={onDeleteHeading}
+                            canMoveUp={canMoveUp}
+                            canMoveDown={canMoveDown}
+                            canDelete
                             busyHeadingId={busyHeadingId}
                             duplicateInfo={duplicateByHeadingId?.get(node.id) ?? null}
                             onSelectDuplicate={onSelectDuplicate}
@@ -331,6 +453,8 @@ function OutlineTree({
                                     onJumpToEditor={onJumpToEditor}
                                     onSaveText={onSaveText}
                                     onGenerate={onGenerate}
+                                    onMoveHeading={onMoveHeading}
+                                    onDeleteHeading={onDeleteHeading}
                                     busyHeadingId={busyHeadingId}
                                     duplicateByHeadingId={duplicateByHeadingId}
                                     onSelectDuplicate={onSelectDuplicate}
@@ -403,9 +527,13 @@ function ReadOnlyOutlineTree({ nodes, activeHeadingId = null }) {
 export default function ArticleOutlineTab({
     articleId,
     headingCommand = null,
+    outlineTreeSync = null,
     onOutlineLoaded,
     onHeadingTextChange,
     onJumpToEditorHeading,
+    onOutlineMoveHeading,
+    onOutlineDeleteHeading,
+    onOutlineAddSection,
     onNotify,
 }) {
     const [tree, setTree] = useState([]);
@@ -602,10 +730,13 @@ export default function ArticleOutlineTab({
             return;
         }
 
-        const { level, headingText, action } = headingCommand;
-        const match = findOutlineNodeWithGroup(tree, level, headingText);
+        const { level, headingText, headingId, action } = headingCommand;
+        const match =
+            headingId != null
+                ? findOutlineNodeById(tree, headingId)
+                : findOutlineNodeWithGroup(tree, level, headingText);
         if (!match) {
-            if (tree.length > 0) {
+            if (tree.length > 0 && headingId == null) {
                 notify('Outline', 'Không tìm thấy heading tương ứng trong outline.', 'warning');
             }
             return;
@@ -624,7 +755,55 @@ export default function ArticleOutlineTab({
         if (action === 'edit') {
             setEditingHeadingId(node.id);
         }
-    }, [headingCommand?.token, headingCommand?.level, headingCommand?.headingText, headingCommand?.action, notify, tree]);
+    }, [
+        headingCommand?.token,
+        headingCommand?.level,
+        headingCommand?.headingText,
+        headingCommand?.headingId,
+        headingCommand?.action,
+        notify,
+        tree,
+    ]);
+
+    useEffect(() => {
+        if (!outlineTreeSync?.token) {
+            return;
+        }
+
+        if (outlineTreeSync.action === 'append' && outlineTreeSync.heading) {
+            const heading = outlineTreeSync.heading;
+            setTree((prev) => {
+                if (prev.some((node) => Number(node.id) === Number(heading.id))) {
+                    return prev;
+                }
+
+                return [...prev, { ...heading, children: [] }];
+            });
+            setEditingHeadingId(null);
+            setActiveGroupId(heading.id);
+            setActiveHeadingId(heading.id);
+
+            if (outlineTreeSync.focusEdit) {
+                window.requestAnimationFrame(() => {
+                    const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    setEditingHeadingId(heading.id);
+                });
+            }
+
+            return;
+        }
+
+        if (outlineTreeSync.action === 'remove' && outlineTreeSync.headingId != null) {
+            setTree((prev) => removeTreeNodeById(prev, outlineTreeSync.headingId));
+            setEditingHeadingId((current) =>
+                Number(current) === Number(outlineTreeSync.headingId) ? null : current,
+            );
+            setActiveHeadingId((current) =>
+                Number(current) === Number(outlineTreeSync.headingId) ? null : current,
+            );
+        }
+    }, [outlineTreeSync?.token, outlineTreeSync?.action, outlineTreeSync?.heading, outlineTreeSync?.headingId, outlineTreeSync?.focusEdit]);
 
     const handleEditingHeadingEnd = useCallback(() => {
         setEditingHeadingId(null);
@@ -693,6 +872,21 @@ export default function ArticleOutlineTab({
         [applyHeadingPatch, articleId, notify],
     );
 
+    const handleMoveHeading = useCallback(
+        (node, direction) => {
+            setTree((prev) => swapSiblingInTree(prev, node.id, direction));
+            onOutlineMoveHeading?.(node, direction);
+        },
+        [onOutlineMoveHeading],
+    );
+
+    const handleDeleteHeading = useCallback(
+        (node) => {
+            onOutlineDeleteHeading?.(node);
+        },
+        [onOutlineDeleteHeading],
+    );
+
     return (
         <div
             className="seo-tab-panel seo-outline-panel"
@@ -705,6 +899,21 @@ export default function ArticleOutlineTab({
             <div className="seo-outline-toolbar">
                 <h3 className="seo-outline-title">Outline / Dàn ý (H2–H4)</h3>
                 <div className="seo-outline-toolbar__actions">
+                    {onOutlineAddSection ? (
+                        <button
+                            type="button"
+                            className="seo-outline-reload seo-outline-add-section-btn"
+                            title="Thêm section mới"
+                            disabled={loading}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onOutlineAddSection();
+                            }}
+                        >
+                            <Plus size={15} strokeWidth={1.75} />
+                            Thêm section
+                        </button>
+                    ) : null}
                     <button
                         type="button"
                         className="seo-outline-reload"
@@ -788,6 +997,8 @@ export default function ArticleOutlineTab({
                                 onJumpToEditor={handleJumpToEditor}
                                 onSaveText={handleSaveText}
                                 onGenerate={handleGenerate}
+                                onMoveHeading={handleMoveHeading}
+                                onDeleteHeading={handleDeleteHeading}
                                 busyHeadingId={busyHeadingId}
                                 duplicateByHeadingId={duplicateByHeadingId}
                                 onSelectDuplicate={handleSelectDuplicate}
@@ -850,6 +1061,8 @@ export default function ArticleOutlineTab({
                         onJumpToEditor={handleJumpToEditor}
                         onSaveText={handleSaveText}
                         onGenerate={handleGenerate}
+                        onMoveHeading={handleMoveHeading}
+                        onDeleteHeading={handleDeleteHeading}
                         busyHeadingId={busyHeadingId}
                     />
                 </div>

@@ -262,6 +262,16 @@ class WordPressArticleContentService
 
             $post = is_array($payload['post'] ?? null) ? $payload['post'] : [];
 
+            if ($taxonomy !== null) {
+                $this->persistTaxonomyIdentityMeta(
+                    $article,
+                    $taxonomy,
+                    array_merge($post, [
+                        'parent_id' => (int) ($post['parent_id'] ?? 0),
+                    ]),
+                );
+            }
+
             $this->persistFetchedMeta($article, $post, $taxonomy !== null, $importFaqs, $forceSeoImport);
 
             return $post;
@@ -296,9 +306,31 @@ class WordPressArticleContentService
     {
         $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
         if ($entity === 'term') {
-            $taxonomy = trim((string) $this->getMeta($article, 'wp_post_type', ''));
+            $wpTaxonomy = trim((string) $this->getMeta($article, 'wp_taxonomy', ''));
+            if ($wpTaxonomy !== '') {
+                $normalized = $this->normalizeTaxonomySlug($wpTaxonomy);
+                if ($normalized !== null) {
+                    return $normalized;
+                }
+            }
 
-            return $this->normalizeTaxonomySlug($taxonomy);
+            $taxonomy = trim((string) $this->getMeta($article, 'wp_post_type', ''));
+            $normalized = $this->normalizeTaxonomySlug($taxonomy);
+            if ($normalized !== null) {
+                return $normalized;
+            }
+
+            $type = strtolower(trim((string) ($article->type ?? '')));
+
+            return match ($type) {
+                'product_category' => 'product_cat',
+                'category' => 'category',
+                default => null,
+            };
+        }
+
+        if ($entity === 'post') {
+            return null;
         }
 
         $type = strtolower(trim((string) ($article->type ?? '')));
@@ -312,6 +344,98 @@ class WordPressArticleContentService
         $wpPostType = trim((string) $this->getMeta($article, 'wp_post_type', ''));
 
         return $this->normalizeTaxonomySlug($wpPostType);
+    }
+
+    public function healTaxonomyMetaFromWordPress(SeoArticle $article): bool
+    {
+        if ($this->resolveWpTaxonomy($article) !== null) {
+            return false;
+        }
+
+        $entity = trim((string) $this->getMeta($article, 'wp_entity', ''));
+        if ($entity !== 'term') {
+            return false;
+        }
+
+        $wpId = (int) ($article->wp_post_id ?? 0);
+        if ($wpId <= 0) {
+            return false;
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return false;
+        }
+
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return false;
+        }
+
+        foreach (['product_cat', 'category'] as $taxonomy) {
+            $url = $this->buildTermUrl($site, $taxonomy, $wpId);
+            if ($url === '') {
+                continue;
+            }
+
+            try {
+                $response = Http::timeout(15)
+                    ->acceptJson()
+                    ->withToken($readToken)
+                    ->get($url);
+
+                if (! $response->successful()) {
+                    continue;
+                }
+
+                $payload = $response->json();
+                if (! is_array($payload) || ! ($payload['success'] ?? false)) {
+                    continue;
+                }
+
+                $post = is_array($payload['post'] ?? null) ? $payload['post'] : [];
+                $this->persistTaxonomyIdentityMeta($article, $taxonomy, $post);
+
+                return true;
+            } catch (Throwable) {
+                continue;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    private function persistTaxonomyIdentityMeta(SeoArticle $article, string $wpTaxonomy, array $post): void
+    {
+        $seoType = $wpTaxonomy === 'product_cat' ? 'product_category' : 'category';
+
+        $article->update(['type' => $seoType]);
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_entity'],
+            ['meta_value' => 'term'],
+        );
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_taxonomy'],
+            ['meta_value' => $wpTaxonomy],
+        );
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_post_type'],
+            ['meta_value' => $wpTaxonomy],
+        );
+
+        $parentId = max(0, (int) ($post['parent_id'] ?? 0));
+        if ($parentId > 0) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_parent_id'],
+                ['meta_value' => (string) $parentId],
+            );
+        } else {
+            $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+        }
     }
 
     private function normalizeTaxonomySlug(string $taxonomy): ?string
@@ -411,12 +535,31 @@ class WordPressArticleContentService
             );
         }
 
+        $categoryIds = $this->extractCategoryIdsFromPost($post);
+        if ($categoryIds !== []) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_category_ids'],
+                ['meta_value' => json_encode($categoryIds, JSON_THROW_ON_ERROR)],
+            );
+
+            if (! $isTaxonomy) {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'category_ids'],
+                    ['meta_value' => json_encode($categoryIds, JSON_THROW_ON_ERROR)],
+                );
+            }
+        }
+
         if ($importFaqs && is_array($post['faqs'] ?? null) && $article->faqs()->count() === 0) {
             app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
         }
 
         $this->importSeoFromFetchedPost($article, $post, $forceSeoImport);
         $this->timestampService->sync($article, $post);
+
+        if (! $isTaxonomy) {
+            app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($article->fresh());
+        }
     }
 
     /**
@@ -586,5 +729,24 @@ class WordPressArticleContentService
         }
 
         return $base.'/wp-json/omi-seo-ai/v1/posts/'.$wpId.'/editor-sync';
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     * @return list<int>
+     */
+    public function extractCategoryIdsFromPost(array $post): array
+    {
+        $raw = $post['category_ids'] ?? [];
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        return collect($raw)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
     }
 }

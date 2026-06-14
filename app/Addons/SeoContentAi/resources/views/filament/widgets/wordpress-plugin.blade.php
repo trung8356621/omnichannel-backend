@@ -75,6 +75,16 @@
             <div class="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center lg:flex-col lg:items-end">
                     <x-filament::button
                         tag="a"
+                        :href="\App\Addons\SeoContentAi\Filament\Pages\ManagePluginRelease::getUrl()"
+                        icon="heroicon-o-arrow-up-tray"
+                        color="gray"
+                        size="sm"
+                    >
+                        {{ __('seo-content-ai::filament.wp_plugin.manage_releases') }}
+                    </x-filament::button>
+
+                    <x-filament::button
+                        tag="a"
                         :href="route('seo.wp-plugin.download', ['version' => $latest['version']])"
                         icon="heroicon-o-arrow-down-tray"
                         color="primary"
@@ -181,6 +191,16 @@
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                     {{ __('seo-content-ai::filament.wp_plugin.no_packages_hint') }}
                 </p>
+                <div class="mt-3">
+                    <x-filament::button
+                        tag="a"
+                        size="sm"
+                        :href="\App\Addons\SeoContentAi\Filament\Pages\ManagePluginRelease::getUrl()"
+                        icon="heroicon-o-arrow-up-tray"
+                    >
+                        {{ __('seo-content-ai::filament.wp_plugin.manage_releases') }}
+                    </x-filament::button>
+                </div>
             </x-filament::section>
         @endif
     </x-filament::section>

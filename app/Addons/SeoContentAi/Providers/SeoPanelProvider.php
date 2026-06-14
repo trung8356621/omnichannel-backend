@@ -8,6 +8,8 @@ use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
@@ -25,6 +27,7 @@ use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
+use Filament\Support\Enums\MaxWidth;
 use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
@@ -62,14 +65,26 @@ class SeoPanelProvider extends PanelProvider
 
         FilamentView::registerRenderHook(
             'panels::global-search.after',
-            fn (): string => Blade::render('@livewire(\'global-seo-bar\')'),
+            function (): string {
+                if (! request()->is('seo', 'seo/*')) {
+                    return '';
+                }
+
+                return Blade::render('@livewire(\'global-seo-bar\')');
+            },
         );
 
         FilamentView::registerRenderHook(
             PanelsRenderHook::BODY_END,
-            fn (): HtmlString => new HtmlString(
-                view('seo-content-ai::filament.prompt-variable-insert')->render()
-            ),
+            function (): HtmlString {
+                if (! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.prompt-variable-insert')->render()
+                );
+            },
         );
 
         FilamentView::registerRenderHook(
@@ -94,17 +109,26 @@ class SeoPanelProvider extends PanelProvider
 
         FilamentView::registerRenderHook(
             PanelsRenderHook::HEAD_END,
-            fn (): HtmlString => new HtmlString(
-                '<script>'
-                .'window.__SEO_I18N_LOCALE__ = '.json_encode(app()->getLocale()).';'
-                .'document.documentElement.setAttribute("lang", '.json_encode(str_replace('_', '-', app()->getLocale())).');'
-                .'</script>'
-            ),
+            function (): HtmlString {
+                if (! request()->is('seo', 'seo/*')) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    '<script>'
+                    .'window.__SEO_I18N_LOCALE__ = '.json_encode(app()->getLocale()).';'
+                    .'document.documentElement.setAttribute("lang", '.json_encode(str_replace('_', '-', app()->getLocale())).');'
+                    .'</script>'
+                );
+            },
         );
 
         Route::middleware('api')
             ->prefix('api')
             ->group(dirname(__DIR__).'/routes/api.php');
+
+        Route::get('storage/plugins/omi-seo-ai-bridge/info.json', [PluginUpdateController::class, 'infoJson'])
+            ->name('seo.plugin.info-json');
 
         Route::middleware([
             EncryptCookies::class,
@@ -171,6 +195,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/outline', [ArticleOutlineController::class, 'index'])
                     ->whereNumber('article')
                     ->name('seo.articles.outline.index');
+                Route::post('/{article}/outline', [ArticleOutlineController::class, 'store'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.outline.store');
                 Route::post('/{article}/outline/check-duplicates', [ArticleOutlineController::class, 'checkDuplicates'])
                     ->whereNumber('article')
                     ->name('seo.articles.outline.check-duplicates');
@@ -178,10 +205,21 @@ class SeoPanelProvider extends PanelProvider
                     ->whereNumber('article')
                     ->whereNumber('heading')
                     ->name('seo.articles.outline.update');
+                Route::delete('/{article}/outline/{heading}', [ArticleOutlineController::class, 'destroy'])
+                    ->whereNumber('article')
+                    ->whereNumber('heading')
+                    ->name('seo.articles.outline.destroy');
                 Route::post('/{article}/outline/{heading}/generate', [ArticleOutlineController::class, 'generate'])
                     ->whereNumber('article')
                     ->whereNumber('heading')
                     ->name('seo.articles.outline.generate');
+                Route::get('/{article}/revisions', [ArticleRevisionController::class, 'index'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.revisions.index');
+                Route::get('/{article}/revisions/{revision}', [SeoArticleRevisionController::class, 'show'])
+                    ->whereNumber('article')
+                    ->whereNumber('revision')
+                    ->name('seo.articles.revisions.show');
             });
 
         Route::middleware([
@@ -249,6 +287,12 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.articles.seo-preview');
                 Route::get('/articles/{article}/preview', ArticlePreviewController::class)
                     ->name('seo.articles.preview');
+                Route::get('/articles/{article}/revisions', [SeoArticleRevisionController::class, 'compare'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.revisions.compare');
+                Route::post('/articles/{article}/revisions/restore', [SeoArticleRevisionController::class, 'restore'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.revisions.restore');
                 Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
                     ->name('seo.articles.wp-edit-redirect');
                 Route::get('/wp-plugin/download/{version}', [PluginUpdateController::class, 'downloadForPanel'])
@@ -267,6 +311,7 @@ class SeoPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Emerald,
             ])
+            ->maxContentWidth(MaxWidth::Full)
             ->discoverResources(
                 in: __DIR__.'/../Filament/Resources',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Resources'

@@ -3,7 +3,6 @@
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\SiteResource\Pages;
-use App\Filament\Resources\SiteServiceResource;
 use App\Models\Site;
 use Filament\Forms;
 use Filament\Forms\Form;
@@ -63,7 +62,7 @@ class SiteResource extends Resource
 
                 Forms\Components\Select::make('user_id')
                     ->label(__('Owner'))
-                    ->relationship('user', 'name', fn(Builder $query) => $query->whereIn('role', ['admin', 'owner']))
+                    ->relationship('user', 'name', fn (Builder $query) => $query->whereIn('role', ['admin', 'owner']))
                     ->searchable()
                     ->preload()
                     ->required(),
@@ -74,10 +73,6 @@ class SiteResource extends Resource
                     ->default(true)
                     ->helperText(__('Enable if the site uses HTTPS protocol.'))
                     ->required(),
-
-
-
-
 
                 Forms\Components\Select::make('status')
                     ->label(__('Status'))
@@ -121,24 +116,17 @@ class SiteResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\ViewColumn::make('site_card')
-                    ->view('filament.tables.columns.site-card')
-                    ->searchable(['domain', 'user.name'])
-                    ->sortable(['domain', 'status']),
-            ])
-            ->contentGrid([
-                'md' => 2,
-                'xl' => 3,
+                Tables\Columns\TextColumn::make('domain')
+                    ->label(__('Domain'))
+                    ->searchable()
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('user.name')
+                    ->label(__('Owner'))
+                    ->searchable()
+                    ->sortable(),
             ])
             ->defaultSort('domain')
             ->filters([
-                Tables\Filters\SelectFilter::make('status')
-                    ->label(__('Status'))
-                    ->options([
-                        'active' => __('Active'),
-                        'inactive' => __('Inactive'),
-                        'maintenance' => __('Maintenance'),
-                    ]),
                 Tables\Filters\TrashedFilter::make(),
             ])
             ->actions([

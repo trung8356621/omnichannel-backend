@@ -33,7 +33,7 @@ final class KeywordOrphanCleanup
 
                 if (
                     $keyword->articleKeywords()->exists()
-                    || $keyword->inboundLinks()->exists()
+                    || $keyword->links()->exists()
                     || $keyword->children()->exists()
                 ) {
                     return;

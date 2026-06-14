@@ -18,11 +18,12 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use Carbon\Carbon;
-use Filament\Notifications\Notification;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action as FormAction;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Forms\Set;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Enums\FiltersLayout;
@@ -123,11 +124,11 @@ class ArticleResource extends Resource
                     ->wrap()
                     ->description(function (SeoArticle $record): ?string {
                         if (filled($record->slug)) {
-                            return '/' . ltrim((string) $record->slug, '/');
+                            return '/'.ltrim((string) $record->slug, '/');
                         }
 
                         if ($record->wp_post_id) {
-                            return 'WP ID: ' . $record->wp_post_id;
+                            return 'WP ID: '.$record->wp_post_id;
                         }
 
                         return null;
@@ -341,7 +342,7 @@ class ArticleResource extends Resource
                         $type = $data['type'] ?? null;
                         $typeLabel = $type === 'internal' ? 'internal' : ($type === 'external' ? 'external' : '');
 
-                        return __('seo-content-ai::filament.article_list.link') . ($typeLabel !== '' ? ' ' . $typeLabel : '') . ': ' . Str::limit($url, 48);
+                        return __('seo-content-ai::filament.article_list.link').($typeLabel !== '' ? ' '.$typeLabel : '').': '.Str::limit($url, 48);
                     }),
                 Filter::make('keyword')
                     ->label(__('seo-content-ai::filament.article_list.keyword'))
@@ -393,17 +394,17 @@ class ArticleResource extends Resource
                             ->value('phrase');
 
                         if (! is_string($phrase) || $phrase === '') {
-                            return __('seo-content-ai::filament.article_list.keyword') . ' #' . $keywordId;
+                            return __('seo-content-ai::filament.article_list.keyword').' #'.$keywordId;
                         }
 
                         $usage = (string) ($data['usage'] ?? '');
                         $suffix = match (true) {
-                            $usage === 'main' => ' (' . __('seo-content-ai::filament.article_list.main_article') . ')',
-                            $usage === 'internal_link', ($data['internal_link_only'] ?? '') === '1' => ' (' . __('seo-content-ai::filament.article_list.has_internal_link') . ')',
+                            $usage === 'main' => ' ('.__('seo-content-ai::filament.article_list.main_article').')',
+                            $usage === 'internal_link', ($data['internal_link_only'] ?? '') === '1' => ' ('.__('seo-content-ai::filament.article_list.has_internal_link').')',
                             default => '',
                         };
 
-                        return __('seo-content-ai::filament.article_list.keyword') . ': ' . $phrase . $suffix;
+                        return __('seo-content-ai::filament.article_list.keyword').': '.$phrase.$suffix;
                     }),
             ], layout: FiltersLayout::AboveContent)
             ->filtersFormColumns([
@@ -655,7 +656,7 @@ class ArticleResource extends Resource
             return null;
         }
 
-        return rtrim($base, '/') . '/' . ltrim($slug, '/');
+        return rtrim($base, '/').'/'.ltrim($slug, '/');
     }
 
     /**
@@ -722,38 +723,38 @@ class ArticleResource extends Resource
                         ->success()
                         ->send();
                 }),
-                Tables\Actions\Action::make('view_content_project_runs')
-                    ->icon('heroicon-o-queue-list')
-                    ->iconButton()
-                    ->color('info')
-                    ->tooltip('View content project runs')
-                    ->visible(function (SeoArticle $record): bool {
-                        return static::articleAssignedContentProjectId($record) !== null;
-                    })
-                    ->url(function (SeoArticle $record): ?string {
-                        $projectId = static::articleAssignedContentProjectId($record);
-                        if ($projectId === null) {
-                            return null;
-                        }
+            Tables\Actions\Action::make('view_content_project_runs')
+                ->icon('heroicon-o-queue-list')
+                ->iconButton()
+                ->color('info')
+                ->tooltip('View content project runs')
+                ->visible(function (SeoArticle $record): bool {
+                    return static::articleAssignedContentProjectId($record) !== null;
+                })
+                ->url(function (SeoArticle $record): ?string {
+                    $projectId = static::articleAssignedContentProjectId($record);
+                    if ($projectId === null) {
+                        return null;
+                    }
 
-                        $project = SeoProject::query()->find($projectId);
+                    $project = SeoProject::query()->find($projectId);
 
-                        return $project instanceof SeoProject
-                            ? SeoProjectResource::getRunHistoryUrl($project)
-                            : null;
-                    }),
-                Tables\Actions\Action::make('assign_to_content_project')
-                    ->icon('heroicon-o-folder-plus')
-                    ->iconButton()
-                    ->color('warning')
-                    ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                    ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
-                    ->requiresConfirmation()
-                    ->form(fn (SeoArticle $record): array => [
-                        static::assignContentProjectSelectField(
-                            fn (): ?int => static::resolveArticleSiteId($record),
-                        ),
-                    ])
+                    return $project instanceof SeoProject
+                        ? SeoProjectResource::getRunHistoryUrl($project)
+                        : null;
+                }),
+            Tables\Actions\Action::make('assign_to_content_project')
+                ->icon('heroicon-o-folder-plus')
+                ->iconButton()
+                ->color('warning')
+                ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+                ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
+                ->requiresConfirmation()
+                ->form(fn (SeoArticle $record): array => [
+                    static::assignContentProjectSelectField(
+                        fn (): ?int => static::resolveArticleSiteId($record),
+                    ),
+                ])
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
@@ -872,7 +873,7 @@ class ArticleResource extends Resource
     }
 
     /**
-     * @param  callable(): ?int  $resolveSiteId
+     * @param  callable(Get=): ?int  $resolveSiteId
      * @param  (callable(): ?string)|null  $resolveHelperText
      */
     public static function assignContentProjectSelectField(
@@ -881,7 +882,9 @@ class ArticleResource extends Resource
     ): Forms\Components\Select {
         $select = Forms\Components\Select::make('project_id')
             ->label(__('seo-content-ai::filament.article_list.content_project'))
-            ->options(fn (): array => static::contentProjectOptions($resolveSiteId()))
+            ->options(fn (Get $get): array => static::contentProjectOptions(
+                static::resolveAssignContentProjectSiteId($resolveSiteId, $get),
+            ))
             ->required()
             ->searchable()
             ->preload()
@@ -890,8 +893,8 @@ class ArticleResource extends Resource
                 FormAction::make('quick_create_content_project')
                     ->label(__('seo-content-ai::filament.article_list.quick_create_content_project'))
                     ->icon('heroicon-o-plus')
-                    ->action(function (Set $set) use ($resolveSiteId): void {
-                        $siteId = (int) ($resolveSiteId() ?? 0);
+                    ->action(function (Set $set, Get $get) use ($resolveSiteId): void {
+                        $siteId = (int) (static::resolveAssignContentProjectSiteId($resolveSiteId, $get) ?? 0);
                         if ($siteId <= 0) {
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
@@ -928,6 +931,27 @@ class ArticleResource extends Resource
         }
 
         return $select;
+    }
+
+    /**
+     * @param  callable(Get=): ?int  $resolveSiteId
+     */
+    private static function resolveAssignContentProjectSiteId(callable $resolveSiteId, ?Get $get = null): ?int
+    {
+        if ($get instanceof Get && $resolveSiteId instanceof \Closure) {
+            $reflection = new \ReflectionFunction($resolveSiteId);
+            $firstParameter = $reflection->getParameters()[0] ?? null;
+
+            if ($firstParameter !== null) {
+                $type = $firstParameter->getType();
+
+                if ($type instanceof \ReflectionNamedType && $type->getName() === Get::class) {
+                    return $resolveSiteId($get);
+                }
+            }
+        }
+
+        return $resolveSiteId();
     }
 
     public static function quickCreateContentProject(int $siteId): SeoProject
@@ -1014,7 +1038,7 @@ class ArticleResource extends Resource
     {
         $sourceContent = trim((string) ($article->title ?? ''));
         if ($sourceContent === '') {
-            return 'Article #' . (int) $article->id;
+            return 'Article #'.(int) $article->id;
         }
 
         return $sourceContent;
@@ -1105,7 +1129,7 @@ class ArticleResource extends Resource
             $existingKeys = SeoProjectTask::query()
                 ->where('project_id', (int) $project->id)
                 ->get(['site_id', 'type', 'source_content'])
-                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id . '|' . SeoProjectTask::TYPE_REWRITE . '|' . mb_strtolower(trim((string) $task->source_content)))
+                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id.'|'.SeoProjectTask::TYPE_REWRITE.'|'.mb_strtolower(trim((string) $task->source_content)))
                 ->all();
             $existingMap = array_fill_keys($existingKeys, true);
 
@@ -1137,7 +1161,7 @@ class ArticleResource extends Resource
                 $sourceContent = static::resolveArticleProjectSourceContent($record);
 
                 $siteId = $projectSiteId > 0 ? $projectSiteId : $articleSiteId;
-                $key = $siteId . '|' . SeoProjectTask::TYPE_REWRITE . '|' . mb_strtolower($sourceContent);
+                $key = $siteId.'|'.SeoProjectTask::TYPE_REWRITE.'|'.mb_strtolower($sourceContent);
                 if (isset($existingMap[$key])) {
                     $duplicate++;
 

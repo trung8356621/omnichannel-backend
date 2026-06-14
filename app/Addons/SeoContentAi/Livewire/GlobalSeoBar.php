@@ -17,23 +17,11 @@ class GlobalSeoBar extends Component
 
     public function mount(): void
     {
-        $hasStoredSelection = SeoAccessControl::hasGlobalSiteSelection();
-        $this->globalSiteId = SeoAccessControl::globalSiteId();
-
-        if (
-            $this->globalSiteId !== null
-            && ! $this->resolveSitesQuery()->whereKey($this->globalSiteId)->exists()
-        ) {
-            SeoAccessControl::clearGlobalSiteSelection();
+        if ($this->shouldForceAllDomainsScope()) {
+            SeoAccessControl::setGlobalSiteId(null);
             $this->globalSiteId = null;
-            $hasStoredSelection = false;
-        }
-
-        if ($this->globalSiteId === null && ! $hasStoredSelection) {
-            $this->globalSiteId = $this->resolveSitesQuery()->value('id');
-            if ($this->globalSiteId !== null) {
-                SeoAccessControl::setGlobalSiteId($this->globalSiteId);
-            }
+        } else {
+            $this->restoreGlobalSiteFromStorage();
         }
 
         $actualRole = SeoAccessControl::actualRole();
@@ -113,6 +101,33 @@ class GlobalSeoBar extends Component
         }
 
         return $query;
+    }
+
+    private function shouldForceAllDomainsScope(): bool
+    {
+        return request()->routeIs('filament.seo.resources.keywords.index');
+    }
+
+    private function restoreGlobalSiteFromStorage(): void
+    {
+        $hasStoredSelection = SeoAccessControl::hasGlobalSiteSelection();
+        $this->globalSiteId = SeoAccessControl::globalSiteId();
+
+        if (
+            $this->globalSiteId !== null
+            && ! $this->resolveSitesQuery()->whereKey($this->globalSiteId)->exists()
+        ) {
+            SeoAccessControl::clearGlobalSiteSelection();
+            $this->globalSiteId = null;
+            $hasStoredSelection = false;
+        }
+
+        if ($this->globalSiteId === null && ! $hasStoredSelection) {
+            $this->globalSiteId = $this->resolveSitesQuery()->value('id');
+            if ($this->globalSiteId !== null) {
+                SeoAccessControl::setGlobalSiteId($this->globalSiteId);
+            }
+        }
     }
 
     private function resolveReturnUrl(): string

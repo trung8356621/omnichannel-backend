@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Observers;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Services\DomainLinkListKeywordSyncService;
 use App\Addons\SeoContentAi\Services\KeywordPhraseUpdateService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
 final class KeywordLinkListSyncObserver
 {
@@ -25,27 +26,29 @@ final class KeywordLinkListSyncObserver
             app(KeywordPhraseUpdateService::class)->propagate($keyword, $this->previousPhrase);
         }
 
-        if ($keyword->type !== Keyword::TYPE_FOCUS) {
+        if ($keyword->type !== Keyword::TYPE_NORMAL) {
             $this->previousPhrase = null;
 
             return;
         }
 
         $service = app(DomainLinkListKeywordSyncService::class);
-        $siteId = (int) ($keyword->site_id ?? 0);
+        $siteId = (int) (SeoAccessControl::globalSiteId() ?? $keyword->resolveSiteId() ?? 0);
 
-        if ($this->previousPhrase !== null && $this->previousPhrase !== '') {
+        if ($this->previousPhrase !== null && $this->previousPhrase !== '' && $siteId > 0) {
             $service->removeLinkFromDomainContext($siteId, $this->previousPhrase);
             $this->previousPhrase = null;
         }
 
         $phrase = trim((string) ($keyword->phrase ?? ''));
-        $targetUrl = trim((string) ($keyword->target_url ?? ''));
+        $targetUrl = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
 
-        if ($phrase === '' || $targetUrl === '') {
-            if ($phrase !== '') {
-                $service->removeLinkFromDomainContext($siteId, $phrase);
-            }
+        if ($siteId <= 0 || $phrase === '') {
+            return;
+        }
+
+        if ($targetUrl === '') {
+            $service->removeLinkFromDomainContext($siteId, $phrase);
 
             return;
         }
@@ -55,18 +58,16 @@ final class KeywordLinkListSyncObserver
 
     public function deleted(Keyword $keyword): void
     {
-        if ($keyword->type !== Keyword::TYPE_FOCUS) {
+        if ($keyword->type !== Keyword::TYPE_NORMAL) {
             return;
         }
 
         $phrase = trim((string) ($keyword->phrase ?? ''));
-        if ($phrase === '') {
+        $siteId = (int) ($keyword->resolveSiteId() ?? 0);
+        if ($phrase === '' || $siteId <= 0) {
             return;
         }
 
-        app(DomainLinkListKeywordSyncService::class)->removeLinkFromDomainContext(
-            (int) ($keyword->site_id ?? 0),
-            $phrase,
-        );
+        app(DomainLinkListKeywordSyncService::class)->removeLinkFromDomainContext($siteId, $phrase);
     }
 }

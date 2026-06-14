@@ -169,6 +169,47 @@ MD;
         $this->assertStringContainsString('số lượng', $faqs[0]['answer']);
     }
 
+    public function test_parse_faqs_from_standalone_numbered_headings_with_trailing_emoji(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+Chào bạn! Dưới đây là 3 câu hỏi cốt lõi.
+
+### 1. Túi canvas có độ bền như thế nào? 🌿
+
+**Trả lời bởi:** *Ông Minh Tiến.*
+
+Túi canvas rất bền và thân thiện môi trường.
+
+### 2. Chi phí đặt may túi canvas phụ thuộc yếu tố nào? 💰
+
+**Trả lời bởi:** *Bà Thanh Huyền.*
+
+Phụ thuộc số lượng, kỹ thuật in và định lượng vải.
+
+### 3. Làm sao để hình in không bị bong tróc? 🧼
+
+**Trả lời bởi:** *Anh Quốc Hoàng.*
+
+Dùng mực cao cấp và lộn ngược túi khi giặt.
+
+---
+*Hy vọng hữu ích.*
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+        $stripped = $parser->removeFaqAndAppendShortcodeFromContent($markdown);
+
+        $this->assertCount(3, $faqs);
+        $this->assertSame('Túi canvas có độ bền như thế nào? 🌿', $faqs[0]['question']);
+        $this->assertStringContainsString('bền', $faqs[0]['answer']);
+        $this->assertStringContainsString('[omi_faq]', $stripped);
+        $this->assertStringContainsString('Chào bạn!', $stripped);
+        $this->assertStringNotContainsString('Túi canvas có độ bền', $stripped);
+        $this->assertStringNotContainsString('Hy vọng hữu ích', $stripped);
+    }
+
     public function test_remove_faq_and_append_shortcode(): void
     {
         $parser = $this->parser();

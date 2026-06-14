@@ -1,13 +1,22 @@
 @php
     /**
      * Tab Publish — bộ chọn danh mục kiểu WordPress.
-     * - Danh sách checkbox, hỗ trợ chọn nhiều, lưu mảng category_ids qua Livewire.
+     * - Danh sách checkbox, hỗ trợ chọn nhiều.
+     * - Fetch từ WordPress → localStorage (seo_wp_category_ids_{articleId}), không ghi DB tự động.
      * - post_type = post  → taxonomy `category`
      * - post_type = product → taxonomy `product_category` (product_cat)
      */
+    $resolvedPostType = \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType(
+        \App\Addons\SeoContentAi\Support\ArticlePostTypeResolver::resolve($this->record),
+    );
     $publishCategoriesInitial = [
+        'articleId' => (int) $this->record->getKey(),
         'selectedIds' => $this->articleCategoryIds,
-        'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType($articlePostType),
+        'postType' => $resolvedPostType,
+        'recordType' => (string) ($this->record->type ?? ''),
+        'currentTermWpId' => (int) ($this->record->wp_post_id ?? 0),
+        'isTaxonomy' => $this->isTaxonomyEntityForPublish(),
+        'categoryTaxonomy' => $this->resolvePublishCategoryTaxonomy($resolvedPostType),
         'options' => $this->getPublishCategoryOptions(),
     ];
 @endphp
@@ -16,35 +25,90 @@
     <script>
         window.seoPublishCategoriesData = function seoPublishCategoriesData(initial) {
             return {
+                articleId: Number(initial.articleId ?? 0),
                 selectedIds: Array.isArray(initial.selectedIds) ? initial.selectedIds.map(Number) : [],
                 postType: initial.postType ?? 'article',
+                recordType: initial.recordType ?? '',
+                currentTermWpId: Number(initial.currentTermWpId ?? 0),
+                isTaxonomy: initial.isTaxonomy === true,
+                categoryTaxonomy: initial.categoryTaxonomy ?? 'category',
                 optionsByTaxonomy: initial.options ?? { category: [], product_category: [] },
                 searchQuery: '',
-                // Bật viền đỏ cảnh báo khi user bấm Đồng bộ mà chưa chọn danh mục.
                 highlightError: false,
+                wpFetchedAt: '',
+                wpFetchedCount: 0,
                 _saveTimer: null,
 
                 init() {
-                    // Guard toàn cục cho nút Đồng bộ (publish-sidebar + phím tắt Ctrl+Shift+S).
-                    // Trả về true nếu hợp lệ (đã chọn danh mục hoặc post type không cần danh mục).
-                    window.__seoEnsureCategoriesBeforeSync = () => this.ensureBeforeSync();
+                    window.__seoPushPublishCategoriesToWire = () => this.pushCategoriesToWire();
+                    window.__seoEnsureBeforePublishAction = () => {
+                        void this.pushCategoriesToWire();
+
+                        return true;
+                    };
+                    window.__seoEnsureCategoriesBeforeSync = () => this.ensureCategoriesBeforeSync();
+                    window.__seoResetPublishTabPrimed = () => {};
+                    this.syncCategoryTaxonomyFromPostType();
+                    this.restoreWpCategoriesFromStorage();
+                    window.addEventListener('seo-wp-categories-fetched', (event) => this.onWpCategoriesFetched(event));
                 },
 
-                // Chỉ bắt buộc danh mục với bài viết / sản phẩm; taxonomy record thì bỏ qua.
+                syncCategoryTaxonomyFromPostType() {
+                    if (this.isTaxonomyEntity()) {
+                        this.categoryTaxonomy = this.postType === 'product_category'
+                            || this.recordType === 'product_category'
+                            ? 'product_category'
+                            : 'category';
+
+                        return;
+                    }
+
+                    this.categoryTaxonomy = this.postType === 'product' ? 'product_category' : 'category';
+                },
+
+                isTaxonomyEntity() {
+                    return this.isTaxonomy
+                        || this.postType === 'category'
+                        || this.postType === 'product_category'
+                        || this.recordType === 'category'
+                        || this.recordType === 'product_category';
+                },
+
+                requiresParentTerm() {
+                    return this.isTaxonomyEntity();
+                },
+
                 requiresCategories() {
+                    if (this.isTaxonomyEntity()) {
+                        return false;
+                    }
+
                     return this.postType === 'article' || this.postType === 'product';
                 },
 
                 taxonomy() {
-                    return this.postType === 'product' ? 'product_category' : 'category';
+                    return this.categoryTaxonomy;
                 },
 
                 taxonomyLabel() {
-                    return this.postType === 'product' ? 'Danh mục sản phẩm (product_cat)' : 'Chuyên mục (category)';
+                    if (this.isTaxonomyEntity()) {
+                        return this.categoryTaxonomy === 'product_category'
+                            ? 'Danh mục cha (product_cat)'
+                            : 'Danh mục cha (category)';
+                    }
+
+                    return this.taxonomy() === 'product_category'
+                        ? 'Danh mục sản phẩm (product_cat)'
+                        : 'Chuyên mục (category)';
                 },
 
                 allOptions() {
-                    return this.optionsByTaxonomy[this.taxonomy()] ?? [];
+                    const options = this.optionsByTaxonomy[this.taxonomy()] ?? [];
+                    if (! this.isTaxonomyEntity() || this.currentTermWpId <= 0) {
+                        return options;
+                    }
+
+                    return options.filter((opt) => Number(opt.id) !== Number(this.currentTermWpId));
                 },
 
                 filteredOptions() {
@@ -61,6 +125,12 @@
                 },
 
                 toggle(id) {
+                    if (this.isTaxonomyEntity()) {
+                        this.selectParentTerm(id);
+
+                        return;
+                    }
+
                     id = Number(id);
                     this.selectedIds = this.isChecked(id)
                         ? this.selectedIds.filter((v) => v !== id)
@@ -73,7 +143,17 @@
                     this.queueSave();
                 },
 
-                // Debounce lưu meta category_ids để không spam request khi tick nhiều ô liên tiếp.
+                selectParentTerm(id) {
+                    id = Number(id);
+                    this.selectedIds = this.selectedIds[0] === id ? [] : [id];
+                    this.highlightError = false;
+                    this.queueSave();
+                },
+
+                isParentSelected(id) {
+                    return this.selectedIds[0] === Number(id);
+                },
+
                 queueSave() {
                     clearTimeout(this._saveTimer);
                     this._saveTimer = setTimeout(() => {
@@ -83,18 +163,168 @@
 
                 onPostTypeChanged(event) {
                     const next = event.detail?.postType;
-                    if (typeof next === 'string' && next !== '') {
-                        this.postType = next;
+                    if (typeof next !== 'string' || next === '') {
+                        return;
+                    }
+
+                    this.postType = next;
+                    this.syncCategoryTaxonomyFromPostType();
+                    this.selectedIds = this.filterValidCategoryIds(this.selectedIds);
+                    this.queueSave();
+                },
+
+                readWireCategoryIds() {
+                    try {
+                        const raw = typeof this.$wire?.get === 'function'
+                            ? this.$wire.get('articleCategoryIds')
+                            : this.$wire?.articleCategoryIds;
+
+                        if (Array.isArray(raw)) {
+                            return raw.map(Number).filter((id) => id > 0);
+                        }
+                    } catch (error) {
+                        console.warn('Không đọc được articleCategoryIds từ Livewire', error);
+                    }
+
+                    return [];
+                },
+
+                normalizeRawCategoryIds(categoryIds) {
+                    return (Array.isArray(categoryIds) ? categoryIds : [])
+                        .map(Number)
+                        .filter((id) => id > 0);
+                },
+
+                syncPostTypeFromWire() {
+                    const wirePostType = String(this.$wire?.articlePostType ?? '').trim();
+                    if (wirePostType === '' || wirePostType === this.postType) {
+                        return;
+                    }
+
+                    this.postType = wirePostType;
+                    this.syncCategoryTaxonomyFromPostType();
+                },
+
+                filterValidCategoryIds(categoryIds) {
+                    const optionIds = new Set(this.allOptions().map((opt) => Number(opt.id)));
+
+                    return this.normalizeRawCategoryIds(categoryIds)
+                        .filter((id) => optionIds.has(id));
+                },
+
+                applyWpCategories(categoryIds, fetchedAt = '', persistSelection = true) {
+                    const raw = this.normalizeRawCategoryIds(categoryIds);
+                    if (raw.length === 0) {
+                        return;
+                    }
+
+                    const valid = this.filterValidCategoryIds(raw);
+                    const idsToUse = valid.length > 0 ? valid : raw;
+
+                    if (window.__seoWpCategoryStorage?.save) {
+                        window.__seoWpCategoryStorage.save(this.articleId, idsToUse, fetchedAt);
+                    }
+
+                    this.wpFetchedAt = fetchedAt || new Date().toISOString();
+                    this.wpFetchedCount = idsToUse.length;
+
+                    if (persistSelection) {
+                        this.selectedIds = idsToUse;
+                        this.highlightError = false;
                     }
                 },
 
-                /**
-                 * Validation trước khi Đồng bộ lên WordPress:
-                 * - Chưa chọn danh mục → mở Tab Publish, bật viền đỏ, toast cảnh báo, chặn sync.
-                 * - Đã chọn (hoặc không áp dụng) → cho phép sync tiếp tục.
-                 */
-                ensureBeforeSync() {
-                    if (!this.requiresCategories() || this.selectedIds.length > 0) {
+                restoreWpCategoriesFromStorage() {
+                    if (!window.__seoWpCategoryStorage?.load || this.articleId <= 0) {
+                        return;
+                    }
+
+                    const stored = window.__seoWpCategoryStorage.load(this.articleId);
+                    if (!stored?.categoryIds?.length) {
+                        return;
+                    }
+
+                    this.applyWpCategories(stored.categoryIds, stored.fetchedAt ?? '', this.selectedIds.length === 0);
+                },
+
+                onWpCategoriesFetched(event) {
+                    const detail = event?.detail ?? {};
+                    if (Number(detail.articleId) !== Number(this.articleId)) {
+                        return;
+                    }
+
+                    this.applyWpCategories(detail.categoryIds ?? [], detail.fetchedAt ?? '');
+                },
+
+                wpSyncHint() {
+                    if (this.wpFetchedCount < 1) {
+                        return '';
+                    }
+
+                    const when = this.wpFetchedAt ? new Date(this.wpFetchedAt).toLocaleString() : '';
+
+                    return when !== ''
+                        ? `Đã fetch ${this.wpFetchedCount} danh mục từ WordPress (localStorage, ${when}).`
+                        : `Đã fetch ${this.wpFetchedCount} danh mục từ WordPress (localStorage).`;
+                },
+
+                resolveRawCategoryIds() {
+                    const selected = this.normalizeRawCategoryIds(this.selectedIds);
+                    if (selected.length > 0) {
+                        return selected;
+                    }
+
+                    return this.readWireCategoryIds();
+                },
+
+                resolveEffectiveCategoryIds() {
+                    const raw = this.resolveRawCategoryIds();
+                    if (raw.length === 0) {
+                        return [];
+                    }
+
+                    const filtered = this.filterValidCategoryIds(raw);
+
+                    return filtered.length > 0 ? filtered : raw;
+                },
+
+                async pushCategoriesToWire() {
+                    clearTimeout(this._saveTimer);
+                    this.syncPostTypeFromWire();
+
+                    if (this.isTaxonomyEntity()) {
+                        const parentIds = this.selectedIds.length > 0 ? [Number(this.selectedIds[0])] : [];
+                        await this.$wire.applyArticleCategoriesFromClient(parentIds);
+
+                        return;
+                    }
+
+                    const categoryIds = this.resolveEffectiveCategoryIds();
+                    if (categoryIds.length > 0) {
+                        await this.$wire.applyArticleCategoriesFromClient(categoryIds);
+                    }
+                },
+
+                async ensureCategoriesBeforeSync() {
+                    this.syncPostTypeFromWire();
+                    await this.pushCategoriesToWire();
+
+                    if (this.isTaxonomyEntity()) {
+                        return true;
+                    }
+
+                    if (! this.requiresCategories()) {
+                        return true;
+                    }
+
+                    const categoryIds = this.resolveEffectiveCategoryIds();
+                    if (categoryIds.length > 0) {
+                        if (this.selectedIds.length === 0) {
+                            this.selectedIds = categoryIds;
+                        }
+
+                        this.highlightError = false;
+
                         return true;
                     }
 
@@ -103,12 +333,20 @@
                     window.dispatchEvent(new CustomEvent('seo-article-editor-notify', {
                         detail: {
                             title: 'Chưa chọn danh mục',
-                            body: 'Chọn ít nhất 1 danh mục trong tab Publish trước khi đăng bài lên WordPress.',
+                            body: this.taxonomy() === 'product_category'
+                                ? 'Chọn ít nhất 1 danh mục product_cat trước khi đăng lên WordPress.'
+                                : 'Chọn ít nhất 1 danh mục category trước khi đăng lên WordPress.',
                             status: 'warning',
                         },
                     }));
 
                     return false;
+                },
+
+                ensureBeforePublishAction() {
+                    void this.pushCategoriesToWire();
+
+                    return true;
                 },
             };
         };
@@ -124,7 +362,47 @@
         <h2 x-text="taxonomyLabel()"></h2>
     </div>
     <div class="wp-postbox-inside">
-        <template x-if="!requiresCategories()">
+        <template x-if="requiresParentTerm()">
+            <div class="space-y-2">
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    Chọn <strong>danh mục cha</strong> cùng taxonomy trên WordPress. Để trống = danh mục gốc (<code>parent_id = 0</code>).
+                </p>
+                <input
+                    type="search"
+                    x-model="searchQuery"
+                    placeholder="Tìm danh mục cha..."
+                    class="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+                />
+
+                <div class="max-h-52 space-y-0.5 overflow-y-auto rounded border border-gray-300 bg-white p-2 dark:border-gray-600 dark:bg-gray-900">
+                    <template x-if="allOptions().length === 0">
+                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                            Chưa có danh mục đồng bộ cho tên miền này. Đồng bộ nội dung domain trước.
+                        </p>
+                    </template>
+
+                    <template x-for="option in filteredOptions()" :key="'parent-' + option.id">
+                        <label class="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-gray-800 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-gray-800">
+                            <input
+                                type="radio"
+                                name="taxonomy_parent_term"
+                                class="h-3.5 w-3.5 border-gray-300 text-sky-600 focus:ring-sky-500 dark:border-gray-600 dark:bg-gray-900"
+                                x-bind:checked="isParentSelected(option.id)"
+                                x-on:change="selectParentTerm(option.id)"
+                            />
+                            <span x-text="option.label"></span>
+                        </label>
+                    </template>
+                </div>
+
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    <span x-show="selectedIds.length === 0" x-cloak>Danh mục gốc — không có parent.</span>
+                    <span x-show="selectedIds.length > 0" x-cloak x-text="`Parent term ID: ${selectedIds[0]}`"></span>
+                </p>
+            </div>
+        </template>
+
+        <template x-if="!requiresParentTerm() && !requiresCategories()">
             <p class="text-xs text-gray-500 dark:text-gray-400">
                 Loại bài hiện tại không cần chọn danh mục.
             </p>
@@ -139,7 +417,6 @@
                     class="w-full rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-800 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
                 />
 
-                {{-- Khung danh sách checkbox kiểu WordPress; viền đỏ khi thiếu danh mục lúc đồng bộ --}}
                 <div
                     class="max-h-52 space-y-0.5 overflow-y-auto rounded border bg-white p-2 transition-colors dark:bg-gray-900"
                     x-bind:class="highlightError
@@ -168,6 +445,8 @@
                         <p class="text-xs text-gray-500 dark:text-gray-400">Không có danh mục khớp từ khóa.</p>
                     </template>
                 </div>
+
+                <p class="text-xs text-sky-700 dark:text-sky-300" x-show="wpSyncHint() !== ''" x-text="wpSyncHint()" x-cloak></p>
 
                 <p class="text-xs" x-bind:class="highlightError ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'">
                     <span x-show="highlightError" x-cloak>Chọn ít nhất 1 danh mục trước khi đăng lên WordPress.</span>

@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\ArticleKeyword;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Models\SeoLink;
 use Illuminate\Support\Facades\DB;
 
 final class KeywordPhraseUpdateService
@@ -25,15 +25,12 @@ final class KeywordPhraseUpdateService
         }
 
         DB::connection('omi_seo_ai')->transaction(function () use ($keyword, $previousPhrase, $newPhrase): void {
-            if ($keyword->type === Keyword::TYPE_FOCUS) {
-                $this->updateMainKeywordMeta($keyword, $newPhrase);
-
+            if (! Keyword::isNormalType($keyword->type)) {
                 return;
             }
 
-            if ($keyword->type === Keyword::TYPE_INTERNAL) {
-                $this->replaceInternalLinkAnchors($keyword, $previousPhrase, $newPhrase);
-            }
+            $this->updateMainKeywordMeta($keyword, $newPhrase);
+            $this->replaceInternalLinkAnchors($keyword, $previousPhrase, $newPhrase);
         });
     }
 
@@ -58,12 +55,12 @@ final class KeywordPhraseUpdateService
         string $previousPhrase,
         string $newPhrase,
     ): void {
-        $links = SeoArticleLink::query()
-            ->where('keyword_id', $keyword->id)
-            ->where('type', 'internal')
+        $links = $keyword->links()
+            ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
+            ->whereNotNull('seo_links.source_article_id')
             ->get();
 
-        foreach ($links->groupBy('article_id') as $articleId => $articleLinks) {
+        foreach ($links->groupBy('source_article_id') as $articleId => $articleLinks) {
             $article = SeoArticle::query()->find((int) $articleId);
             if (! $article instanceof SeoArticle) {
                 continue;
@@ -93,11 +90,6 @@ final class KeywordPhraseUpdateService
                 $this->syncFlags->markLocalEditPending($article);
             }
         }
-
-        SeoArticleLink::query()
-            ->where('keyword_id', $keyword->id)
-            ->where('type', 'internal')
-            ->update(['anchor_text' => $newPhrase]);
     }
 
     /**

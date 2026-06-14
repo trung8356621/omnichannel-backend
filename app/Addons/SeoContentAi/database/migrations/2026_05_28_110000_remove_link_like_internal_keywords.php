@@ -3,9 +3,9 @@
 declare(strict_types=1);
 
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Models\SeoArticleLink;
-use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use Illuminate\Database\Migrations\Migration;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
@@ -29,7 +29,14 @@ return new class extends Migration
                     return;
                 }
 
-                SeoArticleLink::on($this->connection)
+                if (! Schema::connection($this->connection)->hasTable('seo_article_links')) {
+                    Keyword::on($this->connection)->whereIn('id', $ids)->delete();
+
+                    return;
+                }
+
+                DB::connection($this->connection)
+                    ->table('seo_article_links')
                     ->whereIn('keyword_id', $ids)
                     ->update(['keyword_id' => null]);
 

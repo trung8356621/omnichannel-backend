@@ -111,6 +111,53 @@ export function anchorHrefMatches(anchor, href) {
  * @param {string} text
  * @param {string} [href]
  */
+function unwrapAnchorElement(anchor) {
+    const parent = anchor.parentNode;
+    if (!parent) {
+        return;
+    }
+
+    while (anchor.firstChild) {
+        parent.insertBefore(anchor.firstChild, anchor);
+    }
+
+    parent.removeChild(anchor);
+}
+
+/**
+ * Gỡ thẻ &lt;a&gt; khớp anchor text/href khỏi HTML block.
+ *
+ * @param {string} html
+ * @param {string} text
+ * @param {string} [href]
+ * @param {{ removeAll?: boolean, matchIndex?: number }} [options]
+ */
+export function removeMatchingAnchorsFromHtml(html, text, href = '', options = {}) {
+    const targetText = normalizeLinkText(text);
+    const targetHref = normalizeHrefForCompare(href);
+    if (!html || (!targetText && !targetHref)) {
+        return html ?? '';
+    }
+
+    const removeAll = options.removeAll !== false;
+    const matchIndex = Math.max(0, Number(options.matchIndex) || 0);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const anchors = [...doc.querySelectorAll('a[href]')].filter(
+        (anchor) => anchorTextMatches(anchor, targetText) && anchorHrefMatches(anchor, href),
+    );
+
+    if (anchors.length === 0) {
+        return html;
+    }
+
+    const targets = removeAll ? anchors : [anchors[matchIndex]].filter(Boolean);
+    for (const anchor of targets) {
+        unwrapAnchorElement(anchor);
+    }
+
+    return doc.body.innerHTML;
+}
+
 export function countMatchingAnchorsInHtml(html, text, href = '') {
     const targetText = normalizeLinkText(text);
     if (!html) {

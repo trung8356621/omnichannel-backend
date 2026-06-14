@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Models\SeoLink;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Models\Site;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -160,7 +160,7 @@ final class DomainOverviewService
     {
         $query = http_build_query(['tableFilters' => $tableFilters]);
 
-        return $base . (str_contains($base, '?') ? '&' : '?') . $query;
+        return $base.(str_contains($base, '?') ? '&' : '?').$query;
     }
 
     /**
@@ -226,7 +226,7 @@ final class DomainOverviewService
     public function getTopKeywords(int $siteId, int $limit = 8): Collection
     {
         return Keyword::query()
-            ->where('keywords.site_id', $siteId)
+            ->whereHas('articles', static fn ($query) => $query->where('articles.site_id', $siteId))
             ->join('article_keyword', 'article_keyword.keyword_id', '=', 'keywords.id')
             ->join('articles', function ($join) use ($siteId): void {
                 $join->on('articles.id', '=', 'article_keyword.article_id')
@@ -261,14 +261,16 @@ final class DomainOverviewService
     public function paginateKeywords(int $siteId, int $perPage = 25): LengthAwarePaginator
     {
         $query = Keyword::query()
-            ->where('site_id', $siteId);
+            ->forSite($siteId);
 
         InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);
 
         return $query
             ->withCount([
                 'mainArticles as main_articles_count',
-                'articlesViaInternalLink as linked_articles_count',
+                'links as linked_articles_count' => static fn ($linkQuery) => $linkQuery
+                    ->where('seo_links.site_id', $siteId)
+                    ->whereNotNull('seo_links.source_article_id'),
             ])
             ->orderByDesc('linked_articles_count')
             ->orderByDesc('main_articles_count')
@@ -277,20 +279,21 @@ final class DomainOverviewService
     }
 
     /**
-     * @return \Illuminate\Database\Eloquent\Builder<SeoArticleLink>
+     * @return \Illuminate\Database\Eloquent\Builder<SeoLink>
      */
     private function linksGroupedQuery(int $siteId)
     {
-        return SeoArticleLink::query()
+        return SeoLink::query()
             ->join('articles', function ($join) use ($siteId): void {
-                $join->on('articles.id', '=', 'seo_article_links.article_id')
+                $join->on('articles.id', '=', 'seo_links.source_article_id')
                     ->where('articles.site_id', '=', $siteId)
                     ->whereNull('articles.deleted_at');
             })
-            ->selectRaw('MIN(seo_article_links.id) as id')
-            ->addSelect('seo_article_links.url', 'seo_article_links.type')
-            ->selectRaw('COUNT(DISTINCT seo_article_links.article_id) as articles_count')
-            ->groupBy('seo_article_links.url', 'seo_article_links.type')
+            ->where('seo_links.site_id', $siteId)
+            ->selectRaw('MIN(seo_links.id) as id')
+            ->addSelect('seo_links.url', 'seo_links.type')
+            ->selectRaw('COUNT(DISTINCT seo_links.source_article_id) as articles_count')
+            ->groupBy('seo_links.url', 'seo_links.type')
             ->orderByDesc('articles_count');
     }
 
@@ -306,7 +309,7 @@ final class DomainOverviewService
     {
         $ctx = app(SiteDomainPromptContextService::class)->getForSite($site);
         $desc = trim((string) ($ctx['short_description'] ?? ''));
-        $preview = $desc === '' ? '' : mb_substr($desc, 0, 160) . (mb_strlen($desc) > 160 ? '…' : '');
+        $preview = $desc === '' ? '' : mb_substr($desc, 0, 160).(mb_strlen($desc) > 160 ? '…' : '');
 
         return [
             'short_description_preview' => $preview,
@@ -325,10 +328,10 @@ final class DomainOverviewService
 
         $len = mb_strlen($token);
         if ($len <= 3) {
-            return str_repeat('•', max(0, $len - 3)) . $token;
+            return str_repeat('•', max(0, $len - 3)).$token;
         }
 
-        return str_repeat('•', min(24, $len - 3)) . mb_substr($token, -3);
+        return str_repeat('•', min(24, $len - 3)).mb_substr($token, -3);
     }
 
     public function isSiteSynced(int $siteId): bool

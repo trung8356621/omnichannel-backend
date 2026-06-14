@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi;
 
 use App\Addons\RegistersAddonDatabase;
 use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
+use App\Addons\SeoContentAi\Console\CleanCtaKeywordsCommand;
 use App\Addons\SeoContentAi\Console\ExtractOldArticleTocsCommand;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
@@ -49,6 +50,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
         if ($this->app->runningInConsole()) {
             $this->commands([
                 BackfillPromptResultLinksCommand::class,
+                CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
             ]);
         }

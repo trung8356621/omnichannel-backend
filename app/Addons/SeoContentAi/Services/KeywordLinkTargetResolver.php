@@ -6,7 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Models\SeoLink;
 use App\Models\Site;
 use Illuminate\Support\Collection;
 
@@ -17,8 +17,6 @@ final class KeywordLinkTargetResolver
     ) {}
 
     /**
-     * URL đích khi gợi ý chèn link — gộp mọi keyword cùng phrase (focus + internal).
-     *
      * @return array{href: string, keyword_id: int, keyword_type: string}|null
      */
     public function resolveForPhraseOnSite(int $siteId, string $phrase, SeoArticle $currentArticle): ?array
@@ -32,12 +30,13 @@ final class KeywordLinkTargetResolver
 
         /** @var Collection<int, Keyword> $keywords */
         $keywords = Keyword::query()
-            ->where('site_id', $siteId)
+            ->forSite($siteId)
             ->whereNotNull('phrase')
             ->where('phrase', '!=', '')
+            ->with(['links' => static fn ($query) => $query->where('seo_links.site_id', $siteId)])
             ->get()
             ->filter(fn (Keyword $keyword): bool => mb_strtolower(trim((string) $keyword->phrase)) === $normalized)
-            ->sortBy(fn (Keyword $keyword): int => $keyword->type === Keyword::TYPE_INTERNAL ? 0 : 1)
+            ->sortBy(fn (Keyword $keyword): int => Keyword::isNormalType($keyword->type) ? 0 : 1)
             ->values();
 
         foreach ($keywords as $keyword) {
@@ -54,9 +53,6 @@ final class KeywordLinkTargetResolver
         return null;
     }
 
-    /**
-     * @deprecated Dùng {@see resolveForPhraseOnSite()} khi phrase có thể trùng nhiều type.
-     */
     public function resolveForFocusKeyword(Keyword $keyword, SeoArticle $currentArticle): ?string
     {
         return $this->resolveForKeyword($keyword, $currentArticle);
@@ -64,12 +60,13 @@ final class KeywordLinkTargetResolver
 
     public function resolveForKeyword(Keyword $keyword, SeoArticle $currentArticle): ?string
     {
-        $explicit = trim((string) ($keyword->target_url ?? ''));
+        $siteId = (int) ($currentArticle->site_id ?? 0);
+        $explicit = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
         if ($explicit !== '') {
             return $explicit;
         }
 
-        if ($keyword->type === Keyword::TYPE_INTERNAL) {
+        if (Keyword::isNormalType($keyword->type)) {
             $fromLinks = $this->resolveFromInternalKeywordLinks($keyword, $currentArticle);
             if ($fromLinks !== null) {
                 return $fromLinks;
@@ -116,7 +113,7 @@ final class KeywordLinkTargetResolver
             return null;
         }
 
-        return rtrim($base, '/') . '/' . ltrim($slug, '/');
+        return rtrim($base, '/').'/'.ltrim($slug, '/');
     }
 
     private function resolveFromInternalKeywordLinks(Keyword $keyword, SeoArticle $currentArticle): ?string
@@ -125,13 +122,11 @@ final class KeywordLinkTargetResolver
             $this->resolveArticlePublicUrl($currentArticle) ?? '',
         );
 
-        $urls = SeoArticleLink::query()
-            ->where('keyword_id', $keyword->id)
-            ->where('type', 'internal')
-            ->whereNotNull('url')
-            ->where('url', '!=', '')
-            ->orderBy('id')
-            ->pluck('url');
+        $urls = $keyword->links()
+            ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
+            ->where('seo_links.site_id', (int) ($currentArticle->site_id ?? 0))
+            ->orderBy('seo_links.id')
+            ->pluck('seo_links.url');
 
         foreach ($urls as $url) {
             $trimmed = trim((string) $url);
@@ -146,9 +141,18 @@ final class KeywordLinkTargetResolver
             return $trimmed;
         }
 
-        $linkedArticle = $keyword->articlesViaInternalLink()
-            ->where('articles.id', '!=', (int) $currentArticle->id)
-            ->orderBy('articles.id')
+        $linkedArticle = SeoArticle::query()
+            ->where('site_id', (int) ($currentArticle->site_id ?? 0))
+            ->where('id', '!=', (int) $currentArticle->id)
+            ->whereIn('id', function ($query) use ($keyword): void {
+                $query->select('source_article_id')
+                    ->from('seo_links')
+                    ->join('keyword_link', 'keyword_link.link_id', '=', 'seo_links.id')
+                    ->where('keyword_link.keyword_id', $keyword->id)
+                    ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
+                    ->whereNotNull('seo_links.source_article_id');
+            })
+            ->orderBy('id')
             ->first();
 
         if ($linkedArticle instanceof SeoArticle) {

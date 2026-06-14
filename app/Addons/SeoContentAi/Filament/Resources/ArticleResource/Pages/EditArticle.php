@@ -26,6 +26,7 @@ use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
 use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
+use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
@@ -34,6 +35,7 @@ use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
@@ -45,13 +47,13 @@ use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
+use App\Addons\SeoContentAi\Services\WorkflowParserService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use Filament\Actions;
-use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\EditRecord;
 use Filament\Support\Enums\MaxWidth;
@@ -140,6 +142,9 @@ class EditArticle extends EditRecord
     /** @var list<int> Danh mục WordPress đã chọn (term/article id) cho tab Publish. */
     public array $articleCategoryIds = [];
 
+    /** @var array<string, mixed>|null Cache post WP fetch trong một request mount. */
+    private ?array $cachedWordPressPostPayload = null;
+
     public string $editorHtml = '';
 
     public ?int $reviewsCountForEditor = null;
@@ -173,8 +178,18 @@ class EditArticle extends EditRecord
         ArticleResource::syncGlobalSiteForArticle($this->record);
         $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
+        $this->syncWordPressCategoriesOnLoad();
         $this->importFaqsFromWordPressOnLoad();
         $this->syncReviewedStatusFromExistingReviews();
+
+        $restoredMessage = session()->pull('seo_revision_restored');
+        if (is_string($restoredMessage) && $restoredMessage !== '') {
+            Notification::make()
+                ->title('Khôi phục phiên bản thành công')
+                ->body($restoredMessage)
+                ->success()
+                ->send();
+        }
     }
 
     public function updatedArticleSlug($value): void
@@ -266,12 +281,142 @@ class EditArticle extends EditRecord
             return;
         }
 
-        $post = app(WordPressArticleContentService::class)->fetchFromWordPress($this->record, importFaqs: false);
+        $post = $this->fetchWordPressPostPayload(importFaqs: false);
         if ($post === []) {
             return;
         }
 
         $this->record->refresh();
+    }
+
+    /**
+     * Luôn fetch danh mục từ WP khi mở trang (kể cả bài đang chặn import nội dung).
+     */
+    private function syncWordPressCategoriesOnLoad(): void
+    {
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            return;
+        }
+
+        $post = $this->fetchWordPressPostPayload(importFaqs: false);
+        if ($post === []) {
+            return;
+        }
+
+        $categoryIds = app(WordPressArticleContentService::class)->extractCategoryIdsFromPost($post);
+        if ($categoryIds === []) {
+            return;
+        }
+
+        $validIds = $this->filterPublishCategoryIds($categoryIds);
+        if ($validIds === []) {
+            return;
+        }
+
+        $this->applyArticleCategorySelection($validIds);
+        $this->dispatchWordPressCategoriesToClient($validIds);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchWordPressPostPayload(bool $importFaqs = false): array
+    {
+        if (is_array($this->cachedWordPressPostPayload)) {
+            return $this->cachedWordPressPostPayload;
+        }
+
+        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
+            return [];
+        }
+
+        $post = app(WordPressArticleContentService::class)->fetchFromWordPress($this->record, importFaqs: $importFaqs);
+        if ($post === []) {
+            return [];
+        }
+
+        $this->cachedWordPressPostPayload = $post;
+
+        return $post;
+    }
+
+    /**
+     * @param  list<int>  $categoryIds
+     * @return list<int>
+     */
+    private function filterPublishCategoryIds(array $categoryIds): array
+    {
+        if ($this->isTaxonomyArticle()) {
+            return [];
+        }
+
+        $postType = SeoProjectTask::normalizePostType(
+            trim($this->articlePostType) !== ''
+                ? $this->articlePostType
+                : ArticlePostTypeResolver::resolve($this->record),
+        );
+        $taxonomy = $this->resolvePublishCategoryTaxonomy($postType);
+        $siteId = (int) ($this->record->site_id ?? 0);
+
+        $options = $this->getPublishCategoryOptions()[$taxonomy] ?? [];
+        $optionIds = collect($options)
+            ->map(static fn (array $option): int => (int) ($option['id'] ?? 0))
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->all();
+
+        $normalized = collect($categoryIds)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+
+        $direct = $normalized
+            ->filter(static fn (int $id): bool => in_array($id, $optionIds, true))
+            ->values()
+            ->all();
+
+        if ($direct !== []) {
+            return $direct;
+        }
+
+        if ($siteId > 0) {
+            $mapped = SeoArticle::query()
+                ->where('site_id', $siteId)
+                ->where('type', $taxonomy)
+                ->whereIn('wp_post_id', $normalized->all())
+                ->get(['id', 'wp_post_id'])
+                ->map(static function (SeoArticle $term) use ($optionIds): ?int {
+                    $resolvedId = (int) ($term->wp_post_id ?? 0) > 0
+                        ? (int) $term->wp_post_id
+                        : (int) $term->id;
+
+                    return in_array($resolvedId, $optionIds, true) ? $resolvedId : null;
+                })
+                ->filter(static fn (?int $id): bool => $id !== null && $id > 0)
+                ->unique()
+                ->values()
+                ->all();
+
+            if ($mapped !== []) {
+                return $mapped;
+            }
+        }
+
+        return $normalized->isNotEmpty() ? $normalized->values()->all() : [];
+    }
+
+    /**
+     * @param  list<int>  $categoryIds
+     */
+    private function applyArticleCategorySelection(array $categoryIds): void
+    {
+        $validIds = $this->filterPublishCategoryIds($categoryIds);
+        $this->articleCategoryIds = $validIds;
+
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'category_ids'],
+            ['meta_value' => json_encode($validIds, JSON_THROW_ON_ERROR)],
+        );
     }
 
     private function importFaqsFromWordPressOnLoad(): void
@@ -281,7 +426,7 @@ class EditArticle extends EditRecord
 
         if ((int) ($this->record->wp_post_id ?? 0) > 0 && ! $hasLocalFaqs) {
             if (! $this->articleHasStoredWordPressFaqs($this->record)) {
-                app(WordPressArticleContentService::class)->fetchFromWordPress($this->record, importFaqs: false);
+                $post = $this->fetchWordPressPostPayload(importFaqs: false);
                 $this->record->refresh();
                 $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
             }
@@ -334,11 +479,6 @@ class EditArticle extends EditRecord
     protected function getHeaderActions(): array
     {
         return [
-            Actions\Action::make('back_to_articles')
-                ->label(__('seo-content-ai::filament.article_list.back_to_articles'))
-                ->icon('heroicon-o-arrow-left')
-                ->color('gray')
-                ->url(ArticleResource::getUrl('index')),
             Actions\Action::make('view_content_project_runs')
                 ->label('Prompts')
                 ->icon('heroicon-o-queue-list')
@@ -402,8 +542,15 @@ class EditArticle extends EditRecord
             return;
         }
 
+        $categoryIds = is_array($restore['category_ids'] ?? null) ? $restore['category_ids'] : [];
+        $filteredCategoryIds = $this->filterPublishCategoryIds($categoryIds);
+        if ($filteredCategoryIds !== []) {
+            $this->applyArticleCategorySelection($filteredCategoryIds);
+            $this->persistWordPressCategoriesToLocalStorage($filteredCategoryIds);
+        }
+
         $this->record->refresh();
-        app(SeoAnalyzerService::class)->analyze($this->record->fresh());
+        app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh());
 
         Notification::make()
             ->title(__('seo-content-ai::filament.article_list.fetch_from_wordpress_success'))
@@ -422,6 +569,10 @@ class EditArticle extends EditRecord
     protected function hydrateArticleState(): void
     {
         $service = app(WordPressArticleContentService::class);
+        $service->healTaxonomyMetaFromWordPress($this->record);
+        $this->record->refresh();
+        $this->restoreArticleBodyFromWordPressCacheIfMissing();
+
         $flags = app(ArticleWordPressSyncFlagService::class);
 
         $this->articleTitle = $flags->decodeWordPressText((string) ($this->record->title ?? ''));
@@ -446,22 +597,98 @@ class EditArticle extends EditRecord
         $this->syncProductGalleryToEditor();
     }
 
+    private function restoreArticleBodyFromWordPressCacheIfMissing(): void
+    {
+        if (trim((string) ($this->record->body ?? '')) !== '') {
+            return;
+        }
+
+        $cached = trim((string) ($this->record->articleMetas()
+            ->where('meta_key', 'wp_post_content')
+            ->value('meta_value') ?? ''));
+
+        if ($cached === '') {
+            return;
+        }
+
+        $this->record->update(['body' => $cached]);
+        $this->record->refresh();
+    }
+
+    private function articleHadSubstantialContent(): bool
+    {
+        if (trim((string) ($this->record->body ?? '')) !== '') {
+            return true;
+        }
+
+        $cached = trim((string) ($this->record->articleMetas()
+            ->where('meta_key', 'wp_post_content')
+            ->value('meta_value') ?? ''));
+
+        if (strlen($cached) >= 200) {
+            return true;
+        }
+
+        return $this->record->headings()->exists();
+    }
+
+    private function guardArticleBodyBeforeSave(string $html): string
+    {
+        $html = trim($html);
+        if (strlen($html) >= 200) {
+            return $html;
+        }
+
+        $existingBody = trim((string) ($this->record->body ?? ''));
+        if (strlen($existingBody) >= 200) {
+            return $existingBody;
+        }
+
+        $wpCached = trim((string) ($this->record->articleMetas()
+            ->where('meta_key', 'wp_post_content')
+            ->value('meta_value') ?? ''));
+
+        if (strlen($wpCached) >= 200) {
+            return $wpCached;
+        }
+
+        return $html;
+    }
+
     /** Không đặt tên hydrate{Property} — Livewire sẽ coi là lifecycle hook và gọi từ ngoài. */
     private function loadArticleCategoryIdsFromMeta(): void
     {
+        if ($this->isTaxonomyEntityForPublish()) {
+            $parentId = max(0, (int) ($this->record->articleMetas()
+                ->where('meta_key', 'wp_parent_id')
+                ->value('meta_value') ?? 0));
+            $parentId = $this->filterPublishParentId($parentId);
+            $this->articleCategoryIds = $parentId > 0 ? [$parentId] : [];
+
+            return;
+        }
+
         $raw = (string) ($this->record->articleMetas()
             ->where('meta_key', 'category_ids')
             ->value('meta_value') ?? '');
 
+        if ($raw === '') {
+            $raw = (string) ($this->record->articleMetas()
+                ->where('meta_key', 'wp_category_ids')
+                ->value('meta_value') ?? '');
+        }
+
         $decoded = json_decode($raw, true);
 
         $this->articleCategoryIds = is_array($decoded)
-            ? collect($decoded)
-                ->map(static fn (mixed $id): int => (int) $id)
-                ->filter(static fn (int $id): bool => $id > 0)
-                ->unique()
-                ->values()
-                ->all()
+            ? $this->filterPublishCategoryIds(
+                collect($decoded)
+                    ->map(static fn (mixed $id): int => (int) $id)
+                    ->filter(static fn (int $id): bool => $id > 0)
+                    ->unique()
+                    ->values()
+                    ->all(),
+            )
             : [];
     }
 
@@ -480,24 +707,125 @@ class EditArticle extends EditRecord
             return $options;
         }
 
-        SeoArticle::query()
+        $terms = SeoArticle::query()
             ->where('site_id', $siteId)
             ->whereIn('type', ['category', 'product_category'])
-            ->orderBy('title')
-            ->get(['id', 'title', 'type', 'wp_post_id'])
-            ->each(static function (SeoArticle $term) use (&$options): void {
-                $type = (string) $term->type;
-                $title = trim((string) ($term->title ?? ''));
-                $wpId = (int) ($term->wp_post_id ?? 0);
+            ->with(['articleMetas' => static function ($query): void {
+                $query->where('meta_key', 'wp_parent_id');
+            }])
+            ->get(['id', 'title', 'type', 'wp_post_id']);
 
-                $options[$type][] = [
-                    // Ưu tiên WP term ID để dùng được khi đẩy categories sang WordPress.
-                    'id' => $wpId > 0 ? $wpId : (int) $term->id,
-                    'label' => $title !== '' ? $title : 'Danh mục #'.$term->id,
-                ];
-            });
+        foreach (['category', 'product_category'] as $taxonomyType) {
+            $options[$taxonomyType] = $this->buildHierarchicalPublishCategoryOptions(
+                $terms->where('type', $taxonomyType)->values(),
+            );
+        }
 
         return $options;
+    }
+
+    /**
+     * @param  \Illuminate\Support\Collection<int, SeoArticle>  $terms
+     * @return list<array{id: int, label: string}>
+     */
+    private function buildHierarchicalPublishCategoryOptions(\Illuminate\Support\Collection $terms): array
+    {
+        /** @var array<int, array{id: int, label: string, parent_id: int}> $nodes */
+        $nodes = [];
+
+        foreach ($terms as $term) {
+            $wpId = (int) ($term->wp_post_id ?? 0);
+            if ($wpId <= 0) {
+                continue;
+            }
+
+            $title = trim((string) ($term->title ?? ''));
+            $parentRaw = $term->articleMetas->firstWhere('meta_key', 'wp_parent_id')?->meta_value;
+            $nodes[$wpId] = [
+                'id' => $wpId,
+                'label' => $title !== '' ? $title : 'Danh mục #'.$term->id,
+                'parent_id' => max(0, (int) $parentRaw),
+            ];
+        }
+
+        if ($nodes === []) {
+            return [];
+        }
+
+        /** @var array<int, list<int>> $byParent */
+        $byParent = [];
+        foreach ($nodes as $wpId => $node) {
+            $byParent[$node['parent_id']][] = $wpId;
+        }
+
+        foreach ($byParent as &$siblings) {
+            usort(
+                $siblings,
+                static fn (int $leftId, int $rightId): int => strcasecmp(
+                    $nodes[$leftId]['label'],
+                    $nodes[$rightId]['label'],
+                ),
+            );
+        }
+        unset($siblings);
+
+        $result = [];
+        $visited = [];
+
+        $walk = function (int $parentId, int $depth) use (&$walk, &$result, &$visited, $byParent, $nodes): void {
+            foreach ($byParent[$parentId] ?? [] as $wpId) {
+                if (isset($visited[$wpId])) {
+                    continue;
+                }
+
+                $visited[$wpId] = true;
+                $node = $nodes[$wpId];
+                $prefix = $depth > 0 ? str_repeat('— ', $depth) : '';
+                $result[] = [
+                    'id' => $node['id'],
+                    'label' => $prefix.$node['label'],
+                ];
+                $walk($wpId, $depth + 1);
+            }
+        };
+
+        $walk(0, 0);
+
+        foreach (array_keys($nodes) as $wpId) {
+            if (isset($visited[$wpId])) {
+                continue;
+            }
+
+            $node = $nodes[$wpId];
+            $result[] = [
+                'id' => $node['id'],
+                'label' => $node['label'],
+            ];
+        }
+
+        return $result;
+    }
+
+    public function resolvePublishCategoryTaxonomy(?string $postType = null): string
+    {
+        $this->record->loadMissing('articleMetas');
+
+        if ($this->isTaxonomyEntityForPublish()) {
+            return $this->resolveTaxonomyParentOptionKey();
+        }
+
+        $wpPostType = strtolower(trim((string) (
+            $this->record->articleMetas->firstWhere('meta_key', 'wp_post_type')?->meta_value ?? ''
+        )));
+        if ($wpPostType === 'product') {
+            return 'product_category';
+        }
+
+        $normalized = SeoProjectTask::normalizePostType(
+            $postType ?? ArticlePostTypeResolver::resolve($this->record),
+        );
+
+        return $normalized === SeoProjectTask::POST_TYPE_PRODUCT ? 'product_category' : 'category';
     }
 
     /**
@@ -507,19 +835,114 @@ class EditArticle extends EditRecord
      */
     public function applyArticleCategoriesFromClient(array $categoryIds): void
     {
-        $this->articleCategoryIds = collect($categoryIds)
+        if ($this->isTaxonomyEntityForPublish()) {
+            $parentId = collect($categoryIds)
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->first();
+
+            $parentId = $this->filterPublishParentId($parentId ?? 0);
+            $this->persistTaxonomyParentId($parentId);
+            $this->articleCategoryIds = $parentId > 0 ? [$parentId] : [];
+            $this->skipRender();
+
+            return;
+        }
+
+        $this->applyArticleCategorySelection(
+            collect($categoryIds)
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->filter(static fn (int $id): bool => $id > 0)
+                ->unique()
+                ->values()
+                ->all(),
+        );
+
+        $this->skipRender();
+    }
+
+    private function persistTaxonomyParentId(int $parentId): void
+    {
+        if ($parentId <= 0) {
+            $this->record->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+
+            return;
+        }
+
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_parent_id'],
+            ['meta_value' => (string) $parentId],
+        );
+    }
+
+    private function resolveTaxonomyParentOptionKey(): string
+    {
+        $type = SeoProjectTask::normalizePostType(ArticlePostTypeResolver::resolve($this->record));
+
+        return $type === SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY ? 'product_category' : 'category';
+    }
+
+    private function filterPublishParentId(int $parentId): int
+    {
+        if ($parentId <= 0) {
+            return 0;
+        }
+
+        $selfWpId = (int) ($this->record->wp_post_id ?? 0);
+        if ($selfWpId > 0 && $parentId === $selfWpId) {
+            return 0;
+        }
+
+        $options = $this->getPublishCategoryOptions()[$this->resolveTaxonomyParentOptionKey()] ?? [];
+        $optionIds = collect($options)
+            ->map(static fn (array $option): int => (int) ($option['id'] ?? 0))
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->all();
+
+        return in_array($parentId, $optionIds, true) ? $parentId : 0;
+    }
+
+    /**
+     * @param  list<int>  $categoryIds
+     */
+    private function dispatchWordPressCategoriesToClient(array $categoryIds): void
+    {
+        $categoryIds = $this->filterPublishCategoryIds($categoryIds);
+        if ($categoryIds === []) {
+            return;
+        }
+
+        $this->persistWordPressCategoriesToLocalStorage($categoryIds);
+    }
+
+    /**
+     * @param  list<int|string>  $categoryIds
+     */
+    private function persistWordPressCategoriesToLocalStorage(array $categoryIds): void
+    {
+        $categoryIds = collect($categoryIds)
             ->map(static fn (mixed $id): int => (int) $id)
             ->filter(static fn (int $id): bool => $id > 0)
             ->unique()
             ->values()
             ->all();
 
-        $this->record->articleMetas()->updateOrCreate(
-            ['meta_key' => 'category_ids'],
-            ['meta_value' => json_encode($this->articleCategoryIds)],
-        );
+        if ($categoryIds === []) {
+            return;
+        }
 
-        $this->skipRender();
+        $articleId = (int) $this->record->getKey();
+        $payload = json_encode([
+            'articleId' => $articleId,
+            'categoryIds' => $categoryIds,
+            'fetchedAt' => now()->toIso8601String(),
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
+
+        $this->js(sprintf(
+            'window.__seoWpCategoryStorage?.applyFetched?.(%s); window.dispatchEvent(new CustomEvent("seo-wp-categories-fetched", { detail: %s }));',
+            $payload,
+            $payload,
+        ));
     }
 
     public function isProduct(): bool
@@ -532,6 +955,17 @@ class EditArticle extends EditRecord
     public function isTaxonomyArticle(): bool
     {
         return app(WordPressArticleContentService::class)->isTaxonomyRecord($this->record);
+    }
+
+    private function isTaxonomyEntityForPublish(): bool
+    {
+        if ($this->isTaxonomyArticle()) {
+            return true;
+        }
+
+        $type = SeoProjectTask::normalizePostType(ArticlePostTypeResolver::resolve($this->record));
+
+        return in_array($type, [SeoProjectTask::POST_TYPE_CATEGORY, SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY], true);
     }
 
     public function supportsProductGallery(): bool
@@ -1985,6 +2419,18 @@ class EditArticle extends EditRecord
     {
         try {
             $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+            $html = $this->guardArticleBodyBeforeSave($html);
+
+            if (strlen(trim($html)) < 50 && $this->articleHadSubstantialContent()) {
+                Notification::make()
+                    ->title('Không lưu được nội dung')
+                    ->body('Editor trả về nội dung rỗng. Hãy thử lại hoặc dùng Lấy từ WordPress / Restore trước khi lưu.')
+                    ->warning()
+                    ->send();
+                $this->cancelHeavyArticleAction();
+
+                return;
+            }
 
             $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
             $html = $faqSync['body_html'];
@@ -2021,6 +2467,8 @@ class EditArticle extends EditRecord
             $this->record->refresh();
             app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
 
+            $this->captureArticleRevisionAfterSave($html);
+
             $seoResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
                 $this->record->fresh(),
                 $html,
@@ -2044,7 +2492,7 @@ class EditArticle extends EditRecord
                 ->send();
 
             if ($this->articleHeavyActionBusy) {
-                $this->finishHeavyArticleActionWithReload(clearLocalState: true);
+                $this->finishHeavyArticleActionWithReload(clearLocalState: false);
             }
         } catch (\Throwable $exception) {
             $this->cancelHeavyArticleAction();
@@ -2143,6 +2591,7 @@ class EditArticle extends EditRecord
     private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): string
     {
         $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+        $html = $this->guardArticleBodyBeforeSave($html);
 
         $faqSync = app(ArticleFaqBodySyncService::class)->extractFromBodyWhenMissing($this->record, $html);
         $html = $faqSync['body_html'];
@@ -2176,6 +2625,8 @@ class EditArticle extends EditRecord
         $this->record->refresh();
 
         app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($this->record);
+
+        $this->captureArticleRevisionAfterSave($html);
 
         if ($syncVirtualCommentsToWordPress) {
             $this->syncVirtualCommentsToWordPressIfLinked();
@@ -2318,6 +2769,80 @@ class EditArticle extends EditRecord
         $this->importMarkdownDebug($markdown);
     }
 
+    public function importMarkdownFaqDebug(string $markdown): void
+    {
+        abort_unless(SeoAccessControl::canAccessManagerFeatures(), 403);
+
+        $markdown = trim($markdown);
+        if ($markdown === '') {
+            Notification::make()
+                ->title('Markdown trống')
+                ->body('Dán markdown FAQ (AI output) để thử bóc tách vào panel FAQ.')
+                ->warning()
+                ->send();
+            $this->dispatch('article-faq-markdown-import-finished', success: false);
+
+            return;
+        }
+
+        $import = app(ArticleContentFaqService::class)->convertMarkdownImport($markdown);
+        $faqs = $import['faqs'];
+
+        if ($faqs === []) {
+            $parser = app(WorkflowParserService::class);
+            $standalone = $parser->shouldParseMarkdownAsStandaloneFaqSection($markdown);
+            $directCount = count($parser->parseFaqsFromContent($markdown));
+            $treatAllCount = count($parser->parseFaqsFromContent($markdown, true));
+
+            Notification::make()
+                ->title('Không tách được FAQ từ markdown')
+                ->body(sprintf(
+                    'standalone=%s, parse=%d, parse_all=%d. Kiểm tra định dạng (## FAQ hoặc ### 1. Câu hỏi? …).',
+                    $standalone ? 'yes' : 'no',
+                    $directCount,
+                    $treatAllCount,
+                ))
+                ->warning()
+                ->send();
+            $this->dispatch('article-faq-markdown-import-finished', success: false);
+
+            return;
+        }
+
+        $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
+        app(ArticleFaqExtractDebugService::class)->clear($this->record);
+
+        $baseHtml = trim($this->editorHtml);
+        if ($baseHtml === '') {
+            $baseHtml = trim((string) ($this->record->body ?? ''));
+        }
+
+        $newHtml = app(ArticleContentFaqService::class)->injectFaqPlaceholderInEditorHtml($baseHtml);
+        if ($newHtml !== '') {
+            $this->editorHtml = $newHtml;
+            $this->persistArticleLocalSilent($newHtml);
+        }
+
+        $this->record->refresh();
+
+        $this->dispatch(
+            'article-faqs-extracted',
+            faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
+            editorHtml: $newHtml,
+        );
+
+        Notification::make()
+            ->title('Đã import FAQ từ markdown (debug)')
+            ->body(sprintf(
+                'Tách được %d FAQ vào panel. Nội dung editor giữ nguyên, chỉ chèn/cập nhật khối [omi_faq].',
+                $faqCount,
+            ))
+            ->success()
+            ->send();
+
+        $this->dispatch('article-faq-markdown-import-finished', success: true);
+    }
+
     /**
      * @param  array<string, mixed>|null  $debug
      */
@@ -2340,13 +2865,36 @@ class EditArticle extends EditRecord
 
     public function analyzeSeoDraft(string $html): void
     {
+        $this->dispatchSeoAnalyzePreview($html);
+    }
+
+    public function updatedSeoTitle(): void
+    {
+        $this->dispatchSeoAnalyzePreview();
+    }
+
+    public function updatedSeoMetaDescription(): void
+    {
+        $this->dispatchSeoAnalyzePreview();
+    }
+
+    private function dispatchSeoAnalyzePreview(?string $html = null): void
+    {
+        $html = trim((string) ($html ?? $this->editorHtml));
+        if ($html === '') {
+            $html = trim((string) ($this->record->body ?? ''));
+        }
+
         $slug = Str::slug($this->articleSlug);
+        $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
+        $seoMetaDescription = trim($this->seoMetaDescription);
 
         $result = app(SeoAnalyzerService::class)->analyzePreview(
             $this->record,
             $html,
-            trim($this->articleTitle),
+            $seoTitle !== '' ? $seoTitle : null,
             $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+            $seoMetaDescription !== '' ? $seoMetaDescription : null,
         );
 
         $this->dispatch('seo-analyze-result', result: $result);
@@ -3343,6 +3891,56 @@ class EditArticle extends EditRecord
         $this->focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '';
     }
 
+    /**
+     * Khôi phục tiêu đề / SEO meta từ revision vào Livewire (chưa ghi DB / WP).
+     *
+     * @param  array<string, mixed>  $seoMeta
+     */
+    public function applyRevisionPreviewToEditor(string $title, array $seoMeta = []): void
+    {
+        $this->articleTitle = trim($title);
+
+        $seoTitle = trim((string) ($seoMeta['seo_title'] ?? ''));
+        $this->seoTitle = $seoTitle;
+
+        $this->seoMetaDescription = trim((string) ($seoMeta['meta_description'] ?? ''));
+        $this->focusKeyword = trim((string) ($seoMeta['focus_keyword'] ?? ''));
+
+        $slug = trim((string) ($seoMeta['slug'] ?? ''));
+        if ($slug !== '') {
+            $this->articleSlug = $slug;
+        }
+    }
+
+    private function captureArticleRevisionAfterSave(string $html): void
+    {
+        app(SeoArticleRevisionService::class)->captureAfterSave(
+            $this->record->fresh(),
+            trim($this->articleTitle),
+            $html,
+            $this->buildRevisionSeoMetaSnapshot(),
+            auth()->id() !== null ? (int) auth()->id() : null,
+        );
+
+        $this->dispatch('article-revisions-changed');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildRevisionSeoMetaSnapshot(): array
+    {
+        $article = $this->record->fresh();
+
+        return [
+            'seo_title' => trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            'meta_description' => trim($this->seoMetaDescription),
+            'focus_keyword' => trim($this->focusKeyword),
+            'seo_score' => $article?->seo_score !== null ? (float) $article->seo_score : null,
+            'slug' => trim($this->articleSlug),
+        ];
+    }
+
     private function persistSeoMetaFields(): void
     {
         $this->record->loadMissing('articleMetas');
@@ -3414,10 +4012,38 @@ class EditArticle extends EditRecord
 
     private function persistArticlePostTypeMeta(string $postType): void
     {
+        $normalized = SeoProjectTask::normalizePostType($postType);
+
+        $wpSlug = match ($normalized) {
+            SeoProjectTask::POST_TYPE_PRODUCT => 'product',
+            SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'product_cat',
+            SeoProjectTask::POST_TYPE_CATEGORY => 'category',
+            default => 'post',
+        };
+
         $this->record->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_type'],
-            ['meta_value' => $postType],
+            ['meta_value' => $wpSlug],
         );
+
+        if (in_array($wpSlug, ['product_cat', 'category'], true)) {
+            $this->record->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_entity'],
+                ['meta_value' => 'term'],
+            );
+            $this->record->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_taxonomy'],
+                ['meta_value' => $wpSlug],
+            );
+
+            return;
+        }
+
+        $this->record->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_entity'],
+            ['meta_value' => 'post'],
+        );
+        $this->record->articleMetas()->where('meta_key', 'wp_taxonomy')->delete();
     }
 
     protected function mutateFormDataBeforeSave(array $data): array

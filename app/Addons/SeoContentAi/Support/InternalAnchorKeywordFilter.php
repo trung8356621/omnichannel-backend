@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Models\Keyword;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
@@ -13,7 +14,7 @@ final class InternalAnchorKeywordFilter
 {
     public static function isUsableAnchorPhrase(string $phrase, ?string $href = null): bool
     {
-        $phrase = trim(strip_tags($phrase));
+        $phrase = Keyword::decodePhrase($phrase);
         if ($phrase === '') {
             return false;
         }
@@ -60,7 +61,7 @@ final class InternalAnchorKeywordFilter
             return true;
         }
 
-        $candidate = str_starts_with(strtolower($text), 'http') ? $text : 'https://' . $text;
+        $candidate = str_starts_with(strtolower($text), 'http') ? $text : 'https://'.$text;
         if (filter_var($candidate, FILTER_VALIDATE_URL) !== false) {
             $path = (string) parse_url($candidate, PHP_URL_PATH);
             $host = (string) parse_url($candidate, PHP_URL_HOST);

@@ -1,0 +1,234 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services;
+
+use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
+use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
+use Illuminate\Support\Facades\DB;
+
+final class KeywordDomainResyncService
+{
+    public function __construct(
+        private readonly SeoAnalyzerService $analyzer,
+        private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
+        private readonly KeywordPersistenceService $keywordPersistence,
+    ) {}
+
+    /**
+     * @return array{deleted:int, kept:int, cta_deleted:int, articles:int, rescanned:int, skipped_articles:int}
+     */
+    public function resetAndResync(int $siteId): array
+    {
+        if ($siteId <= 0) {
+            return [
+                'deleted' => 0,
+                'kept' => 0,
+                'cta_deleted' => 0,
+                'articles' => 0,
+                'rescanned' => 0,
+                'skipped_articles' => 0,
+            ];
+        }
+
+        $ctaDeleteStats = $this->deleteCtaBlacklistedKeywordsForSite($siteId);
+        $deleteStats = $this->deleteLinkedKeywordsForSite($siteId);
+        $resyncStats = $this->resyncKeywordsFromArticles($siteId);
+
+        return array_merge($deleteStats, $ctaDeleteStats, $resyncStats);
+    }
+
+    /**
+     * @return array{cta_deleted:int}
+     */
+    public function deleteCtaBlacklistedKeywordsForSite(int $siteId): array
+    {
+        if ($siteId <= 0) {
+            return ['cta_deleted' => 0];
+        }
+
+        $deleted = 0;
+
+        DB::connection((new Keyword)->getConnectionName())->transaction(function () use ($siteId, &$deleted): void {
+            Keyword::query()
+                ->forSite($siteId)
+                ->orderBy('id')
+                ->chunkById(200, function ($keywords) use ($siteId, &$deleted): void {
+                    foreach ($keywords as $keyword) {
+                        if (! $keyword instanceof Keyword) {
+                            continue;
+                        }
+
+                        if (! $this->ctaKeywordBlacklistFilter->isBlocked((string) $keyword->phrase)) {
+                            continue;
+                        }
+
+                        $this->deleteKeywordForSite($keyword, $siteId);
+                        $deleted++;
+                    }
+                });
+        });
+
+        return ['cta_deleted' => $deleted];
+    }
+
+    /**
+     * @return array{deleted:int, kept:int}
+     */
+    public function deleteLinkedKeywordsForSite(int $siteId): array
+    {
+        $deleted = 0;
+        $kept = 0;
+
+        DB::connection((new Keyword)->getConnectionName())->transaction(function () use ($siteId, &$deleted, &$kept): void {
+            Keyword::query()
+                ->forSite($siteId)
+                ->withCount([
+                    'articles as articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
+                    'mainArticles as main_articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
+                    'links as inbound_links_on_site_count' => static fn ($query) => $query
+                        ->where('seo_links.site_id', $siteId)
+                        ->whereNotNull('seo_links.source_article_id'),
+                    'children',
+                ])
+                ->orderBy('id')
+                ->chunkById(200, function ($keywords) use ($siteId, &$deleted, &$kept): void {
+                    foreach ($keywords as $keyword) {
+                        if (! $keyword instanceof Keyword) {
+                            continue;
+                        }
+
+                        if (! $this->isLinkedOnSite($keyword, $siteId)) {
+                            $kept++;
+
+                            continue;
+                        }
+
+                        $this->deleteKeywordForSite($keyword, $siteId);
+                        $deleted++;
+                    }
+                });
+        });
+
+        return [
+            'deleted' => $deleted,
+            'kept' => $kept,
+        ];
+    }
+
+    /**
+     * @return array{articles:int, rescanned:int, skipped_articles:int}
+     */
+    public function resyncKeywordsFromArticles(int $siteId): array
+    {
+        $articles = 0;
+        $rescanned = 0;
+        $skipped = 0;
+
+        SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->orderBy('id')
+            ->chunkById(50, function ($chunk) use (&$articles, &$rescanned, &$skipped): void {
+                foreach ($chunk as $article) {
+                    if (! $article instanceof SeoArticle) {
+                        continue;
+                    }
+
+                    $articles++;
+                    $content = $this->resolveArticleContent($article);
+                    if ($content === '') {
+                        $skipped++;
+
+                        continue;
+                    }
+
+                    $this->analyzer->analyzeSubmittedContent($article, $content);
+                    $rescanned++;
+                }
+            });
+
+        return [
+            'articles' => $articles,
+            'rescanned' => $rescanned,
+            'skipped_articles' => $skipped,
+        ];
+    }
+
+    public function deleteKeywordForSite(Keyword $keyword, int $siteId): void
+    {
+        $this->keywordPersistence->detachKeywordFromSite($keyword, $siteId);
+
+        $articleIds = SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->pluck('id')
+            ->all();
+
+        if ($articleIds !== []) {
+            $keyword->articles()->whereIn('articles.id', $articleIds)->detach();
+        }
+
+        if (KeywordResource::isUnused($keyword)) {
+            $this->deleteKeywordRecord($keyword);
+        }
+    }
+
+    public function deleteKeywordRecord(Keyword $keyword): void
+    {
+        Keyword::query()
+            ->where('parent_id', $keyword->id)
+            ->update(['parent_id' => null]);
+
+        $linkIds = $keyword->links()->pluck('seo_links.id')->all();
+        $keyword->links()->detach();
+        $keyword->articles()->detach();
+        $keyword->tags()->detach();
+        $keyword->delete();
+
+        if ($linkIds !== []) {
+            SeoLink::query()
+                ->whereIn('id', $linkIds)
+                ->whereDoesntHave('keywords')
+                ->delete();
+        }
+    }
+
+    private function isLinkedOnSite(Keyword $keyword, int $siteId): bool
+    {
+        if ($keyword->keepOnRescrapeForSite($siteId)) {
+            return false;
+        }
+
+        if ((int) ($keyword->children_count ?? 0) > 0) {
+            return true;
+        }
+
+        if ((int) ($keyword->inbound_links_on_site_count ?? 0) > 0) {
+            return true;
+        }
+
+        if (in_array($keyword->type, [Keyword::TYPE_NORMAL, Keyword::TYPE_SUGGEST], true)) {
+            return (int) ($keyword->main_articles_on_site_count ?? 0) > 0
+                || (int) ($keyword->articles_on_site_count ?? 0) > 0;
+        }
+
+        return (int) ($keyword->articles_on_site_count ?? 0) > 0;
+    }
+
+    private function resolveArticleContent(SeoArticle $article): string
+    {
+        $body = trim((string) ($article->body ?? ''));
+        if ($body !== '') {
+            return $body;
+        }
+
+        $meta = $article->articleMetas()
+            ->where('meta_key', 'wp_post_content')
+            ->value('meta_value');
+
+        return is_string($meta) ? trim($meta) : '';
+    }
+}

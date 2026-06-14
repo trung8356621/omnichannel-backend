@@ -6,7 +6,8 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoArticleLink;
+use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
@@ -18,6 +19,12 @@ use Illuminate\Support\Str;
 
 class SeoAnalyzerService
 {
+    public function __construct(
+        private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
+        private readonly KeywordPersistenceService $keywordPersistence,
+        private readonly WorkflowParserService $workflowParser,
+    ) {}
+
     /**
      * Phân tích SEO tổng hợp theo rule-set nội bộ.
      *
@@ -227,42 +234,42 @@ class SeoAnalyzerService
 
         // Rule 1: Focus keyword trong tiêu đề SEO
         if ($this->containsKeyword($seoTitle, $focusKeyword)) {
-            $good[] = 'Từ khóa chính xuất hiện trong tiêu đề SEO.';
+            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong tiêu đề SEO.', 10, true);
         } else {
-            $errors[] = 'Tiêu đề SEO chưa chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('Tiêu đề SEO chưa chứa từ khóa chính.', 10, false);
             $totalScore -= 10;
         }
 
         // Rule 2: Focus keyword trong meta description
         if ($this->containsKeyword($metaDescription, $focusKeyword)) {
-            $good[] = 'Từ khóa chính xuất hiện trong meta description.';
+            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong meta description.', 10, true);
         } else {
-            $errors[] = 'Meta description chưa chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('Meta description chưa chứa từ khóa chính.', 10, false);
             $totalScore -= 10;
         }
 
         // Rule 3: Focus keyword trong URL slug (so sánh dạng slug / kebab-case)
         if ($this->slugContainsFocusKeyword($slug, $focusKeyword)) {
-            $good[] = 'URL chứa từ khóa chính.';
+            $good[] = $this->scoredLine('URL chứa từ khóa chính.', 5, true);
         } else {
-            $errors[] = 'URL chưa chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('URL chưa chứa từ khóa chính.', 5, false);
             $totalScore -= 5;
         }
 
         // Rule 4: Focus keyword trong 10% đầu nội dung
         $firstTenPercent = $this->sliceFirstTenPercentText($content);
         if ($this->containsKeyword($firstTenPercent, $focusKeyword)) {
-            $good[] = 'Từ khóa chính xuất hiện trong 10% đầu nội dung.';
+            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong 10% đầu nội dung.', 10, true);
         } else {
-            $errors[] = 'Từ khóa chính chưa xuất hiện sớm trong nội dung.';
+            $errors[] = $this->scoredLine('Từ khóa chính chưa xuất hiện sớm trong nội dung.', 10, false);
             $totalScore -= 10;
         }
 
         // Rule 5: Focus keyword xuất hiện trong toàn nội dung
         if ($this->containsKeyword($content, $focusKeyword)) {
-            $good[] = 'Từ khóa chính có xuất hiện trong nội dung.';
+            $good[] = $this->scoredLine('Từ khóa chính có xuất hiện trong nội dung.', 10, true);
         } else {
-            $errors[] = 'Nội dung chưa chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('Nội dung chưa chứa từ khóa chính.', 10, false);
             $totalScore -= 10;
         }
 
@@ -271,70 +278,86 @@ class SeoAnalyzerService
         $isEcommerceType = (string) $article->type === 'e-commerce';
         if ($isEcommerceType) {
             if ($wordCount > 500) {
-                $good[] = "Độ dài nội dung phù hợp cho e-commerce ({$wordCount} từ).";
+                $good[] = $this->scoredLine("Độ dài nội dung phù hợp cho e-commerce ({$wordCount} từ).", 10, true);
             } else {
-                $errors[] = "Nội dung e-commerce quá ngắn ({$wordCount} từ, cần > 500).";
+                $errors[] = $this->scoredLine("Nội dung e-commerce quá ngắn ({$wordCount} từ, cần > 500).", 10, false);
                 $totalScore -= 10;
             }
         } else {
             if ($wordCount < 600) {
-                $errors[] = "Nội dung quá ngắn ({$wordCount} từ, cần >= 600).";
+                $errors[] = $this->scoredLine("Nội dung quá ngắn ({$wordCount} từ, cần >= 600).", 10, false);
                 $totalScore -= 10;
             } elseif ($wordCount <= 1000) {
-                $warnings[] = "Nội dung trung bình ({$wordCount} từ). Nên > 1000 từ để tối ưu.";
+                $warnings[] = $this->scoredLine("Nội dung trung bình ({$wordCount} từ). Nên > 1000 từ để tối ưu.", 0, false);
             } else {
-                $good[] = "Độ dài nội dung tốt ({$wordCount} từ).";
+                $good[] = $this->scoredLine("Độ dài nội dung tốt ({$wordCount} từ).", 0, true);
             }
         }
 
         // Rule 7: Từ khóa trong H2/H3/H4
         $headingText = $this->extractHeadingText($content);
         if ($this->containsKeyword($headingText, $focusKeyword)) {
-            $good[] = 'Từ khóa chính xuất hiện trong heading phụ (H2/H3/H4).';
+            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong heading phụ (H2/H3/H4).', 5, true);
         } else {
-            $errors[] = 'Heading phụ chưa chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('Heading phụ chưa chứa từ khóa chính.', 5, false);
             $totalScore -= 5;
         }
 
         // Rule 8: Alt ảnh chứa từ khóa
         $imagesAltText = $this->extractImageAltText($content);
         if ($this->containsKeyword($imagesAltText, $focusKeyword)) {
-            $good[] = 'Có ảnh chứa alt text gồm từ khóa chính.';
+            $good[] = $this->scoredLine('Có ảnh chứa alt text gồm từ khóa chính.', 5, true);
         } else {
-            $errors[] = 'Chưa có alt text ảnh chứa từ khóa chính.';
+            $errors[] = $this->scoredLine('Chưa có alt text ảnh chứa từ khóa chính.', 5, false);
             $totalScore -= 5;
         }
 
         // Rule 9: Keyword density (1% - 2.5%)
         $density = $this->calculateKeywordDensity($content, $focusKeyword);
         if ($density >= 1.0 && $density <= 2.5) {
-            $good[] = 'Mật độ từ khóa nằm trong ngưỡng tối ưu (1% - 2.5%).';
+            $good[] = $this->scoredLine('Mật độ từ khóa nằm trong ngưỡng tối ưu (1% - 2.5%).', 5, true);
         } else {
-            $warnings[] = sprintf('Mật độ từ khóa hiện tại %.2f%% chưa tối ưu.', $density);
+            $warnings[] = $this->scoredLine(sprintf('Mật độ từ khóa hiện tại %.2f%% chưa tối ưu.', $density), 5, false);
             $totalScore -= 5;
         }
 
         // Rule 10: Slug ngắn gọn
         if (mb_strlen($slug) < 75) {
-            $good[] = 'URL ngắn gọn (< 75 ký tự).';
+            $good[] = $this->scoredLine('URL ngắn gọn (< 75 ký tự).', 5, true);
         } else {
-            $errors[] = 'URL quá dài (>= 75 ký tự).';
+            $errors[] = $this->scoredLine('URL quá dài (>= 75 ký tự).', 5, false);
             $totalScore -= 5;
         }
 
         // Rule 11: Có internal link
         if (count($extractedLinks['internal']) > 0) {
-            $good[] = 'Có liên kết nội bộ trong nội dung.';
+            $good[] = $this->scoredLine('Có liên kết nội bộ trong nội dung.', 20, true);
         } else {
-            $errors[] = 'Chưa có liên kết nội bộ.';
-            $totalScore -= 5;
+            $errors[] = $this->scoredLine('Chưa có liên kết nội bộ.', 20, false);
+            $totalScore -= 20;
         }
 
-        // Rule 12: Keyword ở 3 từ đầu tiêu đề SEO
-        if ($this->keywordInFirstThreeWords($seoTitle, $focusKeyword)) {
-            $good[] = 'Từ khóa chính nằm ở phần đầu tiêu đề.';
+        // Rule 12: Có external link
+        if (count($extractedLinks['external']) > 0) {
+            $good[] = $this->scoredLine('Có liên kết ngoài trong nội dung.', 10, true);
         } else {
-            $warnings[] = 'Nên đặt từ khóa chính vào 3 từ đầu tiêu đề.';
+            $errors[] = $this->scoredLine('Chưa có liên kết ngoài.', 10, false);
+            $totalScore -= 10;
+        }
+
+        // Rule 13: Có FAQ
+        if ($this->articleHasFaqs($article, $content)) {
+            $good[] = $this->scoredLine('Có phần FAQ trong bài.', 10, true);
+        } else {
+            $errors[] = $this->scoredLine('Chưa có phần FAQ.', 10, false);
+            $totalScore -= 10;
+        }
+
+        // Rule 14: Keyword ở 3 từ đầu tiêu đề SEO
+        if ($this->keywordInFirstThreeWords($seoTitle, $focusKeyword)) {
+            $good[] = $this->scoredLine('Từ khóa chính nằm ở phần đầu tiêu đề.', 5, true);
+        } else {
+            $warnings[] = $this->scoredLine('Nên đặt từ khóa chính vào 3 từ đầu tiêu đề.', 5, false);
             $totalScore -= 5;
         }
 
@@ -389,6 +412,53 @@ class SeoAnalyzerService
         ];
     }
 
+    private function scoredLine(string $message, int $points, bool $passed): string
+    {
+        $message = rtrim(trim($message), '.');
+
+        if ($points <= 0) {
+            return $message;
+        }
+
+        $sign = $passed ? '+' : '-';
+
+        return sprintf('%s %s%d', $message, $sign, $points);
+    }
+
+    private function articleHasFaqs(SeoArticle $article, string $content): bool
+    {
+        $article->loadMissing('faqs');
+        if ($article->faqs->count() > 0) {
+            return true;
+        }
+
+        return $this->workflowParser->parseFaqsFromContent($content) !== [];
+    }
+
+    /**
+     * Bóc tách link trong nội dung bài, gắn keyword mới và gỡ keyword/link outbound cũ của bài này.
+     */
+    /**
+     * @param  array<int, string>  $excludeAnchorPhrases
+     */
+    public function reconcileKeywordLinksFromContent(
+        SeoArticle $article,
+        string $content,
+        ?string $domainOverride = null,
+        array $excludeAnchorPhrases = [],
+    ): void {
+        if (! $article->countsTowardSeoScore()) {
+            return;
+        }
+
+        $domain = $this->resolveArticleDomain($article, $domainOverride);
+        $extractedLinks = trim($content) === ''
+            ? ['internal' => [], 'external' => []]
+            : $this->extractLinks($content, $domain);
+
+        $this->persistExtractedLinks($article, $extractedLinks, $excludeAnchorPhrases);
+    }
+
     /**
      * @param  array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}  $scoreData
      * @param  array{internal: array<int, mixed>, external: array<int, mixed>}|null  $extractedLinks
@@ -423,77 +493,106 @@ class SeoAnalyzerService
 
     /**
      * @param  array{internal: array<int, mixed>, external: array<int, mixed>}  $extractedLinks
+     * @param  array<int, string>  $excludeAnchorPhrases
      */
-    private function persistExtractedLinks(SeoArticle $article, array $extractedLinks): void
-    {
-        $previousKeywordIds = $article->links()
-            ->whereNotNull('keyword_id')
-            ->pluck('keyword_id')
+    private function persistExtractedLinks(
+        SeoArticle $article,
+        array $extractedLinks,
+        array $excludeAnchorPhrases = [],
+    ): void {
+        $previousKeywordIds = SeoLink::query()
+            ->where('source_article_id', $article->id)
+            ->with('keywords')
+            ->get()
+            ->flatMap(static fn (SeoLink $link): array => $link->keywords->pluck('id')->all())
+            ->unique()
+            ->values()
             ->all();
 
-        $article->links()->delete();
+        $this->keywordPersistence->detachArticleOutboundLinks((int) $article->id);
 
         $article->loadMissing('site');
-        $userId = (int) ($article->site?->user_id ?? 0);
-
-        $linksToInsert = [];
-        $now = now();
+        $siteId = (int) ($article->site_id ?? 0);
+        $focusKeyword = $this->resolveFocusKeyword($article);
+        $articlePermalink = $focusKeyword !== null && trim($focusKeyword) !== ''
+            ? trim(app(WordPressArticleContentService::class)->resolvePermalink($article))
+            : '';
 
         foreach ($extractedLinks['internal'] as $link) {
             $href = (string) ($link['href'] ?? '');
-            $anchorText = Str::limit(strip_tags((string) ($link['text'] ?? '')), 255);
-            if ($anchorText === '') {
+            $anchorText = Keyword::decodePhrase(
+                Str::limit(strip_tags((string) ($link['text'] ?? '')), 255, ''),
+            );
+            $anchorText = $this->normalizeAnchorAgainstFocusKeyword($anchorText, $focusKeyword);
+            if ($anchorText === '' || $href === '') {
                 continue;
             }
 
-            $keywordId = null;
-            if (InternalAnchorKeywordFilter::isUsableAnchorPhrase($anchorText, $href)) {
-                $keywordRecord = Keyword::query()->firstOrCreate(
-                    [
-                        'site_id' => $article->site_id,
-                        'phrase' => $anchorText,
-                        'type' => Keyword::TYPE_INTERNAL,
-                    ],
-                    [
-                        'user_id' => $userId,
-                        'target_url' => $href,
-                    ]
-                );
-
-                if ($keywordRecord->target_url === null && $href !== '') {
-                    $keywordRecord->update(['target_url' => $href]);
-                }
-
-                $keywordId = $keywordRecord->id;
+            if (
+                $focusKeyword !== null
+                && mb_strtolower($anchorText) === mb_strtolower($focusKeyword)
+                && $articlePermalink !== ''
+                && $this->urlsMatchForCompare($href, $articlePermalink)
+            ) {
+                continue;
             }
 
-            $linksToInsert[] = [
-                'article_id' => $article->id,
-                'keyword_id' => $keywordId,
-                'type' => 'internal',
-                'url' => $href,
-                'anchor_text' => $anchorText,
-                'is_nofollow' => (bool) ($link['is_nofollow'] ?? false),
-                'created_at' => $now,
-                'updated_at' => $now,
-            ];
+            if ($this->shouldExcludeAnchorPhrase($anchorText, $excludeAnchorPhrases)) {
+                $this->keywordPersistence->resolveOrCreateLink(
+                    siteId: $siteId,
+                    url: $href,
+                    type: SeoLink::TYPE_INTERNAL,
+                    sourceArticleId: (int) $article->id,
+                    isNofollow: (bool) ($link['is_nofollow'] ?? false),
+                );
+
+                continue;
+            }
+
+            if (
+                InternalAnchorKeywordFilter::isUsableAnchorPhrase($anchorText, $href)
+                && ! $this->ctaKeywordBlacklistFilter->isBlocked($anchorText)
+            ) {
+                $keyword = $this->keywordPersistence->upsert(
+                    $anchorText,
+                    Keyword::TYPE_NORMAL,
+                    $siteId,
+                    $href,
+                    sourceArticleId: (int) $article->id,
+                    isNofollow: (bool) ($link['is_nofollow'] ?? false),
+                );
+
+                if (
+                    $keyword !== null
+                    && $focusKeyword !== null
+                    && mb_strtolower($anchorText) === mb_strtolower($focusKeyword)
+                ) {
+                    $this->keywordPersistence->mergeSuffixTruncatedKeywords($keyword, $siteId);
+                }
+            } else {
+                $this->keywordPersistence->resolveOrCreateLink(
+                    siteId: $siteId,
+                    url: $href,
+                    type: SeoLink::TYPE_INTERNAL,
+                    sourceArticleId: (int) $article->id,
+                    isNofollow: (bool) ($link['is_nofollow'] ?? false),
+                );
+            }
         }
 
         foreach ($extractedLinks['external'] as $link) {
-            $linksToInsert[] = [
-                'article_id' => $article->id,
-                'keyword_id' => null,
-                'type' => 'external',
-                'url' => (string) ($link['href'] ?? ''),
-                'anchor_text' => Str::limit(strip_tags((string) ($link['text'] ?? '')), 500),
-                'is_nofollow' => (bool) ($link['is_nofollow'] ?? false),
-                'created_at' => $now,
-                'updated_at' => $now,
-            ];
-        }
+            $href = trim((string) ($link['href'] ?? ''));
+            if ($href === '') {
+                continue;
+            }
 
-        foreach (array_chunk($linksToInsert, 500) as $chunk) {
-            SeoArticleLink::insert($chunk);
+            $this->keywordPersistence->resolveOrCreateLink(
+                siteId: $siteId,
+                url: $href,
+                type: SeoLink::TYPE_EXTERNAL,
+                sourceArticleId: (int) $article->id,
+                isNofollow: (bool) ($link['is_nofollow'] ?? false),
+            );
         }
 
         KeywordOrphanCleanup::deleteUnusedByIds($previousKeywordIds);
@@ -528,6 +627,68 @@ class SeoAnalyzerService
         }
 
         return $raw;
+    }
+
+    private function normalizeAnchorAgainstFocusKeyword(string $anchorText, ?string $focusKeyword): string
+    {
+        $anchorText = Keyword::decodePhrase($anchorText);
+        $focusKeyword = Keyword::decodePhrase($focusKeyword ?? '');
+
+        if ($anchorText === '' || $focusKeyword === '') {
+            return $anchorText;
+        }
+
+        $anchorNorm = mb_strtolower($anchorText);
+        $focusNorm = mb_strtolower($focusKeyword);
+
+        if ($anchorNorm === $focusNorm) {
+            return $focusKeyword;
+        }
+
+        if (str_ends_with($focusNorm, $anchorNorm) && mb_strlen($anchorNorm) < mb_strlen($focusNorm)) {
+            return $focusKeyword;
+        }
+
+        return $anchorText;
+    }
+
+    /**
+     * @param  array<int, string>  $excludeAnchorPhrases
+     */
+    private function shouldExcludeAnchorPhrase(string $anchorText, array $excludeAnchorPhrases): bool
+    {
+        if ($excludeAnchorPhrases === []) {
+            return false;
+        }
+
+        $anchorNorm = mb_strtolower(Keyword::decodePhrase($anchorText));
+        if ($anchorNorm === '') {
+            return false;
+        }
+
+        foreach ($excludeAnchorPhrases as $phrase) {
+            if ($anchorNorm === mb_strtolower(Keyword::decodePhrase((string) $phrase))) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function urlsMatchForCompare(string $first, string $second): bool
+    {
+        $firstNorm = rtrim(strtolower(trim($first)), '/');
+        $secondNorm = rtrim(strtolower(trim($second)), '/');
+
+        if ($firstNorm === '' || $secondNorm === '') {
+            return false;
+        }
+
+        if ($firstNorm === $secondNorm) {
+            return true;
+        }
+
+        return str_ends_with($firstNorm, $secondNorm) || str_ends_with($secondNorm, $firstNorm);
     }
 
     private function resolveSeoTitle(SeoArticle $article): string
@@ -576,7 +737,7 @@ class SeoAnalyzerService
                 return ((int) ($keyword->pivot->is_main ?? 0) === 1) || ((int) ($keyword->is_main ?? 0) === 1);
             })
             ->sortBy(function ($keyword): int {
-                return (string) ($keyword->type ?? '') === Keyword::TYPE_FOCUS ? 0 : 1;
+                return Keyword::isNormalType((string) ($keyword->type ?? '')) ? 0 : 1;
             })
             ->first();
 

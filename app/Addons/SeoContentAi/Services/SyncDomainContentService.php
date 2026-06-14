@@ -271,6 +271,13 @@ class SyncDomainContentService
                 );
             }
 
+            if ($wpEntity === 'term' && $wpPostType !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_taxonomy'],
+                    ['meta_value' => $wpPostType],
+                );
+            }
+
             $this->syncWordPressPostMeta($article, $item);
             $this->syncSchemaAndWooCommerceMeta($article, $item);
             app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
@@ -345,6 +352,16 @@ class SyncDomainContentService
         }
 
         if ($isTaxonomy) {
+            $parentId = max(0, (int) ($item['parent_id'] ?? 0));
+            if ($parentId > 0) {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_parent_id'],
+                    ['meta_value' => (string) $parentId],
+                );
+            } else {
+                $article->articleMetas()->where('meta_key', 'wp_parent_id')->delete();
+            }
+
             $article->articleMetas()->whereIn('meta_key', [
                 'wp_featured_image_url',
                 'wp_product_gallery',

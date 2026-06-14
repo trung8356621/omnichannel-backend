@@ -5,12 +5,15 @@ namespace App\Filament\Resources;
 use App\Filament\Resources\UserResource\Pages;
 use App\Models\User;
 use Filament\Forms;
+use Filament\Forms\Components\Actions\Action as FormInputAction;
 use Filament\Forms\Form;
+use Filament\Forms\Set;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Support\Str;
 
 class UserResource extends Resource
 {
@@ -32,12 +35,29 @@ class UserResource extends Resource
                     ->required()
                     ->unique(ignoreRecord: true)
                     ->maxLength(255),
+                Forms\Components\TextInput::make('password')
+                    ->label(__('Password'))
+                    ->required(fn ($livewire): bool => $livewire instanceof Pages\CreateUser)
+                    ->maxLength(255)
+                    ->default(fn ($livewire): string => $livewire instanceof Pages\CreateUser
+                        ? self::generateRandomPassword()
+                        : '')
+                    ->helperText(fn ($livewire): ?string => $livewire instanceof Pages\EditUser
+                        ? __('Leave blank to keep the current password.')
+                        : __('Random password by default. Use reload to generate a new one.'))
+                    ->dehydrated(fn (?string $state): bool => filled($state))
+                    ->suffixAction(
+                        FormInputAction::make('regenerate_password')
+                            ->label(__('Reload'))
+                            ->icon('heroicon-o-arrow-path')
+                            ->action(fn (Set $set): mixed => $set('password', self::generateRandomPassword()))
+                    ),
                 Forms\Components\Select::make('role')
                     ->label(__('Rule'))
                     ->options([
                         'admin' => 'Administrator',
                         'owner' => 'Chủ sở hữu (Owner)',
-                        'staff' => 'Nhân viên (Staff)'
+                        'staff' => 'Nhân viên (Staff)',
                     ])
                     ->required()
                     ->native(false),
@@ -64,10 +84,10 @@ class UserResource extends Resource
                 Tables\Columns\ImageColumn::make('avatar')
                     ->label(label: __('Avatar'))
                     ->circular()
-                    ->defaultImageUrl(fn($record) => 'https://ui-avatars.com/api/?name=' . urlencode($record->name)),
+                    ->defaultImageUrl(fn ($record) => 'https://ui-avatars.com/api/?name='.urlencode($record->name)),
 
                 Tables\Columns\TextColumn::make('name')
-                    ->label(__("Full name"))
+                    ->label(__('Full name'))
                     ->searchable()
                     ->sortable(),
 
@@ -79,7 +99,7 @@ class UserResource extends Resource
                 Tables\Columns\TextColumn::make('role')
                     ->label(__('Rule'))
                     ->badge()
-                    ->color(fn(string $state): string => match ($state) {
+                    ->color(fn (string $state): string => match ($state) {
                         'admin' => 'danger',
                         'owner' => 'success',
                         'staff' => 'info',
@@ -87,9 +107,9 @@ class UserResource extends Resource
                     }),
 
                 Tables\Columns\TextColumn::make('status')
-                    ->label(__("Status"))
+                    ->label(__('Status'))
                     ->badge()
-                    ->color(fn(string $state): string => match ($state) {
+                    ->color(fn (string $state): string => match ($state) {
                         'normal' => 'success',
                         'block' => 'danger',
                         'pending' => 'warning',
@@ -98,12 +118,12 @@ class UserResource extends Resource
 
                 // Hiển thị số dư ví từ quan hệ wallet
                 Tables\Columns\TextColumn::make('wallet.balance')
-                    ->label(__("Wallet balance"))
-                    ->formatStateUsing(fn($state) => number_format($state, 0, ',', '.') . ' đ')->default(0)
+                    ->label(__('Wallet balance'))
+                    ->formatStateUsing(fn ($state) => number_format($state, 0, ',', '.').' đ')->default(0)
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('parent.name')
-                    ->label(__("Managed by"))
+                    ->label(__('Managed by'))
                     ->placeholder('N/A')
                     ->toggleable(),
 
@@ -115,7 +135,7 @@ class UserResource extends Resource
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('role')
-                    ->label(__("Filter by rule"))
+                    ->label(__('Filter by rule'))
                     ->options([
                         'admin' => 'Admin',
                         'owner' => 'Owner',
@@ -162,5 +182,10 @@ class UserResource extends Resource
             'create' => Pages\CreateUser::route('/create'),
             'edit' => Pages\EditUser::route('/{record}/edit'),
         ];
+    }
+
+    public static function generateRandomPassword(int $length = 16): string
+    {
+        return Str::password($length, letters: true, numbers: true, symbols: false);
     }
 }

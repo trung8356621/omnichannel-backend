@@ -18,7 +18,9 @@
         ],
     ];
     $publishBoxInitial = [
-        'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType($articlePostType),
+        'postType' => \App\Addons\SeoContentAi\Models\SeoProjectTask::normalizePostType(
+            \App\Addons\SeoContentAi\Support\ArticlePostTypeResolver::resolve($this->record),
+        ),
         'status' => $articleStatus,
         'visibility' => $visibility,
         'publishDay' => $publishDay,
@@ -28,6 +30,8 @@
         'publishMinute' => $publishMinute,
         'publishWhenLabel' => $this->getPublishWhenLabel(),
     ];
+    $articleRevisionCount = app(\App\Addons\SeoContentAi\Services\SeoArticleRevisionService::class)
+        ->countForArticle((int) $record->getKey());
 @endphp
 
 @once
@@ -240,7 +244,11 @@
 
                     try {
                         await this.pushToWire();
+                        if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
+                            await window.__seoPushPublishCategoriesToWire();
+                        }
                         await this.$wire.requestSaveArticle();
+                        window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
                         window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
                     }
@@ -251,21 +259,26 @@
                         return;
                     }
 
-                    // Interceptor: chặn đăng/đồng bộ WordPress khi chưa chọn danh mục.
-                    // Guard tự mở Tab Publish + viền đỏ + toast cảnh báo (xem publish-categories.blade.php).
-                    if (typeof window.__seoEnsureCategoriesBeforeSync === 'function'
-                        && !window.__seoEnsureCategoriesBeforeSync()) {
-                        return;
-                    }
-
-                    window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
-                        detail: { action: 'sync' },
-                    }));
-
                     try {
+                        if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
+                            const allowed = await window.__seoEnsureCategoriesBeforeSync();
+                            if (! allowed) {
+                                return;
+                            }
+                        }
+
+                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
+                            detail: { action: 'sync' },
+                        }));
+
                         await this.pushToWire();
+                        if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
+                            await window.__seoPushPublishCategoriesToWire();
+                        }
                         await this.$wire.requestSyncToWordPress();
+                        window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
+                        console.warn('Đồng bộ WordPress thất bại ở client', error);
                         window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
                     }
                 },
@@ -361,8 +374,10 @@
                     >
                         <option value="article">{{ __('seo-content-ai::filament.article_list.post_type_article') }}</option>
                         <option value="product">{{ __('seo-content-ai::filament.article_list.post_type_product') }}</option>
-                        <option value="category">{{ __('seo-content-ai::filament.article_list.post_type_category') }}</option>
-                        <option value="product_category">{{ __('seo-content-ai::filament.article_list.post_type_product_category') }}</option>
+                        @if ($this->isTaxonomyArticle())
+                            <option value="category">{{ __('seo-content-ai::filament.article_list.post_type_category') }}</option>
+                            <option value="product_category">{{ __('seo-content-ai::filament.article_list.post_type_product_category') }}</option>
+                        @endif
                     </select>
                     <button type="button" x-on:click="applyPostType()" class="text-sky-600 hover:underline">Đồng ý</button>
                     <button type="button" x-on:click="cancelEdit('PostType')" class="text-sky-600 hover:underline">Hủy</button>
@@ -499,6 +514,17 @@
                     @endif
                 </div>
             @endif
+
+            <div class="text-xs">
+                <a
+                    href="{{ route('seo.articles.revisions.compare', ['article' => $record->getKey()]) }}"
+                    class="text-sky-600 hover:underline"
+                    title="Xem và so sánh các phiên bản đã lưu"
+                    target="_blank"
+                >
+                    📋 Lịch sử chỉnh sửa ({{ $articleRevisionCount }})
+                </a>
+            </div>
         </div>
 
         <div class="seo-publish-icon-actions">

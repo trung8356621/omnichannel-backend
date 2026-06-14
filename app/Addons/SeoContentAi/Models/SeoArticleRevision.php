@@ -4,19 +4,23 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class SeoArticleLink extends Model
+class SeoArticleRevision extends Model
 {
+    use BelongsToOnDefaultConnection;
+
     protected $connection = 'omi_seo_ai';
 
-    protected $table = 'seo_article_links';
+    protected $table = 'seo_article_revisions';
 
     protected $guarded = [];
 
     protected $casts = [
-        'is_nofollow' => 'boolean',
+        'seo_meta' => 'array',
     ];
 
     public function article(): BelongsTo
@@ -24,8 +28,8 @@ class SeoArticleLink extends Model
         return $this->belongsTo(SeoArticle::class, 'article_id');
     }
 
-    public function keyword(): BelongsTo
+    public function user(): BelongsTo
     {
-        return $this->belongsTo(Keyword::class, 'keyword_id');
+        return $this->belongsToOnDefaultConnection(User::class, 'user_id');
     }
 }

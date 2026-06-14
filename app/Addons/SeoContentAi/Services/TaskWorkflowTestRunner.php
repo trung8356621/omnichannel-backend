@@ -895,14 +895,19 @@ final class TaskWorkflowTestRunner
     }
 
     /**
-     * @param  array{parent_id: int, parent_phrase: string, children_count: int, suggest_count?: int}  $sync
+     * @param  array{parent_id: int, parent_phrase: string, children_count: int, suggest_count?: int, tags_count?: int}  $sync
      */
     private function formatVocabularyResearchSyncMessage(array $sync, bool $includeParentId = false): string
     {
         $parts = [];
         $childrenCount = (int) ($sync['children_count'] ?? 0);
         $suggestCount = (int) ($sync['suggest_count'] ?? 0);
+        $tagsCount = (int) ($sync['tags_count'] ?? 0);
         $parentPhrase = trim((string) ($sync['parent_phrase'] ?? ''));
+
+        if ($suggestCount > 0) {
+            $parts[] = sprintf('%d gợi ý chủ đề (Related topics)', $suggestCount);
+        }
 
         if ($parentPhrase !== '') {
             $clusterMessage = $includeParentId
@@ -911,8 +916,8 @@ final class TaskWorkflowTestRunner
             $parts[] = $clusterMessage;
         }
 
-        if ($suggestCount > 0) {
-            $parts[] = sprintf('%d gợi ý chủ đề (Related topics)', $suggestCount);
+        if ($tagsCount > 0) {
+            $parts[] = sprintf('%d tag Holonymy', $tagsCount);
         }
 
         if ($parts === []) {
@@ -923,7 +928,7 @@ final class TaskWorkflowTestRunner
     }
 
     /**
-     * @return array{parent_id: int, parent_phrase: string, children_count: int, suggest_count: int}
+     * @return array{parent_id: int, parent_phrase: string, children_count: int, suggest_count: int, tags_count: int}
      */
     private function syncKeywordResearchForArticle(
         SeoArticle $article,

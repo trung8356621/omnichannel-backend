@@ -9,6 +9,7 @@ import {
     countMatchingAnchorsInHtml,
     countPlainTextInHtml,
     findBlockIdForExportOffset,
+    removeMatchingAnchorsFromHtml,
     scrollToFaqByIndex,
     scrollToFaqKeyword,
     scrollToKeywordAnchor,
@@ -135,14 +136,20 @@ const createFaqShortcodeBlock = () => ({
     suffix: '',
 });
 
-const createEmptySectionBlock = () => ({
-    id: newBlockId('classic'),
-    type: 'text',
-    isWp: false,
-    prefix: '',
-    content: `<h2>${t('editor_new_section_heading')}</h2><p></p>`,
-    suffix: '',
-});
+const createEmptySectionBlock = () => {
+    const id = newBlockId('classic');
+    const suffix = String(id).split('-').pop()?.slice(-4) ?? String(Date.now()).slice(-4);
+    const headingText = `${t('editor_new_section_heading')} ${suffix}`;
+
+    return {
+        id,
+        type: 'text',
+        isWp: false,
+        prefix: '',
+        content: `<h2>${headingText}</h2><p></p>`,
+        suffix: '',
+    };
+};
 
 const articleHasFaqShortcode = (blocks) =>
     blocks.some((block) => isFaqPlaceholderHtml(block.content || ''));
@@ -297,6 +304,62 @@ const findBlockIdForOutlineHeading = (blocks, level, headingText) => {
 
     return null;
 };
+
+const flattenOutlineHeadingKeys = (nodes) => {
+    const keys = new Set();
+
+    const walk = (items) => {
+        if (!Array.isArray(items)) {
+            return;
+        }
+
+        for (const node of items) {
+            const level = Number(node?.level ?? 0);
+            const text = normalizeOutlineHeadingText(node?.heading_text);
+            if (level >= 2 && text !== '') {
+                keys.add(`${level}|${text}`);
+            }
+            if (Array.isArray(node?.children) && node.children.length > 0) {
+                walk(node.children);
+            }
+        }
+    };
+
+    walk(nodes);
+
+    return keys;
+};
+
+const outlineHeadingKey = (level, headingText) =>
+    `${Number(level)}|${normalizeOutlineHeadingText(headingText)}`;
+
+const isSectionHeadingBlock = (block, section) =>
+    !section?.isIntro &&
+    section?.blockIds?.[0] === block?.id &&
+    blockHasOutlineHeading(block);
+
+const outlineApiCsrfToken = () =>
+    document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+
+async function outlineApiRequest(articleId, path, options = {}) {
+    const response = await fetch(`/api/seo/articles/${articleId}/outline${path}`, {
+        credentials: 'same-origin',
+        ...options,
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...(outlineApiCsrfToken() ? { 'X-CSRF-TOKEN': outlineApiCsrfToken() } : {}),
+            ...(options.headers ?? {}),
+        },
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+        throw new Error(data.message ?? 'Yêu cầu outline thất bại.');
+    }
+
+    return data;
+}
 
 const INTRO_SECTION_ID = 'section-intro';
 
@@ -907,7 +970,87 @@ const parseHtmlToBlocks = (html) => {
         if (textAfter.trim()) blocks.push(...splitClassic(textAfter));
     }
 
-    return normalizeBlocks(blocks);
+    return regroupParsedBlocksByH2(normalizeBlocks(blocks));
+};
+
+const splitHtmlAtH2Sections = (htmlContent) => {
+    const source = String(htmlContent || '').trim();
+    if (!source) {
+        return [];
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    if (doc.body.querySelectorAll('h2').length <= 1) {
+        return [source];
+    }
+
+    const sections = [];
+    let current = document.createElement('div');
+
+    const flushCurrent = () => {
+        const html = cleanBlockHtmlForEditorDisplay(current.innerHTML.trim());
+        if (isMeaningfulHtml(html)) {
+            sections.push(html);
+        }
+        current = document.createElement('div');
+    };
+
+    const walkNodes = (parent) => {
+        Array.from(parent.childNodes).forEach((node) => {
+            if (node.nodeType === 3 && !node.textContent?.trim()) {
+                return;
+            }
+
+            if (node.nodeType === 1 && node.tagName === 'H2') {
+                flushCurrent();
+                current.appendChild(node.cloneNode(true));
+                return;
+            }
+
+            if (node.nodeType === 1 && typeof node.querySelector === 'function' && node.querySelector('h2')) {
+                walkNodes(node);
+                return;
+            }
+
+            current.appendChild(node.cloneNode(true));
+        });
+    };
+
+    walkNodes(doc.body);
+    flushCurrent();
+
+    return sections.length > 0 ? sections : [source];
+};
+
+const regroupParsedBlocksByH2 = (blocks) => {
+    const result = [];
+
+    blocks.forEach((block) => {
+        if (block.type !== 'text' || block.isWp || typeof block.content !== 'string' || !block.content.trim()) {
+            result.push(block);
+            return;
+        }
+
+        const parts = splitHtmlAtH2Sections(block.content);
+        if (parts.length <= 1) {
+            result.push(block);
+            return;
+        }
+
+        parts.forEach((part) => {
+            result.push({
+                id: newBlockId('classic'),
+                type: 'text',
+                isWp: false,
+                prefix: '',
+                content: part,
+                suffix: '',
+            });
+        });
+    });
+
+    return normalizeBlocks(result);
 };
 
 const hasMeaningfulExportHtml = (html) => {
@@ -1533,6 +1676,11 @@ export default function SeoArticleEditor({
     const [imagesTabJumpTarget, setImagesTabJumpTarget] = useState(null);
     const [outlineHasSavedHeadings, setOutlineHasSavedHeadings] = useState(false);
     const [outlineHeadingCommand, setOutlineHeadingCommand] = useState(null);
+    const [outlineTreeSync, setOutlineTreeSync] = useState(null);
+    const [outlineHeadingKeys, setOutlineHeadingKeys] = useState(() => new Set());
+    const outlineHeadingIdsByBlockIdRef = useRef(new Map());
+    const outlineAppendInflightRef = useRef(new Set());
+    const outlineAppendDoneRef = useRef(new Set());
     const [insertMenu, setInsertMenu] = useState(null);
     const [collapsedSectionIds, setCollapsedSectionIds] = useState({});
     const [supplementalImages, setSupplementalImages] = useState(() =>
@@ -1743,28 +1891,35 @@ export default function SeoArticleEditor({
 
         const countCache = new Map();
         const withCounts = (items) =>
-            (Array.isArray(items) ? items : []).map((item) => {
-                const key = buildKey(item);
-                if (!countCache.has(key)) {
-                    let count = 0;
-                    for (const block of currentBlocks) {
-                        if (block.type === 'image' || !block.content) {
-                            continue;
+            (Array.isArray(items) ? items : [])
+                .map((item) => {
+                    const key = buildKey(item);
+                    if (!countCache.has(key)) {
+                        let count = 0;
+                        for (const block of currentBlocks) {
+                            if (block.type === 'image' || !block.content) {
+                                continue;
+                            }
+                            count += countMatchingAnchorsInHtml(
+                                block.content,
+                                String(item?.text ?? ''),
+                                String(item?.href ?? ''),
+                            );
                         }
-                        count += countMatchingAnchorsInHtml(
-                            block.content,
-                            String(item?.text ?? ''),
-                            String(item?.href ?? ''),
-                        );
+                        countCache.set(key, count);
                     }
-                    countCache.set(key, Math.max(1, count));
-                }
 
-                return {
-                    ...item,
-                    occurrence_count: countCache.get(key) ?? 1,
-                };
-            });
+                    const occurrenceCount = countCache.get(key) ?? 0;
+                    if (occurrenceCount <= 0) {
+                        return null;
+                    }
+
+                    return {
+                        ...item,
+                        occurrence_count: occurrenceCount,
+                    };
+                })
+                .filter(Boolean);
 
         return {
             internal: withCounts(source.internal),
@@ -3459,6 +3614,91 @@ export default function SeoArticleEditor({
         [commitActiveBlock, persistEditorContentImmediately, selectPlainTextInBlock],
     );
 
+    const removeInternalLinkFromContent = useCallback(
+        (detail) => {
+            const text = String(detail?.text ?? '').trim();
+            const href = String(detail?.href ?? '').trim();
+            if (!text && !href) {
+                return;
+            }
+
+            commitActiveBlock();
+
+            let removedCount = 0;
+            const nextBlocks = blocksRef.current.map((block) => {
+                if (block.type === 'image' || !block.content) {
+                    return block;
+                }
+
+                const nextContent = removeMatchingAnchorsFromHtml(block.content, text, href);
+                if (nextContent === block.content) {
+                    return block;
+                }
+
+                removedCount += countMatchingAnchorsInHtml(block.content, text, href);
+                return { ...block, content: nextContent };
+            });
+
+            if (removedCount <= 0) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('links_remove_not_found_title'),
+                            body: t('links_remove_not_found_body', { label: text || href }),
+                            status: 'warning',
+                        },
+                    }),
+                );
+                return;
+            }
+
+            const activeId = activeBlockIdRef.current;
+            if (activeId) {
+                const activeEditor = blockEditorsRef.current.get(activeId);
+                const activeBlock = nextBlocks.find((block) => block.id === activeId);
+                if (activeEditor && !activeEditor.isDestroyed && activeBlock?.content) {
+                    activeEditor.commands.setContent(activeBlock.content, { emitUpdate: false });
+                }
+            }
+
+            blocksRef.current = nextBlocks;
+            setBlocks(nextBlocks);
+            setExtractedLinks((prev) => {
+                const current = prev && typeof prev === 'object'
+                    ? prev
+                    : { internal: [], external: [] };
+                const textKey = normalizeLinkLabel(text);
+                const hrefKey = normalizeHrefForCompare(href);
+
+                return {
+                    ...current,
+                    internal: (Array.isArray(current.internal) ? current.internal : []).filter(
+                        (item) => {
+                            const itemText = normalizeLinkLabel(item?.text);
+                            const itemHref = normalizeHrefForCompare(item?.href);
+                            const textMatches = !textKey || itemText === textKey;
+                            const hrefMatches = !hrefKey || itemHref === hrefKey;
+
+                            return !(textMatches && hrefMatches);
+                        },
+                    ),
+                };
+            });
+            scheduleAutosave();
+
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('links_removed_title'),
+                        body: t('links_removed_body', { label: text || href }),
+                        status: 'success',
+                    },
+                }),
+            );
+        },
+        [commitActiveBlock, scheduleAutosave],
+    );
+
     const insertCtaLinkIntoContent = useCallback(
         (detail) => {
             const text = String(detail?.text ?? '').trim();
@@ -3614,6 +3854,10 @@ export default function SeoArticleEditor({
             insertCtaLinkIntoContent(event.detail ?? {});
         };
 
+        const onRemoveInternalLink = (event) => {
+            removeInternalLinkFromContent(event.detail ?? {});
+        };
+
         const onScrollToFeaturedSnippetTable = () => {
             scrollToFeaturedSnippetTable();
         };
@@ -3621,24 +3865,26 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-scroll-to-link', onScrollToLink);
         window.addEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
         window.addEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
+        window.addEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
         window.addEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
 
         return () => {
             window.removeEventListener('seo-editor-scroll-to-link', onScrollToLink);
             window.removeEventListener('seo-editor-insert-suggested-link', onInsertSuggestedLink);
             window.removeEventListener('seo-editor-insert-cta-link', onInsertCtaLink);
+            window.removeEventListener('seo-editor-remove-internal-link', onRemoveInternalLink);
             window.removeEventListener('seo-editor-scroll-to-featured-snippet-table', onScrollToFeaturedSnippetTable);
         };
-    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, scrollToFeaturedSnippetTable]);
+    }, [scrollToExtractedLink, insertSuggestedLinkIntoContent, insertCtaLinkIntoContent, removeInternalLinkFromContent, scrollToFeaturedSnippetTable]);
 
     const deleteBlock = useCallback(
-        (id) => {
+        (id, { skipConfirm = false } = {}) => {
             if (blocksRef.current.length <= 1) return;
 
             const block = blocksRef.current.find((b) => b.id === id);
             if (!block) return;
 
-            if (block.isWp && !window.confirm(t('editor_delete_wp_block_confirm'))) {
+            if (block.isWp && !skipConfirm && !window.confirm(t('editor_delete_wp_block_confirm'))) {
                 return;
             }
 
@@ -3660,6 +3906,37 @@ export default function SeoArticleEditor({
             setBlocks((prev) => prev.filter((b) => b.id !== id));
         },
         [activeBlockId, articleId, commitActiveBlock, clearTempMerge],
+    );
+
+    const removeImageBlock = useCallback(
+        (row) => {
+            const blockId = String(row?.blockId || '').trim();
+            if (!blockId) {
+                return;
+            }
+
+            if (blocksRef.current.length <= 1) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('cannot_delete_last_block'),
+                            body: t('image_tab_remove_last_block_hint'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            const block = blocksRef.current.find((item) => item.id === blockId);
+            if (!block || block.type !== 'image') {
+                return;
+            }
+
+            deleteBlock(blockId, { skipConfirm: true });
+        },
+        [deleteBlock],
     );
 
     useEffect(() => {
@@ -3708,17 +3985,53 @@ export default function SeoArticleEditor({
 
     const syncOutlineFocusFromBlock = useCallback((block, action = 'focus') => {
         const meta = extractOutlineHeadingFromBlock(block);
-        if (!meta) {
+        const headingId = outlineHeadingIdsByBlockIdRef.current.get(block?.id);
+        if (!meta && headingId == null) {
             return;
+        }
+
+        if (headingId == null && outlineHasSavedHeadings && meta) {
+            const key = outlineHeadingKey(meta.level, meta.headingText);
+            if (!outlineHeadingKeys.has(key)) {
+                return;
+            }
         }
 
         setOutlineHeadingCommand({
             token: Date.now(),
-            level: meta.level,
-            headingText: meta.headingText,
+            level: meta?.level,
+            headingText: meta?.headingText,
+            headingId: headingId ?? null,
             action,
         });
-    }, []);
+    }, [outlineHasSavedHeadings, outlineHeadingKeys]);
+
+    const isBlockOutlineSynced = useCallback(
+        (block) => {
+            if (outlineHeadingIdsByBlockIdRef.current.has(block?.id)) {
+                return true;
+            }
+
+            const meta = extractOutlineHeadingFromBlock(block);
+            if (!meta) {
+                return false;
+            }
+
+            const key = outlineHeadingKey(meta.level, meta.headingText);
+            if (!outlineHeadingKeys.has(key)) {
+                return false;
+            }
+
+            const matchedBlockId = findBlockIdForOutlineHeading(
+                blocksRef.current,
+                meta.level,
+                meta.headingText,
+            );
+
+            return matchedBlockId === block.id;
+        },
+        [outlineHeadingKeys],
+    );
 
     const activateBlock = useCallback(
         (id) => {
@@ -4381,66 +4694,337 @@ export default function SeoArticleEditor({
         [commitActiveBlock, notifyIntroNoImages],
     );
 
-    const moveBlockToSection = useCallback(
-        (blockId, direction) => {
+    const moveSection = useCallback(
+        (sectionId, direction) => {
             if (tempMergeRef.current) {
                 return;
             }
-            const id = String(blockId ?? '').trim();
-            if (!id) {
+
+            const sections = editorSections;
+            const currentIndex = sections.findIndex((section) => section.id === sectionId);
+            if (currentIndex < 0) {
                 return;
             }
 
-            const currentSectionIndex = editorSections.findIndex((section) => section.blockIds.includes(id));
-            if (currentSectionIndex < 0) {
+            const section = sections[currentIndex];
+            if (section?.isIntro) {
                 return;
             }
 
-            const targetSectionIndex =
-                direction === 'prev' ? currentSectionIndex - 1 : currentSectionIndex + 1;
-            if (targetSectionIndex < 0 || targetSectionIndex >= editorSections.length) {
+            const headingBlock = blocksRef.current.find((block) => block.id === section.blockIds[0]);
+            if (!isSectionHeadingBlock(headingBlock, section)) {
                 return;
             }
 
-            const targetSection = editorSections[targetSectionIndex];
-            const targetIds = (targetSection?.blockIds ?? []).filter((candidateId) => candidateId !== id);
+            const targetIndex = direction === 'prev' ? currentIndex - 1 : currentIndex + 1;
+            if (targetIndex < 0 || targetIndex >= sections.length) {
+                return;
+            }
+
+            const targetSection = sections[targetIndex];
+            if (targetSection?.isIntro) {
+                return;
+            }
+
             commitActiveBlock();
             setInsertMenu(null);
 
             setBlocks((prev) => {
-                const fromIndex = prev.findIndex((block) => block.id === id);
-                if (fromIndex < 0) {
+                const fromBlocks = section.blockIds
+                    .map((blockId) => prev.find((block) => block.id === blockId))
+                    .filter(Boolean);
+                if (fromBlocks.length !== section.blockIds.length) {
                     return prev;
                 }
 
-                const moving = prev[fromIndex];
-                if (targetSection?.isIntro && moving?.type === 'image') {
-                    notifyIntroNoImages();
-
+                const withoutMoved = prev.filter((block) => !section.blockIds.includes(block.id));
+                const targetStart = withoutMoved.findIndex((block) => block.id === targetSection.blockIds[0]);
+                if (targetStart < 0) {
                     return prev;
                 }
-                const next = [...prev];
-                next.splice(fromIndex, 1);
 
-                let insertAt = next.length;
-                if (direction === 'prev') {
-                    const lastTargetId = targetIds[targetIds.length - 1];
-                    const lastIndex = lastTargetId ? next.findIndex((block) => block.id === lastTargetId) : -1;
-                    insertAt = lastIndex >= 0 ? lastIndex + 1 : 0;
-                } else {
-                    const firstTargetId = targetIds[0];
-                    const firstIndex = firstTargetId ? next.findIndex((block) => block.id === firstTargetId) : -1;
-                    insertAt = firstIndex >= 0 ? firstIndex : next.length;
-                }
+                const insertAt =
+                    direction === 'prev'
+                        ? targetStart
+                        : targetStart + targetSection.blockIds.length;
 
-                next.splice(insertAt, 0, moving);
-                return normalizeBlocks(next);
+                return normalizeBlocks([
+                    ...withoutMoved.slice(0, insertAt),
+                    ...fromBlocks,
+                    ...withoutMoved.slice(insertAt),
+                ]);
             });
 
-            setActiveBlockId(id);
             setGlobalEditor(null);
         },
-        [commitActiveBlock, editorSections, notifyIntroNoImages],
+        [commitActiveBlock, editorSections],
+    );
+
+    const deleteSection = useCallback(
+        (section) => {
+            if (section?.isIntro) {
+                return;
+            }
+
+            const headingBlockId = section.blockIds[0];
+            const headingBlock = blocksRef.current.find((block) => block.id === headingBlockId);
+            if (!isSectionHeadingBlock(headingBlock, section)) {
+                return;
+            }
+
+            if (blocksRef.current.length <= section.blockIds.length) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('cannot_delete_last_block'),
+                            body: t('editor_delete_section_last_block_hint'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            if (!window.confirm(t('editor_delete_section_confirm'))) {
+                return;
+            }
+
+            commitActiveBlock();
+            setInsertMenu(null);
+
+            const idsToRemove = new Set(section.blockIds);
+            if (activeBlockId && idsToRemove.has(activeBlockId)) {
+                blockFlushRef.current = null;
+                setActiveBlockId(null);
+                setGlobalEditor(null);
+                dispatchActiveBlockContext(articleId, '', '', false, null);
+            }
+
+            setBlocks((prev) => {
+                const next = prev.filter((block) => !idsToRemove.has(block.id));
+                return next.length > 0 ? normalizeBlocks(next) : prev;
+            });
+
+            outlineAppendDoneRef.current.delete(headingBlockId);
+
+            const headingId = outlineHeadingIdsByBlockIdRef.current.get(headingBlockId);
+            if (headingId != null) {
+                outlineHeadingIdsByBlockIdRef.current.delete(headingBlockId);
+                void outlineApiRequest(articleId, `/${headingId}`, { method: 'DELETE' }).catch(() => {});
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'remove',
+                    headingId,
+                });
+            } else {
+                const meta = extractOutlineHeadingFromBlock(headingBlock);
+                if (meta) {
+                    setOutlineHeadingKeys((prev) => {
+                        const next = new Set(prev);
+                        next.delete(outlineHeadingKey(meta.level, meta.headingText));
+                        return next;
+                    });
+                }
+            }
+        },
+        [activeBlockId, articleId, commitActiveBlock],
+    );
+
+    const resolveSectionForOutlineNode = useCallback(
+        (node) => {
+            if (!node || Number(node.level) !== 2) {
+                return null;
+            }
+
+            for (const section of editorSections) {
+                if (section.isIntro) {
+                    continue;
+                }
+
+                const blockId = section.blockIds[0];
+                const headingId = outlineHeadingIdsByBlockIdRef.current.get(blockId);
+                if (headingId != null && Number(headingId) === Number(node.id)) {
+                    return section;
+                }
+            }
+
+            const blockId = findBlockIdForOutlineHeading(
+                blocksRef.current,
+                Number(node.level),
+                String(node.heading_text ?? ''),
+            );
+            if (!blockId) {
+                return null;
+            }
+
+            const section = editorSections.find((item) => item.blockIds[0] === blockId) ?? null;
+            if (!section || section.isIntro) {
+                return null;
+            }
+
+            const block = blocksRef.current.find((item) => item.id === blockId);
+            if (!isSectionHeadingBlock(block, section)) {
+                return null;
+            }
+
+            return section;
+        },
+        [editorSections],
+    );
+
+    const removeHeadingFromBlocks = useCallback((level, headingText) => {
+        const targetLevel = Number(level) || 0;
+        const target = normalizeOutlineHeadingText(headingText);
+        if (target === '') {
+            return;
+        }
+
+        const selector = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2, h3, h4';
+
+        setBlocks((prev) =>
+            prev.map((block) => {
+                if (block.type !== 'text' || !block.content) {
+                    return block;
+                }
+
+                const doc = new DOMParser().parseFromString(block.content, 'text/html');
+                const headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
+                    (node) => normalizeOutlineHeadingText(node.textContent) === target,
+                );
+                if (!headingNode) {
+                    return block;
+                }
+
+                headingNode.remove();
+                const nextContent = doc.body.innerHTML.trim();
+
+                return {
+                    ...block,
+                    content: nextContent !== '' ? nextContent : '<p></p>',
+                };
+            }),
+        );
+    }, []);
+
+    const purgeOutlineHeadingState = useCallback((node) => {
+        const level = Number(node?.level ?? 0);
+        const text = normalizeOutlineHeadingText(node?.heading_text);
+
+        for (const [blockId, headingId] of outlineHeadingIdsByBlockIdRef.current.entries()) {
+            if (Number(headingId) === Number(node?.id)) {
+                outlineHeadingIdsByBlockIdRef.current.delete(blockId);
+                outlineAppendDoneRef.current.delete(blockId);
+            }
+        }
+
+        if (text !== '') {
+            setOutlineHeadingKeys((prev) => {
+                const next = new Set(prev);
+                next.delete(outlineHeadingKey(level, text));
+                return next;
+            });
+        }
+    }, []);
+
+    const handleOutlineMoveHeading = useCallback(
+        (node, direction) => {
+            if (!node) {
+                return;
+            }
+
+            const level = Number(node.level ?? 0);
+
+            if (level === 2) {
+                const section = resolveSectionForOutlineNode(node);
+                if (section) {
+                    moveSection(section.id, direction);
+                }
+
+                return;
+            }
+
+            const blockId = findBlockIdForOutlineHeading(
+                blocksRef.current,
+                level,
+                String(node.heading_text ?? ''),
+            );
+            if (!blockId) {
+                return;
+            }
+
+            const section = editorSections.find((item) => item.blockIds[0] === blockId) ?? null;
+            if (!section || section.isIntro) {
+                return;
+            }
+
+            const block = blocksRef.current.find((item) => item.id === blockId);
+            if (!isSectionHeadingBlock(block, section)) {
+                return;
+            }
+
+            moveSection(section.id, direction);
+        },
+        [editorSections, moveSection, resolveSectionForOutlineNode],
+    );
+
+    const handleOutlineDeleteHeading = useCallback(
+        (node) => {
+            if (!node?.id) {
+                return;
+            }
+
+            const level = Number(node.level ?? 0);
+
+            if (level === 2) {
+                const section = resolveSectionForOutlineNode(node);
+                if (section) {
+                    deleteSection(section);
+
+                    return;
+                }
+
+                if (!window.confirm(t('editor_delete_section_confirm'))) {
+                    return;
+                }
+
+                purgeOutlineHeadingState(node);
+                void outlineApiRequest(articleId, `/${node.id}`, { method: 'DELETE' }).catch(() => {});
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'remove',
+                    headingId: node.id,
+                });
+
+                return;
+            }
+
+            if (
+                !window.confirm(
+                    `Xóa heading H${level} "${String(node.heading_text ?? '').trim()}" khỏi bài viết?`,
+                )
+            ) {
+                return;
+            }
+
+            commitActiveBlock();
+            removeHeadingFromBlocks(level, node.heading_text);
+            purgeOutlineHeadingState(node);
+            void outlineApiRequest(articleId, `/${node.id}`, { method: 'DELETE' }).catch(() => {});
+            setOutlineTreeSync({
+                token: Date.now(),
+                action: 'remove',
+                headingId: node.id,
+            });
+        },
+        [
+            articleId,
+            commitActiveBlock,
+            deleteSection,
+            purgeOutlineHeadingState,
+            removeHeadingFromBlocks,
+            resolveSectionForOutlineNode,
+        ],
     );
 
     const startTempMerge = useCallback(
@@ -4492,6 +5076,23 @@ export default function SeoArticleEditor({
             setSaveStatus('saved');
         };
 
+        const onRevisionRestore = (event) => {
+            const html = stripLeadingH1FromHtml(event.detail?.content ?? event.detail?.html ?? '');
+            if (!html) {
+                return;
+            }
+
+            skipNextAutosave.current = true;
+            clearTempMerge();
+            blockFlushRef.current = null;
+            setActiveBlockId(null);
+            setGlobalEditor(null);
+            const parsedBlocks = parseHtmlToBlocks(html);
+            setBlocks(enrichBlocksWithPostImages(parsedBlocks, postImagesRef.current));
+            saveDraft(articleId, { blocks: parsedBlocks, html });
+            setSaveStatus('saved');
+        };
+
         const onCollectEditorHtml = (event) => {
             blockFlushRef.current?.();
             clearTempMerge();
@@ -4516,6 +5117,7 @@ export default function SeoArticleEditor({
         window.addEventListener('collect-editor-html', onCollectEditorHtml);
         window.addEventListener('extract-article-faqs', enrichExtractFaq);
         window.addEventListener('article-faqs-extracted', applyEditorHtml);
+        window.addEventListener('seo-article-revision-restore', onRevisionRestore);
 
         const onPostImagesSynced = (event) => {
             const images = event.detail?.images;
@@ -5048,6 +5650,7 @@ export default function SeoArticleEditor({
             window.removeEventListener('collect-editor-html', onCollectEditorHtml);
             window.removeEventListener('extract-article-faqs', enrichExtractFaq);
             window.removeEventListener('article-faqs-extracted', applyEditorHtml);
+            window.removeEventListener('seo-article-revision-restore', onRevisionRestore);
             window.removeEventListener('article-post-images-synced', onPostImagesSynced);
             window.removeEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
             window.removeEventListener('seo-request-editor-images-catalog', onRequestEditorImagesCatalog);
@@ -5166,11 +5769,96 @@ export default function SeoArticleEditor({
                 return { ...block, content: doc.body.innerHTML };
             }),
         );
+
+        setOutlineHeadingKeys((prev) => {
+            const next = new Set(prev);
+            const oldKey = outlineHeadingKey(targetLevel, target);
+            const newKey = outlineHeadingKey(targetLevel, replacement);
+            if (next.has(oldKey)) {
+                next.delete(oldKey);
+            }
+            next.add(newKey);
+            return next;
+        });
     }, []);
 
     const handleOutlineLoaded = useCallback((outline) => {
-        setOutlineHasSavedHeadings(Array.isArray(outline) && outline.length > 0);
+        const hasOutline = Array.isArray(outline) && outline.length > 0;
+        setOutlineHasSavedHeadings(hasOutline);
+        setOutlineHeadingKeys(flattenOutlineHeadingKeys(outline));
     }, []);
+
+    const handleOutlineHeadingAppended = useCallback(({ blockId, headingId, heading }) => {
+        if (blockId && headingId != null) {
+            outlineHeadingIdsByBlockIdRef.current.set(blockId, headingId);
+            outlineAppendDoneRef.current.add(blockId);
+        }
+
+        const level = Number(heading?.level ?? 2);
+        const text = normalizeOutlineHeadingText(heading?.heading_text);
+        if (text !== '') {
+            setOutlineHeadingKeys((prev) => {
+                const next = new Set(prev);
+                next.add(outlineHeadingKey(level, text));
+                return next;
+            });
+        }
+    }, []);
+
+    const appendOutlineHeadingForBlock = useCallback(
+        async (blockId, meta) => {
+            const id = String(blockId ?? '').trim();
+            if (!id || !meta?.headingText || outlineAppendDoneRef.current.has(id)) {
+                return;
+            }
+
+            if (outlineAppendInflightRef.current.has(id)) {
+                return;
+            }
+
+            outlineAppendInflightRef.current.add(id);
+
+            try {
+                const data = await outlineApiRequest(articleId, '', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        heading_text: meta.headingText,
+                        level: meta.level,
+                    }),
+                });
+
+                const heading = data.heading ?? null;
+                if (!heading?.id) {
+                    throw new Error('Không tạo được heading trong outline.');
+                }
+
+                handleOutlineHeadingAppended({
+                    blockId: id,
+                    headingId: heading.id,
+                    heading,
+                });
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'append',
+                    heading,
+                    focusEdit: true,
+                });
+            } catch (error) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Outline',
+                            body: error?.message || 'Không thêm được heading vào outline.',
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                outlineAppendInflightRef.current.delete(id);
+            }
+        },
+        [articleId, handleOutlineHeadingAppended],
+    );
 
     const switchTab = useCallback(
         (tabId) => {
@@ -5322,7 +6010,14 @@ export default function SeoArticleEditor({
             ...prev,
             [sectionId]: false,
         }));
-    }, [commitActiveBlock]);
+
+        if (outlineHasSavedHeadings) {
+            const meta = extractOutlineHeadingFromBlock(newSectionBlock);
+            if (meta) {
+                void appendOutlineHeadingForBlock(newSectionBlock.id, meta);
+            }
+        }
+    }, [appendOutlineHeadingForBlock, commitActiveBlock, outlineHasSavedHeadings]);
 
     useEffect(() => {
         const normalizeSelectedImage = (payload = {}) => {
@@ -5580,9 +6275,13 @@ export default function SeoArticleEditor({
                     <ArticleOutlineTab
                         articleId={articleId}
                         headingCommand={outlineHeadingCommand}
+                        outlineTreeSync={outlineTreeSync}
                         onOutlineLoaded={handleOutlineLoaded}
                         onHeadingTextChange={applyOutlineHeadingText}
                         onJumpToEditorHeading={jumpToOutlineHeading}
+                        onOutlineMoveHeading={handleOutlineMoveHeading}
+                        onOutlineDeleteHeading={handleOutlineDeleteHeading}
+                        onOutlineAddSection={addSection}
                         onNotify={(payload) => {
                             window.dispatchEvent(
                                 new CustomEvent('seo-article-editor-notify', { detail: payload }),
@@ -5710,14 +6409,6 @@ export default function SeoArticleEditor({
                                     placeholder={t('editor_replace')}
                                     className="h-8 w-36 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 dark:border-gray-600 dark:bg-slate-900 dark:text-gray-100"
                                 />
-                                <button
-                                    type="button"
-                                    onClick={addSection}
-                                    className="inline-flex h-8 items-center gap-2 rounded border border-sky-300 bg-sky-50 px-3 text-sm font-medium text-sky-700 hover:bg-sky-100"
-                                >
-                                    <Plus size={14} />
-                                    {t('editor_add_section')}
-                                </button>
                             </div>
                         </div>
 
@@ -5851,10 +6542,6 @@ export default function SeoArticleEditor({
                                                     const canMoveDown = blockIndex < blocks.length - 1;
                                                     const handleMoveUp = () => moveBlock(block.id, 'up');
                                                     const handleMoveDown = () => moveBlock(block.id, 'down');
-                                                    const canMovePrevSection = sectionIndex > 0;
-                                                    const canMoveNextSection = sectionIndex < editorSections.length - 1;
-                                                    const handleMovePrevSection = () => moveBlockToSection(block.id, 'prev');
-                                                    const handleMoveNextSection = () => moveBlockToSection(block.id, 'next');
 
                                                     return (
                                                         <div
@@ -5873,12 +6560,8 @@ export default function SeoArticleEditor({
                                                                         onToggle={() => toggleInsertMenu(block.id, 'before')}
                                                                         canMoveUp={canMoveUp}
                                                                         canMoveDown={canMoveDown}
-                                                                        canMovePrevSection={canMovePrevSection}
-                                                                        canMoveNextSection={canMoveNextSection}
                                                                         onMoveUp={handleMoveUp}
                                                                         onMoveDown={handleMoveDown}
-                                                                        onMovePrevSection={handleMovePrevSection}
-                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'before' ? (
@@ -5934,7 +6617,10 @@ export default function SeoArticleEditor({
                                                                 }
                                                                 setGlobalEditor={setGlobalEditor}
                                                                 panelFaqs={panelFaqs}
-                                                                outlineHeadingsLocked={outlineHasSavedHeadings}
+                                                                outlineHeadingsLocked={
+                                                                    outlineHasSavedHeadings &&
+                                                                    isBlockOutlineSynced(block)
+                                                                }
                                                                 onOutlineHeadingCommand={handleOutlineHeadingFromEditor}
                                                                 onDelete={() => deleteBlock(block.id)}
                                                                 canDeleteBlock={blocks.length > 1}
@@ -5951,12 +6637,8 @@ export default function SeoArticleEditor({
                                                                         onToggle={() => toggleInsertMenu(block.id, 'after')}
                                                                         canMoveUp={canMoveUp}
                                                                         canMoveDown={canMoveDown}
-                                                                        canMovePrevSection={canMovePrevSection}
-                                                                        canMoveNextSection={canMoveNextSection}
                                                                         onMoveUp={handleMoveUp}
                                                                         onMoveDown={handleMoveDown}
-                                                                        onMovePrevSection={handleMovePrevSection}
-                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'after' ? (
@@ -6000,6 +6682,7 @@ export default function SeoArticleEditor({
                     onQuickFixSlugOne={quickFixSlugSingleImage}
                     onQuickFixAltTitleAll={quickFixAltTitleAllImages}
                     onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
+                    onRemoveImage={removeImageBlock}
                     onNotify={(payload) => {
                         window.dispatchEvent(
                             new CustomEvent('seo-article-editor-notify', { detail: payload }),

@@ -9,39 +9,50 @@ use Illuminate\Support\Facades\Config;
 trait RegistersAddonDatabase
 {
     /**
-     * Đọc addon.json; nếu có key "database" thì đăng ký connection và (tùy chọn) load migrations.
+     * Đăng ký connection DB từ addon.json (+ database.local.php tùy chọn) và load migrations.
      *
-     * @param string $addonPath Đường dẫn thư mục addon (thường __DIR__)
-     * @param string $connectionName Tên connection (vd: wp_headless)
-     * @param string|null $migrationsPath Đường dẫn thư mục migrations (null = không load)
+     * @param  string  $addonPath  Thư mục addon (thường __DIR__)
+     * @param  string  $connectionName  Tên connection runtime (vd: omi_seo_ai)
+     * @param  string|null  $migrationsPath  Thư mục migrations addon
      */
     protected function registerAddonDatabase(string $addonPath, string $connectionName, ?string $migrationsPath = null): void
     {
         $meta = $this->getAddonMetaFromPath($addonPath);
-        $database = $meta['database'] ?? null;
-
-        if ($database === null || $database === '') {
+        if ($meta === []) {
             return;
         }
 
-        $base = Config::get('database.connections.mysql', []);
-        Config::set('database.connections.' . $connectionName, array_merge($base, [
-            'database' => $database,
-        ]));
+        $meta['_addon_path'] = $addonPath;
+
+        $connection = AddonDatabaseConfig::resolveConnection($meta, $connectionName);
+        if ($connection === null) {
+            return;
+        }
+
+        Config::set('database.connections.'.$connectionName, $connection);
 
         if ($migrationsPath !== null && is_dir($migrationsPath)) {
             $this->loadMigrationsFrom($migrationsPath);
         }
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     private function getAddonMetaFromPath(string $addonPath): array
     {
-        $path = rtrim($addonPath, '/\\') . DIRECTORY_SEPARATOR . 'addon.json';
-        if (!is_file($path)) {
+        $path = rtrim($addonPath, '/\\').DIRECTORY_SEPARATOR.'addon.json';
+        if (! is_file($path)) {
             return [];
         }
+
         $json = file_get_contents($path);
+        if ($json === false) {
+            return [];
+        }
+
         $decoded = json_decode($json, true);
+
         return is_array($decoded) ? $decoded : [];
     }
 }

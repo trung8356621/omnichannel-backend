@@ -5,5 +5,11 @@
   "description": "Quản lý kết nối WordPress Headless và đồng bộ dữ liệu tự động.",
   "icon": "heroicon-o-cloud-arrow-up",
   "provider": "App\\Addons\\WpHeadless\\WpHeadlessServiceProvider",
-  "database": "omi_wp_headless"
+  "database": {
+    "connection": "wp_headless",
+    "name": "omi_wp_headless",
+    "host": "127.0.0.1",
+    "port": 3306,
+    "username": "root"
+  }
 }

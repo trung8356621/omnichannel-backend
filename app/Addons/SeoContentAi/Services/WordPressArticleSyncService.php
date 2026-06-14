@@ -8,6 +8,8 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
+use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -70,7 +72,8 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $postType = $type === 'product' ? 'product' : 'post';
+        $resolvedPostType = ArticlePostTypeResolver::resolve($article);
+        $postType = $resolvedPostType === SeoProjectTask::POST_TYPE_PRODUCT ? 'product' : 'post';
 
         try {
             $response = Http::timeout(30)
@@ -313,27 +316,45 @@ final class WordPressArticleSyncService
         }
 
         $virtualComments = app(VirtualCommentService::class)->getFromArticle($article);
-        $requestedPostType = strtolower(trim((string) ($article->type ?? 'article'))) === 'product'
-            ? 'product'
-            : 'post';
+        $wpContentService = app(WordPressArticleContentService::class);
+        $wpTaxonomy = $wpContentService->resolveWpTaxonomy($article);
 
-        $payload = [
-            'title' => (string) ($article->title ?? ''),
-            'slug' => (string) ($article->slug ?? ''),
-            'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
-            'post_date' => $this->formatPostDateForWordPress($article),
-            'post_type' => $requestedPostType,
-            'post_content' => $postContent !== '' ? $postContent : null,
-            'faqs' => $faqs,
-            'virtual_comments' => $virtualComments,
-            'seo' => $this->resolveSeoPayloadForWordPress($article, $seoOverride),
-            'meta_input' => [
-                VirtualCommentService::WP_META_KEY => json_encode(
-                    $virtualComments,
-                    JSON_UNESCAPED_UNICODE,
-                ),
-            ],
-        ];
+        if ($wpTaxonomy !== null) {
+            $payload = [
+                'title' => (string) ($article->title ?? ''),
+                'slug' => (string) ($article->slug ?? ''),
+                'post_content' => $postContent !== '' ? $postContent : null,
+                'faqs' => $faqs,
+                'seo' => $this->resolveSeoPayloadForWordPress($article, $seoOverride),
+                'parent_id' => $this->resolveTaxonomyParentIdForWordPress($article),
+            ];
+        } else {
+            $resolvedPostType = ArticlePostTypeResolver::resolve($article);
+            $requestedPostType = $resolvedPostType === SeoProjectTask::POST_TYPE_PRODUCT ? 'product' : 'post';
+
+            $payload = [
+                'title' => (string) ($article->title ?? ''),
+                'slug' => (string) ($article->slug ?? ''),
+                'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
+                'post_date' => $this->formatPostDateForWordPress($article),
+                'post_type' => $requestedPostType,
+                'post_content' => $postContent !== '' ? $postContent : null,
+                'faqs' => $faqs,
+                'virtual_comments' => $virtualComments,
+                'seo' => $this->resolveSeoPayloadForWordPress($article, $seoOverride),
+                'meta_input' => [
+                    VirtualCommentService::WP_META_KEY => json_encode(
+                        $virtualComments,
+                        JSON_UNESCAPED_UNICODE,
+                    ),
+                ],
+            ];
+
+            $categoryIds = $this->resolveCategoryIdsForWordPress($article);
+            if ($categoryIds !== []) {
+                $payload['category_ids'] = $categoryIds;
+            }
+        }
 
         try {
             $response = Http::timeout(45)
@@ -370,18 +391,24 @@ final class WordPressArticleSyncService
 
             $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
             $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
-            $remotePostType = strtolower(trim((string) ($decoded['post_type'] ?? $requestedPostType)));
-            if (! in_array($remotePostType, ['post', 'product'], true)) {
-                $remotePostType = $requestedPostType;
-            }
 
-            $article->update([
-                'type' => $remotePostType === 'product' ? 'product' : 'article',
-            ]);
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'wp_post_type'],
-                ['meta_value' => $remotePostType],
-            );
+            if ($wpTaxonomy === null) {
+                $requestedPostType = ArticlePostTypeResolver::resolve($article) === SeoProjectTask::POST_TYPE_PRODUCT
+                    ? 'product'
+                    : 'post';
+                $remotePostType = strtolower(trim((string) ($decoded['post_type'] ?? $requestedPostType)));
+                if (! in_array($remotePostType, ['post', 'product'], true)) {
+                    $remotePostType = $requestedPostType;
+                }
+
+                $article->update([
+                    'type' => $remotePostType === 'product' ? 'product' : 'article',
+                ]);
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_post_type'],
+                    ['meta_value' => $remotePostType],
+                );
+            }
             if ($remoteSlug !== '') {
                 $article->update(['slug' => $remoteSlug]);
                 $article->articleMetas()->updateOrCreate(
@@ -453,7 +480,9 @@ final class WordPressArticleSyncService
                 }
             }
 
-            $article->update(['body' => null]);
+            if ($wpTaxonomy === null) {
+                $article->update(['body' => null]);
+            }
             app(ArticleWordPressSyncFlagService::class)->clearAll($article);
             $this->timestampService->sync($article, $decoded);
 
@@ -462,8 +491,10 @@ final class WordPressArticleSyncService
                 'message' => $message,
                 'faq_count' => count($faqs),
                 'faq_extract_debug' => $faqExtractDebug,
-                'post_type' => $remotePostType,
-                'post_type_changed' => (bool) ($decoded['post_type_changed'] ?? false),
+                'post_type' => $wpTaxonomy === null ? ($remotePostType ?? null) : null,
+                'post_type_changed' => $wpTaxonomy === null
+                    ? (bool) ($decoded['post_type_changed'] ?? false)
+                    : false,
             ];
         } catch (Throwable $e) {
             Log::warning('WordPress article sync exception', [
@@ -794,5 +825,38 @@ final class WordPressArticleSyncService
 
             return $faq;
         }, $faqs);
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function resolveCategoryIdsForWordPress(SeoArticle $article): array
+    {
+        $article->loadMissing('articleMetas');
+        $raw = (string) ($article->articleMetas->firstWhere('meta_key', 'category_ids')?->meta_value ?? '');
+        if ($raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (! is_array($decoded)) {
+            return [];
+        }
+
+        return collect($decoded)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function resolveTaxonomyParentIdForWordPress(SeoArticle $article): int
+    {
+        $article->loadMissing('articleMetas');
+
+        return max(0, (int) (
+            $article->articleMetas->firstWhere('meta_key', 'wp_parent_id')?->meta_value ?? 0
+        ));
     }
 }

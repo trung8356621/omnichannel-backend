@@ -47,17 +47,18 @@ final class ArticleInternalLinkSuggestionService
         $excludeKeywordIds = $article->keywords()->pluck('keywords.id');
 
         $keywordsQuery = Keyword::query()
-            ->where('site_id', $siteId)
-            ->where('type', Keyword::TYPE_FOCUS)
+            ->forSite($siteId)
+            ->where('type', Keyword::TYPE_NORMAL)
             ->whereNotNull('phrase')
             ->where('phrase', '!=', '')
+            ->with(['links' => static fn ($query) => $query->where('seo_links.site_id', $siteId)])
             ->orderByRaw('CHAR_LENGTH(phrase) DESC');
 
         if ($excludeKeywordIds->isNotEmpty()) {
             $keywordsQuery->whereNotIn('id', $excludeKeywordIds);
         }
 
-        $keywords = $keywordsQuery->get(['id', 'phrase', 'target_url']);
+        $keywords = $keywordsQuery->get(['id', 'phrase']);
 
         $suggestions = [];
 
@@ -188,14 +189,14 @@ final class ArticleInternalLinkSuggestionService
             if (str_contains($path, '?')) {
                 [$path, $queryPart] = explode('?', $path, 2);
                 $path = $path !== '' ? $path : '/';
-                $query = '?' . strtolower($queryPart);
+                $query = '?'.strtolower($queryPart);
             }
 
-            return $path . $query;
+            return $path.$query;
         }
 
         if (str_starts_with($href, '//')) {
-            $href = 'https:' . $href;
+            $href = 'https:'.$href;
         }
 
         $parsed = parse_url($href);
@@ -205,12 +206,11 @@ final class ArticleInternalLinkSuggestionService
 
         $path = strtolower(rtrim((string) ($parsed['path'] ?? ''), '/')) ?: '/';
         $query = isset($parsed['query']) && $parsed['query'] !== ''
-            ? '?' . strtolower((string) $parsed['query'])
+            ? '?'.strtolower((string) $parsed['query'])
             : '';
 
-        return $path . $query;
+        return $path.$query;
     }
-
 
     /**
      * @param  list<string>  $linkedLabels

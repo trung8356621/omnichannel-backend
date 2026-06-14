@@ -5,12 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Str;
 
 /**
  * Skip List cho dò trùng outline — hỗ trợ wildcard SQL (%).
  *
- * Lớp 1 (PHP): Str::is — chặn heading đang xét, không gọi DB.
+ * Lớp 1 (PHP): so khớp wildcard UTF-8, không phân biệt hoa thường.
  * Lớp 2 (SQL): NOT LIKE — loại heading cũ trong DB khỏi kết quả FTS/exact.
  */
 final class OutlineSkipListMatcher
@@ -33,7 +32,7 @@ final class OutlineSkipListMatcher
 
             $normalized[] = str_contains($pattern, '%')
                 ? $pattern
-                : '%' . $pattern . '%';
+                : '%'.$pattern.'%';
         }
 
         return array_values(array_unique($normalized));
@@ -65,15 +64,58 @@ final class OutlineSkipListMatcher
         ]);
 
         foreach ($sqlPatterns as $pattern) {
-            $strIsPattern = mb_strtolower(str_replace('%', '*', $pattern), 'UTF-8');
             foreach ($candidates as $candidate) {
-                if ($candidate !== '' && Str::is($strIsPattern, $candidate)) {
+                if ($candidate !== '' && $this->matchesSqlLikePattern($candidate, $pattern)) {
                     return true;
                 }
             }
         }
 
         return false;
+    }
+
+    /**
+     * So khớp SQL LIKE (%/_), không phân biệt hoa thường, hỗ trợ UTF-8.
+     */
+    public function matchesSqlLikePattern(string $text, string $sqlPattern): bool
+    {
+        $text = mb_strtolower(trim($text), 'UTF-8');
+        $pattern = mb_strtolower(trim($sqlPattern), 'UTF-8');
+
+        if ($text === '' || $pattern === '') {
+            return false;
+        }
+
+        $startsWithWildcard = str_starts_with($pattern, '%');
+        $endsWithWildcard = str_ends_with($pattern, '%');
+
+        if ($startsWithWildcard && $endsWithWildcard) {
+            $needle = trim($pattern, '%');
+
+            return $needle !== '' && mb_strpos($text, $needle) !== false;
+        }
+
+        if ($endsWithWildcard && ! $startsWithWildcard) {
+            $prefix = mb_substr($pattern, 0, mb_strlen($pattern) - 1);
+
+            return $prefix === '' || mb_strpos($text, $prefix) === 0;
+        }
+
+        if ($startsWithWildcard && ! $endsWithWildcard) {
+            $suffix = mb_substr($pattern, 1);
+            if ($suffix === '') {
+                return true;
+            }
+
+            $suffixLength = mb_strlen($suffix);
+            if (mb_strlen($text) < $suffixLength) {
+                return false;
+            }
+
+            return mb_substr($text, -$suffixLength) === $suffix;
+        }
+
+        return $text === $pattern;
     }
 
     /**

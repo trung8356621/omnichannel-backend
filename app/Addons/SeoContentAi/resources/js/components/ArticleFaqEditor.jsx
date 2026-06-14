@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles, FileCode } from 'lucide-react';
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
@@ -175,6 +175,7 @@ export default function ArticleFaqEditor({
     initialFaqs = [],
     initialExtractDebug = null,
     canGenerateFaq = false,
+    canImportMarkdownFaq = false,
 }) {
     const [faqs, setFaqs] = useState(() => {
         const localFaqs = loadFaqDraft(articleId);
@@ -189,6 +190,9 @@ export default function ArticleFaqEditor({
     const skipBlurDuplicateCheckRef = useRef(false);
     const [renewingIndex, setRenewingIndex] = useState(null);
     const [generatingAll, setGeneratingAll] = useState(false);
+    const [markdownImportOpen, setMarkdownImportOpen] = useState(false);
+    const [markdownImportDraft, setMarkdownImportDraft] = useState('');
+    const [importingMarkdown, setImportingMarkdown] = useState(false);
     const [saveStatus, setSaveStatus] = useState('saved');
 
     const flushFaqs = useCallback(() => {
@@ -363,6 +367,16 @@ export default function ArticleFaqEditor({
         window.addEventListener('article-faq-generate-started', onGenerateStarted);
         window.addEventListener('article-faq-generate-finished', onGenerateFinished);
 
+        const onMarkdownImportFinished = (event) => {
+            setImportingMarkdown(false);
+            if (event?.detail?.success === true) {
+                setMarkdownImportDraft('');
+                setMarkdownImportOpen(false);
+            }
+        };
+
+        window.addEventListener('article-faq-markdown-import-finished', onMarkdownImportFinished);
+
         return () => {
             window.removeEventListener('article-faq-renewed', onRenewed);
             window.removeEventListener('faq-duplicate-checked', onDuplicateResult);
@@ -373,8 +387,23 @@ export default function ArticleFaqEditor({
             window.removeEventListener('article-faqs-save-finished', onFaqsSaveFinished);
             window.removeEventListener('article-faq-generate-started', onGenerateStarted);
             window.removeEventListener('article-faq-generate-finished', onGenerateFinished);
+            window.removeEventListener('article-faq-markdown-import-finished', onMarkdownImportFinished);
         };
     }, [articleId, debouncedSave, flushFaqs]);
+
+    const importMarkdownFaq = () => {
+        const markdown = String(markdownImportDraft ?? '').trim();
+        if (!markdown || importingMarkdown) {
+            return;
+        }
+
+        setImportingMarkdown(true);
+        window.dispatchEvent(
+            new CustomEvent('import-markdown-faq-debug', {
+                detail: { markdown },
+            }),
+        );
+    };
 
     const generateAllFaqs = () => {
         if (!canGenerateFaq || generatingAll) {
@@ -441,6 +470,18 @@ export default function ArticleFaqEditor({
                             {generatingAll ? t('faq_generate_ai_loading') : t('faq_generate_ai')}
                         </button>
                     ) : null}
+                    {canImportMarkdownFaq ? (
+                        <button
+                            type="button"
+                            className="seo-faq-btn-import-md"
+                            disabled={importingMarkdown}
+                            onClick={() => setMarkdownImportOpen((open) => !open)}
+                            title={t('faq_import_markdown_debug')}
+                        >
+                            <FileCode size={14} />
+                            {importingMarkdown ? t('faq_import_markdown_loading') : t('faq_import_markdown_debug')}
+                        </button>
+                    ) : null}
                     <button type="button" className="seo-faq-btn-add" onClick={addFaq}>
                         <Plus size={14} />
                         {t('faq_add_question')}
@@ -448,6 +489,36 @@ export default function ArticleFaqEditor({
                 </div>
             </div>
             <div className="wp-postbox-inside space-y-4">
+                {canImportMarkdownFaq && markdownImportOpen ? (
+                    <div className="seo-faq-markdown-import">
+                        <p className="seo-faq-markdown-import__hint">{t('faq_import_markdown_hint')}</p>
+                        <textarea
+                            className="seo-faq-markdown-import__textarea"
+                            rows={8}
+                            value={markdownImportDraft}
+                            onChange={(event) => setMarkdownImportDraft(event.target.value)}
+                            placeholder={t('faq_import_markdown_placeholder')}
+                        />
+                        <div className="seo-faq-markdown-import__actions">
+                            <button
+                                type="button"
+                                className="seo-faq-btn-import-md is-primary"
+                                disabled={importingMarkdown || markdownImportDraft.trim() === ''}
+                                onClick={importMarkdownFaq}
+                            >
+                                {importingMarkdown ? t('faq_import_markdown_loading') : t('faq_import_markdown_submit')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-faq-btn-import-md"
+                                disabled={importingMarkdown}
+                                onClick={() => setMarkdownImportOpen(false)}
+                            >
+                                {t('cancel')}
+                            </button>
+                        </div>
+                    </div>
+                ) : null}
                 <FaqExtractDebugBanner
                     debug={extractDebug}
                     onDismiss={() => setExtractDebug(null)}

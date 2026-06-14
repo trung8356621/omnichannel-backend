@@ -163,6 +163,13 @@ class WorkflowParserService
             return $this->parseFaqsFromHtml($content, $treatAllAsFaqSection);
         }
 
+        if (
+            ! $treatAllAsFaqSection
+            && $this->shouldParseMarkdownAsStandaloneFaqSection($content)
+        ) {
+            return $this->parseFaqs($content, true);
+        }
+
         return $this->parseFaqs($content, $treatAllAsFaqSection);
     }
 
@@ -709,7 +716,7 @@ class WorkflowParserService
                     ];
                 }
 
-                $currentQuestion = $this->faqItemHeadingText($trimmed);
+                $currentQuestion = $this->normalizeExtractedFaqQuestion($this->faqItemHeadingText($trimmed));
                 $answerLines = [];
 
                 continue;
@@ -1141,6 +1148,10 @@ class WorkflowParserService
 
     private function removeFaqFromMarkdownAndAppendShortcode(string $markdown): string
     {
+        if ($this->shouldParseMarkdownAsStandaloneFaqSection($markdown)) {
+            return $this->removeStandaloneFaqBlockFromMarkdown($markdown);
+        }
+
         $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
         $result = [];
         $inFaqSection = false;
@@ -1186,6 +1197,57 @@ class WorkflowParserService
 
         $cleaned = trim(implode("\n", $result));
         if ($cleaned !== '' && ! str_contains($cleaned, self::FAQ_SHORTCODE_PLACEHOLDER)) {
+            $cleaned .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        return $cleaned;
+    }
+
+    private function removeStandaloneFaqBlockFromMarkdown(string $markdown): string
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
+        $result = [];
+        $inFaqBlock = false;
+        $placeholderAdded = false;
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+
+            if (! $inFaqBlock && ($this->isFaqItemHeadingLine($trimmed) || $this->isFaqQuestionLine($trimmed))) {
+                $inFaqBlock = true;
+
+                if (! $placeholderAdded) {
+                    if ($result !== [] && trim((string) end($result)) !== '') {
+                        $result[] = '';
+                    }
+                    $result[] = self::FAQ_SHORTCODE_PLACEHOLDER;
+                    $placeholderAdded = true;
+                }
+
+                continue;
+            }
+
+            if ($inFaqBlock) {
+                if ($this->isFaqMarkdownSectionTerminatorLine($trimmed)) {
+                    break;
+                }
+
+                continue;
+            }
+
+            $result[] = $line;
+        }
+
+        if (! $placeholderAdded) {
+            return trim($markdown) . "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        $cleaned = trim(implode("\n", $result));
+        if ($cleaned === '') {
+            return self::FAQ_SHORTCODE_PLACEHOLDER;
+        }
+
+        if (! str_contains($cleaned, self::FAQ_SHORTCODE_PLACEHOLDER)) {
             $cleaned .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
         }
 
@@ -1612,7 +1674,7 @@ class WorkflowParserService
         $plain = trim(str_replace(['**', '*'], '', $line));
 
         return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1
-            || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?\s*$/u', $plain) === 1
+            || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?/u', $plain) === 1
             || preg_match('/^(❓\s*)?Q\s*\d*\s*:\s*.+/iu', $plain) === 1
             || preg_match('/^(❓\s*)?Hỏi\s*:\s*.+/iu', $plain) === 1;
     }
@@ -1652,7 +1714,7 @@ class WorkflowParserService
             return false;
         }
 
-        if (preg_match('/\?\s*$/u', $plain) === 1) {
+        if (preg_match('/\?/u', $plain) === 1) {
             return false;
         }
 
@@ -2011,8 +2073,40 @@ class WorkflowParserService
         );
         $normalized = is_string($normalized) ? $normalized : $text;
         $normalized = preg_replace('/^\?\s*/u', '', trim($normalized)) ?? trim($normalized);
+        $normalized = preg_replace('/^\d+[\.\)]\s+/u', '', $normalized) ?? $normalized;
 
         return trim($normalized);
+    }
+
+    /**
+     * Markdown FAQ kiểu AI: nhiều H3/H4 dạng «1. Câu hỏi?» nhưng không có tiêu đề vùng FAQ.
+     */
+    public function shouldParseMarkdownAsStandaloneFaqSection(string $markdown): bool
+    {
+        $markdown = trim($markdown);
+        if ($markdown === '') {
+            return false;
+        }
+
+        if ($this->findFaqSectionHeadingInContent($markdown) !== null) {
+            return false;
+        }
+
+        $questionHeadings = 0;
+        foreach (preg_split('/\r\n|\r|\n/', $markdown) ?: [] as $line) {
+            $trimmed = trim($line);
+            if ($this->lineHeadingLevel($trimmed) === null) {
+                continue;
+            }
+
+            if (! $this->isFaqItemHeadingLine($trimmed) && ! $this->isFaqQuestionLine($trimmed)) {
+                continue;
+            }
+
+            $questionHeadings++;
+        }
+
+        return $questionHeadings >= 2;
     }
 
     private function stripFaqAnswerLabelFromHtml(string $html): string

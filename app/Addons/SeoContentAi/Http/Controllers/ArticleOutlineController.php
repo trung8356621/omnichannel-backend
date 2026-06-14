@@ -21,6 +21,7 @@ use RuntimeException;
 /**
  * API Outline (TOC) cho React Editor:
  * - GET    /api/seo/articles/{article}/outline
+ * - POST   /api/seo/articles/{article}/outline
  * - PUT    /api/seo/articles/{article}/outline/{heading}
  * - POST   /api/seo/articles/{article}/outline/{heading}/generate
  */
@@ -83,6 +84,58 @@ class ArticleOutlineController extends Controller
         ]);
     }
 
+    public function store(Request $request, SeoArticle $article): JsonResponse
+    {
+        abort_unless($this->canAccessArticle($article), 403);
+
+        $validated = $request->validate([
+            'heading_text' => ['required', 'string', 'max:255'],
+            'level' => ['sometimes', 'integer', 'min:2', 'max:4'],
+            'parent_id' => ['nullable', 'integer'],
+        ]);
+
+        $text = trim(preg_replace('/\s+/u', ' ', $validated['heading_text']) ?? $validated['heading_text']);
+        if ($text === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Heading không được để trống.',
+            ], 422);
+        }
+
+        $level = (int) ($validated['level'] ?? 2);
+        $parentId = isset($validated['parent_id']) ? (int) $validated['parent_id'] : null;
+
+        if ($parentId !== null) {
+            $parent = SeoArticleHeading::query()
+                ->where('article_id', $article->id)
+                ->whereKey($parentId)
+                ->first();
+
+            if ($parent === null) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Parent heading không hợp lệ.',
+                ], 422);
+            }
+        }
+
+        $maxSortOrder = (int) ($article->headings()->max('sort_order') ?? -1);
+
+        $heading = SeoArticleHeading::query()->create([
+            'article_id' => (int) $article->id,
+            'heading_text' => $text,
+            'heading_slug' => Str::slug($text),
+            'level' => $level,
+            'sort_order' => $maxSortOrder + 1,
+            'parent_id' => $parentId,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'heading' => $this->headingToArray($heading),
+        ], 201);
+    }
+
     public function update(Request $request, SeoArticle $article, SeoArticleHeading $heading): JsonResponse
     {
         abort_unless($this->canAccessArticle($article), 403);
@@ -119,6 +172,20 @@ class ArticleOutlineController extends Controller
             'success' => true,
             'heading' => $this->headingToArray($heading),
             'duplicates' => $duplicates,
+        ]);
+    }
+
+    public function destroy(SeoArticle $article, SeoArticleHeading $heading): JsonResponse
+    {
+        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless((int) $heading->article_id === (int) $article->id, 404);
+
+        $headingId = (int) $heading->id;
+        $heading->delete();
+
+        return response()->json([
+            'success' => true,
+            'heading_id' => $headingId,
         ]);
     }
 
