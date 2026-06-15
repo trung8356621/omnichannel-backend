@@ -49,6 +49,7 @@ final class ArticleEditorSeoPayloadService
 
         return [
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
+            'site_domain' => trim((string) ($article->site?->domain ?? '')),
             'article_type' => (string) ($article->type ?? 'post'),
             'skip_seo_score' => $skipSeoScore,
             'score' => $skipSeoScore || $article->seo_score === null

@@ -92,6 +92,7 @@ class ArticleOutlineController extends Controller
             'heading_text' => ['required', 'string', 'max:255'],
             'level' => ['sometimes', 'integer', 'min:2', 'max:4'],
             'parent_id' => ['nullable', 'integer'],
+            'after_heading_id' => ['nullable', 'integer'],
         ]);
 
         $text = trim(preg_replace('/\s+/u', ' ', $validated['heading_text']) ?? $validated['heading_text']);
@@ -104,6 +105,7 @@ class ArticleOutlineController extends Controller
 
         $level = (int) ($validated['level'] ?? 2);
         $parentId = isset($validated['parent_id']) ? (int) $validated['parent_id'] : null;
+        $afterHeadingId = isset($validated['after_heading_id']) ? (int) $validated['after_heading_id'] : null;
 
         if ($parentId !== null) {
             $parent = SeoArticleHeading::query()
@@ -119,14 +121,59 @@ class ArticleOutlineController extends Controller
             }
         }
 
-        $maxSortOrder = (int) ($article->headings()->max('sort_order') ?? -1);
+        $insertSortOrder = null;
+
+        if ($afterHeadingId !== null) {
+            $afterHeading = SeoArticleHeading::query()
+                ->where('article_id', $article->id)
+                ->whereKey($afterHeadingId)
+                ->first();
+
+            if ($afterHeading !== null) {
+                $sorted = $article->headings()->orderBy('sort_order')->get();
+                $afterIndex = $sorted->search(
+                    static fn (SeoArticleHeading $row): bool => (int) $row->id === $afterHeadingId,
+                );
+
+                if ($afterIndex !== false) {
+                    $afterLevel = (int) $afterHeading->level;
+                    $insertAfterIndex = (int) $afterIndex;
+
+                    for ($i = $afterIndex + 1; $i < $sorted->count(); $i++) {
+                        /** @var SeoArticleHeading $candidate */
+                        $candidate = $sorted[$i];
+                        if ((int) $candidate->level <= $afterLevel) {
+                            break;
+                        }
+
+                        $insertAfterIndex = $i;
+                    }
+
+                    $insertSortOrder = (int) $sorted[$insertAfterIndex]->sort_order + 1;
+
+                    if ($level === 2) {
+                        $parentId = null;
+                    } elseif ($parentId === null) {
+                        $parentId = $afterHeading->parent_id !== null ? (int) $afterHeading->parent_id : null;
+                    }
+                }
+            }
+        }
+
+        if ($insertSortOrder === null) {
+            $insertSortOrder = (int) ($article->headings()->max('sort_order') ?? -1) + 1;
+        } else {
+            $article->headings()
+                ->where('sort_order', '>=', $insertSortOrder)
+                ->increment('sort_order');
+        }
 
         $heading = SeoArticleHeading::query()->create([
             'article_id' => (int) $article->id,
             'heading_text' => $text,
             'heading_slug' => Str::slug($text),
             'level' => $level,
-            'sort_order' => $maxSortOrder + 1,
+            'sort_order' => $insertSortOrder,
             'parent_id' => $parentId,
         ]);
 

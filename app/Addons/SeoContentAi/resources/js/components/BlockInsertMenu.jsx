@@ -96,21 +96,34 @@ export function BlockInsertMenuBar({
         return () => document.removeEventListener('mousedown', onMouseDown);
     }, [onClose]);
 
+    const handleInsert = (type) => {
+        onInsert(type);
+        onClose();
+    };
+
     return (
         <div ref={ref} className="seo-block-insert-menu" onMouseDown={(e) => e.stopPropagation()}>
             <button
                 type="button"
                 className="seo-block-insert-menu__item"
-                onClick={() => onInsert('text')}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    handleInsert('text');
+                }}
             >
                 <FileText size={18} strokeWidth={1.75} />
-                <span>Paragraph</span>
+                <span>{t('editor_add_paragraph')}</span>
             </button>
             {!imageInsertDisabled ? (
                 <button
                     type="button"
                     className="seo-block-insert-menu__item"
-                    onClick={() => onInsert('image')}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        handleInsert('image');
+                    }}
                 >
                     <ImageIcon size={18} strokeWidth={1.75} />
                     <span>{t('image_block_label')}</span>
@@ -125,9 +138,11 @@ export function BlockInsertMenuBar({
                         ? 'FAQ shortcode already exists [omi_faq]'
                         : 'Insert FAQ shortcode [omi_faq]'
                 }
-                onClick={() => {
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={(e) => {
+                    e.stopPropagation();
                     if (!faqShortcodeDisabled) {
-                        onInsert('faq');
+                        handleInsert('faq');
                     }
                 }}
             >

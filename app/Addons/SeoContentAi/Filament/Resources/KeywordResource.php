@@ -262,7 +262,7 @@ class KeywordResource extends Resource
                     ->label(__('seo-content-ai::filament.keyword.target_destinations'))
                     ->view('seo-content-ai::filament.resources.keywords.columns.destinations')
                     ->disabledClick()
-                    ->extraCellAttributes(['class' => 'py-2.5 whitespace-normal max-w-xl']),
+                    ->extraCellAttributes(['class' => 'py-2 whitespace-normal']),
             ])
             ->defaultSort('phrase')
             ->filters([

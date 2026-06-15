@@ -105,6 +105,59 @@ final class SimpleMarkdownHtmlConverter
     }
 
     /**
+     * Markdown Featured Snippet → HTML chèn trong section hiện tại (không tạo H2/H3 outline mới).
+     */
+    public function toFeaturedSnippetEditorHtml(string $markdown): string
+    {
+        return $this->downgradeHeadingsForInlineEditorInsert($this->toHtml($markdown));
+    }
+
+    /**
+     * H1–H6 → <p><strong>…</strong></p> để editor không tách section / outline.
+     */
+    public function downgradeHeadingsForInlineEditorInsert(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $previous = libxml_use_internal_errors(true);
+        $doc = new \DOMDocument('1.0', 'UTF-8');
+        $wrapped = '<div id="seo-fs-root">' . $html . '</div>';
+        $doc->loadHTML('<?xml encoding="UTF-8">' . $wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+
+        $root = $doc->getElementById('seo-fs-root');
+        if ($root === null) {
+            return $html;
+        }
+
+        $headings = [];
+        foreach ($root->getElementsByTagName('*') as $element) {
+            if (preg_match('/^h[1-6]$/i', $element->nodeName) === 1) {
+                $headings[] = $element;
+            }
+        }
+
+        foreach ($headings as $heading) {
+            $p = $doc->createElement('p');
+            $strong = $doc->createElement('strong');
+            $strong->textContent = trim(preg_replace('/\s+/u', ' ', $heading->textContent ?? '') ?? '');
+            $p->appendChild($strong);
+            $heading->parentNode?->replaceChild($p, $heading);
+        }
+
+        $parts = [];
+        foreach ($root->childNodes as $child) {
+            $parts[] = $doc->saveHTML($child);
+        }
+
+        return trim(implode('', $parts));
+    }
+
+    /**
      * Tách H1 / Meta Description khỏi markdown trước khi convert (H1 → tiêu đề, không vào body).
      *
      * @return array{markdown: string, h1_title: string|null, meta_description: string|null}

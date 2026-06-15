@@ -2765,6 +2765,97 @@
     color: #e2e8f0;
 }
 
+.seo-block-insert-menu__item--featured {
+    border-color: #c4b5fd;
+    background: #f5f3ff;
+    color: #6d28d9;
+}
+
+.seo-block-insert-menu__item--featured:hover:not(:disabled) {
+    border-color: #7c3aed;
+    color: #5b21b6;
+}
+
+.dark .seo-block-insert-menu__item--featured {
+    background: rgb(46 16 101 / 0.35);
+    border-color: rgb(124 58 237 / 0.45);
+    color: #ddd6fe;
+}
+
+.seo-section-header-icon-btn {
+    display: inline-flex;
+    height: 1.75rem;
+    width: 1.75rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    border-width: 1px;
+}
+
+.seo-section-element-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.25rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed #dcdcde;
+}
+
+.dark .seo-section-element-actions {
+    border-top-color: rgb(71 85 105);
+}
+
+.seo-section-element-actions__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #1d2327;
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.seo-section-element-actions__item:hover:not(:disabled):not(.is-disabled) {
+    border-color: #2271b1;
+    color: #2271b1;
+}
+
+.seo-section-element-actions__item--featured {
+    border-color: #c4b5fd;
+    background: #f5f3ff;
+    color: #6d28d9;
+}
+
+.seo-section-element-actions__item--featured:hover:not(:disabled) {
+    border-color: #7c3aed;
+    color: #5b21b6;
+}
+
+.seo-section-element-actions__item.is-disabled,
+.seo-section-element-actions__item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    color: #646970;
+    background: #f6f7f7;
+}
+
+.dark .seo-section-element-actions__item {
+    background: rgb(15 23 42);
+    border-color: rgb(71 85 105);
+    color: #e2e8f0;
+}
+
+.dark .seo-section-element-actions__item--featured {
+    background: rgb(46 16 101 / 0.35);
+    border-color: rgb(124 58 237 / 0.45);
+    color: #ddd6fe;
+}
+
 .seo-image-block-picker {
     display: flex;
     flex-direction: column;
@@ -6638,18 +6729,11 @@
 }
 
 .seo-outline-block__actions-row {
-    display: none;
+    display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: 0.375rem;
     padding-left: 2.5rem;
-}
-
-.seo-outline-block:hover .seo-outline-block__actions-row,
-.seo-outline-block.is-heading-focused .seo-outline-block__actions-row,
-.seo-outline-block.is-busy .seo-outline-block__actions-row,
-.seo-outline-block:focus-within .seo-outline-block__actions-row {
-    display: flex;
 }
 
 .seo-outline-block__action-btn {

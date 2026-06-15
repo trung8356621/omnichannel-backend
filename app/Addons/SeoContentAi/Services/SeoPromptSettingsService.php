@@ -31,6 +31,9 @@ final class SeoPromptSettingsService
 
     public const KEY_FEATURED_SNIPPET_MAX_COLUMNS = 'featured_snippet_max_columns';
 
+    /** Prompt sinh Featured Snippet trên editor bài viết (biến {{input}} = từ khóa chính). */
+    public const KEY_FEATURED_SNIPPET_PROMPT_ID = 'featured_snippet_prompt_id';
+
     /** Nội dung chèn vào prompt qua {{tone}}. */
     public const KEY_TONE_TEXT = 'tone_text';
 
@@ -136,7 +139,15 @@ final class SeoPromptSettingsService
                 10,
                 5,
             ),
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull(
+                $data[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
+            ),
         ];
+    }
+
+    public function getFeaturedSnippetPromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_FEATURED_SNIPPET_PROMPT_ID];
     }
 
     /**
@@ -281,6 +292,9 @@ final class SeoPromptSettingsService
             ...$this->normalizeFeaturedSnippetRowTiers($settings),
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $minCols,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $maxCols,
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull(
+                $settings[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
+            ),
         ], 'no');
     }
 
@@ -307,6 +321,7 @@ final class SeoPromptSettingsService
             self::KEY_FEATURED_SNIPPET_MIN_ROWS => 10,
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => 2,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => 5,
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => null,
         ];
     }
 
@@ -405,5 +420,16 @@ final class SeoPromptSettingsService
         $int = (int) $value;
 
         return max($min, min($max, $int));
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $int = (int) $value;
+
+        return $int > 0 ? $int : null;
     }
 }

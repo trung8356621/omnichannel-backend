@@ -16,11 +16,14 @@ use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
 use Illuminate\Database\Eloquent\Builder;
+use Livewire\Attributes\Renderless;
 use Livewire\Attributes\Url;
 
 class ListKeywords extends ListRecords
 {
     protected static string $resource = KeywordResource::class;
+
+    protected static string $view = 'seo-content-ai::filament.resources.keywords.pages.list-keywords';
 
     #[Url(as: 'parent_id')]
     public ?int $parentId = null;
@@ -28,6 +31,38 @@ class ListKeywords extends ListRecords
     public function mount(): void
     {
         SeoAccessControl::setGlobalSiteId(null);
+    }
+
+    /**
+     * @return array{phrase: string, html: string, error: string|null}
+     */
+    #[Renderless]
+    public function loadKeywordDestinationsModal(int $keywordId): array
+    {
+        $keyword = Keyword::query()
+            ->with([
+                'links' => static fn ($linkQuery): mixed => $linkQuery
+                    ->orderBy('seo_links.id')
+                    ->with(['sourceArticle:id,site_id,title,slug']),
+                'mainArticles.site',
+            ])
+            ->find($keywordId);
+
+        if ($keyword === null) {
+            return [
+                'phrase' => '',
+                'html' => '',
+                'error' => __('seo-content-ai::filament.keyword.destinations_modal_not_found'),
+            ];
+        }
+
+        return [
+            'phrase' => (string) $keyword->phrase,
+            'html' => view('seo-content-ai::filament.resources.keywords.columns.destinations-modal-content', [
+                'record' => $keyword,
+            ])->render(),
+            'error' => null,
+        ];
     }
 
     public function getSubheading(): ?string

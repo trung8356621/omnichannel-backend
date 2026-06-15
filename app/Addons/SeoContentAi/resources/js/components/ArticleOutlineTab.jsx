@@ -57,6 +57,39 @@ function findOutlineNodeById(nodes, headingId, groupId = null) {
     return null;
 }
 
+function nodeContainsHeadingId(node, headingId) {
+    if (Number(node.id) === Number(headingId)) {
+        return true;
+    }
+
+    return (Array.isArray(node.children) ? node.children : []).some((child) =>
+        nodeContainsHeadingId(child, headingId),
+    );
+}
+
+function insertRootOutlineNodeAfter(tree, afterHeadingId, newNode) {
+    const wrapped = {
+        ...newNode,
+        children: Array.isArray(newNode.children) ? newNode.children : [],
+    };
+    const afterId = Number(afterHeadingId);
+
+    if (!afterId) {
+        return [...tree, wrapped];
+    }
+
+    for (let index = 0; index < tree.length; index += 1) {
+        if (nodeContainsHeadingId(tree[index], afterId)) {
+            const next = [...tree];
+            next.splice(index + 1, 0, wrapped);
+
+            return next;
+        }
+    }
+
+    return [...tree, wrapped];
+}
+
 /** Tìm node outline theo level + text, kèm groupId (H2 container). */
 function findOutlineNodeWithGroup(nodes, level, headingText, groupId = null) {
     const normalized = normalizeOutlineHeadingText(headingText);
@@ -294,7 +327,7 @@ function HeadingBlock({
                     {duplicateInfo.match_type === 'semantic' ? ' (đồng nghĩa)' : ''}
                 </button>
             ) : null}
-            {!editing ? (
+            {!editing && (isHeadingFocused || isBusy) ? (
                 <div className="seo-outline-block__actions-row">
                     <button
                         type="button"
@@ -324,21 +357,19 @@ function HeadingBlock({
                     >
                         <ChevronDown size={14} strokeWidth={1.75} />
                     </button>
-                    {!isHeadingFocused ? (
-                        <button
-                            type="button"
-                            className="seo-outline-block__action-btn"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                if (!isBusy) {
-                                    setEditing(true);
-                                }
-                            }}
-                        >
-                            <span className="seo-outline-block__action-label">Sửa tay</span>
-                            <Pencil size={14} strokeWidth={1.75} />
-                        </button>
-                    ) : null}
+                    <button
+                        type="button"
+                        className="seo-outline-block__action-btn"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isBusy) {
+                                setEditing(true);
+                            }
+                        }}
+                    >
+                        <span className="seo-outline-block__action-label">Sửa tay</span>
+                        <Pencil size={14} strokeWidth={1.75} />
+                    </button>
                     <button
                         type="button"
                         className="seo-outline-block__action-btn seo-outline-block__action-btn--ai"
@@ -794,6 +825,30 @@ export default function ArticleOutlineTab({
             return;
         }
 
+        if (outlineTreeSync.action === 'insertAfter' && outlineTreeSync.heading) {
+            const heading = outlineTreeSync.heading;
+            setTree((prev) => {
+                if (prev.some((node) => Number(node.id) === Number(heading.id))) {
+                    return prev;
+                }
+
+                return insertRootOutlineNodeAfter(prev, outlineTreeSync.afterHeadingId, heading);
+            });
+            setEditingHeadingId(null);
+            setActiveGroupId(heading.id);
+            setActiveHeadingId(heading.id);
+
+            if (outlineTreeSync.focusEdit) {
+                window.requestAnimationFrame(() => {
+                    const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    setEditingHeadingId(heading.id);
+                });
+            }
+
+            return;
+        }
+
         if (outlineTreeSync.action === 'remove' && outlineTreeSync.headingId != null) {
             setTree((prev) => removeTreeNodeById(prev, outlineTreeSync.headingId));
             setEditingHeadingId((current) =>
@@ -803,7 +858,14 @@ export default function ArticleOutlineTab({
                 Number(current) === Number(outlineTreeSync.headingId) ? null : current,
             );
         }
-    }, [outlineTreeSync?.token, outlineTreeSync?.action, outlineTreeSync?.heading, outlineTreeSync?.headingId, outlineTreeSync?.focusEdit]);
+    }, [
+        outlineTreeSync?.token,
+        outlineTreeSync?.action,
+        outlineTreeSync?.afterHeadingId,
+        outlineTreeSync?.heading,
+        outlineTreeSync?.headingId,
+        outlineTreeSync?.focusEdit,
+    ]);
 
     const handleEditingHeadingEnd = useCallback(() => {
         setEditingHeadingId(null);

@@ -462,6 +462,144 @@ export function isMeaningfulHtml(html) {
     );
 }
 
+/**
+ * Tách HTML Featured Snippet thành các block text trong section hiện tại (không H2 section mới).
+ *
+ * @param {string} html
+ * @param {() => object} createTextBlock
+ * @returns {object[]}
+ */
+export function prepareFeaturedSnippetBlocksForInsert(html, createTextBlock) {
+    const source = String(html ?? '').trim();
+    if (!source) {
+        return [];
+    }
+
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    const blocks = [];
+
+    const pushBlock = (content) => {
+        const trimmed = String(content ?? '').trim();
+        if (!trimmed || !isMeaningfulHtml(trimmed)) {
+            return;
+        }
+
+        blocks.push({
+            ...createTextBlock(),
+            content: trimmed,
+        });
+    };
+
+    const downgradeHeading = (headingEl) => {
+        const p = doc.createElement('p');
+        const strong = doc.createElement('strong');
+        strong.textContent = (headingEl.textContent || '').replace(/\s+/g, ' ').trim();
+        p.appendChild(strong);
+
+        return p.outerHTML;
+    };
+
+    for (const node of Array.from(doc.body.childNodes)) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+            if (text) {
+                pushBlock(`<p>${text}</p>`);
+            }
+
+            continue;
+        }
+
+        if (node.nodeType !== Node.ELEMENT_NODE) {
+            continue;
+        }
+
+        const tag = node.tagName.toLowerCase();
+        if (/^h[1-6]$/.test(tag)) {
+            pushBlock(downgradeHeading(node));
+        } else {
+            pushBlock(node.outerHTML);
+        }
+    }
+
+    if (blocks.length === 0) {
+        pushBlock(source);
+    }
+
+    return blocks;
+}
+
+function escapeHtmlText(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+/**
+ * Tách HTML Featured Snippet thành block H2 (section mới) + các block nội dung.
+ *
+ * @param {string} html
+ * @param {() => object} createTextBlock
+ * @param {string} [fallbackTitle]
+ * @returns {{ headingBlock: object|null, contentBlocks: object[] }}
+ */
+export function parseFeaturedSnippetNewSectionBlocks(html, createTextBlock, fallbackTitle = '') {
+    const source = String(html ?? '').trim();
+    if (!source) {
+        return { headingBlock: null, contentBlocks: [] };
+    }
+
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+    const elements = Array.from(doc.body.childNodes).filter((node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            return Boolean((node.textContent || '').trim());
+        }
+
+        return node.nodeType === Node.ELEMENT_NODE;
+    });
+
+    let h2Index = -1;
+    elements.forEach((node, index) => {
+        if (h2Index >= 0 || node.nodeType !== Node.ELEMENT_NODE) {
+            return;
+        }
+
+        if (node.tagName.toLowerCase() === 'h2') {
+            h2Index = index;
+        }
+    });
+
+    const h2Node = h2Index >= 0 ? elements[h2Index] : null;
+    const headingText =
+        (h2Node?.textContent || '').replace(/\s+/g, ' ').trim() ||
+        String(fallbackTitle || '').trim() ||
+        'Featured Snippet';
+
+    const headingBlock = {
+        ...createTextBlock(),
+        content: `<h2>${escapeHtmlText(headingText)}</h2><p></p>`,
+    };
+
+    const restHtml = elements
+        .filter((_, index) => index !== h2Index)
+        .map((node) => {
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+
+                return text ? `<p>${escapeHtmlText(text)}</p>` : '';
+            }
+
+            return node.outerHTML || '';
+        })
+        .filter(Boolean)
+        .join('');
+
+    const contentBlocks = restHtml ? prepareFeaturedSnippetBlocksForInsert(restHtml, createTextBlock) : [];
+
+    return { headingBlock, contentBlocks };
+}
+
 const newBlockId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 
 /**

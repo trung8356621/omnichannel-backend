@@ -8,6 +8,7 @@ import ImageBlockEditor from './ImageBlockEditor';
 import {
     countMatchingAnchorsInHtml,
     countPlainTextInHtml,
+    extractLinksFromBlocks,
     findBlockIdForExportOffset,
     removeMatchingAnchorsFromHtml,
     scrollToFaqByIndex,
@@ -81,6 +82,7 @@ import {
     isWordPressImageElement,
     normalizeBlocks,
     parseImageFromBlockContent,
+    parseFeaturedSnippetNewSectionBlocks,
     renderImageFigure,
 } from '../utils/blockImageUtils';
 import {
@@ -100,7 +102,7 @@ import {
     stripEditorTransientMarkup,
 } from '../utils/articleEditorTransientMarkup';
 import FaqAccordionPreview from './FaqAccordionPreview';
-import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle, Search } from 'lucide-react';
+import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle, Search, ListPlus, Sparkles, ListCollapse } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
     getSelectionTextFromEditor,
@@ -257,6 +259,15 @@ const blockHasOutlineHeading = (block) => {
 };
 
 const normalizeOutlineHeadingText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+const flattenOutlineNodes = (nodes, result = []) => {
+    for (const node of nodes ?? []) {
+        result.push(node);
+        flattenOutlineNodes(node.children, result);
+    }
+
+    return result;
+};
 
 const extractOutlineHeadingFromBlock = (block) => {
     if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
@@ -1635,6 +1646,7 @@ export default function SeoArticleEditor({
     );
     const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
     const showReviewsTab = editorSettings?.show_reviews_tab !== false;
+    const canGenerateFeaturedSnippet = editorSettings?.can_generate_featured_snippet === true;
     const editorTabs = useMemo(() => {
         if (!isProductPost || !showReviewsTab) {
             return BASE_TABS;
@@ -1701,6 +1713,8 @@ export default function SeoArticleEditor({
     const [generateImageModalPrompt, setGenerateImageModalPrompt] = useState('');
     const [generateImageModalTarget, setGenerateImageModalTarget] = useState('editor');
     const [generateImageModalInitialCustom, setGenerateImageModalInitialCustom] = useState('');
+    const [featuredSnippetGenerating, setFeaturedSnippetGenerating] = useState(false);
+    const featuredSnippetTargetRef = useRef(null);
 
     useEffect(() => {
         if (!articleId) {
@@ -1765,6 +1779,7 @@ export default function SeoArticleEditor({
         return () => window.removeEventListener('seo-product-gallery-updated', onGalleryUpdated);
     }, [parseGalleryUrlList]);
 
+    const [siteDomain] = useState(() => String(initialSeo?.site_domain ?? '').trim());
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
     const [contentBonus, setContentBonus] = useState(
@@ -2105,9 +2120,7 @@ export default function SeoArticleEditor({
     const scheduleAutosave = useCallback(() => {
         setSaveStatus('pending');
         debouncedLocalSave();
-        if (activeTabRef.current === 'seo') {
-            debouncedAnalyze();
-        }
+        debouncedAnalyze();
     }, [debouncedLocalSave, debouncedAnalyze]);
 
     const skipNextAutosave = useRef(true);
@@ -3838,8 +3851,28 @@ export default function SeoArticleEditor({
     );
 
     useEffect(() => {
+        if (blocks.length === 0) {
+            return;
+        }
+
+        const freshLinks = extractLinksFromBlocks(blocks, siteDomain);
+        setExtractedLinks((prev) => {
+            const prevInternal = JSON.stringify(prev?.internal ?? []);
+            const prevExternal = JSON.stringify(prev?.external ?? []);
+            const nextInternal = JSON.stringify(freshLinks.internal ?? []);
+            const nextExternal = JSON.stringify(freshLinks.external ?? []);
+
+            if (prevInternal === nextInternal && prevExternal === nextExternal) {
+                return prev;
+            }
+
+            return freshLinks;
+        });
+    }, [blocks, siteDomain]);
+
+    useEffect(() => {
         publishExtractedLinks(extractedLinks, suggestedInternalLinks);
-    }, [extractedLinks, suggestedInternalLinks, blocks, publishExtractedLinks]);
+    }, [extractedLinks, suggestedInternalLinks, publishExtractedLinks]);
 
     useEffect(() => {
         const onScrollToLink = (event) => {
@@ -4118,7 +4151,7 @@ export default function SeoArticleEditor({
                 const insertAt = position === 'before' ? index : index + 1;
                 const next = [...prev];
                 next.splice(insertAt, 0, newBlock);
-                return normalizeBlocks(next);
+                return next;
             });
 
             setInsertMenu(null);
@@ -4126,6 +4159,45 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
         },
         [commitActiveBlock, isIntroBlockId, notifyIntroNoImages],
+    );
+
+    const insertHtmlBlockRelative = useCallback(
+        (refBlockId, position, html) => {
+            if (tempMergeRef.current) {
+                return;
+            }
+
+            const content = String(html ?? '').trim();
+            if (!content) {
+                return;
+            }
+
+            commitActiveBlock();
+
+            const newBlock = {
+                ...createEmptyTextBlock(),
+                content,
+            };
+            const newId = newBlock.id;
+
+            setBlocks((prev) => {
+                const index = prev.findIndex((b) => b.id === refBlockId);
+                if (index < 0) {
+                    return prev;
+                }
+
+                const insertAt = position === 'before' ? index : index + 1;
+                const next = [...prev];
+                next.splice(insertAt, 0, newBlock);
+
+                return normalizeBlocks(next);
+            });
+
+            setInsertMenu(null);
+            setActiveBlockId(newId);
+            setGlobalEditor(null);
+        },
+        [commitActiveBlock],
     );
 
     const applyCompletedMediaToPlaceholder = useCallback((mediaId, mediaType, finalUrl) => {
@@ -5213,6 +5285,7 @@ export default function SeoArticleEditor({
                 e.target.closest('.seo-block-insert-bar') ||
                 e.target.closest('.seo-block-insert-trigger') ||
                 e.target.closest('.seo-block-insert-menu') ||
+                e.target.closest('.seo-section-element-actions') ||
                 e.target.closest('.seo-block-editor-resize') ||
                 e.target.closest('.seo-image-block-picker')
             ) {
@@ -5806,7 +5879,7 @@ export default function SeoArticleEditor({
     }, []);
 
     const appendOutlineHeadingForBlock = useCallback(
-        async (blockId, meta) => {
+        async (blockId, meta, options = {}) => {
             const id = String(blockId ?? '').trim();
             if (!id || !meta?.headingText || outlineAppendDoneRef.current.has(id)) {
                 return;
@@ -5818,13 +5891,20 @@ export default function SeoArticleEditor({
 
             outlineAppendInflightRef.current.add(id);
 
+            const afterHeadingId = Number(options.afterHeadingId ?? 0) || null;
+
             try {
+                const payload = {
+                    heading_text: meta.headingText,
+                    level: meta.level,
+                };
+                if (afterHeadingId !== null) {
+                    payload.after_heading_id = afterHeadingId;
+                }
+
                 const data = await outlineApiRequest(articleId, '', {
                     method: 'POST',
-                    body: JSON.stringify({
-                        heading_text: meta.headingText,
-                        level: meta.level,
-                    }),
+                    body: JSON.stringify(payload),
                 });
 
                 const heading = data.heading ?? null;
@@ -5839,7 +5919,8 @@ export default function SeoArticleEditor({
                 });
                 setOutlineTreeSync({
                     token: Date.now(),
-                    action: 'append',
+                    action: afterHeadingId !== null ? 'insertAfter' : 'append',
+                    afterHeadingId,
                     heading,
                     focusEdit: true,
                 });
@@ -5858,6 +5939,50 @@ export default function SeoArticleEditor({
             }
         },
         [articleId, handleOutlineHeadingAppended],
+    );
+
+    const resolveOutlineHeadingIdForSection = useCallback(
+        async (section) => {
+            if (!section?.blockIds?.length || !articleId) {
+                return null;
+            }
+
+            for (const blockId of section.blockIds) {
+                const headingId = outlineHeadingIdsByBlockIdRef.current.get(blockId);
+                if (headingId) {
+                    return headingId;
+                }
+            }
+
+            const headingBlock = section.blockIds
+                .map((blockId) => blocksRef.current.find((block) => block.id === blockId))
+                .find((block) => block && extractOutlineHeadingFromBlock(block));
+
+            const meta = headingBlock ? extractOutlineHeadingFromBlock(headingBlock) : null;
+            if (!meta) {
+                return null;
+            }
+
+            try {
+                const data = await outlineApiRequest(articleId, '', { method: 'GET' });
+                const match = flattenOutlineNodes(data.outline ?? []).find(
+                    (node) =>
+                        Number(node.level) === Number(meta.level) &&
+                        normalizeOutlineHeadingText(node.heading_text) === meta.headingText,
+                );
+
+                if (match?.id) {
+                    outlineHeadingIdsByBlockIdRef.current.set(headingBlock.id, match.id);
+
+                    return match.id;
+                }
+            } catch {
+                return null;
+            }
+
+            return null;
+        },
+        [articleId],
     );
 
     const switchTab = useCallback(
@@ -5970,6 +6095,20 @@ export default function SeoArticleEditor({
         }));
     }, []);
 
+    const collapseAllSections = useCallback(() => {
+        if (editorSections.length === 0) {
+            return;
+        }
+
+        commitActiveBlock();
+
+        const next = {};
+        editorSections.forEach((section) => {
+            next[section.id] = true;
+        });
+        setCollapsedSectionIds(next);
+    }, [commitActiveBlock, editorSections]);
+
     useEffect(() => {
         if (editorSections.length === 0) {
             return;
@@ -6018,6 +6157,208 @@ export default function SeoArticleEditor({
             }
         }
     }, [appendOutlineHeadingForBlock, commitActiveBlock, outlineHasSavedHeadings]);
+
+    const addSectionAfter = useCallback(
+        (section) => {
+            if (tempMergeRef.current || !section?.blockIds?.length) {
+                return;
+            }
+
+            commitActiveBlock();
+
+            const lastBlockId = section.blockIds[section.blockIds.length - 1];
+            const newSectionBlock = createEmptySectionBlock();
+            const sectionId = `section-${newSectionBlock.id}`;
+
+            setBlocks((prev) => {
+                const index = prev.findIndex((b) => b.id === lastBlockId);
+                if (index < 0) {
+                    return prev;
+                }
+
+                const next = [...prev];
+                next.splice(index + 1, 0, newSectionBlock);
+
+                return normalizeBlocks(next);
+            });
+            setInsertMenu(null);
+            setActiveTab('editor');
+            setActiveBlockId(newSectionBlock.id);
+            setGlobalEditor(null);
+            setCollapsedSectionIds((prev) => ({
+                ...prev,
+                [sectionId]: false,
+            }));
+
+            if (outlineHasSavedHeadings) {
+                const meta = extractOutlineHeadingFromBlock(newSectionBlock);
+                if (meta) {
+                    void (async () => {
+                        const afterHeadingId = await resolveOutlineHeadingIdForSection(section);
+                        await appendOutlineHeadingForBlock(newSectionBlock.id, meta, { afterHeadingId });
+                    })();
+                }
+            }
+        },
+        [
+            appendOutlineHeadingForBlock,
+            commitActiveBlock,
+            outlineHasSavedHeadings,
+            resolveOutlineHeadingIdForSection,
+        ],
+    );
+
+    const insertFeaturedSnippetAsNewSectionAfter = useCallback(
+        async (pending, html) => {
+            if (tempMergeRef.current || !pending?.anchorLastBlockId) {
+                return;
+            }
+
+            commitActiveBlock();
+
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            const { headingBlock, contentBlocks } = parseFeaturedSnippetNewSectionBlocks(
+                html,
+                createEmptyTextBlock,
+                keyword,
+            );
+
+            if (!headingBlock) {
+                return;
+            }
+
+            const anchorSection = buildEditorSections(blocksRef.current).find(
+                (item) => item.id === pending.anchorSectionId,
+            );
+            const insertBlocks = [headingBlock, ...contentBlocks];
+            const sectionUiId = `section-${headingBlock.id}`;
+            const lastBlockId =
+                contentBlocks.length > 0 ? contentBlocks[contentBlocks.length - 1].id : headingBlock.id;
+
+            setBlocks((prev) => {
+                const index = prev.findIndex((b) => b.id === pending.anchorLastBlockId);
+                if (index < 0) {
+                    return prev;
+                }
+
+                const next = [...prev];
+                next.splice(index + 1, 0, ...insertBlocks);
+
+                return next;
+            });
+
+            setInsertMenu(null);
+            setActiveTab('editor');
+            setActiveBlockId(lastBlockId);
+            setGlobalEditor(null);
+            setCollapsedSectionIds((prev) => ({
+                ...prev,
+                [sectionUiId]: false,
+            }));
+
+            if (outlineHasSavedHeadings && anchorSection) {
+                const meta = extractOutlineHeadingFromBlock(headingBlock);
+                if (meta) {
+                    const afterHeadingId = await resolveOutlineHeadingIdForSection(anchorSection);
+                    await appendOutlineHeadingForBlock(headingBlock.id, meta, { afterHeadingId });
+                }
+            }
+        },
+        [
+            appendOutlineHeadingForBlock,
+            articleTitle,
+            commitActiveBlock,
+            focusKeyword,
+            outlineHasSavedHeadings,
+            resolveOutlineHeadingIdForSection,
+        ],
+    );
+
+    const requestGenerateFeaturedSnippetAfterSection = useCallback(
+        async (section) => {
+            if (
+                !canGenerateFeaturedSnippet ||
+                featuredSnippetGenerating ||
+                section?.isIntro ||
+                !section?.blockIds?.length
+            ) {
+                return;
+            }
+
+            const keyword = (focusKeyword || articleTitle || '').trim();
+            if (!keyword) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_generate_featured_snippet'),
+                            body: t('editor_featured_snippet_no_keyword'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            featuredSnippetTargetRef.current = {
+                mode: 'new-section-after',
+                anchorSectionId: section.id,
+                anchorLastBlockId: section.blockIds[section.blockIds.length - 1],
+            };
+            setFeaturedSnippetGenerating(true);
+            setArticleAutosaveLock('generate-featured-snippet', true);
+
+            try {
+                await callEditArticleLivewire(
+                    'generateFeaturedSnippetFromEditor',
+                    featuredSnippetTargetRef.current.anchorLastBlockId,
+                    'after',
+                );
+            } catch (error) {
+                featuredSnippetTargetRef.current = null;
+                setFeaturedSnippetGenerating(false);
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('editor_generate_featured_snippet'),
+                            body: error?.message ?? t('editor_featured_snippet_failed'),
+                            status: 'danger',
+                        },
+                    }),
+                );
+            } finally {
+                setArticleAutosaveLock('generate-featured-snippet', false);
+            }
+        },
+        [articleTitle, canGenerateFeaturedSnippet, featuredSnippetGenerating, focusKeyword],
+    );
+
+    useEffect(() => {
+        const onFeaturedSnippetGenerated = (event) => {
+            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
+            const html = String(detail.html ?? '').trim();
+            const pending = featuredSnippetTargetRef.current;
+
+            if (!html || pending?.mode !== 'new-section-after') {
+                featuredSnippetTargetRef.current = null;
+                setFeaturedSnippetGenerating(false);
+
+                return;
+            }
+
+            featuredSnippetTargetRef.current = null;
+
+            void insertFeaturedSnippetAsNewSectionAfter(pending, html).finally(() => {
+                setFeaturedSnippetGenerating(false);
+            });
+        };
+
+        window.addEventListener('article-featured-snippet-generated', onFeaturedSnippetGenerated);
+
+        return () => {
+            window.removeEventListener('article-featured-snippet-generated', onFeaturedSnippetGenerated);
+        };
+    }, [insertFeaturedSnippetAsNewSectionAfter]);
 
     useEffect(() => {
         const normalizeSelectedImage = (payload = {}) => {
@@ -6354,6 +6695,15 @@ export default function SeoArticleEditor({
                                 {t('editor_total_words')}: {totalWordCount}
                             </div>
                             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                                <button
+                                    type="button"
+                                    onClick={collapseAllSections}
+                                    className="seo-editor-search-btn"
+                                    title={t('editor_collapse_all_sections')}
+                                    aria-label={t('editor_collapse_all_sections')}
+                                >
+                                    <ListCollapse size={15} />
+                                </button>
                                 <div className="seo-editor-search-group">
                                     <input
                                         type="text"
@@ -6503,11 +6853,36 @@ export default function SeoArticleEditor({
                                                     <button
                                                         type="button"
                                                         onClick={() => quickGenerateImageForSection(section)}
-                                                        className="ml-2 inline-flex items-center gap-1 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-500/70 dark:bg-sky-900/30 dark:text-sky-200"
+                                                        className="seo-section-header-icon-btn ml-1 border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 dark:border-sky-500/70 dark:bg-sky-900/30 dark:text-sky-200"
                                                         title={t('editor_quick_generate_image_section')}
+                                                        aria-label={t('editor_quick_generate_image')}
                                                     >
-                                                        <Wand2 size={11} />
-                                                        <span>{t('editor_quick_generate_image')}</span>
+                                                        <Wand2 size={12} />
+                                                    </button>
+                                                ) : null}
+
+                                                {!section.isIntro ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => addSectionAfter(section)}
+                                                        className="seo-section-header-icon-btn ml-1 border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 dark:border-violet-500/70 dark:bg-violet-900/30 dark:text-violet-200"
+                                                        title={t('editor_add_section_after')}
+                                                        aria-label={t('editor_add_section_after')}
+                                                    >
+                                                        <ListPlus size={12} />
+                                                    </button>
+                                                ) : null}
+
+                                                {!section.isIntro && canGenerateFeaturedSnippet ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => requestGenerateFeaturedSnippetAfterSection(section)}
+                                                        disabled={featuredSnippetGenerating}
+                                                        className="seo-section-header-icon-btn ml-1 border-fuchsia-300 bg-fuchsia-50 text-fuchsia-700 hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-fuchsia-500/70 dark:bg-fuchsia-900/30 dark:text-fuchsia-200"
+                                                        title={t('editor_generate_featured_snippet')}
+                                                        aria-label={t('editor_generate_featured_snippet')}
+                                                    >
+                                                        <Sparkles size={12} />
                                                     </button>
                                                 ) : null}
 

@@ -233,6 +233,7 @@ function registerArticleEditorLivewireBridge() {
             }
         });
         Livewire.on('article-ai-image-generated', forward('article-ai-image-generated'));
+        Livewire.on('article-featured-snippet-generated', forward('article-featured-snippet-generated'));
         Livewire.on('article-ai-video-generated', forward('article-ai-video-generated'));
         Livewire.on('article-ai-media-failed', forward('article-ai-media-failed'));
         Livewire.on('article-post-images-synced', forward('article-post-images-synced'));

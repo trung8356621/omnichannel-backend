@@ -460,3 +460,168 @@ export function scrollToFaqKeyword(text, matchIndex = 0) {
 
     return false;
 }
+
+const SPECIAL_LINK_SCHEMES = new Set([
+    'tel',
+    'mailto',
+    'sms',
+    'fax',
+    'callto',
+    'geo',
+    'skype',
+    'whatsapp',
+    'viber',
+    'data',
+    'cid',
+]);
+
+function isSpecialSchemeLink(href) {
+    const value = String(href ?? '').trim();
+    if (value.toLowerCase().startsWith('javascript:')) {
+        return true;
+    }
+
+    try {
+        const url = new URL(value, 'https://placeholder.local');
+        const scheme = String(url.protocol || '').replace(/:$/, '').toLowerCase();
+
+        return scheme !== '' && scheme !== 'http' && scheme !== 'https' && SPECIAL_LINK_SCHEMES.has(scheme);
+    } catch {
+        return false;
+    }
+}
+
+function normalizeDomainHost(host) {
+    return String(host ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/^www\./, '');
+}
+
+function normalizeLinkHrefForDedup(href) {
+    const value = String(href ?? '').trim();
+    if (value === '') {
+        return '';
+    }
+
+    return value.toLowerCase().replace(/\/+$/, '');
+}
+
+function deduplicateLinksByHrefAndText(links) {
+    const seen = new Set();
+    const unique = [];
+
+    for (const link of links) {
+        const href = normalizeLinkHrefForDedup(link?.href);
+        const text = normalizeLinkText(link?.text).toLowerCase();
+        const key = `${href}\u0000${text}`;
+
+        if (href === '' || seen.has(key)) {
+            continue;
+        }
+
+        seen.add(key);
+        unique.push(link);
+    }
+
+    return unique;
+}
+
+function isInternalLinkHref(href, domain) {
+    const value = String(href ?? '').trim();
+    if (value === '') {
+        return false;
+    }
+
+    if (value.startsWith('/')) {
+        return true;
+    }
+
+    let resolved = value;
+    if (resolved.startsWith('//')) {
+        resolved = `https:${resolved}`;
+    }
+
+    try {
+        const url = new URL(resolved, 'https://placeholder.local');
+        const host = normalizeDomainHost(url.hostname);
+        const normalizedDomain = normalizeDomainHost(domain);
+
+        return host !== '' && normalizedDomain !== '' && host === normalizedDomain;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Trích xuất internal/external links từ HTML (logic tương thích SeoAnalyzerService::extractLinks).
+ *
+ * @param {string} html
+ * @param {string} [domain]
+ * @returns {{ internal: Array<{href:string,text:string,is_nofollow:boolean}>, external: Array<{href:string,text:string,is_nofollow:boolean}> }}
+ */
+export function extractLinksFromHtml(html, domain = '') {
+    const result = {
+        internal: [],
+        external: [],
+    };
+
+    const source = String(html ?? '').trim();
+    if (source === '') {
+        return result;
+    }
+
+    const doc = new DOMParser().parseFromString(source, 'text/html');
+
+    for (const anchor of doc.querySelectorAll('a[href]')) {
+        const href = String(anchor.getAttribute('href') ?? '').trim();
+        if (href === '' || href.startsWith('#') || isSpecialSchemeLink(href)) {
+            continue;
+        }
+
+        const text = normalizeLinkText(anchor.textContent);
+        const rel = String(anchor.getAttribute('rel') ?? '').toLowerCase();
+        const item = {
+            href,
+            text,
+            is_nofollow: rel.includes('nofollow'),
+        };
+
+        if (isInternalLinkHref(href, domain)) {
+            result.internal.push(item);
+        } else {
+            result.external.push(item);
+        }
+    }
+
+    return {
+        internal: deduplicateLinksByHrefAndText(result.internal),
+        external: deduplicateLinksByHrefAndText(result.external),
+    };
+}
+
+/**
+ * @param {Array<{ type?: string, content?: string }>} blocks
+ * @param {string} [domain]
+ */
+export function extractLinksFromBlocks(blocks, domain = '') {
+    const merged = {
+        internal: [],
+        external: [],
+    };
+
+    for (const block of Array.isArray(blocks) ? blocks : []) {
+        if (block?.type === 'image' || !block?.content) {
+            continue;
+        }
+
+        const part = extractLinksFromHtml(block.content, domain);
+        merged.internal.push(...part.internal);
+        merged.external.push(...part.external);
+    }
+
+    return {
+        internal: deduplicateLinksByHrefAndText(merged.internal),
+        external: deduplicateLinksByHrefAndText(merged.external),
+    };
+}

@@ -21,6 +21,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqExtractDebugService;
+use App\Addons\SeoContentAi\Services\ArticleFeaturedSnippetGeneratorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqGeneratorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
@@ -37,6 +38,7 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
+use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
@@ -2912,7 +2914,13 @@ class EditArticle extends EditRecord
             'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
+            'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
         ];
+    }
+
+    public function canGenerateFeaturedSnippet(): bool
+    {
+        return app(SeoPromptSettingsService::class)->getFeaturedSnippetPromptId() !== null;
     }
 
     /**
@@ -3600,6 +3608,43 @@ class EditArticle extends EditRecord
         Notification::make()
             ->title(__('seo-content-ai::filament.article_edit.faq_generate_success'))
             ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
+            ->success()
+            ->send();
+    }
+
+    public function generateFeaturedSnippetFromEditor(string $refBlockId, string $position = 'after'): void
+    {
+        if (! $this->canGenerateFeaturedSnippet()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.featured_snippet_generate_failed'))
+                ->body(__('seo-content-ai::filament.article_edit.featured_snippet_generate_no_prompt'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        try {
+            $html = app(ArticleFeaturedSnippetGeneratorService::class)->generate($this->record);
+        } catch (\InvalidArgumentException $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.featured_snippet_generate_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->dispatch(
+            'article-featured-snippet-generated',
+            html: $html,
+            blockId: trim($refBlockId),
+            position: in_array($position, ['before', 'after'], true) ? $position : 'after',
+        );
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_edit.featured_snippet_generate_success'))
             ->success()
             ->send();
     }
