@@ -17,8 +17,10 @@ use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
+use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -67,6 +69,10 @@ class SeoPanelProvider extends PanelProvider
             'panels::global-search.after',
             function (): string {
                 if (! request()->is('seo', 'seo/*')) {
+                    return '';
+                }
+
+                if (! SeoAccessControl::shouldShowGlobalSeoBar()) {
                     return '';
                 }
 
@@ -257,6 +263,26 @@ class SeoPanelProvider extends PanelProvider
             VerifyCsrfToken::class,
             SubstituteBindings::class,
             Authenticate::class,
+        ])
+            ->prefix('api/seo/team')
+            ->group(function (): void {
+                Route::get('/messages', [TeamMessageController::class, 'index'])
+                    ->name('seo.team-messages.index');
+                Route::get('/config', [TeamMessageController::class, 'config'])
+                    ->name('seo.team-messages.config');
+                Route::post('/messages', [TeamMessageController::class, 'store'])
+                    ->name('seo.team-messages.store');
+            });
+
+        Route::middleware([
+            EncryptCookies::class,
+            AddQueuedCookiesToResponse::class,
+            StartSession::class,
+            AuthenticateSession::class,
+            ShareErrorsFromSession::class,
+            VerifyCsrfToken::class,
+            SubstituteBindings::class,
+            Authenticate::class,
             CheckMainRole::class,
         ])
             ->prefix('api/ai')
@@ -305,7 +331,7 @@ class SeoPanelProvider extends PanelProvider
         return $panel
             ->id('seo')
             ->path('seo')
-            ->login()
+            ->login(\App\Addons\SeoContentAi\Filament\Pages\Auth\SeoLogin::class)
             ->databaseNotifications()
             ->databaseNotificationsPolling('30s')
             ->colors([

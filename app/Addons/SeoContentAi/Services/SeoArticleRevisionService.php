@@ -67,6 +67,13 @@ final class SeoArticleRevisionService
             ->count();
     }
 
+    public function clearAllForArticle(int $articleId): int
+    {
+        return SeoArticleRevision::query()
+            ->where('article_id', $articleId)
+            ->delete();
+    }
+
     public function restoreRevisionToArticle(SeoArticle $article, SeoArticleRevision $revision): SeoArticle
     {
         $seoMeta = is_array($revision->seo_meta) ? $revision->seo_meta : [];

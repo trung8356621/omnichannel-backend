@@ -62,6 +62,7 @@ use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 
 class EditArticle extends EditRecord
@@ -492,19 +493,35 @@ class EditArticle extends EditRecord
                 ->icon('heroicon-o-folder-plus')
                 ->color('warning')
                 ->visible(fn (): bool => ! ArticleResource::articleIsInContentProject($this->record))
-                ->form([
-                    ArticleResource::assignContentProjectSelectField(
-                        fn (): ?int => ArticleResource::resolveArticleSiteId($this->record),
-                    ),
-                ])
-                ->requiresConfirmation()
+                ->form(function (): array {
+                    $siteId = ArticleResource::resolveArticleSiteId($this->record);
+
+                    if (ArticleResource::resolveDirectAssignContentProjectId($siteId) !== null) {
+                        return [];
+                    }
+
+                    return [
+                        ArticleResource::assignContentProjectSelectField(
+                            fn (): ?int => $siteId,
+                        ),
+                    ];
+                })
+                ->requiresConfirmation(fn (): bool => ArticleResource::resolveDirectAssignContentProjectId(
+                    ArticleResource::resolveArticleSiteId($this->record),
+                ) === null)
+                ->modalHidden(fn (): bool => ArticleResource::resolveDirectAssignContentProjectId(
+                    ArticleResource::resolveArticleSiteId($this->record),
+                ) !== null)
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
                 ->action(function (array $data): void {
+                    $siteId = ArticleResource::resolveArticleSiteId($this->record);
+                    $projectId = ArticleResource::resolveDirectAssignContentProjectId($siteId)
+                        ?? (int) ($data['project_id'] ?? 0);
                     $summary = ArticleResource::assignArticlesToContentProject(
                         collect([$this->record]),
-                        (int) ($data['project_id'] ?? 0),
+                        $projectId,
                     );
 
                     Notification::make()
@@ -517,7 +534,8 @@ class EditArticle extends EditRecord
                 ->label(__('seo-content-ai::filament.article_list.fetch_from_wordpress'))
                 ->icon('heroicon-o-arrow-down-tray')
                 ->color('info')
-                ->visible(fn (): bool => (int) ($this->record->wp_post_id ?? 0) > 0)
+                ->visible(fn (): bool => ! SeoAccessControl::isContentManager()
+                    && (int) ($this->record->wp_post_id ?? 0) > 0)
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.article_list.fetch_from_wordpress_heading'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.fetch_from_wordpress_description'))
@@ -2028,7 +2046,7 @@ class EditArticle extends EditRecord
 
     public function canToggleArticleReview(): bool
     {
-        if (SeoAccessControl::canAccessManagerFeatures()) {
+        if (SeoAccessControl::canAccessPlannerFeatures()) {
             return true;
         }
 
@@ -2311,10 +2329,20 @@ class EditArticle extends EditRecord
         }
 
         if (SeoAccessControl::isContentManager()) {
-            app(SeoProjectApprovalService::class)->approveLinkedProject(
-                $this->record,
-                auth()->user(),
-            );
+            try {
+                app(SeoProjectApprovalService::class)->approveLinkedProject(
+                    $this->record,
+                    auth()->user(),
+                );
+            } catch (ValidationException $exception) {
+                Notification::make()
+                    ->title('Không thể duyệt project')
+                    ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
+                    ->danger()
+                    ->send();
+
+                return;
+            }
         }
 
         $deletedCount = ArticleResource::markArticleReviewed($this->record);
@@ -2920,7 +2948,7 @@ class EditArticle extends EditRecord
 
     public function canGenerateFeaturedSnippet(): bool
     {
-        return app(SeoPromptSettingsService::class)->getFeaturedSnippetPromptId() !== null;
+        return app(SeoCreateArticleSettingsService::class)->getFeaturedSnippetPromptId() !== null;
     }
 
     /**
@@ -3138,16 +3166,22 @@ class EditArticle extends EditRecord
                 'name' => '',
                 'template' => '',
                 'variables' => [],
+                'tools' => '',
+                'connection_name' => '',
+                'execution' => '',
             ];
         }
 
-        $prompt = SeoPrompt::query()->find($promptId);
+        $prompt = SeoPrompt::query()->with('aiConnection')->find($promptId);
         if (! $prompt instanceof SeoPrompt) {
             return [
                 'prompt_id' => $promptId,
                 'name' => '',
                 'template' => '',
                 'variables' => [],
+                'tools' => '',
+                'connection_name' => '',
+                'execution' => '',
             ];
         }
 
@@ -3168,11 +3202,22 @@ class EditArticle extends EditRecord
             $template = (string) ($prompt->markdown_content ?? '');
         }
 
+        $tools = strtolower(trim((string) ($prompt->tools ?? 'default')));
+        $connectionName = trim((string) ($prompt->aiConnection?->name ?? ''));
+        $execution = match ($tools) {
+            'image' => 'Imagen 4 hoặc Nano Banana (Gemini Image API)',
+            'video' => 'Veo / video pipeline',
+            default => 'Văn bản (Gemini Flash / Claude)',
+        };
+
         return [
             'prompt_id' => (int) $prompt->id,
             'name' => (string) ($prompt->name ?? ''),
             'template' => $template,
             'variables' => $variableNames,
+            'tools' => $tools,
+            'connection_name' => $connectionName,
+            'execution' => $execution,
         ];
     }
 
@@ -3385,6 +3430,7 @@ class EditArticle extends EditRecord
         string $target = 'editor',
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
+        string $selectionText = '',
     ): array {
         return app(ArticleEditorMediaAiService::class)->previewRenderedImagePrompt(
             $this->record,
@@ -3392,6 +3438,7 @@ class EditArticle extends EditRecord
             $target,
             $loaiSanPhamCategoryArticleId,
             $loaiSanPhamCustom,
+            $selectionText,
         );
     }
 
@@ -3966,6 +4013,30 @@ class EditArticle extends EditRecord
             $this->buildRevisionSeoMetaSnapshot(),
             auth()->id() !== null ? (int) auth()->id() : null,
         );
+
+        $this->dispatch('article-revisions-changed');
+    }
+
+    public function clearArticleRevisionHistory(): void
+    {
+        $articleId = (int) $this->record->getKey();
+        $deleted = app(SeoArticleRevisionService::class)->clearAllForArticle($articleId);
+
+        if ($deleted === 0) {
+            Notification::make()
+                ->title('Không có lịch sử')
+                ->body('Bài viết chưa có phiên bản lịch sử nào.')
+                ->info()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Đã dọn dẹp lịch sử')
+            ->body("Đã xóa {$deleted} phiên bản lịch sử.")
+            ->success()
+            ->send();
 
         $this->dispatch('article-revisions-changed');
     }

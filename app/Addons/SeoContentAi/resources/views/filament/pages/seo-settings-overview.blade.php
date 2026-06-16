@@ -125,6 +125,18 @@
                         </p>
                     @endforelse
                 </section>
+
+                <section class="seo-ai-models-panel mt-6">
+                    <form wire:submit="saveTeamChatSettings">
+                        {{ $this->teamChatForm }}
+
+                        <div class="mt-4">
+                            <x-filament::button type="submit">
+                                {{ __('seo-content-ai::filament.settings_overview.team_chat_save') }}
+                            </x-filament::button>
+                        </div>
+                    </form>
+                </section>
             </div>
         </div>
     </x-filament-panels::page>

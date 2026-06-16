@@ -24,6 +24,12 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_PROJECT_KEYWORDS_PROMPT_ID = 'project_keywords_prompt_id';
 
+    /** Prompt sinh Featured Snippet trên editor bài viết (biến {{input}} = từ khóa chính). */
+    public const KEY_FEATURED_SNIPPET_PROMPT_ID = 'featured_snippet_prompt_id';
+
+    /** Prompt tái sinh heading từ tab Outline (nút AI gen). */
+    public const KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID = 'outline_heading_regenerator_prompt_id';
+
     /** @deprecated Dùng publish_article_task_id; vẫn đọc/ghi để tương thích wp_options cũ */
     public const KEY_LEGACY_TASK_ID = 'task_id';
 
@@ -56,7 +62,26 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($data[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null),
+            self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $this->positiveIntOrNull(
+                $data[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
+            ),
         ];
+    }
+
+    public function getFeaturedSnippetPromptId(): ?int
+    {
+        $fromWorkflow = $this->getSettings()[self::KEY_FEATURED_SNIPPET_PROMPT_ID];
+        if ($fromWorkflow !== null) {
+            return $fromWorkflow;
+        }
+
+        return app(SeoPromptSettingsService::class)->getFeaturedSnippetPromptId();
+    }
+
+    public function getOutlineHeadingRegeneratorPromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID];
     }
 
     public function getProjectKeywordsPromptId(): ?int
@@ -139,6 +164,10 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($settings[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null),
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null),
+            self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $this->positiveIntOrNull(
+                $settings[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
+            ),
             self::KEY_LEGACY_TASK_ID => $publish,
         ], 'no');
     }
@@ -161,6 +190,8 @@ final class SeoCreateArticleSettingsService
             self::KEY_CREATE_VIDEO => null,
             self::KEY_RENEW_FAQ_PROMPT_ID => null,
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => null,
+            self::KEY_FEATURED_SNIPPET_PROMPT_ID => null,
+            self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => null,
         ];
     }
 

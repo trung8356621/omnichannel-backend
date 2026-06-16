@@ -515,7 +515,7 @@
                 </div>
             @endif
 
-            <div class="text-xs">
+            <div class="flex items-center justify-between gap-2 text-xs">
                 <a
                     href="{{ route('seo.articles.revisions.compare', ['article' => $record->getKey()]) }}"
                     class="text-sky-600 hover:underline"
@@ -524,6 +524,20 @@
                 >
                     📋 Lịch sử chỉnh sửa ({{ $articleRevisionCount }})
                 </a>
+                @if ($articleRevisionCount > 0)
+                    <button
+                        type="button"
+                        wire:click.stop="clearArticleRevisionHistory"
+                        wire:confirm="Xóa toàn bộ {{ $articleRevisionCount }} phiên bản lịch sử? Thao tác không thể hoàn tác."
+                        wire:loading.attr="disabled"
+                        wire:target="clearArticleRevisionHistory"
+                        class="shrink-0 text-rose-600 hover:underline disabled:opacity-50"
+                        title="Xóa sạch lịch sử chỉnh sửa"
+                    >
+                        <span wire:loading.remove wire:target="clearArticleRevisionHistory">🗑 Dọn dẹp</span>
+                        <span wire:loading wire:target="clearArticleRevisionHistory">Đang xóa…</span>
+                    </button>
+                @endif
             </div>
         </div>
 

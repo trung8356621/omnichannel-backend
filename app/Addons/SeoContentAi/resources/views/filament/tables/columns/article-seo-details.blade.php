@@ -1,9 +1,11 @@
 @php
     /** @var \App\Addons\SeoContentAi\Models\SeoArticle $record */
     use App\Addons\SeoContentAi\Support\ArticleListSeoSummary;
+    use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
     $record = $getRecord();
     $seo = ArticleListSeoSummary::for($record);
+    $canEditMainKeyword = SeoAccessControl::canAccessPlannerFeatures();
 
     if (! empty($seo['score_skipped'])) {
         $scoreLabel = __('seo-content-ai::filament.article_list.seo_score_skipped_label');
@@ -19,32 +21,80 @@
     $keywordLabel = filled($seo['keyword'])
         ? (string) $seo['keyword']
         : __('seo-content-ai::filament.article_list.seo_keyword_empty');
+    $mainKeywordValue = filled($seo['keyword']) ? (string) $seo['keyword'] : '';
 @endphp
 
 <div
-    class="article-seo-cell"
+    class="article-seo-cell{{ $canEditMainKeyword ? ' article-seo-cell--planner' : '' }}"
     wire:key="article-seo-{{ $record->id }}"
-    x-data="{ open: false }"
+    x-data="{
+        open: false,
+        keywordOriginal: @js($mainKeywordValue),
+        normalizeKeyword(value) {
+            return String(value ?? '').trim();
+        },
+        syncMainKeywordIfChanged(articleId, value) {
+            const next = this.normalizeKeyword(value);
+            if (next === this.normalizeKeyword(this.keywordOriginal)) {
+                return;
+            }
+
+            this.keywordOriginal = next;
+            $wire.syncArticleMainKeyword(articleId, next);
+        },
+    }"
     x-on:click.outside="open = false"
     x-on:keydown.escape.window="open = false"
     onclick="event.stopPropagation()"
 >
-    <button
-        type="button"
-        class="article-seo-dropdown__trigger"
-        x-on:click.stop="open = !open"
-        :aria-expanded="open"
-        aria-haspopup="true"
-        title="{{ $keywordLabel }}"
-    >
-        <span class="article-seo-score article-seo-score--{{ $scoreTone }}">
-            {{ $scoreLabel }}
-        </span>
-        <span class="article-seo-dropdown__keyword">{{ $keywordLabel }}</span>
-        <span class="article-seo-dropdown__chevron-wrap" x-bind:class="{ 'is-open': open }">
-            <x-filament::icon icon="heroicon-m-chevron-down" class="article-seo-dropdown__chevron" />
-        </span>
-    </button>
+    @if($canEditMainKeyword)
+        <div class="article-seo-dropdown__header">
+            <span class="article-seo-score article-seo-score--{{ $scoreTone }}">
+                {{ $scoreLabel }}
+            </span>
+            <input
+                type="text"
+                class="article-seo-main-keyword-input"
+                value="{{ $mainKeywordValue }}"
+                placeholder="{{ __('seo-content-ai::filament.article_list.main_keyword_placeholder') }}"
+                x-on:blur.stop="syncMainKeywordIfChanged({{ $record->id }}, $event.target.value)"
+                x-on:keydown.enter.stop="$event.target.blur()"
+                wire:loading.attr="disabled"
+                wire:target="syncArticleMainKeyword"
+                x-on:click.stop
+                x-on:keydown.stop
+                title="{{ __('seo-content-ai::filament.article_list.main_keyword_placeholder') }}"
+            />
+            <button
+                type="button"
+                class="article-seo-dropdown__chevron-btn"
+                x-on:click.stop="open = !open"
+                :aria-expanded="open"
+                aria-haspopup="true"
+            >
+                <span class="article-seo-dropdown__chevron-wrap" x-bind:class="{ 'is-open': open }">
+                    <x-filament::icon icon="heroicon-m-chevron-down" class="article-seo-dropdown__chevron" />
+                </span>
+            </button>
+        </div>
+    @else
+        <button
+            type="button"
+            class="article-seo-dropdown__trigger"
+            x-on:click.stop="open = !open"
+            :aria-expanded="open"
+            aria-haspopup="true"
+            title="{{ $keywordLabel }}"
+        >
+            <span class="article-seo-score article-seo-score--{{ $scoreTone }}">
+                {{ $scoreLabel }}
+            </span>
+            <span class="article-seo-dropdown__keyword">{{ $keywordLabel }}</span>
+            <span class="article-seo-dropdown__chevron-wrap" x-bind:class="{ 'is-open': open }">
+                <x-filament::icon icon="heroicon-m-chevron-down" class="article-seo-dropdown__chevron" />
+            </span>
+        </button>
+    @endif
 
     <div
         class="article-seo-dropdown__panel"
@@ -113,6 +163,78 @@
             position: relative;
             min-width: 10rem;
             max-width: 18rem;
+        }
+
+        .article-seo-cell--planner {
+            min-width: 14rem;
+            max-width: 22rem;
+        }
+
+        .article-seo-dropdown__header {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            width: 100%;
+            max-width: 100%;
+            padding: 0.3rem 0.45rem;
+            border: 1px solid rgb(229 231 235);
+            border-radius: 0.5rem;
+            background: rgb(255 255 255);
+        }
+
+        .dark .article-seo-dropdown__header {
+            border-color: rgb(55 65 81);
+            background: rgb(17 24 39);
+        }
+
+        .article-seo-main-keyword-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            margin: 0;
+            padding: 0.15rem 0.35rem;
+            border: 1px solid rgb(209 213 219);
+            border-radius: 0.375rem;
+            background: rgb(249 250 251);
+            font-size: 0.75rem;
+            font-weight: 600;
+            line-height: 1.35;
+            color: rgb(17 24 39);
+        }
+
+        .article-seo-main-keyword-input:focus {
+            outline: none;
+            border-color: rgb(59 130 246);
+            box-shadow: 0 0 0 2px rgb(59 130 246 / 20%);
+            background: rgb(255 255 255);
+        }
+
+        .article-seo-main-keyword-input:disabled {
+            opacity: 0.65;
+            cursor: wait;
+        }
+
+        .dark .article-seo-main-keyword-input {
+            border-color: rgb(75 85 99);
+            background: rgb(31 41 55);
+            color: rgb(243 244 246);
+        }
+
+        .article-seo-dropdown__chevron-btn {
+            display: inline-flex;
+            flex-shrink: 0;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        .article-seo-dropdown__chevron-btn:focus-visible {
+            outline: 2px solid rgb(59 130 246);
+            outline-offset: 2px;
+            border-radius: 0.25rem;
         }
 
         .article-seo-dropdown__trigger {

@@ -453,21 +453,36 @@ class ArticleResource extends Resource
                         ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->icon('heroicon-o-folder-plus')
                         ->color('warning')
-                        ->requiresConfirmation()
                         ->deselectRecordsAfterCompletion()
-                        ->form(fn (Collection $records): array => [
-                            static::assignContentProjectSelectField(
-                                fn (): ?int => static::resolveBulkArticlesSiteId($records),
-                                fn (): ?string => static::resolveBulkArticlesSiteId($records) === null
-                                    ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
-                                    : null,
-                            ),
-                        ])
+                        ->form(function (Collection $records): array {
+                            $siteId = static::resolveBulkArticlesSiteId($records);
+
+                            if (static::resolveDirectAssignContentProjectId($siteId) !== null) {
+                                return [];
+                            }
+
+                            return [
+                                static::assignContentProjectSelectField(
+                                    fn (): ?int => $siteId,
+                                    fn (): ?string => $siteId === null
+                                        ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
+                                        : null,
+                                ),
+                            ];
+                        })
+                        ->requiresConfirmation(fn (Collection $records): bool => static::resolveDirectAssignContentProjectId(
+                            static::resolveBulkArticlesSiteId($records),
+                        ) === null)
+                        ->modalHidden(fn (Collection $records): bool => static::resolveDirectAssignContentProjectId(
+                            static::resolveBulkArticlesSiteId($records),
+                        ) !== null)
                         ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
                         ->action(function (Collection $records, array $data): void {
-                            $projectId = (int) ($data['project_id'] ?? 0);
+                            $siteId = static::resolveBulkArticlesSiteId($records);
+                            $projectId = static::resolveDirectAssignContentProjectId($siteId)
+                                ?? (int) ($data['project_id'] ?? 0);
                             $summary = static::assignArticlesToContentProject($records, $projectId);
 
                             Notification::make()
@@ -536,8 +551,8 @@ class ArticleResource extends Resource
             );
         }
 
-        if ($includeGlobalSiteScope && ($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
-            $query->where('site_id', $globalSiteId);
+        if ($includeGlobalSiteScope && SeoAccessControl::shouldApplyGlobalSiteScope()) {
+            $query->where('site_id', (int) SeoAccessControl::globalSiteId());
         }
 
         if ($includeContentManagerOwnershipScope && SeoAccessControl::isContentManager()) {
@@ -700,17 +715,27 @@ class ArticleResource extends Resource
                 ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
                     ? __('seo-content-ai::filament.article_list.already_reviewed')
                     : (SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed')))
-                ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canAccessManagerFeatures()
+                ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canAccessPlannerFeatures()
                     || (SeoAccessControl::isContentManager()
                         && ! (bool) $record->is_reviewed
                         && static::articleIsInContentProject($record)))
                 ->requiresConfirmation()
                 ->action(function (SeoArticle $record): void {
                     if (SeoAccessControl::isContentManager()) {
-                        app(SeoProjectApprovalService::class)->approveLinkedProject(
-                            $record,
-                            auth()->user(),
-                        );
+                        try {
+                            app(SeoProjectApprovalService::class)->approveLinkedProject(
+                                $record,
+                                auth()->user(),
+                            );
+                        } catch (\Illuminate\Validation\ValidationException $exception) {
+                            Notification::make()
+                                ->title('Không thể duyệt project')
+                                ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
                     }
 
                     $deletedCount = static::markArticleReviewed($record);
@@ -749,17 +774,32 @@ class ArticleResource extends Resource
                 ->color('warning')
                 ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
-                ->requiresConfirmation()
-                ->form(fn (SeoArticle $record): array => [
-                    static::assignContentProjectSelectField(
-                        fn (): ?int => static::resolveArticleSiteId($record),
-                    ),
-                ])
+                ->form(function (SeoArticle $record): array {
+                    $siteId = static::resolveArticleSiteId($record);
+
+                    if (static::resolveDirectAssignContentProjectId($siteId) !== null) {
+                        return [];
+                    }
+
+                    return [
+                        static::assignContentProjectSelectField(
+                            fn (): ?int => $siteId,
+                        ),
+                    ];
+                })
+                ->requiresConfirmation(fn (SeoArticle $record): bool => static::resolveDirectAssignContentProjectId(
+                    static::resolveArticleSiteId($record),
+                ) === null)
+                ->modalHidden(fn (SeoArticle $record): bool => static::resolveDirectAssignContentProjectId(
+                    static::resolveArticleSiteId($record),
+                ) !== null)
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
                 ->action(function (SeoArticle $record, array $data): void {
-                    $projectId = (int) ($data['project_id'] ?? 0);
+                    $siteId = static::resolveArticleSiteId($record);
+                    $projectId = static::resolveDirectAssignContentProjectId($siteId)
+                        ?? (int) ($data['project_id'] ?? 0);
                     $summary = static::assignArticlesToContentProject(
                         Collection::make([$record]),
                         $projectId,
@@ -870,6 +910,22 @@ class ArticleResource extends Resource
             ->values();
 
         return $siteIds->count() === 1 ? (int) $siteIds->first() : null;
+    }
+
+    public static function resolveDirectAssignContentProjectId(?int $recordSiteId = null): ?int
+    {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        $projectId = SeoAccessControl::globalContentProjectId();
+
+        if ($globalSiteId === null || $projectId === null) {
+            return null;
+        }
+
+        if ($recordSiteId !== null && $recordSiteId > 0 && $recordSiteId !== $globalSiteId) {
+            return null;
+        }
+
+        return $projectId;
     }
 
     /**

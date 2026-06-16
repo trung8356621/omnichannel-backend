@@ -9,8 +9,8 @@ use App\Addons\SeoContentAi\Http\Requests\SeoArticleRevisionRestoreRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleRevision;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
-use App\Models\Site;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
@@ -106,9 +106,10 @@ final class SeoArticleRevisionController extends Controller
             return true;
         }
 
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
+        if (SeoAccessControl::isContentManager()) {
+            return ArticleResource::canContentManagerAccessArticle($article);
+        }
+
+        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
     }
 }

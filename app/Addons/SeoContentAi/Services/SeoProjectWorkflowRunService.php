@@ -41,6 +41,39 @@ final class SeoProjectWorkflowRunService
         ]);
     }
 
+    public function prepareRunQueue(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
+    {
+        $pendingCount = (int) $project->tasks()
+            ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->count();
+
+        if ($pendingCount <= 0) {
+            throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
+        }
+
+        $plannedTotal = $limit !== null && $limit > 0
+            ? min($pendingCount, $limit)
+            : $pendingCount;
+
+        $run->update([
+            'status' => SeoProjectRun::STATUS_RUNNING,
+            'total' => $plannedTotal,
+            'succeeded' => 0,
+            'failed' => 0,
+            'items' => [],
+            'finished_at' => null,
+        ]);
+
+        return $run->fresh(['project']);
+    }
+
+    public function completeRunQueue(SeoProjectRun $run): SeoProjectRun
+    {
+        $items = is_array($run->items) ? $run->items : [];
+
+        return $this->persistRunItems($run, $items, true);
+    }
+
     public function execute(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
     {
         @set_time_limit(0);
@@ -115,7 +148,7 @@ final class SeoProjectWorkflowRunService
     /**
      * @return array<string, mixed>
      */
-    public function retryTask(SeoProjectRun $run, int $taskId): array
+    public function retryTask(SeoProjectRun $run, int $taskId, bool $markCompleted = true): array
     {
         @set_time_limit(0);
 
@@ -172,7 +205,7 @@ final class SeoProjectWorkflowRunService
             $items[] = $itemRow;
         }
 
-        $this->finalizeRun($run, array_values($items));
+        $this->persistRunItems($run, array_values($items), $markCompleted);
 
         return $itemRow;
     }
@@ -230,10 +263,13 @@ final class SeoProjectWorkflowRunService
         }
 
         foreach ($currentTasks as $index => $currentTask) {
-            $currentTask->update([
-                'status' => SeoProjectTask::STATUS_COMPLETED,
-                'article_id' => $index === 0 ? $resolvedArticleId : null,
-            ]);
+            if ($index === 0) {
+                $this->markTaskCompleted($currentTask, $resolvedArticleId);
+
+                continue;
+            }
+
+            $this->persistTaskState($currentTask, SeoProjectTask::STATUS_COMPLETED, null);
         }
 
         $metaTask = $currentTasks->first();
@@ -274,7 +310,7 @@ final class SeoProjectWorkflowRunService
     {
         $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
         if ($taskSiteId <= 0) {
-            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+            $this->markTaskFailed($task);
 
             return $this->buildFailedItemRow(
                 $task,
@@ -283,7 +319,7 @@ final class SeoProjectWorkflowRunService
             );
         }
 
-        $task->update(['status' => SeoProjectTask::STATUS_WRITING]);
+        $this->markTaskWriting($task);
         $scope = $this->articleScopeForProject($projectSiteId);
 
         try {
@@ -292,10 +328,7 @@ final class SeoProjectWorkflowRunService
 
             if ($result['success']) {
                 $articleId = (int) ($result['article_id'] ?? 0);
-                $task->update([
-                    'status' => SeoProjectTask::STATUS_COMPLETED,
-                    'article_id' => $articleId > 0 ? $articleId : null,
-                ]);
+                $this->markTaskCompleted($task, $articleId);
 
                 if ($articleId > 0) {
                     $this->storeArticleRunMeta($articleId, $run, $task);
@@ -316,7 +349,7 @@ final class SeoProjectWorkflowRunService
                 );
             }
 
-            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+            $this->markTaskFailed($task);
 
             $failedStep = is_array($result['failed_step'] ?? null) ? $result['failed_step'] : null;
 
@@ -343,7 +376,7 @@ final class SeoProjectWorkflowRunService
 
             return $item;
         } catch (\Throwable $exception) {
-            $task->update(['status' => SeoProjectTask::STATUS_FAILED]);
+            $this->markTaskFailed($task);
 
             $item = $this->buildFailedItemRow($task, null, $this->errorFormatter->fromThrowable($exception));
             $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
@@ -433,17 +466,36 @@ final class SeoProjectWorkflowRunService
      */
     private function finalizeRun(SeoProjectRun $run, array $items): SeoProjectRun
     {
+        return $this->persistRunItems($run, $items, true);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
+    private function persistRunItems(SeoProjectRun $run, array $items, bool $markCompleted): SeoProjectRun
+    {
         $succeeded = collect($items)->where('status', 'success')->count();
         $failed = collect($items)->where('status', 'failed')->count();
 
-        $run->update([
-            'status' => SeoProjectRun::STATUS_COMPLETED,
-            'total' => count($items),
+        $payload = [
             'succeeded' => $succeeded,
             'failed' => $failed,
             'items' => $items,
-            'finished_at' => now(),
-        ]);
+        ];
+
+        if ($markCompleted || (int) $run->total <= 0) {
+            $payload['total'] = max((int) $run->total, count($items));
+        }
+
+        if ($markCompleted) {
+            $payload['status'] = SeoProjectRun::STATUS_COMPLETED;
+            $payload['finished_at'] = now();
+        } else {
+            $payload['status'] = SeoProjectRun::STATUS_RUNNING;
+            $payload['finished_at'] = null;
+        }
+
+        $run->update($payload);
 
         return $run->fresh(['project']);
     }
@@ -551,6 +603,51 @@ final class SeoProjectWorkflowRunService
             ->filter(fn (mixed $step): bool => is_array($step) && ($step['type'] ?? '') === 'prompt')
             ->values()
             ->all();
+    }
+
+    private function markTaskWriting(SeoProjectTask $task): void
+    {
+        $this->persistTaskState($task, SeoProjectTask::STATUS_WRITING, null);
+    }
+
+    private function markTaskFailed(SeoProjectTask $task): void
+    {
+        $this->persistTaskState($task, SeoProjectTask::STATUS_FAILED, null);
+    }
+
+    private function markTaskCompleted(SeoProjectTask $task, int $articleId): void
+    {
+        if ($articleId > 0) {
+            $this->releaseArticleLinkFromOtherTasks($articleId, (int) $task->id);
+        }
+
+        $this->persistTaskState(
+            $task,
+            SeoProjectTask::STATUS_COMPLETED,
+            $articleId > 0 ? $articleId : null,
+        );
+    }
+
+    private function persistTaskState(SeoProjectTask $task, string $status, ?int $articleId): void
+    {
+        SeoProjectTask::query()->whereKey($task->id)->update([
+            'status' => $status,
+            'article_id' => $articleId,
+        ]);
+
+        $task->refresh();
+    }
+
+    private function releaseArticleLinkFromOtherTasks(int $articleId, int $keepTaskId): void
+    {
+        if ($articleId <= 0) {
+            return;
+        }
+
+        SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->whereKeyNot($keepTaskId)
+            ->update(['article_id' => null]);
     }
 
     private function storeArticleRunMeta(int $articleId, SeoProjectRun $run, SeoProjectTask $task): void

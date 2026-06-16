@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Models\Site;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Cookie;
 
 final class SeoAccessControl
 {
     private const GLOBAL_SITE_COOKIE = 'seo_global_site_id';
+
+    private const GLOBAL_CONTENT_PROJECT_COOKIE = 'seo_global_content_project_id';
+
+    private const GLOBAL_CONTENT_PROJECT_SITE_COOKIE = 'seo_global_content_project_site_id';
 
     private const GLOBAL_SITE_COOKIE_MINUTES = 60 * 24 * 365;
 
@@ -77,6 +84,26 @@ final class SeoAccessControl
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_CONTENT_MANAGER);
     }
 
+    public static function canAccessSeoPanel(?User $user = null): bool
+    {
+        $user ??= auth()->user();
+        if (! $user instanceof User) {
+            return false;
+        }
+
+        if ((string) ($user->status ?? '') === User::STATUS_BLOCK) {
+            return false;
+        }
+
+        if (in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
+            return true;
+        }
+
+        return $user->isStaff()
+            && (int) $user->parent_id > 0
+            && filled($user->seo_role);
+    }
+
     public static function isContentManager(): bool
     {
         return self::effectiveRole() === self::ROLE_CONTENT_MANAGER;
@@ -85,6 +112,73 @@ final class SeoAccessControl
     public static function isPlanner(): bool
     {
         return self::effectiveRole() === self::ROLE_PLANNER;
+    }
+
+    public static function shouldShowGlobalSeoBar(): bool
+    {
+        return ! self::isContentManager();
+    }
+
+    public static function canMutateContentProjects(): bool
+    {
+        return self::canAccessPlannerFeatures();
+    }
+
+    public static function canAccessContentProjectRun(?SeoProject $project): bool
+    {
+        if (! $project instanceof SeoProject) {
+            return false;
+        }
+
+        if (self::canAccessPlannerFeatures()) {
+            return true;
+        }
+
+        return self::isContentManager()
+            && (int) $project->user_id === (int) auth()->id();
+    }
+
+    public static function canDeleteSeoMedia(): bool
+    {
+        return ! self::isContentManager();
+    }
+
+    public static function canSyncArticlesToWordPress(): bool
+    {
+        return ! self::isContentManager();
+    }
+
+    public static function accountSiteOwnerId(): int
+    {
+        return self::accountOwnerId() ?? (int) auth()->id();
+    }
+
+    /**
+     * @return Builder<Site>
+     */
+    public static function accessibleSitesQuery(): Builder
+    {
+        $query = Site::query();
+
+        if (auth()->user()?->role === User::ROLE_ADMIN) {
+            return $query;
+        }
+
+        return $query->where('user_id', self::accountSiteOwnerId());
+    }
+
+    public static function canAccessSite(int $siteId): bool
+    {
+        if ($siteId <= 0) {
+            return false;
+        }
+
+        return self::accessibleSitesQuery()->whereKey($siteId)->exists();
+    }
+
+    public static function shouldApplyGlobalSiteScope(): bool
+    {
+        return ! self::isContentManager() && self::globalSiteId() !== null;
     }
 
     public static function accountOwnerId(): ?int
@@ -102,6 +196,10 @@ final class SeoAccessControl
 
     public static function globalSiteId(): ?int
     {
+        if (self::isContentManager()) {
+            return null;
+        }
+
         $cookieSiteId = request()->cookie(self::GLOBAL_SITE_COOKIE);
         $siteId = $cookieSiteId !== null && $cookieSiteId !== ''
             ? $cookieSiteId
@@ -137,7 +235,13 @@ final class SeoAccessControl
 
     public static function setGlobalSiteId(?int $siteId): void
     {
+        $previousSiteId = self::globalSiteId();
         $storedSiteId = $siteId !== null && $siteId > 0 ? $siteId : 0;
+        $nextSiteId = $storedSiteId > 0 ? $storedSiteId : null;
+
+        if ($previousSiteId !== $nextSiteId) {
+            self::clearGlobalContentProjectSelection();
+        }
 
         session(['seo_global_site_id' => $storedSiteId]);
         Cookie::queue(cookie(
@@ -157,6 +261,89 @@ final class SeoAccessControl
     {
         session()->forget('seo_global_site_id');
         Cookie::queue(Cookie::forget(self::GLOBAL_SITE_COOKIE, '/'));
+        self::clearGlobalContentProjectSelection();
+    }
+
+    public static function canUseGlobalContentProjectPicker(): bool
+    {
+        return self::isPlanner() && self::globalSiteId() !== null;
+    }
+
+    public static function globalContentProjectId(): ?int
+    {
+        if (! self::canUseGlobalContentProjectPicker()) {
+            return null;
+        }
+
+        $siteId = (int) self::globalSiteId();
+        $storedSiteId = self::resolveStoredGlobalContentProjectSiteId();
+        $projectId = self::resolveStoredGlobalContentProjectId();
+
+        if ($storedSiteId !== $siteId || $projectId === null) {
+            return null;
+        }
+
+        if (! self::isAssignableGlobalContentProject($projectId, $siteId)) {
+            self::clearGlobalContentProjectSelection();
+
+            return null;
+        }
+
+        return $projectId;
+    }
+
+    public static function setGlobalContentProjectId(?int $projectId): void
+    {
+        $siteId = self::globalSiteId();
+        if ($siteId === null || $projectId === null || $projectId <= 0) {
+            self::clearGlobalContentProjectSelection();
+
+            return;
+        }
+
+        if (! self::isAssignableGlobalContentProject($projectId, $siteId)) {
+            self::clearGlobalContentProjectSelection();
+
+            return;
+        }
+
+        session([
+            'seo_global_content_project_id' => $projectId,
+            'seo_global_content_project_site_id' => $siteId,
+        ]);
+
+        Cookie::queue(cookie(
+            self::GLOBAL_CONTENT_PROJECT_COOKIE,
+            (string) $projectId,
+            self::GLOBAL_SITE_COOKIE_MINUTES,
+            '/',
+            null,
+            request()->isSecure(),
+            true,
+            false,
+            'lax',
+        ));
+        Cookie::queue(cookie(
+            self::GLOBAL_CONTENT_PROJECT_SITE_COOKIE,
+            (string) $siteId,
+            self::GLOBAL_SITE_COOKIE_MINUTES,
+            '/',
+            null,
+            request()->isSecure(),
+            true,
+            false,
+            'lax',
+        ));
+    }
+
+    public static function clearGlobalContentProjectSelection(): void
+    {
+        session()->forget([
+            'seo_global_content_project_id',
+            'seo_global_content_project_site_id',
+        ]);
+        Cookie::queue(Cookie::forget(self::GLOBAL_CONTENT_PROJECT_COOKIE, '/'));
+        Cookie::queue(Cookie::forget(self::GLOBAL_CONTENT_PROJECT_SITE_COOKIE, '/'));
     }
 
     public static function normalizeRole(string $role): string
@@ -173,5 +360,59 @@ final class SeoAccessControl
         $role = self::normalizeRole($role);
 
         return self::ROLE_RANK[$role] ?? self::ROLE_RANK[self::ROLE_CONTENT_MANAGER];
+    }
+
+    private static function resolveStoredGlobalContentProjectSiteId(): ?int
+    {
+        $cookieSiteId = request()->cookie(self::GLOBAL_CONTENT_PROJECT_SITE_COOKIE);
+        $siteId = $cookieSiteId !== null && $cookieSiteId !== ''
+            ? $cookieSiteId
+            : session('seo_global_content_project_site_id');
+
+        if ($siteId === null || $siteId === '') {
+            return null;
+        }
+
+        $siteId = (int) $siteId;
+
+        return $siteId > 0 ? $siteId : null;
+    }
+
+    private static function resolveStoredGlobalContentProjectId(): ?int
+    {
+        $cookieProjectId = request()->cookie(self::GLOBAL_CONTENT_PROJECT_COOKIE);
+        $projectId = $cookieProjectId !== null && $cookieProjectId !== ''
+            ? $cookieProjectId
+            : session('seo_global_content_project_id');
+
+        if ($projectId === null || $projectId === '') {
+            return null;
+        }
+
+        $projectId = (int) $projectId;
+
+        return $projectId > 0 ? $projectId : null;
+    }
+
+    private static function isAssignableGlobalContentProject(int $projectId, int $siteId): bool
+    {
+        $project = SeoProject::query()->find($projectId);
+        if (! $project instanceof SeoProject) {
+            return false;
+        }
+
+        if ((int) $project->site_id !== $siteId) {
+            return false;
+        }
+
+        if (! in_array((string) $project->status, [
+            SeoProject::STATUS_PENDING,
+            SeoProject::STATUS_MANUAL,
+            SeoProject::STATUS_RUNNING,
+        ], true)) {
+            return false;
+        }
+
+        return $project->maxTasksAllowed() > (int) ($project->total_tasks ?? 0);
     }
 }

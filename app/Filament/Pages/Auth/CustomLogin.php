@@ -59,4 +59,13 @@ class CustomLogin extends Login
         // Nếu không có, quay về logic mặc định của Filament (vào Dashboard)
         return parent::getRedirectUrl();
     }
+
+    public function getGoogleLoginReturnUrl(): string
+    {
+        if ($this->return_url) {
+            return $this->return_url;
+        }
+
+        return filament()->getCurrentPanel()->getUrl();
+    }
 }

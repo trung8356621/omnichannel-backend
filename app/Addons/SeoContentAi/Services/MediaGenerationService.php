@@ -103,7 +103,7 @@ final class MediaGenerationService
 
         $imagePrompt = $this->buildImageGenerationInput($compiled, $variables);
         $excludeImagen = $this->isProductImageContext($variables);
-        $imageModel = $excludeImagen ? null : $this->resolveImageModelSlug($connection, $routedModel);
+        $imageModel = $this->resolveImageModelSlug($connection, $routedModel, preferNanoBananaFirst: ! $excludeImagen);
         [$output, $usage] = $this->geminiMediaGeneration->generateImage(
             $connection,
             $imagePrompt,
@@ -212,9 +212,21 @@ final class MediaGenerationService
         return $this->executeImage($connection, $prompt, $compiled, $variables, $modelOverride);
     }
 
-    private function resolveImageModelSlug(ApiConnection $connection, ?string $routedModel): string
-    {
+    private function resolveImageModelSlug(
+        ApiConnection $connection,
+        ?string $routedModel,
+        bool $preferNanoBananaFirst = false,
+    ): ?string {
         $routedModel = trim((string) $routedModel);
+
+        if ($preferNanoBananaFirst) {
+            if ($routedModel !== '' && GoogleAiModelRegistry::isGeminiNativeImageModel($routedModel)) {
+                return GoogleAiModelRegistry::normalizeSlug($routedModel);
+            }
+
+            return null;
+        }
+
         if ($routedModel !== '' && ! GoogleAiModelRegistry::isTextModel($routedModel)) {
             return GoogleAiModelRegistry::normalizeSlug($routedModel);
         }

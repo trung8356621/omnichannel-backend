@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Livewire;
 
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
@@ -12,6 +13,8 @@ use Livewire\Component;
 class GlobalSeoBar extends Component
 {
     public ?int $globalSiteId = null;
+
+    public ?int $globalContentProjectId = null;
 
     public string $simulatedRole = '';
 
@@ -31,6 +34,7 @@ class GlobalSeoBar extends Component
         $this->simulatedRole = in_array($current, $allowed, true) ? $current : $actualRole;
 
         session(['seo_simulated_role' => $this->simulatedRole]);
+        $this->syncGlobalContentProjectSelection();
     }
 
     public function updatedGlobalSiteId($value): void
@@ -42,15 +46,29 @@ class GlobalSeoBar extends Component
 
         if ($siteId !== null && ! $this->resolveSitesQuery()->whereKey($siteId)->exists()) {
             $this->globalSiteId = SeoAccessControl::globalSiteId();
+            $this->syncGlobalContentProjectSelection();
 
             return;
         }
 
         $this->globalSiteId = $siteId;
         SeoAccessControl::setGlobalSiteId($siteId);
+        $this->syncGlobalContentProjectSelection();
         session()->save();
 
         $this->redirect($this->resolveReturnUrl(), navigate: false);
+    }
+
+    public function updatedGlobalContentProjectId($value): void
+    {
+        $projectId = filled($value) ? (int) $value : null;
+        if ($projectId !== null && $projectId <= 0) {
+            $projectId = null;
+        }
+
+        SeoAccessControl::setGlobalContentProjectId($projectId);
+        $this->syncGlobalContentProjectSelection();
+        session()->save();
     }
 
     public function updatedSimulatedRole($value): void
@@ -65,6 +83,14 @@ class GlobalSeoBar extends Component
 
         $this->simulatedRole = $role;
         session(['seo_simulated_role' => $role]);
+
+        if ($role !== SeoAccessControl::ROLE_PLANNER) {
+            SeoAccessControl::clearGlobalContentProjectSelection();
+            $this->globalContentProjectId = null;
+        } else {
+            $this->syncGlobalContentProjectSelection();
+        }
+
         session()->save();
 
         $this->redirect($this->resolveReturnUrl(), navigate: false);
@@ -86,9 +112,24 @@ class GlobalSeoBar extends Component
             $roleOptions[$role] = $roleLabels[$role] ?? $role;
         }
 
+        $showContentProjectPicker = SeoAccessControl::canUseGlobalContentProjectPicker();
+        $contentProjectOptions = $showContentProjectPicker
+            ? ArticleResource::contentProjectOptions($this->globalSiteId)
+            : [];
+
+        if (
+            $this->globalContentProjectId !== null
+            && ! array_key_exists($this->globalContentProjectId, $contentProjectOptions)
+        ) {
+            SeoAccessControl::clearGlobalContentProjectSelection();
+            $this->globalContentProjectId = null;
+        }
+
         return view('seo-content-ai::livewire.global-seo-bar', [
             'sites' => $this->resolveSitesQuery()->get(),
             'roleOptions' => $roleOptions,
+            'showContentProjectPicker' => $showContentProjectPicker,
+            'contentProjectOptions' => $contentProjectOptions,
         ]);
     }
 
@@ -128,6 +169,11 @@ class GlobalSeoBar extends Component
                 SeoAccessControl::setGlobalSiteId($this->globalSiteId);
             }
         }
+    }
+
+    private function syncGlobalContentProjectSelection(): void
+    {
+        $this->globalContentProjectId = SeoAccessControl::globalContentProjectId();
     }
 
     private function resolveReturnUrl(): string

@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
@@ -29,6 +30,8 @@ final class TaskWorkflowTestRunner
         private readonly PromptTestPublishService $promptPublisher,
         private readonly WorkflowExistingAiOutputService $existingAiOutput,
         private readonly SeoMediaStorageService $mediaStorage,
+        private readonly SeoCreateArticleSettingsService $createArticleSettings,
+        private readonly ArticleMediaLocalService $articleMediaLocal,
     ) {}
 
     /**
@@ -288,6 +291,21 @@ final class TaskWorkflowTestRunner
                     'title' => $title,
                     'status' => 'failed',
                     'message' => 'Không tìm thấy prompt #'.(string) $promptId,
+                ];
+            }
+
+            if (
+                $this->isProductGalleryPromptNode($nodeId, $prompt, $edges)
+                && ! $this->shouldRunProductGalleryPrompt($context, $state)
+            ) {
+                return [
+                    'node_id' => $nodeId,
+                    'type' => $type,
+                    'title' => $title,
+                    'status' => 'skipped',
+                    'prompt_id' => $prompt->id,
+                    'prompt_name' => (string) $prompt->name,
+                    'message' => 'Bỏ qua prompt product gallery vì album hình ảnh sản phẩm đã có ảnh.',
                 ];
             }
 
@@ -663,6 +681,10 @@ final class TaskWorkflowTestRunner
 
         if ($preserveExistingBody) {
             $messages[] = 'Giữ nguyên nội dung bài viết đã có.';
+            $heldMarkdown = trim((string) ($state->meta['direct_publish_article_markdown'] ?? ''));
+            if ($heldMarkdown !== '') {
+                $this->persistMetaDescriptionFromMarkdown($article, $heldMarkdown);
+            }
         }
 
         if ($articleMarkdown !== '') {
@@ -711,27 +733,34 @@ final class TaskWorkflowTestRunner
             }
         }
 
-        $galleryImagesCount = $this->appendGalleryImagesFromActionEdges($article, $nodeId, $edges, $state);
-        if ($galleryImagesCount > 0) {
-            $messages[] = sprintf('Đã thêm %d ảnh vào product gallery.', $galleryImagesCount);
+        $shouldAppendProductGallery = ! $this->isProductWorkflowContext($context, $state)
+            || $this->shouldRunProductGalleryPrompt($context, $state);
 
-            // Rải ảnh gallery vào các section còn trống sau khi lưu thành công
-            $article->unsetRelation('articleMetas');
-            $mediaService = app(ArticleMediaLocalService::class);
-            $fixedMediaCount = $this->quickFixProductGalleryMedia($article, $context, $mediaService);
-            if ($fixedMediaCount > 0) {
-                $messages[] = sprintf('Đã fix slug/alt/title cho %d ảnh product gallery.', $fixedMediaCount);
+        if ($shouldAppendProductGallery) {
+            $galleryImagesCount = $this->appendGalleryImagesFromActionEdges($article, $nodeId, $edges, $state);
+            if ($galleryImagesCount > 0) {
+                $messages[] = sprintf('Đã thêm %d ảnh vào product gallery.', $galleryImagesCount);
+
+                // Rải ảnh gallery vào các section còn trống sau khi lưu thành công
                 $article->unsetRelation('articleMetas');
-            }
+                $mediaService = $this->articleMediaLocal;
+                $fixedMediaCount = $this->quickFixProductGalleryMedia($article, $context, $mediaService);
+                if ($fixedMediaCount > 0) {
+                    $messages[] = sprintf('Đã fix slug/alt/title cho %d ảnh product gallery.', $fixedMediaCount);
+                    $article->unsetRelation('articleMetas');
+                }
 
-            $galleryItems = $mediaService->resolveProductAlbum($article);
-            if ($galleryItems !== []) {
-                $distributedCount = app(ArticleProductGalleryDistributeService::class)
-                    ->distribute($article, $galleryItems);
-                if ($distributedCount > 0) {
-                    $messages[] = sprintf('Đã rải %d ảnh vào các section.', $distributedCount);
+                $galleryItems = $mediaService->resolveProductAlbum($article);
+                if ($galleryItems !== []) {
+                    $distributedCount = app(ArticleProductGalleryDistributeService::class)
+                        ->distribute($article, $galleryItems);
+                    if ($distributedCount > 0) {
+                        $messages[] = sprintf('Đã rải %d ảnh vào các section.', $distributedCount);
+                    }
                 }
             }
+        } else {
+            $messages[] = 'Giữ nguyên album hình ảnh sản phẩm đã có.';
         }
 
         $savedKeys = $this->persistWorkflowMeta($article, $state);
@@ -1020,13 +1049,6 @@ final class TaskWorkflowTestRunner
 
     private function persistMetaDescriptionFromMarkdown(SeoArticle $article, string $markdown): void
     {
-        $existing = trim((string) ($article->articleMetas()
-            ->where('meta_key', 'seo_meta_description')
-            ->value('meta_value') ?? ''));
-        if ($existing !== '') {
-            return; // Already saved by publishArticle
-        }
-
         $prepared = app(ArticleMarkdownToHtmlService::class)->prepareImport($markdown);
         $metaDescription = trim((string) ($prepared['meta_description'] ?? ''));
         if ($metaDescription === '') {
@@ -1261,7 +1283,6 @@ final class TaskWorkflowTestRunner
             KeywordFocusAttach::attachMainKeyword(
                 $article,
                 $siteId,
-                (int) auth()->id(),
                 $focusKeyword,
             );
         }
@@ -1272,6 +1293,156 @@ final class TaskWorkflowTestRunner
     private function shouldScheduleProjectArticle(TaskTestContext $context): bool
     {
         return $context->projectTaskType === SeoProjectTask::TYPE_NEW_KEYWORD;
+    }
+
+    private function shouldRunProductGalleryPrompt(TaskTestContext $context, WorkflowExecutionState $state): bool
+    {
+        $article = $this->resolveArticleForProductAlbumCheck($context, $state);
+        if (! $article instanceof SeoArticle) {
+            return true;
+        }
+
+        $article->unsetRelation('articleMetas');
+
+        return $this->articleMediaLocal->resolveProductAlbum($article) === [];
+    }
+
+    private function isProductWorkflowContext(TaskTestContext $context, WorkflowExecutionState $state): bool
+    {
+        $postType = SeoProjectTask::normalizePostType((string) ($context->postType ?? ''));
+        if ($postType === SeoProjectTask::POST_TYPE_PRODUCT) {
+            return true;
+        }
+
+        $article = $this->resolveArticleForProductAlbumCheck($context, $state);
+        if (! $article instanceof SeoArticle) {
+            return false;
+        }
+
+        return ArticlePostTypeResolver::resolve($article) === SeoProjectTask::POST_TYPE_PRODUCT;
+    }
+
+    private function resolveArticleForProductAlbumCheck(TaskTestContext $context, WorkflowExecutionState $state): ?SeoArticle
+    {
+        $article = $this->resolveWorkflowArticle($context, $state);
+        if ($article instanceof SeoArticle) {
+            return $article;
+        }
+
+        $articleId = (int) ($context->variables['article_id'] ?? 0);
+        if ($articleId > 0) {
+            $byId = SeoArticle::query()->find($articleId);
+            if ($byId instanceof SeoArticle) {
+                return $byId;
+            }
+        }
+
+        $siteId = (int) ($context->siteId ?? $context->article?->site_id ?? 0);
+        $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
+        if ($keyword === '') {
+            $keyword = trim((string) ($context->variables['post_title'] ?? ''));
+        }
+
+        if ($siteId <= 0 || $keyword === '') {
+            return null;
+        }
+
+        $baseQuery = SeoArticle::query()->where('site_id', $siteId);
+
+        $byTitle = (clone $baseQuery)
+            ->where('title', $keyword)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($byTitle instanceof SeoArticle) {
+            return $byTitle;
+        }
+
+        $byTitleLike = (clone $baseQuery)
+            ->where('title', 'like', '%'.$this->escapeLike($keyword).'%')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($byTitleLike instanceof SeoArticle) {
+            return $byTitleLike;
+        }
+
+        $normalized = mb_strtolower($keyword);
+
+        $byKeyword = (clone $baseQuery)
+            ->whereHas('keywords', static function ($query) use ($normalized, $keyword): void {
+                $query->whereRaw('LOWER(phrase) = ?', [$normalized])
+                    ->orWhere('phrase', 'like', '%'.addcslashes($keyword, '%_\\').'%');
+            })
+            ->orderByDesc('id')
+            ->first();
+
+        if ($byKeyword instanceof SeoArticle) {
+            return $byKeyword;
+        }
+
+        return (clone $baseQuery)
+            ->whereHas('articleMetas', static function ($query) use ($normalized, $keyword): void {
+                $query->where('meta_key', 'seo_focus_keyword')
+                    ->where(function ($inner) use ($normalized, $keyword): void {
+                        $inner->whereRaw('LOWER(meta_value) = ?', [$normalized])
+                            ->orWhere('meta_value', 'like', '%'.addcslashes($keyword, '%_\\').'%');
+                    });
+            })
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function escapeLike(string $value): string
+    {
+        return str_replace(['%', '_'], ['\\%', '\\_'], $value);
+    }
+
+    private function resolveWorkflowArticle(TaskTestContext $context, WorkflowExecutionState $state): ?SeoArticle
+    {
+        return $state->article ?? $context->article;
+    }
+
+    /**
+     * @param  array<string, mixed>  $node
+     * @param  list<array<string, mixed>>  $edges
+     */
+    private function isProductGalleryPromptNode(string $nodeId, SeoPrompt $prompt, array $edges): bool
+    {
+        if (trim((string) ($prompt->tools ?? 'default')) !== 'image') {
+            return false;
+        }
+
+        $configuredPromptId = $this->createArticleSettings->getCreateProductGalleryImagePromptId();
+        if ($configuredPromptId !== null && (int) $prompt->id === $configuredPromptId) {
+            return true;
+        }
+
+        foreach ($edges as $edge) {
+            if (! is_array($edge)) {
+                continue;
+            }
+
+            if ((string) ($edge['targetNode'] ?? '') !== $nodeId) {
+                continue;
+            }
+
+            if ((string) ($edge['sourcePort'] ?? '') === 'out_gallery_description') {
+                return true;
+            }
+        }
+
+        $detectedTags = is_array($prompt->settings['detected_tags'] ?? null)
+            ? $prompt->settings['detected_tags']
+            : [];
+
+        foreach ($detectedTags as $tag) {
+            if (strtolower(trim((string) $tag)) === 'gallery_description') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -1844,8 +2015,13 @@ final class TaskWorkflowTestRunner
             if ($sourceNodeId !== '' && isset($articleNodeIds[$sourceNodeId])) {
                 $filterNodeId = $sourceNodeId.'_article_filter';
                 $targetNodeId = (string) ($edge['targetNode'] ?? '');
+                $targetIsArticleFilter = isset($articleFilterNodeIds[$targetNodeId]);
 
-                if (isset($articleFilterNodeIds[$filterNodeId]) && $targetNodeId !== $filterNodeId) {
+                if (
+                    isset($articleFilterNodeIds[$filterNodeId])
+                    && $targetNodeId !== $filterNodeId
+                    && ! $targetIsArticleFilter
+                ) {
                     $edge['sourceNode'] = $filterNodeId;
                     $edge['sourcePort'] = $sourcePort === 'out_description'
                         ? 'out_gallery_description'

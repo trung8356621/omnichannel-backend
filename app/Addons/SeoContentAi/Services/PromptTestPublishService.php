@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\MarkdownOutlineParser;
 use App\Addons\SeoContentAi\Support\MarkdownSemanticKeywordsParser;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Support\Str;
 
 final class PromptTestPublishService
@@ -93,14 +94,16 @@ final class PromptTestPublishService
         app(ArticlePostImagesService::class)->syncFromHtml($article->fresh(), $html);
         app(SeoAnalyzerService::class)->analyze($article->fresh());
 
-        if ($faqs !== []) {
+        if ($faqs !== [] && SeoAccessControl::canSyncArticlesToWordPress()) {
             app(WordPressFaqSyncService::class)->syncForArticle($article->fresh());
         }
 
         return [
             'success' => true,
             'message' => sprintf(
-                'Đã lưu nội dung bài «%s» vào editor (HTML trong DB). Mở editor để chỉnh và đồng bộ WP.',
+                SeoAccessControl::canSyncArticlesToWordPress()
+                    ? 'Đã lưu nội dung bài «%s» vào editor (HTML trong DB). Mở editor để chỉnh và đồng bộ WP.'
+                    : 'Đã lưu nội dung bài «%s» vào editor (chỉ Laravel, không đồng bộ WordPress).',
                 $title,
             ),
         ];
@@ -168,7 +171,6 @@ final class PromptTestPublishService
         KeywordFocusAttach::attachMainKeyword(
             $article,
             (int) $article->site_id,
-            (int) auth()->id(),
             $phrase,
         );
     }

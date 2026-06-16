@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
@@ -13,6 +14,7 @@ use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
 use Illuminate\Http\JsonResponse;
@@ -516,6 +518,7 @@ class SeoMediaController extends Controller
 
     public function deleteAiJob(SeoMedia $media): JsonResponse
     {
+        abort_unless(SeoAccessControl::canDeleteSeoMedia(), 403);
         abort_unless($this->canAccessMedia($media), 403);
 
         if (! $media->isAiGenerationJob()) {
@@ -698,27 +701,16 @@ class SeoMediaController extends Controller
             return true;
         }
 
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
+        if (SeoAccessControl::isContentManager()) {
+            return ArticleResource::canContentManagerAccessArticle($article);
+        }
+
+        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
     }
 
     private function canAccessSite(int $siteId): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($siteId)
-            ->where('user_id', $user->id)
-            ->exists();
+        return SeoAccessControl::canAccessSite($siteId);
     }
 
     private function resolveSplitSaveArticleId(?int $requestedArticleId, ?int $originalSeoMediaId): ?int

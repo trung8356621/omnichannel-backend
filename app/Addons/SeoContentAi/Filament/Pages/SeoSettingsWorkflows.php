@@ -33,6 +33,8 @@ class SeoSettingsWorkflows extends Page implements HasForms
     public function mount(SeoCreateArticleSettingsService $settings): void
     {
         $this->settingsData = $settings->getSettings();
+        $this->settingsData[SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID] =
+            $settings->getFeaturedSnippetPromptId();
         $this->form->fill($this->settingsData);
     }
 
@@ -98,6 +100,30 @@ class SeoSettingsWorkflows extends Page implements HasForms
                             ->native(false)
                             ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
                     ]),
+
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.featured_snippet_section'))
+                    ->description(__('seo-content-ai::filament.settings_workflows.featured_snippet_description'))
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID)
+                            ->label(__('seo-content-ai::filament.settings_workflows.featured_snippet_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.featured_snippet_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
+                    ]),
+
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.outline_heading_section'))
+                    ->description(__('seo-content-ai::filament.settings_workflows.outline_heading_description'))
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID)
+                            ->label(__('seo-content-ai::filament.settings_workflows.outline_heading_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.outline_heading_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
+                    ]),
             ])
             ->statePath('settingsData');
     }
@@ -125,6 +151,8 @@ class SeoSettingsWorkflows extends Page implements HasForms
             SeoCreateArticleSettingsService::KEY_CREATE_VIDEO => $data[SeoCreateArticleSettingsService::KEY_CREATE_VIDEO] ?? null,
             SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_RENEW_FAQ_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
         ]);
 
         Notification::make()

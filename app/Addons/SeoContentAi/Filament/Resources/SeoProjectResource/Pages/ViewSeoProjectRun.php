@@ -18,6 +18,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\HtmlString;
 
 class ViewSeoProjectRun extends Page
 {
@@ -37,12 +38,16 @@ class ViewSeoProjectRun extends Page
     public function mount(int|string $run): void
     {
         static::authorizeResourceAccess();
-        abort_if(SeoAccessControl::isContentManager(), 403);
 
         $this->run = (int) $run;
         $this->projectRun = SeoProjectRun::query()
             ->with(['project.site', 'user', 'project.tasks'])
             ->findOrFail($this->run);
+
+        abort_unless(
+            SeoAccessControl::canAccessContentProjectRun($this->projectRun->project),
+            403,
+        );
 
         app(SeoProjectWorkflowRunService::class)->ensureFailedTasksQueued($this->projectRun);
         $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
@@ -56,6 +61,92 @@ class ViewSeoProjectRun extends Page
             'project' => $projectName,
             'id' => (int) ($this->projectRun?->id ?? 0),
         ]);
+    }
+
+    public function getHeading(): string|Htmlable
+    {
+        return new HtmlString(
+            view('seo-content-ai::filament.resources.seo-project-resource.pages.partials.run-queue-heading', [
+                'title' => $this->getTitle(),
+            ])->render(),
+        );
+    }
+
+    /**
+     * @return list<int>
+     */
+    public function getQueueTaskIds(): array
+    {
+        if ($this->projectRun === null) {
+            return [];
+        }
+
+        $plannedTotal = (int) $this->projectRun->total;
+        $processedInRun = count($this->getResultItems());
+        $remainingSlots = $plannedTotal > 0
+            ? max(0, $plannedTotal - $processedInRun)
+            : PHP_INT_MAX;
+
+        if ($remainingSlots === 0) {
+            return [];
+        }
+
+        $taskIds = [];
+
+        foreach ($this->getAllItems() as $item) {
+            if ((string) ($item['status'] ?? '') !== 'pending') {
+                continue;
+            }
+
+            if ((bool) ($item['article_is_reviewed'] ?? false)) {
+                continue;
+            }
+
+            $taskId = (int) ($item['task_id'] ?? 0);
+            if ($taskId <= 0) {
+                continue;
+            }
+
+            $taskIds[] = $taskId;
+
+            if (count($taskIds) >= $remainingSlots) {
+                break;
+            }
+        }
+
+        return $taskIds;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getQueueBootstrapData(): array
+    {
+        return [
+            'runStatus' => (string) ($this->projectRun?->status ?? ''),
+            'taskIds' => $this->getQueueTaskIds(),
+            'autorun' => request()->boolean('autorun'),
+            'labels' => [
+                'running' => __('seo-content-ai::filament.projects.run_queue_running'),
+                'ok' => 'OK',
+                'failed' => __('seo-content-ai::filament.projects.run_item_failed'),
+                'pending' => __('seo-content-ai::filament.projects.run_item_pending'),
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, int|string>
+     */
+    public function getRunStatsPayload(): array
+    {
+        return [
+            'total' => (int) ($this->projectRun?->total ?? 0),
+            'succeeded' => (int) ($this->projectRun?->succeeded ?? 0),
+            'failed' => (int) ($this->projectRun?->failed ?? 0),
+            'pending' => $this->getPendingCount(),
+            'status' => (string) ($this->projectRun?->status ?? ''),
+        ];
     }
 
     /**
@@ -335,6 +426,86 @@ class ViewSeoProjectRun extends Page
                 ->send();
 
             $this->reloadCurrentRunPage();
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function runItemQueued(int $taskId): array
+    {
+        if ($this->projectRun === null) {
+            return [
+                'success' => false,
+                'message' => 'Run không tồn tại.',
+            ];
+        }
+
+        $formatter = app(SeoProjectRunErrorFormatter::class);
+
+        try {
+            $item = app(SeoProjectWorkflowRunService::class)->retryTask(
+                $this->projectRun,
+                $taskId,
+                markCompleted: false,
+            );
+            $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+
+            return [
+                'success' => true,
+                'item' => $this->enrichItemArticleLink($item),
+                'displayError' => $formatter->displayMessage($item),
+                'stats' => $this->getRunStatsPayload(),
+            ];
+        } catch (\Throwable $exception) {
+            $error = $formatter->fromThrowable($exception);
+
+            return [
+                'success' => false,
+                'message' => $formatter->displayMessage([
+                    'status' => 'failed',
+                    'message' => $error['message'],
+                    'error_detail' => $error['error_detail'],
+                ]),
+                'stats' => $this->getRunStatsPayload(),
+            ];
+        }
+    }
+
+    public function completeRunQueue(bool $stopped = false): void
+    {
+        if ($this->projectRun === null) {
+            return;
+        }
+
+        if ($this->projectRun->status === SeoProjectRun::STATUS_RUNNING) {
+            app(SeoProjectWorkflowRunService::class)->completeRunQueue($this->projectRun);
+            $this->projectRun->refresh();
+        }
+
+        if ($stopped) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.run_stopped'))
+                ->body(__('seo-content-ai::filament.projects.run_stopped_body'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $run = $this->projectRun;
+        $notification = Notification::make()
+            ->title(__('seo-content-ai::filament.projects.run_completed'))
+            ->body(__('seo-content-ai::filament.projects.run_completed_body', [
+                'succeeded' => (int) $run->succeeded,
+                'failed' => (int) $run->failed,
+                'total' => (int) $run->total,
+            ]));
+
+        if ((int) $run->failed > 0) {
+            $notification->warning()->send();
+        } else {
+            $notification->success()->send();
         }
     }
 

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewRatingAssigner;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -271,6 +272,13 @@ final class VirtualCommentService
      */
     public function syncToWordPress(SeoArticle $article, ?array $items = null): array
     {
+        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
+            return [
+                'success' => false,
+                'message' => 'Quản lý nội dung không được đồng bộ review/bình luận lên WordPress.',
+            ];
+        }
+
         $wpPostId = (int) ($article->wp_post_id ?? 0);
         if ($wpPostId <= 0) {
             return [

@@ -442,7 +442,7 @@ class SeoProjectResource extends Resource
                     ->label(__('seo-content-ai::filament.projects.view_runs'))
                     ->icon('heroicon-o-queue-list')
                     ->color('gray')
-                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
+                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
                     ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
                 Tables\Actions\Action::make('merge_completed_tasks')
                     ->label(__('seo-content-ai::filament.projects.merge_projects'))
@@ -514,7 +514,8 @@ class SeoProjectResource extends Resource
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
+                    Tables\Actions\DeleteBulkAction::make()
+                        ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects()),
                 ]),
             ]);
     }
@@ -534,13 +535,11 @@ class SeoProjectResource extends Resource
 
     public static function applyGlobalSiteScopeToProjectQuery(Builder $query): Builder
     {
-        $globalSiteId = SeoAccessControl::globalSiteId();
-
-        if ($globalSiteId === null) {
+        if (! SeoAccessControl::shouldApplyGlobalSiteScope()) {
             return $query;
         }
 
-        return $query->where('site_id', $globalSiteId);
+        return $query->where('site_id', (int) SeoAccessControl::globalSiteId());
     }
 
     /**
@@ -606,30 +605,28 @@ class SeoProjectResource extends Resource
         return new HtmlString('<p>'.e($base).'</p>'.$warnings->toHtml());
     }
 
-    public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
+    public static function createProjectWorkflowRun(SeoProject $project, string $mode): SeoProjectRun
     {
         $runner = app(SeoProjectWorkflowRunService::class);
+        $limit = $mode === SeoProjectRun::MODE_TEST ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT : null;
+        $run = $runner->startRun($project, $mode);
 
+        return $runner->prepareRunQueue($project, $run, $limit);
+    }
+
+    public static function dispatchProjectWorkflowRun(SeoProject $project, string $mode): mixed
+    {
         try {
-            $run = $runner->startRun($project, $mode);
-            $limit = $mode === SeoProjectRun::MODE_TEST ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT : null;
-            $run = $runner->execute($project, $run, $limit);
+            $run = static::createProjectWorkflowRun($project, $mode);
+            $url = static::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
 
-            $notification = Notification::make()
-                ->title(__('seo-content-ai::filament.projects.run_completed'))
-                ->body(__('seo-content-ai::filament.projects.run_completed_body', [
-                    'succeeded' => (int) $run->succeeded,
-                    'failed' => (int) $run->failed,
-                    'total' => (int) $run->total,
-                ]));
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.run_started'))
+                ->body(__('seo-content-ai::filament.projects.run_started_new_tab'))
+                ->success()
+                ->send();
 
-            if ((int) $run->failed > 0) {
-                $notification->warning()->send();
-            } else {
-                $notification->success()->send();
-            }
-
-            return redirect(static::getUrl('view-run', ['run' => $run->id]));
+            return redirect($url);
         } catch (\InvalidArgumentException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.run_failed'))
@@ -667,13 +664,33 @@ class SeoProjectResource extends Resource
 
         return $query
             ->orderBy('name')
-            ->pluck('name', 'id')
+            ->get(['id', 'name', 'email'])
+            ->mapWithKeys(static fn (User $user): array => [
+                (int) $user->id => static::formatUserSelectLabel($user),
+            ])
             ->all();
     }
 
-    /**
-     * @return array<int|string, string>
-     */
+    public static function formatUserSelectLabel(User $user): string
+    {
+        $name = trim((string) ($user->name ?? ''));
+        $email = trim((string) ($user->email ?? ''));
+
+        if ($name !== '' && $email !== '') {
+            return sprintf('%s(%s)', $name, $email);
+        }
+
+        if ($name !== '') {
+            return $name;
+        }
+
+        if ($email !== '') {
+            return $email;
+        }
+
+        return (string) $user->id;
+    }
+
     /**
      * @return array<string, string> title => label
      */

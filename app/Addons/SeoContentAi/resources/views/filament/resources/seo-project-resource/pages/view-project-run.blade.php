@@ -1,5 +1,17 @@
+@php
+    $queueBootstrap = $this->getQueueBootstrapData();
+@endphp
+
+@vite([
+    'app/Addons/SeoContentAi/resources/css/project-run-queue.css',
+    'app/Addons/SeoContentAi/resources/js/project-run-queue.js',
+])
+
 <x-filament-panels::page>
-    <div class="space-y-6">
+    <div
+        class="space-y-6"
+        x-data="seoProjectRunQueue(@js($queueBootstrap))"
+    >
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_mode') }}</p>
@@ -12,22 +24,22 @@
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_total') }}</p>
-                <p class="mt-1 text-lg font-semibold text-gray-950 dark:text-white">{{ (int) $this->projectRun->total }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-950 dark:text-white" data-run-stat="total">{{ (int) $this->projectRun->total }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_succeeded') }}</p>
-                <p class="mt-1 text-lg font-semibold text-success-600 dark:text-success-400">{{ (int) $this->projectRun->succeeded }}</p>
+                <p class="mt-1 text-lg font-semibold text-success-600 dark:text-success-400" data-run-stat="succeeded">{{ (int) $this->projectRun->succeeded }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_failed_count') }}</p>
-                <p class="mt-1 text-lg font-semibold text-danger-600 dark:text-danger-400">{{ (int) $this->projectRun->failed }}</p>
+                <p class="mt-1 text-lg font-semibold text-danger-600 dark:text-danger-400" data-run-stat="failed">{{ (int) $this->projectRun->failed }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_pending_count') }}</p>
-                <p class="mt-1 text-lg font-semibold text-warning-600 dark:text-warning-400">{{ $this->getPendingCount() }}</p>
+                <p class="mt-1 text-lg font-semibold text-warning-600 dark:text-warning-400" data-run-stat="pending">{{ $this->getPendingCount() }}</p>
             </x-filament::section>
         </div>
 
@@ -59,6 +71,8 @@
                             <tr
                                 class="align-top {{ $itemStatus === 'pending' ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
                                 wire:key="run-row-{{ $taskId > 0 ? $taskId : $index }}"
+                                @if ($taskId > 0) data-run-task-id="{{ $taskId }}" @endif
+                                data-run-item-status="{{ $itemStatus }}"
                             >
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">{{ $index + 1 }}</td>
                                 <td class="px-3 py-3">
@@ -96,7 +110,7 @@
                                         @endif
                                     </div>
                                 </td>
-                                <td class="px-3 py-3">
+                                <td class="px-3 py-3" data-run-status>
                                     @if ($itemStatus === 'success')
                                         <span class="inline-flex rounded-md bg-success-50 px-2 py-0.5 text-xs font-medium text-success-700 dark:bg-success-500/10 dark:text-success-400">
                                             OK
@@ -111,7 +125,7 @@
                                         </span>
                                     @endif
                                 </td>
-                                <td class="px-3 py-3 text-gray-600 dark:text-gray-300">
+                                <td class="px-3 py-3 text-gray-600 dark:text-gray-300" data-run-message>
                                     @if ($itemStatus === 'failed')
                                         <p class="font-medium text-danger-600 dark:text-danger-400">
                                             {{ $this->displayItemError($item) }}
@@ -142,7 +156,7 @@
                                         {{ $item['message'] ?? '' }}
                                     @endif
                                 </td>
-                                <td class="px-3 py-3">
+                                <td class="px-3 py-3 seo-run-row-actions" data-run-actions>
                                     @if ($taskId > 0 && in_array($itemStatus, ['success', 'failed', 'pending'], true))
                                         <div class="flex flex-wrap gap-2">
                                             @if ($stepsUrl = $this->itemStepsUrl($item))

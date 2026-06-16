@@ -49,4 +49,34 @@ final class SeoArticleRevisionServiceTest extends TestCase
         $this->assertSame('Title 16', $latest->title);
         $this->assertSame('<p>Body 16</p>', $latest->content);
     }
+
+    public function test_clear_all_for_article_removes_all_revisions(): void
+    {
+        $article = SeoArticle::query()->create([
+            'site_id' => 1,
+            'title' => 'Clear revisions test',
+            'body' => '<p>Initial</p>',
+            'status' => 'draft',
+            'type' => 'article',
+        ]);
+
+        $service = app(SeoArticleRevisionService::class);
+
+        for ($index = 1; $index <= 3; $index++) {
+            $service->captureAfterSave(
+                $article,
+                'Title '.$index,
+                '<p>Body '.$index.'</p>',
+                ['seo_title' => 'SEO '.$index],
+                1,
+            );
+        }
+
+        $this->assertSame(3, $service->countForArticle((int) $article->id));
+
+        $deleted = $service->clearAllForArticle((int) $article->id);
+
+        $this->assertSame(3, $deleted);
+        $this->assertSame(0, $service->countForArticle((int) $article->id));
+    }
 }

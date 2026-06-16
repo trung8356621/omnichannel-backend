@@ -17,6 +17,28 @@ final class SeoOverviewSettingsService
 
     public const KEY_OUTLINE_SKIP_WORDS = 'outline_skip_words';
 
+    public const KEY_TEAM_CHAT_ALLOWED_EXTENSIONS = 'team_chat_allowed_extensions';
+
+    public const KEY_TEAM_CHAT_MAX_FILE_SIZE_MB = 'team_chat_max_file_size_mb';
+
+    /** @var list<string> */
+    private const DEFAULT_TEAM_CHAT_ALLOWED_EXTENSIONS = [
+        'jpg',
+        'jpeg',
+        'png',
+        'webp',
+        'gif',
+        'pdf',
+        'doc',
+        'docx',
+        'xls',
+        'xlsx',
+        'zip',
+        'txt',
+    ];
+
+    private const DEFAULT_TEAM_CHAT_MAX_FILE_SIZE_MB = 10;
+
     /** @var list<string> */
     private const DEFAULT_OUTLINE_SKIP_WORDS = [
         'giới thiệu',
@@ -61,12 +83,17 @@ final class SeoOverviewSettingsService
     }
 
     /**
-     * @return array{faq_catch_keywords: list<string>, outline_skip_words: list<string>}
+     * @return array{
+     *     faq_catch_keywords: list<string>,
+     *     outline_skip_words: list<string>,
+     *     team_chat_allowed_extensions: list<string>,
+     *     team_chat_max_file_size_mb: int,
+     * }
      */
     public function getSettings(): array
     {
         if ($this->inMemorySettings !== null) {
-            return $this->inMemorySettings;
+            return $this->mergeTeamChatDefaults($this->inMemorySettings);
         }
 
         $data = WpOption::get(self::OPTION_KEY, []);
@@ -80,10 +107,12 @@ final class SeoOverviewSettingsService
             ? $this->normalizeKeywords($data[self::KEY_OUTLINE_SKIP_WORDS])
             : self::DEFAULT_OUTLINE_SKIP_WORDS;
 
-        return [
+        return $this->mergeTeamChatDefaults([
             self::KEY_FAQ_CATCH_KEYWORDS => $keywords !== [] ? $keywords : self::DEFAULT_FAQ_CATCH_KEYWORDS,
             self::KEY_OUTLINE_SKIP_WORDS => $skipWords,
-        ];
+            self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => $data[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS] ?? null,
+            self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $data[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB] ?? null,
+        ]);
     }
 
     /**
@@ -105,21 +134,94 @@ final class SeoOverviewSettingsService
     }
 
     /**
+     * @return list<string>
+     */
+    public function getTeamChatAllowedExtensions(): array
+    {
+        return $this->getSettings()[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS];
+    }
+
+    public function getTeamChatMaxFileSizeMb(): int
+    {
+        return (int) $this->getSettings()[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB];
+    }
+
+    public function extensionsToTextarea(array $extensions): string
+    {
+        return implode("\n", $this->normalizeExtensions($extensions));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function extensionsFromTextarea(string $raw): array
+    {
+        $lines = preg_split('/\r\n|\r|\n|,/', $raw) ?: [];
+
+        return $this->normalizeExtensions($lines);
+    }
+
+    /**
      * @param  array<string, mixed>  $settings
      */
     public function saveSettings(array $settings): void
     {
+        $current = WpOption::get(self::OPTION_KEY, []);
+        if (! is_array($current)) {
+            $current = [];
+        }
+
         $keywords = $this->normalizeKeywords($settings[self::KEY_FAQ_CATCH_KEYWORDS] ?? null);
         $skipWords = array_key_exists(self::KEY_OUTLINE_SKIP_WORDS, $settings)
             ? $this->normalizeKeywords($settings[self::KEY_OUTLINE_SKIP_WORDS])
-            : $this->getOutlineSkipWords();
+            : ($current[self::KEY_OUTLINE_SKIP_WORDS] ?? self::DEFAULT_OUTLINE_SKIP_WORDS);
 
-        WpOption::set(self::OPTION_KEY, [
+        $payload = [
             self::KEY_FAQ_CATCH_KEYWORDS => $keywords !== [] ? $keywords : self::DEFAULT_FAQ_CATCH_KEYWORDS,
-            self::KEY_OUTLINE_SKIP_WORDS => $skipWords,
-        ], 'no');
+            self::KEY_OUTLINE_SKIP_WORDS => is_array($skipWords) ? $skipWords : self::DEFAULT_OUTLINE_SKIP_WORDS,
+            self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => $current[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS]
+                ?? self::DEFAULT_TEAM_CHAT_ALLOWED_EXTENSIONS,
+            self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $current[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB]
+                ?? self::DEFAULT_TEAM_CHAT_MAX_FILE_SIZE_MB,
+        ];
+
+        if (array_key_exists(self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS, $settings)) {
+            $extensions = $this->normalizeExtensions($settings[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS]);
+            $payload[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS] = $extensions !== []
+                ? $extensions
+                : self::DEFAULT_TEAM_CHAT_ALLOWED_EXTENSIONS;
+        }
+
+        if (array_key_exists(self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB, $settings)) {
+            $payload[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB] = $this->normalizeMaxFileSizeMb(
+                $settings[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB],
+            );
+        }
+
+        WpOption::set(self::OPTION_KEY, $payload, 'no');
 
         $this->inMemorySettings = null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    public function saveTeamChatSettings(array $settings): void
+    {
+        $current = $this->getSettings();
+
+        $extensionsRaw = $settings[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS] ?? null;
+        $extensions = is_string($extensionsRaw)
+            ? $this->extensionsFromTextarea($extensionsRaw)
+            : $this->normalizeExtensions($extensionsRaw);
+
+        $this->saveSettings([
+            self::KEY_FAQ_CATCH_KEYWORDS => $current[self::KEY_FAQ_CATCH_KEYWORDS],
+            self::KEY_OUTLINE_SKIP_WORDS => $current[self::KEY_OUTLINE_SKIP_WORDS],
+            self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => $extensions,
+            self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $settings[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB]
+                ?? $current[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB],
+        ]);
     }
 
     /**
@@ -138,14 +240,82 @@ final class SeoOverviewSettingsService
     }
 
     /**
-     * @return array{faq_catch_keywords: list<string>, outline_skip_words: list<string>}
+     * @return array{
+     *     faq_catch_keywords: list<string>,
+     *     outline_skip_words: list<string>,
+     *     team_chat_allowed_extensions: list<string>,
+     *     team_chat_max_file_size_mb: int,
+     * }
      */
     private function defaultSettings(): array
     {
         return [
             self::KEY_FAQ_CATCH_KEYWORDS => self::DEFAULT_FAQ_CATCH_KEYWORDS,
             self::KEY_OUTLINE_SKIP_WORDS => self::DEFAULT_OUTLINE_SKIP_WORDS,
+            self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => self::DEFAULT_TEAM_CHAT_ALLOWED_EXTENSIONS,
+            self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => self::DEFAULT_TEAM_CHAT_MAX_FILE_SIZE_MB,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     * @return array{
+     *     faq_catch_keywords: list<string>,
+     *     outline_skip_words: list<string>,
+     *     team_chat_allowed_extensions: list<string>,
+     *     team_chat_max_file_size_mb: int,
+     * }
+     */
+    private function mergeTeamChatDefaults(array $settings): array
+    {
+        $extensions = $this->normalizeExtensions($settings[self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS] ?? null);
+
+        return [
+            self::KEY_FAQ_CATCH_KEYWORDS => $settings[self::KEY_FAQ_CATCH_KEYWORDS] ?? self::DEFAULT_FAQ_CATCH_KEYWORDS,
+            self::KEY_OUTLINE_SKIP_WORDS => $settings[self::KEY_OUTLINE_SKIP_WORDS] ?? self::DEFAULT_OUTLINE_SKIP_WORDS,
+            self::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => $extensions !== []
+                ? $extensions
+                : self::DEFAULT_TEAM_CHAT_ALLOWED_EXTENSIONS,
+            self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $this->normalizeMaxFileSizeMb(
+                $settings[self::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB] ?? self::DEFAULT_TEAM_CHAT_MAX_FILE_SIZE_MB,
+            ),
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeExtensions(mixed $raw): array
+    {
+        if (is_string($raw)) {
+            $raw = preg_split('/\r\n|\r|\n|,/', $raw) ?: [];
+        }
+
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        $extensions = [];
+        foreach ($raw as $item) {
+            $value = strtolower(trim(is_string($item) ? $item : (string) $item));
+            $value = ltrim($value, '.');
+            if ($value === '' || ! preg_match('/^[a-z0-9]{1,12}$/', $value)) {
+                continue;
+            }
+
+            if (! in_array($value, $extensions, true)) {
+                $extensions[] = $value;
+            }
+        }
+
+        return $extensions;
+    }
+
+    private function normalizeMaxFileSizeMb(mixed $value): int
+    {
+        $size = (int) $value;
+
+        return max(1, min(100, $size > 0 ? $size : self::DEFAULT_TEAM_CHAT_MAX_FILE_SIZE_MB));
     }
 
     /**

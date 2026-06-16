@@ -11,7 +11,8 @@
         <div class="flex-grow border-t border-gray-700"></div>
     </div>
 
-    <x-filament::button color="gray" icon="heroicon-m-globe-alt" tag="a" href="{{ route('google.login') }}"
+    <x-filament::button color="gray" icon="heroicon-m-globe-alt" tag="a"
+        href="{{ route('google.login', ['return_url' => method_exists($this, 'getGoogleLoginReturnUrl') ? $this->getGoogleLoginReturnUrl() : (request()->query('return_url') ?: filament()->getCurrentPanel()->getUrl())]) }}"
         class="w-full">
         Tiếp tục với Google
     </x-filament::button>

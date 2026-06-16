@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
@@ -74,7 +75,7 @@ final class CreateArticlesFromTaskService
 
             $builder->whereIn(
                 'site_id',
-                Site::query()->where('user_id', auth()->id())->select('id'),
+                SeoAccessControl::accessibleSitesQuery()->select('id'),
             );
         };
 
@@ -336,20 +337,13 @@ final class CreateArticlesFromTaskService
         KeywordFocusAttach::attachMainKeyword(
             $article,
             (int) $article->site_id,
-            (int) auth()->id(),
             trim($phrase),
         );
     }
 
     private function assertSiteAccessible(int $siteId): void
     {
-        $query = Site::query()->whereKey($siteId);
-
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
-        }
-
-        if (! $query->exists()) {
+        if (! SeoAccessControl::canAccessSite($siteId)) {
             throw new \InvalidArgumentException('Website không hợp lệ hoặc bạn không có quyền.');
         }
     }

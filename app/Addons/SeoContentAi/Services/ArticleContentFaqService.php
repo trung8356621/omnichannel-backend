@@ -16,8 +16,7 @@ final class ArticleContentFaqService
         private readonly ArticleMarkdownToHtmlService $markdownHtml,
         private readonly ArticlePostContentFaqPlaceholder $postContentPlaceholder,
         private readonly ArticleFaqEditorService $faqEditor,
-    ) {
-    }
+    ) {}
 
     /**
      * Thay đoạn FAQ đã chọn trong HTML bài viết bằng bản đã cắt (giữ tiêu đề + placeholder).
@@ -81,7 +80,7 @@ final class ArticleContentFaqService
             && ! str_contains($cleaned, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)
             && ! str_contains($cleaned, 'omi-faq-placeholder')
         ) {
-            $cleaned = rtrim($cleaned) . "\n\n" . WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+            $cleaned = rtrim($cleaned)."\n\n".WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
         }
         $converted = $this->markdownHtml->convertWithMetadata($cleaned);
         $html = $this->ensureEditorPlaceholderMarkup($converted['html']);
@@ -96,6 +95,12 @@ final class ArticleContentFaqService
         $h1Title = filled($prepared['h1_title'])
             ? trim((string) $prepared['h1_title'])
             : $h1FromHtml['h1_title'];
+
+        $strippedHtml = $this->markdownHtml->stripMetaDescriptionFromHtml($html);
+        $html = $strippedHtml['html'];
+        if ($metaDescription === '' && filled($strippedHtml['meta_description'])) {
+            $metaDescription = trim((string) $strippedHtml['meta_description']);
+        }
 
         return [
             'html' => $html,
@@ -244,7 +249,7 @@ final class ArticleContentFaqService
             ! str_contains($stripped, WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER)
             && ! str_contains($stripped, 'omi-faq-placeholder')
         ) {
-            $stripped = rtrim($stripped) . "\n\n" . WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
+            $stripped = rtrim($stripped)."\n\n".WorkflowParserService::FAQ_SHORTCODE_PLACEHOLDER;
         }
 
         return $this->ensureEditorPlaceholderMarkup($stripped);
@@ -263,7 +268,7 @@ final class ArticleContentFaqService
         }
 
         return (string) preg_replace(
-            '/\s*' . preg_quote($token, '/') . '\s*/u',
+            '/\s*'.preg_quote($token, '/').'\s*/u',
             $this->workflowParser->faqPlaceholderHtml(),
             $html,
             1,

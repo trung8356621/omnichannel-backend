@@ -61,6 +61,16 @@ final class TaskTestInputResolver
             $rewriteContext = $this->resolve(null, $keyword, $keyword, $scopeArticles)
                 ->withProjectTaskType($task->type);
 
+            if ($rewriteContext->isNewArticle && $taskSiteId > 0) {
+                $siteOnlyScope = static fn (Builder $builder): Builder => $builder->where('site_id', $taskSiteId);
+                $siteScopedContext = $this->resolve(null, $keyword, $keyword, $siteOnlyScope)
+                    ->withProjectTaskType($task->type);
+
+                if (! $siteScopedContext->isNewArticle) {
+                    $rewriteContext = $siteScopedContext;
+                }
+            }
+
             // Nếu không tìm thấy bài cũ (sẽ tạo bài mới), đảm bảo site đúng với task/project
             if ($rewriteContext->siteId === null && $taskSiteId > 0) {
                 $rewriteContext = $rewriteContext->withSiteId($taskSiteId);
@@ -84,8 +94,7 @@ final class TaskTestInputResolver
         TaskTestContext $context,
         string $galleryDescription,
         string $loaiSanPham,
-    ): TaskTestContext
-    {
+    ): TaskTestContext {
         $variables = $context->variables;
         $variables['gallery_description'] = $galleryDescription;
         $variables['loai_san_pham'] = $loaiSanPham;

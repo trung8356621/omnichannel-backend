@@ -6,12 +6,19 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
 use App\Addons\SeoContentAi\Services\AiModelRouterService;
+use App\Addons\SeoContentAi\Services\SeoOverviewSettingsService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Filament\Forms;
+use Filament\Forms\Concerns\InteractsWithForms;
+use Filament\Forms\Contracts\HasForms;
+use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 
-class SeoSettingsOverview extends Page
+class SeoSettingsOverview extends Page implements HasForms
 {
+    use InteractsWithForms;
+
     protected static ?string $slug = 'settings/overview';
 
     protected static bool $shouldRegisterNavigation = false;
@@ -27,13 +34,71 @@ class SeoSettingsOverview extends Page
         'last_synced_at' => null,
     ];
 
-    public function mount(AiModelRouterService $router): void
+    /** @var array<string, mixed> */
+    public array $teamChatSettingsData = [];
+
+    public function mount(AiModelRouterService $router, SeoOverviewSettingsService $overviewSettings): void
     {
         $this->refreshAiModelsOverview($router);
 
         if (($this->aiModelsOverview['total_models'] ?? 0) === 0) {
             $this->syncAllAiModels($router, silent: true);
         }
+
+        $overview = $overviewSettings->getSettings();
+        $this->teamChatSettingsData = [
+            SeoOverviewSettingsService::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => $overviewSettings->extensionsToTextarea(
+                $overview[SeoOverviewSettingsService::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS],
+            ),
+            SeoOverviewSettingsService::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $overview[SeoOverviewSettingsService::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB],
+        ];
+
+        $this->teamChatForm->fill($this->teamChatSettingsData);
+    }
+
+    public function teamChatForm(Form $form): Form
+    {
+        return $form
+            ->schema([
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_overview.team_chat_section'))
+                    ->description(__('seo-content-ai::filament.settings_overview.team_chat_section_description'))
+                    ->schema([
+                        Forms\Components\Textarea::make(SeoOverviewSettingsService::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS)
+                            ->label(__('seo-content-ai::filament.settings_overview.team_chat_extensions_label'))
+                            ->rows(6)
+                            ->required()
+                            ->columnSpanFull()
+                            ->helperText(__('seo-content-ai::filament.settings_overview.team_chat_extensions_hint')),
+                        Forms\Components\TextInput::make(SeoOverviewSettingsService::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB)
+                            ->label(__('seo-content-ai::filament.settings_overview.team_chat_max_size_label'))
+                            ->numeric()
+                            ->minValue(1)
+                            ->maxValue(100)
+                            ->required()
+                            ->suffix('MB')
+                            ->helperText(__('seo-content-ai::filament.settings_overview.team_chat_max_size_hint')),
+                    ])
+                    ->columns(2),
+            ])
+            ->statePath('teamChatSettingsData');
+    }
+
+    public function saveTeamChatSettings(SeoOverviewSettingsService $overviewSettings): void
+    {
+        $data = $this->teamChatForm->getState();
+
+        $overviewSettings->saveTeamChatSettings([
+            SeoOverviewSettingsService::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS => (string) (
+                $data[SeoOverviewSettingsService::KEY_TEAM_CHAT_ALLOWED_EXTENSIONS] ?? ''
+            ),
+            SeoOverviewSettingsService::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB => $data[SeoOverviewSettingsService::KEY_TEAM_CHAT_MAX_FILE_SIZE_MB]
+                ?? $overviewSettings->getTeamChatMaxFileSizeMb(),
+        ]);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.settings_overview.team_chat_saved'))
+            ->success()
+            ->send();
     }
 
     public function refreshAiModelsOverview(AiModelRouterService $router): void

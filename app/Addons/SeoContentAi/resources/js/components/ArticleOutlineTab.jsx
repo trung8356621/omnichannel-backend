@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Sparkles, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Sparkles, Trash2 } from 'lucide-react';
 
 const outlineUrl = (articleId) => `/api/seo/articles/${articleId}/outline`;
 const checkDuplicatesUrl = (articleId) => `/api/seo/articles/${articleId}/outline/check-duplicates`;
@@ -201,6 +201,8 @@ function HeadingBlock({
     const [draft, setDraft] = useState(node.heading_text);
     const inputRef = useRef(null);
     const clickTimerRef = useRef(null);
+    const copyTimerRef = useRef(null);
+    const [copied, setCopied] = useState(false);
     const isBusy = busyHeadingId === node.id;
     const isHeadingFocused = activeHeadingId === node.id;
 
@@ -245,8 +247,57 @@ function HeadingBlock({
             if (clickTimerRef.current) {
                 window.clearTimeout(clickTimerRef.current);
             }
+            if (copyTimerRef.current) {
+                window.clearTimeout(copyTimerRef.current);
+            }
         },
         [],
+    );
+
+    const handleCopyHeading = useCallback(
+        async (event) => {
+            event.stopPropagation();
+
+            const text = String(node.heading_text ?? '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (text === '') {
+                return;
+            }
+
+            try {
+                if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    textarea.setAttribute('readonly', '');
+                    textarea.style.position = 'fixed';
+                    textarea.style.opacity = '0';
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                }
+
+                setCopied(true);
+                if (copyTimerRef.current) {
+                    window.clearTimeout(copyTimerRef.current);
+                }
+                copyTimerRef.current = window.setTimeout(() => setCopied(false), 1500);
+            } catch {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Outline',
+                            body: 'Không copy được heading — kiểm tra quyền clipboard.',
+                            status: 'warning',
+                        },
+                    }),
+                );
+            }
+        },
+        [node.heading_text],
     );
 
     return (
@@ -311,6 +362,21 @@ function HeadingBlock({
                         {node.heading_text}
                     </span>
                 )}
+                {!editing ? (
+                    <button
+                        type="button"
+                        className="seo-outline-block__copy-btn"
+                        title={copied ? 'Đã copy' : 'Copy heading'}
+                        aria-label={copied ? 'Đã copy heading' : 'Copy heading'}
+                        onClick={handleCopyHeading}
+                    >
+                        {copied ? (
+                            <Check size={14} strokeWidth={1.75} />
+                        ) : (
+                            <Copy size={14} strokeWidth={1.75} />
+                        )}
+                    </button>
+                ) : null}
             </div>
             {duplicateInfo && !editing ? (
                 <button

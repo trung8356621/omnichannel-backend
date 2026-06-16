@@ -10,7 +10,6 @@ use App\Addons\SeoContentAi\Services\ArticleFaqHtmlRenderer;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Http\Controllers\Controller;
-use App\Models\Site;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Response;
@@ -22,8 +21,6 @@ class ArticlePreviewController extends Controller
         ArticleFaqHtmlRenderer $faqRenderer,
         WordPressArticleContentService $wordPressContent,
     ): View|Response|RedirectResponse {
-        abort_unless($this->canViewArticle($article), 403);
-
         $article->loadMissing(['site', 'keywords']);
 
         if ($article->body === null && (int) ($article->wp_post_id ?? 0) > 0) {
@@ -46,22 +43,5 @@ class ArticlePreviewController extends Controller
             'permalink' => $wordPressContent->resolvePermalink($article),
             'editUrl' => ArticleResource::panelUrl('edit', ['record' => $article]),
         ]);
-    }
-
-    private function canViewArticle(SeoArticle $article): bool
-    {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
     }
 }

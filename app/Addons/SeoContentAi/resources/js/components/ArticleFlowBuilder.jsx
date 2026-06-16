@@ -87,18 +87,70 @@ function defaultPromptNodeData(promptId) {
 }
 
 function normalizeArticleNodeData(data = {}) {
+  return {};
+}
+
+function normalizeArticleFilterNodeData(data = {}) {
   const actions = Array.isArray(data.actions) ? data.actions : (data.action ? [data.action] : []);
 
   return {
+    postTypes: Array.isArray(data.postTypes) ? data.postTypes : [],
+    taxonomies: Array.isArray(data.taxonomies) ? data.taxonomies : [],
     actions: actions.filter((action) => action !== 'add_comment_review'),
   };
 }
 
-function normalizeArticleFilterNodeData(data = {}) {
-  return {
-    postTypes: Array.isArray(data.postTypes) ? data.postTypes : [],
-    taxonomies: Array.isArray(data.taxonomies) ? data.taxonomies : [],
-  };
+function migrateArticleActionsToFilters(nodes, edges) {
+  const nodeById = Object.fromEntries(nodes.map((node) => [node.id, node]));
+
+  nodes.forEach((node) => {
+    if (node.type !== 'article') {
+      return;
+    }
+
+    const legacyActions = Array.isArray(node.data?.actions)
+      ? node.data.actions
+      : (node.data?.action ? [node.data.action] : []);
+    const actions = legacyActions.filter((action) => action !== 'add_comment_review');
+    if (actions.length === 0) {
+      node.data = normalizeArticleNodeData(node.data);
+      return;
+    }
+
+    const targetFilterIds = new Set();
+    const autoFilterId = `${node.id}_article_filter`;
+    if (nodeById[autoFilterId]?.type === 'article_filter') {
+      targetFilterIds.add(autoFilterId);
+    }
+
+    edges.forEach((edge) => {
+      if (edge.sourceNode !== node.id) {
+        return;
+      }
+
+      const target = nodeById[edge.targetNode];
+      if (target?.type === 'article_filter') {
+        targetFilterIds.add(target.id);
+      }
+    });
+
+    targetFilterIds.forEach((filterId) => {
+      const filterNode = nodeById[filterId];
+      if (!filterNode || filterNode.type !== 'article_filter') {
+        return;
+      }
+
+      const currentActions = Array.isArray(filterNode.data?.actions) ? filterNode.data.actions : [];
+      if (currentActions.length === 0) {
+        filterNode.data = {
+          ...filterNode.data,
+          actions: [...actions],
+        };
+      }
+    });
+
+    node.data = normalizeArticleNodeData(node.data);
+  });
 }
 
 const ARTICLE_SAVE_ACTION = 'save_article';
@@ -203,13 +255,15 @@ function normalizeFlowData(initialData = {}) {
       title: 'Article (Input)',
       x: 50,
       y: 150,
-      data: { actions: [] },
+      data: {},
     }];
   let edges = Array.isArray(initialData.edges) ? [...initialData.edges] : [];
   const nodes = [];
 
   edges = edges.map((edge) => {
     const sourceNode = sourceNodes.find((candidate) => candidate.id === edge.sourceNode);
+    const targetNode = sourceNodes.find((candidate) => candidate.id === edge.targetNode);
+
     if (sourceNode?.type === 'article_filter') {
       const sourcePort = edge.sourcePort ?? 'out_main';
       if (sourcePort === 'out_main') {
@@ -226,6 +280,15 @@ function normalizeFlowData(initialData = {}) {
     }
 
     const sourcePort = edge.sourcePort ?? 'out_main';
+
+    if (targetNode?.type === 'article_filter') {
+      if (sourcePort === 'out_description') {
+        return { ...edge, sourcePort: 'out_gallery_description' };
+      }
+
+      return { ...edge, sourcePort: 'out_main' };
+    }
+
     const filterId = `${sourceNode.id}_article_filter`;
     const hasFilterNode = sourceNodes.some((candidate) => candidate.id === filterId && candidate.type === 'article_filter');
 
@@ -251,6 +314,9 @@ function normalizeFlowData(initialData = {}) {
   sourceNodes.forEach((node) => {
     const legacyPostTypes = Array.isArray(node.data?.postTypes) ? node.data.postTypes : [];
     const legacyTaxonomies = Array.isArray(node.data?.taxonomies) ? node.data.taxonomies : [];
+    const legacyActions = Array.isArray(node.data?.actions)
+      ? node.data.actions
+      : (node.data?.action ? [node.data.action] : []);
 
     nodes.push(node);
 
@@ -294,12 +360,15 @@ function normalizeFlowData(initialData = {}) {
       title: 'Lọc bài viết',
       x: Number(node.x ?? 50) + 260,
       y: Number(node.y ?? 150),
-      data: {
+      data: normalizeArticleFilterNodeData({
         postTypes: legacyPostTypes,
         taxonomies: legacyTaxonomies,
-      },
+        actions: legacyActions,
+      }),
     });
   });
+
+  migrateArticleActionsToFilters(nodes, edges);
 
   return {
     nodes: normalizeNodes(nodes),
@@ -364,11 +433,11 @@ export default function ArticleFlowBuilder({
     let title = '', data = {};
     if (type === 'article') {
       title = 'Article';
-      data = { actions: [] };
+      data = {};
     }
     else if (type === 'article_filter') {
       title = 'Lọc bài viết';
-      data = { postTypes: [], taxonomies: [] };
+      data = { postTypes: [], taxonomies: [], actions: [] };
     }
     else if (type === 'prompt') {
       title = 'Prompt block';
@@ -628,11 +697,12 @@ export default function ArticleFlowBuilder({
                 <div className={`p-3 text-xs flex flex-col justify-center ${t.nodeBody}`}>
                   {node.type === 'article' && (
                     <div className="space-y-1">
-                      <span>Hành động: <span className={`font-semibold ${t.accentEmerald}`}>{formatSelection(node.data.actions, actionLabels)}</span></span><br/>
+                      <span className={t.emptyHint}>Input bài viết</span>
                     </div>
                   )}
                   {node.type === 'article_filter' && (
                     <div className="space-y-1">
+                      <span>Hành động: <span className={`font-semibold ${t.accentEmerald}`}>{formatSelection(node.data.actions, actionLabels)}</span></span><br/>
                       <span>Loại: {formatSelection(node.data.postTypes)}</span><br/>
                       <span>Tax: {formatSelection(node.data.taxonomies)}</span>
                     </div>
@@ -754,6 +824,14 @@ export default function ArticleFlowBuilder({
               
               {selectedNode.type === 'article' && (
                 <div className="space-y-4">
+                  <p className={`text-xs leading-relaxed ${t.emptyHint}`}>
+                    Node đầu vào từ dự án / bài viết. Cấu hình <b>Hành động</b>, loại bài và taxonomy trên widget <b>Lọc bài viết</b>.
+                  </p>
+                </div>
+              )}
+
+              {selectedNode.type === 'article_filter' && (
+                <div className="space-y-4">
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Hành động (Để trống = Lấy tất cả)</label>
                     <div className="flex flex-wrap gap-2">
@@ -776,11 +854,6 @@ export default function ArticleFlowBuilder({
                       ))}
                     </div>
                   </div>
-                </div>
-              )}
-
-              {selectedNode.type === 'article_filter' && (
-                <div className="space-y-4">
                   <div>
                     <label className={`text-xs block mb-1 ${t.label}`}>Post Type (Để trống = Lấy tất cả)</label>
                     <div className="flex flex-wrap gap-2">

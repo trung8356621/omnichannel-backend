@@ -30,6 +30,10 @@ final class SeoProjectApprovalService
             ]);
         }
 
+        if ($project->status === SeoProject::STATUS_APPROVED) {
+            return $project;
+        }
+
         DB::connection($project->getConnectionName())->transaction(function () use ($article, $project): void {
             $project->tasks()
                 ->where('article_id', (int) $article->id)
@@ -61,21 +65,24 @@ final class SeoProjectApprovalService
 
         if ($metaTaskId > 0) {
             SeoProjectTask::query()
+                ->where('article_id', (int) $article->id)
+                ->whereKeyNot($metaTaskId)
+                ->update(['article_id' => null]);
+
+            SeoProjectTask::query()
                 ->whereKey($metaTaskId)
-                ->whereNull('article_id')
                 ->update(['article_id' => (int) $article->id]);
         }
 
         return SeoProject::query()
             ->where('user_id', (int) $user->id)
-            ->where('status', '!=', SeoProject::STATUS_APPROVED)
             ->where(function (Builder $projects) use ($article, $metaProjectId): void {
                 $projects->whereHas('tasks', function (Builder $tasks) use ($article): void {
                     $tasks->where('article_id', (int) $article->id);
                 });
 
                 if ($metaProjectId > 0) {
-                    $projects->orWhereKey($metaProjectId);
+                    $projects->orWhere('id', $metaProjectId);
                 }
             });
     }

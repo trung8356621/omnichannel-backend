@@ -522,17 +522,32 @@ class KeywordResource extends Resource
                     ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                     ->color('warning')
                     ->visible(fn (Keyword $record): bool => static::canAssignKeywordToContentProject($record))
-                    ->requiresConfirmation()
-                    ->form(fn (Keyword $record): array => static::assignKeywordContentProjectFormSchema(
-                        ($siteId = static::resolveKeywordSiteId($record)) !== null ? [(int) $siteId] : [],
-                    ))
+                    ->form(function (Keyword $record): array {
+                        $siteId = static::resolveKeywordSiteId($record);
+
+                        if (static::resolveKeywordDirectAssignData($siteId) !== null) {
+                            return [];
+                        }
+
+                        return static::assignKeywordContentProjectFormSchema(
+                            $siteId !== null ? [(int) $siteId] : [],
+                        );
+                    })
+                    ->requiresConfirmation(fn (Keyword $record): bool => static::resolveKeywordDirectAssignData(
+                        static::resolveKeywordSiteId($record),
+                    ) === null)
+                    ->modalHidden(fn (Keyword $record): bool => static::resolveKeywordDirectAssignData(
+                        static::resolveKeywordSiteId($record),
+                    ) !== null)
                     ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                     ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
                     ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
                     ->action(function (Keyword $record, array $data): void {
+                        $siteId = static::resolveKeywordSiteId($record);
+                        $assignData = static::resolveKeywordDirectAssignData($siteId) ?? $data;
                         $summary = static::executeAssignKeywordsToContentProjects(
                             Collection::make([$record]),
-                            $data,
+                            $assignData,
                         );
 
                         Notification::make()
@@ -748,18 +763,26 @@ class KeywordResource extends Resource
                         ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->icon('heroicon-o-folder-plus')
                         ->color('warning')
-                        ->requiresConfirmation()
                         ->deselectRecordsAfterCompletion()
-                        ->form(fn (Collection $records): array => static::assignKeywordContentProjectFormSchema(
-                            ($siteIds = static::resolveBulkKeywordsSiteIds($records)) !== []
-                                ? $siteIds
-                                : (SeoAccessControl::globalSiteId() !== null ? [(int) SeoAccessControl::globalSiteId()] : []),
-                        ))
+                        ->form(function (Collection $records): array {
+                            if (static::resolveKeywordDirectAssignData() !== null) {
+                                return [];
+                            }
+
+                            return static::assignKeywordContentProjectFormSchema(
+                                ($siteIds = static::resolveBulkKeywordsSiteIds($records)) !== []
+                                    ? $siteIds
+                                    : (SeoAccessControl::globalSiteId() !== null ? [(int) SeoAccessControl::globalSiteId()] : []),
+                            );
+                        })
+                        ->requiresConfirmation(fn (Collection $records): bool => static::resolveKeywordDirectAssignData() === null)
+                        ->modalHidden(fn (Collection $records): bool => static::resolveKeywordDirectAssignData() !== null)
                         ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
                         ->action(function (Collection $records, array $data): void {
-                            $summary = static::executeAssignKeywordsToContentProjects($records, $data);
+                            $assignData = static::resolveKeywordDirectAssignData() ?? $data;
+                            $summary = static::executeAssignKeywordsToContentProjects($records, $assignData);
 
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.keyword.assign_completed'))
@@ -1688,6 +1711,30 @@ class KeywordResource extends Resource
     public static function resolveKeywordSiteId(Keyword $keyword): ?int
     {
         return $keyword->resolveSiteId(SeoAccessControl::globalSiteId());
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public static function resolveKeywordDirectAssignData(?int $siteId = null): ?array
+    {
+        $globalSiteId = SeoAccessControl::globalSiteId();
+        $targetSiteId = $siteId ?? $globalSiteId;
+        if ($targetSiteId === null || (int) $targetSiteId <= 0) {
+            return null;
+        }
+
+        $projectId = ArticleResource::resolveDirectAssignContentProjectId((int) $targetSiteId);
+        if ($projectId === null) {
+            return null;
+        }
+
+        $targetSiteId = (int) $targetSiteId;
+
+        return [
+            'site_ids' => [$targetSiteId],
+            'project_id_'.$targetSiteId => $projectId,
+        ];
     }
 
     /**

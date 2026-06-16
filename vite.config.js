@@ -24,6 +24,8 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/js/media-image-editor-page.jsx',
                 'app/Addons/SeoContentAi/resources/css/ai-result.css',
                 'app/Addons/SeoContentAi/resources/css/project-run-step.css',
+                'app/Addons/SeoContentAi/resources/css/project-run-queue.css',
+                'app/Addons/SeoContentAi/resources/js/project-run-queue.js',
                 'app/Addons/SeoContentAi/resources/css/global-ai-chat.css',
             ],
             refresh: true,

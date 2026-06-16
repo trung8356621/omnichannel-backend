@@ -1,47 +1,71 @@
 <?php
+
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use Laravel\Socialite\Facades\Socialite;
 use App\Models\User;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+use Laravel\Socialite\Facades\Socialite;
 
 class GoogleController extends Controller
 {
-    public function redirectToGoogle()
+    public function redirectToGoogle(): RedirectResponse
     {
+        $returnUrl = request()->query('return_url');
+        if (is_string($returnUrl) && str_starts_with($returnUrl, '/') && ! str_starts_with($returnUrl, '//')) {
+            session(['url.intended' => $returnUrl]);
+        }
+
         return Socialite::driver('google')->redirect();
     }
 
-    public function handleGoogleCallback()
+    public function handleGoogleCallback(): RedirectResponse
     {
+        $fallbackUrl = $this->resolveFallbackUrl();
+
         try {
-            // Thêm setHttpClient để tắt verify SSL
             $client = new \GuzzleHttp\Client(['verify' => false]);
 
             $gUser = Socialite::driver('google')
-                ->setHttpClient($client) // Ép dùng client không check SSL
+                ->setHttpClient($client)
                 ->stateless()
                 ->user();
+
+            $existingUser = User::query()->where('email', $gUser->email)->first();
 
             $user = User::updateOrCreate(['email' => $gUser->email], [
                 'name' => $gUser->name,
                 'google_id' => $gUser->id,
                 'avatar' => $gUser->avatar,
-                // Tránh ghi đè password nếu user đã tồn tại
-                'password' => \App\Models\User::where('email', $gUser->email)->exists()
-                    ? \App\Models\User::where('email', $gUser->email)->first()->password
-                    : bcrypt(str()->random(16)),
+                'password' => $existingUser?->password ?? bcrypt(str()->random(16)),
             ]);
 
             Auth::login($user, true);
             request()->session()->regenerate();
 
-            return redirect()->intended('/admin');
+            return redirect()->intended($fallbackUrl);
         } catch (\Exception $e) {
-            // Log lỗi để debug nếu cần
-            \Illuminate\Support\Facades\Log::error('Google Login Error: ' . $e->getMessage());
-            return redirect('/admin/login');
+            Log::error('Google Login Error: '.$e->getMessage());
+
+            return redirect($this->resolveLoginPath($fallbackUrl));
         }
+    }
+
+    private function resolveFallbackUrl(): string
+    {
+        $intended = session('url.intended');
+
+        if (is_string($intended) && str_starts_with($intended, '/') && ! str_starts_with($intended, '//')) {
+            return $intended;
+        }
+
+        return '/admin';
+    }
+
+    private function resolveLoginPath(string $fallbackUrl): string
+    {
+        return str_starts_with($fallbackUrl, '/seo') ? '/seo/login' : '/admin/login';
     }
 }

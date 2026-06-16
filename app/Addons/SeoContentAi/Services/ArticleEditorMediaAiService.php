@@ -103,6 +103,7 @@ final class ArticleEditorMediaAiService
                     $loaiSanPhamCategoryArticleId,
                     $loaiSanPhamCustom,
                     $mergeLoai,
+                    $target,
                 ),
             );
             $this->reconcileStaleAiMediaJobs((int) $article->id);
@@ -150,6 +151,7 @@ final class ArticleEditorMediaAiService
         string $target = 'editor',
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
+        string $selectionText = '',
     ): array {
         $target = trim($target);
         [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom] = $this->resolveLoaiSanPhamInputs(
@@ -179,12 +181,13 @@ final class ArticleEditorMediaAiService
             $prompt,
             $this->buildVariables(
                 $article,
-                '',
+                $selectionText,
                 '',
                 $userBrief,
                 $loaiSanPhamCategoryArticleId,
                 $loaiSanPhamCustom,
                 $mergeLoai,
+                $target,
             ),
         );
 
@@ -233,7 +236,7 @@ final class ArticleEditorMediaAiService
 
             $variables = $this->filterVariablesForPrompt(
                 $prompt,
-                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief),
+                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief, target: 'editor'),
             );
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'video', $editorBlockId);
@@ -281,12 +284,17 @@ final class ArticleEditorMediaAiService
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
         bool $mergeLoaiSanPham = false,
+        string $target = 'editor',
     ): array {
         $article->loadMissing(['site', 'keywords', 'articleMetas']);
 
         $postTitle = trim((string) ($article->title ?? ''));
         $focusKeyword = $this->seoAnalyzer->resolveFocusKeywordForArticle($article) ?? '';
-        $bodyPlain = trim(strip_tags((string) ($article->body ?? '')));
+        $bodyPlain = html_entity_decode(
+            trim(strip_tags((string) ($article->body ?? ''))),
+            ENT_QUOTES | ENT_HTML5,
+            'UTF-8',
+        );
         $galleryDescription = $this->resolveGalleryDescription($article);
         $loaiSanPham = $this->resolveLoaiSanPham($article);
 
@@ -297,8 +305,9 @@ final class ArticleEditorMediaAiService
         }
         $userBrief = $this->compactVariableValue($userBrief);
 
-        // Không trộn "Đoạn ngữ cảnh" vào prompt input gửi AI; Product gallery dùng input làm loại sản phẩm.
-        $input = $userBrief;
+        $input = trim($target) === 'product-gallery'
+            ? $userBrief
+            : $this->resolveEditorImageInput($userBrief, $selectionText);
 
         $postType = ArticlePostTypeResolver::resolve($article);
         $promptVars = $this->promptSettings->promptVariables($postType);
@@ -307,8 +316,8 @@ final class ArticleEditorMediaAiService
                 'post_title' => $postTitle,
                 'post_content' => Str::limit($bodyPlain, 3000),
                 'focus_keyword' => $focusKeyword,
-                'selected_text' => '',
-                'selected_html' => '',
+                'selected_text' => $selectionText,
+                'selected_html' => $selectionHtml,
                 'user_brief' => $userBrief,
                 'gallery_description' => $galleryDescription,
                 'loai_san_pham' => $loaiSanPham,
@@ -340,6 +349,22 @@ final class ArticleEditorMediaAiService
         }
 
         return $variables;
+    }
+
+    private function resolveEditorImageInput(string $userBrief, string $selectionText): string
+    {
+        $userBrief = trim($userBrief);
+        $selectionText = trim($selectionText);
+
+        if ($userBrief === '') {
+            return $selectionText;
+        }
+
+        if ($selectionText === '' || str_contains($userBrief, $selectionText)) {
+            return $userBrief;
+        }
+
+        return trim($userBrief."\n\n---\nContext:\n".$selectionText);
     }
 
     /**
@@ -387,6 +412,16 @@ final class ArticleEditorMediaAiService
 
         if (isset($filtered[PromptLoaiSanPhamVariable::NAME])) {
             $filtered = PromptLoaiSanPhamVariable::withAliases($filtered);
+        }
+
+        if (! isset($filtered['input']) && in_array('input', $allowedNames, true)) {
+            $input = $this->compactVariableValue($this->resolveEditorImageInput(
+                (string) ($variables['user_brief'] ?? ''),
+                (string) ($variables['selected_text'] ?? ''),
+            ));
+            if ($input !== '') {
+                $filtered['input'] = $input;
+            }
         }
 
         if ($filtered === []) {

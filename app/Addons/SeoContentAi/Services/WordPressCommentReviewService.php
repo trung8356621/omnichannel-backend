@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewPayloadParser;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 
 final class WordPressCommentReviewService
@@ -84,6 +85,19 @@ final class WordPressCommentReviewService
                 'success' => true,
                 'message' => sprintf(
                     'Đã lưu %d %s (chưa đồng bộ — bài chưa gắn domain).',
+                    $localCount,
+                    $kind,
+                ),
+                'created_count' => $localCount,
+                'error_count' => 0,
+            ];
+        }
+
+        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
+            return [
+                'success' => true,
+                'message' => sprintf(
+                    'Đã lưu %d %s trên Laravel (Quản lý nội dung không đồng bộ WordPress).',
                     $localCount,
                     $kind,
                 ),

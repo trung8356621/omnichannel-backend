@@ -1,0 +1,10 @@
+body.seo-run-queue-active .fi-header-actions,
+body.seo-run-queue-active .seo-run-row-actions,
+body.seo-run-queue-active .seo-run-queue-disabled {
+    pointer-events: none;
+    opacity: 0.45;
+}
+
+body.seo-run-queue-active .seo-run-row-actions {
+    visibility: hidden;
+}

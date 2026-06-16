@@ -19,6 +19,14 @@ final class SimpleMarkdownHtmlConverter
             return ['html' => '', 'meta_description' => null];
         }
 
+        $extracted = $this->extractMetaDescriptionFromMarkdown($markdown);
+        $markdown = $extracted['markdown'];
+        $metaDescription = $extracted['meta_description'];
+
+        if ($markdown === '') {
+            return ['html' => '', 'meta_description' => $metaDescription];
+        }
+
         $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
         $html = [];
         $inList = false;
@@ -36,7 +44,10 @@ final class SimpleMarkdownHtmlConverter
 
             if ($this->isMetaDescriptionLine($trimmed)) {
                 $this->closeList($html, $inList);
-                $metaDescription = $this->parseMetaDescriptionLine($trimmed);
+                $parsedMeta = $this->parseMetaDescriptionLine($trimmed);
+                if ($parsedMeta !== '') {
+                    $metaDescription = $parsedMeta;
+                }
 
                 continue;
             }
@@ -61,7 +72,7 @@ final class SimpleMarkdownHtmlConverter
                 $this->closeList($html, $inList);
                 if ($heading['level'] === 1) {
                     if ($this->isSpuriousHashStarHeadingLine($trimmed)) {
-                        $html[] = '<p>' . $this->formatInline(preg_replace('/^#\s+/u', '', $trimmed) ?? $trimmed) . '</p>';
+                        $html[] = '<p>'.$this->formatInline(preg_replace('/^#\s+/u', '', $trimmed) ?? $trimmed).'</p>';
                     }
 
                     continue;
@@ -82,13 +93,13 @@ final class SimpleMarkdownHtmlConverter
                     $html[] = '<ul>';
                     $inList = true;
                 }
-                $html[] = '<li>' . $this->formatInline($matches[1]) . '</li>';
+                $html[] = '<li>'.$this->formatInline($matches[1]).'</li>';
 
                 continue;
             }
 
             $this->closeList($html, $inList);
-            $html[] = '<p>' . $this->formatInline($trimmed) . '</p>';
+            $html[] = '<p>'.$this->formatInline($trimmed).'</p>';
         }
 
         $this->closeList($html, $inList);
@@ -124,8 +135,8 @@ final class SimpleMarkdownHtmlConverter
 
         $previous = libxml_use_internal_errors(true);
         $doc = new \DOMDocument('1.0', 'UTF-8');
-        $wrapped = '<div id="seo-fs-root">' . $html . '</div>';
-        $doc->loadHTML('<?xml encoding="UTF-8">' . $wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $wrapped = '<div id="seo-fs-root">'.$html.'</div>';
+        $doc->loadHTML('<?xml encoding="UTF-8">'.$wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
 
@@ -169,20 +180,25 @@ final class SimpleMarkdownHtmlConverter
             return ['markdown' => '', 'h1_title' => null, 'meta_description' => null];
         }
 
+        $extracted = $this->extractMetaDescriptionFromMarkdown($markdown);
+        $markdown = $extracted['markdown'];
+        $metaDescription = $extracted['meta_description'];
+
+        if ($markdown === '') {
+            return [
+                'markdown' => '',
+                'h1_title' => null,
+                'meta_description' => $metaDescription,
+            ];
+        }
+
         $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
         $h1Title = null;
-        $metaDescription = null;
         $result = [];
         $h1Stripped = false;
 
         foreach ($lines as $line) {
             $trimmed = trim($line);
-
-            if ($trimmed !== '' && $metaDescription === null && $this->isMetaDescriptionLine($trimmed)) {
-                $metaDescription = $this->parseMetaDescriptionLine($trimmed);
-
-                continue;
-            }
 
             if (! $h1Stripped && $trimmed !== '') {
                 $h1 = $this->parseH1Line($trimmed);
@@ -201,6 +217,97 @@ final class SimpleMarkdownHtmlConverter
             'markdown' => trim(implode("\n", $result)),
             'h1_title' => $h1Title,
             'meta_description' => $metaDescription,
+        ];
+    }
+
+    /**
+     * @return array{html: string, meta_description: string|null}
+     */
+    public function stripMetaDescriptionFromHtml(string $html): array
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return ['html' => '', 'meta_description' => null];
+        }
+
+        $metaDescription = null;
+        $patterns = [
+            '/<p>\s*(?:<(?:strong|b)>\s*)?Meta\s+Description\s*:\s*(?:<\/(?:strong|b)>\s*)?(.*?)<\/p>/isu',
+            '/<p>\s*\*{0,2}\s*Meta\s+Description\s*:\*{0,2}\s*(.*?)<\/p>/isu',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $html, $matches) !== 1) {
+                continue;
+            }
+
+            $candidate = trim(html_entity_decode(strip_tags((string) ($matches[1] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+            if ($candidate !== '') {
+                $metaDescription = $candidate;
+            }
+
+            $html = trim((string) preg_replace($pattern, '', $html, 1));
+
+            break;
+        }
+
+        return [
+            'html' => $html,
+            'meta_description' => $metaDescription !== '' ? $metaDescription : null,
+        ];
+    }
+
+    /**
+     * @return array{markdown: string, meta_description: string|null}
+     */
+    private function extractMetaDescriptionFromMarkdown(string $markdown): array
+    {
+        $lines = preg_split('/\r\n|\r|\n/', trim($markdown)) ?: [];
+        $metaDescription = null;
+        $result = [];
+        $lineCount = count($lines);
+
+        for ($index = 0; $index < $lineCount; $index++) {
+            $line = $lines[$index];
+            $trimmed = trim($line);
+
+            if ($trimmed === '' || $metaDescription !== null || ! $this->isMetaDescriptionLine($trimmed)) {
+                $result[] = $line;
+
+                continue;
+            }
+
+            $inline = $this->parseMetaDescriptionLine($trimmed);
+            if ($inline !== '') {
+                $metaDescription = $inline;
+
+                continue;
+            }
+
+            $parts = [];
+            for ($cursor = $index + 1; $cursor < $lineCount; $cursor++) {
+                $nextLine = trim($lines[$cursor]);
+                if ($nextLine === '') {
+                    break;
+                }
+
+                if ($this->isMetaDescriptionLine($nextLine) || $this->parseH1Line($nextLine) !== null || $this->parseHeading($nextLine) !== null) {
+                    break;
+                }
+
+                $parts[] = $nextLine;
+            }
+
+            if ($parts !== []) {
+                $metaDescription = trim(implode(' ', $parts));
+            }
+
+            $index = $cursor - 1;
+        }
+
+        return [
+            'markdown' => trim(implode("\n", $result)),
+            'meta_description' => $metaDescription !== '' ? $metaDescription : null,
         ];
     }
 
@@ -278,7 +385,7 @@ final class SimpleMarkdownHtmlConverter
         if (preg_match('/^Section\s+(\d+):\s*H([1-6]):\s*(.+)$/iu', $line, $matches) === 1) {
             return [
                 'level' => (int) $matches[2],
-                'text' => 'Section ' . $matches[1] . ': ' . $this->stripHeadingLabelPrefixes($matches[3]),
+                'text' => 'Section '.$matches[1].': '.$this->stripHeadingLabelPrefixes($matches[3]),
             ];
         }
 
@@ -395,7 +502,7 @@ final class SimpleMarkdownHtmlConverter
         $html = ['<table>'];
         $html[] = '<thead><tr>';
         foreach ($header as $cell) {
-            $html[] = '<th>' . $this->formatInline($cell) . '</th>';
+            $html[] = '<th>'.$this->formatInline($cell).'</th>';
         }
         $html[] = '</tr></thead>';
 
@@ -404,7 +511,7 @@ final class SimpleMarkdownHtmlConverter
             foreach ($bodyRows as $row) {
                 $html[] = '<tr>';
                 foreach ($row as $cell) {
-                    $html[] = '<td>' . $this->formatInline($cell) . '</td>';
+                    $html[] = '<td>'.$this->formatInline($cell).'</td>';
                 }
                 $html[] = '</tr>';
             }

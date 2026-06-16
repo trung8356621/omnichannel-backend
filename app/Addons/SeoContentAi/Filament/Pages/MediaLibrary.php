@@ -694,6 +694,15 @@ class MediaLibrary extends Page
      */
     public function deleteLibraryImage(string $key): array
     {
+        if (! SeoAccessControl::canDeleteSeoMedia()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.media_runtime.delete_denied'))
+                ->warning()
+                ->send();
+
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
+        }
+
         if ($this->siteId === null || $this->siteId <= 0) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 
@@ -755,6 +764,15 @@ class MediaLibrary extends Page
      */
     public function deleteSelectedImages(): array
     {
+        if (! SeoAccessControl::canDeleteSeoMedia()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.media_runtime.delete_denied'))
+                ->warning()
+                ->send();
+
+            return ['success' => false, 'removed_keys' => [], 'staging_only' => false];
+        }
+
         if ($this->siteId === null || $this->siteId <= 0) {
             Notification::make()->title(__('seo-content-ai::filament.media_runtime.select_domain'))->warning()->send();
 

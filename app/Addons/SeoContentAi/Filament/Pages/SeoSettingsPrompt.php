@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
-use App\Addons\SeoContentAi\Services\SeoPromptSettingsOptionsService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -46,7 +45,6 @@ class SeoSettingsPrompt extends Page implements HasForms
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS],
-            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID],
         ];
 
         $this->form->fill($this->promptSettingsData);
@@ -156,14 +154,6 @@ class SeoSettingsPrompt extends Page implements HasForms
                             ->maxValue(10)
                             ->required()
                             ->default(5),
-                        Forms\Components\Select::make(SeoPromptSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID)
-                            ->label(__('seo-content-ai::filament.settings_prompt.featured_snippet_prompt'))
-                            ->helperText(__('seo-content-ai::filament.settings_prompt.featured_snippet_prompt_hint'))
-                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
-                            ->searchable()
-                            ->native(false)
-                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt'))
-                            ->columnSpanFull(),
                     ])
                     ->columns(3),
             ])
@@ -184,7 +174,6 @@ class SeoSettingsPrompt extends Page implements HasForms
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? 10,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS] ?? 2,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS] ?? 5,
-            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
         ]);
 
         Notification::make()

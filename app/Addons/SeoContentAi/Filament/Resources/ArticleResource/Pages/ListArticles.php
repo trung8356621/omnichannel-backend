@@ -5,8 +5,14 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
+use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Notification;
@@ -29,6 +35,102 @@ class ListArticles extends ListRecords
         }
 
         $this->resetPage($this->getTablePaginationPageName());
+    }
+
+    public function syncArticleMainKeyword(int $articleId, string $phrase): void
+    {
+        abort_unless(SeoAccessControl::canAccessPlannerFeatures(), 403);
+
+        $article = ArticleResource::getEloquentQuery()
+            ->whereKey($articleId)
+            ->first();
+
+        if (! $article instanceof SeoArticle) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.main_keyword_sync_failed'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $siteId = (int) (ArticleResource::resolveArticleSiteId($article) ?? SeoAccessControl::globalSiteId() ?? 0);
+        if ($siteId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.main_keyword_sync_failed'))
+                ->body(__('seo-content-ai::filament.article_list.main_keyword_no_domain'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $current = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
+        $phrase = trim($phrase);
+
+        if ($phrase === $current) {
+            return;
+        }
+
+        KeywordFocusAttach::syncMainKeyword(
+            $article,
+            $siteId,
+            (int) auth()->id(),
+            $phrase,
+        );
+
+        app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($article->fresh());
+
+        $article = $article->fresh();
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        $content = app(ArticleKeywordLinkReconcileService::class)->resolveArticleContent($article);
+        $scoreResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent($article, $content);
+        $article = $article->fresh();
+        $score = (int) ($scoreResult['score'] ?? $article?->seo_score ?? 0);
+
+        $wpPostId = (int) ($article?->wp_post_id ?? 0);
+
+        if ($wpPostId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.main_keyword_synced'))
+                ->body(__('seo-content-ai::filament.article_list.main_keyword_synced_score_only', [
+                    'score' => $score,
+                    'keyword' => $phrase !== '' ? $phrase : __('seo-content-ai::filament.article_list.seo_keyword_empty'),
+                ]))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $wpResult = app(WordPressArticleSyncService::class)->syncSeoMetaForArticle($article, [
+            'focus_keyword' => $phrase,
+        ]);
+
+        if (! ($wpResult['success'] ?? false)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.main_keyword_sync_failed'))
+                ->body(__('seo-content-ai::filament.article_list.main_keyword_wp_sync_failed_with_score', [
+                    'score' => $score,
+                    'message' => (string) ($wpResult['message'] ?? __('seo-content-ai::filament.article_list.main_keyword_wp_sync_failed')),
+                ]))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.main_keyword_synced'))
+            ->body(__('seo-content-ai::filament.article_list.main_keyword_synced_wp_with_score', [
+                'score' => $score,
+                'keyword' => $phrase !== '' ? $phrase : __('seo-content-ai::filament.article_list.seo_keyword_empty'),
+            ]))
+            ->success()
+            ->send();
     }
 
     protected function getHeaderActions(): array

@@ -1141,6 +1141,50 @@ const getPlainTextFromBlocks = (rangeBlocks) => {
         .join('\n\n');
 };
 
+/** Plain text từ heading trong block tới heading cùng/cao hơn level kế tiếp — ngữ cảnh AI theo outline. */
+const extractHeadingScopedPlainText = (html, level, headingText) => {
+    const raw = String(html ?? '').trim();
+    const target = normalizeOutlineHeadingText(headingText);
+    if (raw === '' || target === '') {
+        return '';
+    }
+
+    const doc = new DOMParser().parseFromString(raw, 'text/html');
+    const selector = level >= 2 && level <= 4 ? `h${level}` : 'h2, h3, h4';
+    const headings = Array.from(doc.body.querySelectorAll(selector));
+    const startIdx = headings.findIndex(
+        (node) => normalizeOutlineHeadingText(node.textContent) === target,
+    );
+    if (startIdx < 0) {
+        return '';
+    }
+
+    const startHeading = headings[startIdx];
+    const startLevel = Number.parseInt(startHeading.tagName.charAt(1), 10);
+    const parts = [normalizeOutlineHeadingText(startHeading.textContent)];
+
+    let el = startHeading.nextElementSibling;
+    while (el) {
+        if (/^H[234]$/i.test(el.tagName)) {
+            const nextLevel = Number.parseInt(el.tagName.charAt(1), 10);
+            if (nextLevel <= startLevel) {
+                break;
+            }
+        }
+
+        const text = String(el.textContent ?? '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (text !== '') {
+            parts.push(text);
+        }
+
+        el = el.nextElementSibling;
+    }
+
+    return parts.filter(Boolean).join('\n');
+};
+
 function getActiveBlockContextText(blocks, activeBlockId, tempMerge) {
     if (!activeBlockId) return '';
 
@@ -2079,6 +2123,7 @@ export default function SeoArticleEditor({
     const activeBlockIdRef = useRef(null);
     const linkScrollTokenRef = useRef(0);
     const intraSelectionRef = useRef({ text: '', html: '' });
+    const focusedOutlineHeadingRef = useRef(null);
     const globalEditorRef = useRef(null);
     const blockEditorsRef = useRef(new Map());
     const pendingAiMediaRef = useRef(new Map());
@@ -3998,8 +4043,25 @@ export default function SeoArticleEditor({
 
             const text = intra.text.length >= 12 ? intra.text : blockText;
             const html = intra.html.length >= 12 ? intra.html : blockHtml;
+            let contextText = text;
+            let contextHtml = html;
 
-            dispatchActiveBlockContext(articleId, text, html, true, activeBlockId);
+            if (intra.text.length < 12) {
+                const focused = focusedOutlineHeadingRef.current;
+                if (focused?.headingText && blockHtml) {
+                    const scoped = extractHeadingScopedPlainText(
+                        blockHtml,
+                        Number(focused.level ?? 0),
+                        String(focused.headingText ?? ''),
+                    );
+                    if (scoped.length >= 12) {
+                        contextText = scoped;
+                        contextHtml = scoped;
+                    }
+                }
+            }
+
+            dispatchActiveBlockContext(articleId, contextText, contextHtml, true, activeBlockId);
         };
 
         const onIntra = (event) => {
@@ -6023,6 +6085,12 @@ export default function SeoArticleEditor({
 
     const jumpToOutlineHeading = useCallback(
         (node) => {
+            focusedOutlineHeadingRef.current = {
+                level: Number(node?.level ?? 0),
+                headingText: String(node?.heading_text ?? ''),
+                headingId: node?.id ?? null,
+            };
+
             const blockId = findBlockIdForOutlineHeading(
                 blocksRef.current,
                 Number(node?.level ?? 0),

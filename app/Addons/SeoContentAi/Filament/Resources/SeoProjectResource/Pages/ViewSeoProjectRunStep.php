@@ -33,13 +33,17 @@ final class ViewSeoProjectRunStep extends Page
     public function mount(int|string $run, int|string $article): void
     {
         self::authorizeResourceAccess();
-        abort_unless(SeoAccessControl::canAccessPlannerFeatures(), 403);
 
         $this->run = (int) $run;
         $this->article = (int) $article;
         $this->projectRun = SeoProjectRun::query()
             ->with('project')
             ->findOrFail($this->run);
+
+        abort_unless(
+            SeoAccessControl::canAccessContentProjectRun($this->projectRun->project),
+            403,
+        );
 
         abort_unless(
             SeoProjectResource::getEloquentQuery()

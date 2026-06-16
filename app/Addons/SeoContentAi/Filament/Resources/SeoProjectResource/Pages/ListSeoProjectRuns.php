@@ -28,12 +28,13 @@ final class ListSeoProjectRuns extends Page
     public function mount(int|string $record): void
     {
         self::authorizeResourceAccess();
-        abort_unless(SeoAccessControl::canAccessPlannerFeatures(), 403);
 
         $this->record = (int) $record;
         $this->project = SeoProjectResource::getEloquentQuery()
             ->with(['site', 'user'])
             ->findOrFail($this->record);
+
+        abort_unless(SeoAccessControl::canAccessContentProjectRun($this->project), 403);
     }
 
     public function getTitle(): string|Htmlable
@@ -59,10 +60,35 @@ final class ListSeoProjectRuns extends Page
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
                 ->modalDescription(fn () => SeoProjectResource::runWorkflowModalDescription($this->project))
-                ->action(fn (): mixed => SeoProjectResource::dispatchProjectWorkflowRun(
-                    $this->project,
-                    SeoProjectRun::MODE_FULL,
-                )),
+                ->action(function (): void {
+                    try {
+                        $run = SeoProjectResource::createProjectWorkflowRun(
+                            $this->project,
+                            SeoProjectRun::MODE_FULL,
+                        );
+                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_started'))
+                            ->body(__('seo-content-ai::filament.projects.run_started_new_tab'))
+                            ->success()
+                            ->send();
+
+                        $this->js('window.open('.json_encode($url).', "_blank")');
+                    } catch (\InvalidArgumentException $exception) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+                    } catch (\Throwable $exception) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+                    }
+                }),
             Actions\Action::make('test_run_workflow')
                 ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
                 ->icon('heroicon-o-beaker')
@@ -73,10 +99,35 @@ final class ListSeoProjectRuns extends Page
                     $this->project,
                     SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
                 ))
-                ->action(fn (): mixed => SeoProjectResource::dispatchProjectWorkflowRun(
-                    $this->project,
-                    SeoProjectRun::MODE_TEST,
-                )),
+                ->action(function (): void {
+                    try {
+                        $run = SeoProjectResource::createProjectWorkflowRun(
+                            $this->project,
+                            SeoProjectRun::MODE_TEST,
+                        );
+                        $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_started'))
+                            ->body(__('seo-content-ai::filament.projects.run_started_new_tab'))
+                            ->success()
+                            ->send();
+
+                        $this->js('window.open('.json_encode($url).', "_blank")');
+                    } catch (\InvalidArgumentException $exception) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+                    } catch (\Throwable $exception) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.projects.run_failed'))
+                            ->body($exception->getMessage())
+                            ->danger()
+                            ->send();
+                    }
+                }),
             Actions\Action::make('back_to_project')
                 ->label(__('seo-content-ai::filament.projects.back_to_project'))
                 ->icon('heroicon-o-arrow-left')

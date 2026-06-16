@@ -13,12 +13,13 @@ use App\Addons\SeoContentAi\Support\SimpleMarkdownHtmlConverter;
 use Illuminate\Support\Str;
 
 /**
- * Sinh Featured Snippet bằng prompt cấu hình tại SEO → Tùy chỉnh → Prompt.
+ * Sinh Featured Snippet bằng prompt cấu hình tại SEO → Tùy chỉnh → Quy trình.
  * Biến {{input}} = từ khóa chính của bài.
  */
 final class ArticleFeaturedSnippetGeneratorService
 {
     public function __construct(
+        private readonly SeoCreateArticleSettingsService $workflowSettings,
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly PromptRunnerService $promptRunner,
@@ -87,7 +88,7 @@ final class ArticleFeaturedSnippetGeneratorService
 
     private function resolvePrompt(): SeoPrompt
     {
-        $promptId = $this->promptSettings->getFeaturedSnippetPromptId();
+        $promptId = $this->workflowSettings->getFeaturedSnippetPromptId();
         if ($promptId === null) {
             throw new \InvalidArgumentException(
                 __('seo-content-ai::filament.article_edit.featured_snippet_generate_no_prompt'),

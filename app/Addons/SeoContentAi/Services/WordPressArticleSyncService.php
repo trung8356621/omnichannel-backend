@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -30,6 +31,10 @@ final class WordPressArticleSyncService
      */
     public function createForArticle(SeoArticle $article): array
     {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
         if ((int) ($article->wp_post_id ?? 0) > 0) {
             return [
                 'success' => true,
@@ -158,6 +163,10 @@ final class WordPressArticleSyncService
      */
     public function syncSlugForArticle(SeoArticle $article, string $slug): array
     {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
         $slug = trim($slug);
         if ($slug === '') {
             return [
@@ -228,6 +237,112 @@ final class WordPressArticleSyncService
     }
 
     /**
+     * Đẩy SEO meta (title / description / focus keyword) lên WordPress qua editor-sync.
+     *
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}  $seoOverride
+     * @return array{success: bool, message: string, seo_applied?: bool}
+     */
+    public function syncSeoMetaForArticle(SeoArticle $article, array $seoOverride): array
+    {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
+        $seo = [];
+        if (array_key_exists('seo_title', $seoOverride)) {
+            $seo['seo_title'] = trim((string) $seoOverride['seo_title']);
+        }
+        if (array_key_exists('meta_description', $seoOverride)) {
+            $seo['meta_description'] = trim((string) $seoOverride['meta_description']);
+        }
+        if (array_key_exists('focus_keyword', $seoOverride)) {
+            $seo['focus_keyword'] = trim((string) $seoOverride['focus_keyword']);
+        }
+
+        if ($seo === []) {
+            return [
+                'success' => false,
+                'message' => 'Không có dữ liệu SEO để đồng bộ lên WordPress.',
+            ];
+        }
+
+        $context = $this->resolveEditorSyncContext($article);
+        if (! ($context['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($context['message'] ?? 'Không thể đồng bộ SEO lên WordPress.'),
+            ];
+        }
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken((string) $context['write_token'])
+                ->post((string) $context['url'], [
+                    'seo' => $seo,
+                ]);
+
+            if (! $response->successful()) {
+                $message = WordPressRestResponseParser::formatHttpErrorMessage(
+                    $response->status(),
+                    $response,
+                );
+
+                Log::warning('WordPress SEO meta sync failed', [
+                    'article_id' => $article->id,
+                    'wp_post_id' => $context['wp_post_id'] ?? null,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $message,
+                ];
+            }
+
+            $decoded = $response->json();
+            if (! is_array($decoded) || ! ($decoded['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($decoded['message'] ?? 'WordPress từ chối cập nhật SEO meta.'),
+                ];
+            }
+
+            if (($decoded['seo_error'] ?? '') !== '') {
+                return [
+                    'success' => false,
+                    'message' => (string) $decoded['seo_error'],
+                ];
+            }
+
+            if (($decoded['seo_applied'] ?? false) !== true) {
+                return [
+                    'success' => false,
+                    'message' => 'WordPress không ghi được SEO meta (Rank Math/Yoast có thể chưa bật).',
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => (string) ($decoded['message'] ?? 'Đã đồng bộ SEO meta lên WordPress.'),
+                'seo_applied' => true,
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress SEO meta sync exception', [
+                'article_id' => $article->id,
+                'wp_post_id' => $context['wp_post_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Đẩy tiêu đề, slug, trạng thái, nội dung và FAQ lên WordPress (nút «Đồng bộ»).
      *
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
@@ -242,6 +357,10 @@ final class WordPressArticleSyncService
      */
     public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
     {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
         $context = $this->resolveEditorSyncContext($article);
         if (! ($context['success'] ?? false)) {
             return [
@@ -858,5 +977,20 @@ final class WordPressArticleSyncService
         return max(0, (int) (
             $article->articleMetas->firstWhere('meta_key', 'wp_parent_id')?->meta_value ?? 0
         ));
+    }
+
+    /**
+     * @return array{success: bool, message: string}|null
+     */
+    private function blockContentManagerWordPressSync(): ?array
+    {
+        if (SeoAccessControl::canSyncArticlesToWordPress()) {
+            return null;
+        }
+
+        return [
+            'success' => false,
+            'message' => 'Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.',
+        ];
     }
 }

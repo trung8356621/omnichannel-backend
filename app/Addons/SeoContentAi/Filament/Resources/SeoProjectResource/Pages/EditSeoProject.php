@@ -16,6 +16,15 @@ class EditSeoProject extends EditRecord
 {
     protected static string $resource = SeoProjectResource::class;
 
+    public function mount(int|string $record): void
+    {
+        parent::mount($record);
+
+        if (SeoAccessControl::isContentManager()) {
+            $this->form->disabled();
+        }
+    }
+
     public function getTitle(): string
     {
         /** @var SeoProject $record */
@@ -46,6 +55,8 @@ class EditSeoProject extends EditRecord
      */
     protected function mutateFormDataBeforeSave(array $data): array
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         $data = SeoProjectResource::normalizeProjectSiteId($data);
 
         if (! empty($data['month'])) {
@@ -71,12 +82,25 @@ class EditSeoProject extends EditRecord
 
     protected function afterSave(): void
     {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
         /** @var SeoProject $record */
         $record = $this->getRecord();
 
         $tasksData = $this->form->getState()['tasks_data'] ?? [];
 
         app(SeoProjectTaskSyncService::class)->sync($record, $tasksData);
+    }
+
+    protected function getFormActions(): array
+    {
+        if (SeoAccessControl::isContentManager()) {
+            return [
+                $this->getCancelFormAction(),
+            ];
+        }
+
+        return parent::getFormActions();
     }
 
     protected function getHeaderActions(): array
@@ -86,10 +110,10 @@ class EditSeoProject extends EditRecord
                 ->label(__('seo-content-ai::filament.projects.view_runs'))
                 ->icon('heroicon-o-queue-list')
                 ->color('gray')
-                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures())
+                ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($this->getRecord()))
                 ->url(fn (): string => SeoProjectResource::getRunHistoryUrl($this->getRecord())),
             Actions\DeleteAction::make()
-                ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures()),
+                ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects()),
         ];
     }
 

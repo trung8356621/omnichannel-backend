@@ -35,6 +35,37 @@ MD;
         $this->assertStringContainsString('Đoạn nội dung', $htmlResult['html']);
     }
 
+    public function test_prepare_import_extracts_multiline_meta_description(): void
+    {
+        $markdown = <<<'MD'
+**Meta Description:**
+Dịch vụ may balo trẻ em Phonak cao cấp, thiết kế chống gù.
+
+H1: May Balo Trẻ Em PHONAK
+
+## Section 1
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame(
+            'Dịch vụ may balo trẻ em Phonak cao cấp, thiết kế chống gù.',
+            $prepared['meta_description'],
+        );
+        $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
+    }
+
+    public function test_strip_meta_description_from_html_paragraph(): void
+    {
+        $html = '<p><b>Meta Description:</b> Dịch vụ may balo trẻ em Phonak cao cấp.</p><h2>Section</h2>';
+
+        $stripped = $this->converter()->stripMetaDescriptionFromHtml($html);
+
+        $this->assertSame('Dịch vụ may balo trẻ em Phonak cao cấp.', $stripped['meta_description']);
+        $this->assertStringNotContainsString('Meta Description', $stripped['html']);
+        $this->assertStringContainsString('<h2>Section</h2>', $stripped['html']);
+    }
+
     public function test_strips_first_h1_anywhere_in_markdown(): void
     {
         $markdown = <<<'MD'

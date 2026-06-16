@@ -6,12 +6,13 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleHeading;
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Services\ArticleHeadingAiGenerateService;
 use App\Addons\SeoContentAi\Services\ArticleTocExtractionService;
 use App\Addons\SeoContentAi\Services\HeadingDuplicateCheckerService;
 use App\Addons\SeoContentAi\Services\HeadingDuplicateCheckService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
-use App\Models\Site;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -313,9 +314,10 @@ class ArticleOutlineController extends Controller
             return true;
         }
 
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
+        if (SeoAccessControl::isContentManager()) {
+            return ArticleResource::canContentManagerAccessArticle($article);
+        }
+
+        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
     }
 }

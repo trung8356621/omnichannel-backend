@@ -223,12 +223,26 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                             </p>
                             <div>
                                 <p className="font-semibold">{t('debug_generate_image')} #{aiDebug?.image?.prompt_id ?? 'n/a'}</p>
+                                <p className="text-[11px] text-amber-900/80 mb-1">
+                                    tools={aiDebug?.image?.tools ?? 'n/a'}
+                                    {aiDebug?.image?.connection_name
+                                        ? ` · connection=${aiDebug.image.connection_name}`
+                                        : ''}
+                                    {aiDebug?.image?.execution ? ` · ${aiDebug.image.execution}` : ''}
+                                </p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
                                     {imageDebugPrompt || t('debug_no_image_prompt')}
                                 </pre>
                             </div>
                             <div>
                                 <p className="font-semibold">{t('debug_generate_video')} #{aiDebug?.video?.prompt_id ?? 'n/a'}</p>
+                                <p className="text-[11px] text-amber-900/80 mb-1">
+                                    tools={aiDebug?.video?.tools ?? 'n/a'}
+                                    {aiDebug?.video?.connection_name
+                                        ? ` · connection=${aiDebug.video.connection_name}`
+                                        : ''}
+                                    {aiDebug?.video?.execution ? ` · ${aiDebug.video.execution}` : ''}
+                                </p>
                                 <pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-break-word bg-white p-2 border rounded">
                                     {videoDebugPrompt || t('debug_no_video_prompt')}
                                 </pre>

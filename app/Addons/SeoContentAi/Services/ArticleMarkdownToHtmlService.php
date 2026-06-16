@@ -47,4 +47,12 @@ final class ArticleMarkdownToHtmlService
 
         return $this->converter->toHtmlWithMetadata($markdown);
     }
+
+    /**
+     * @return array{html: string, meta_description: string|null}
+     */
+    public function stripMetaDescriptionFromHtml(string $html): array
+    {
+        return $this->converter->stripMetaDescriptionFromHtml($html);
+    }
 }
