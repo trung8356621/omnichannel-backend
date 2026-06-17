@@ -130,7 +130,6 @@
                     {{ __('Website chưa có dữ liệu trong kho SEO. Chạy đồng bộ từ WordPress.') }}
                 </x-slot>
                 @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
-                    'showReset' => false,
                     'showTest' => auth()->user()?->role === 'admin',
                 ])
             </x-filament::section>
@@ -178,11 +177,11 @@
                                     @endforeach
                                 </ul>
                             @endif
-                        </div>
-                        <div class="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-                            <p><span class="font-semibold">{{ __('Đã chấm') }}:</span> {{ $scoring['scored'] }}</p>
-                            <p><span class="font-semibold">{{ __('Thấp nhất') }}:</span> {{ $scoring['min_score'] }}</p>
-                            <p><span class="font-semibold">{{ __('Cao nhất') }}:</span> {{ $scoring['max_score'] }}</p>
+                            <div class="seo-score-stats">
+                                <p><span class="font-semibold">{{ __('Đã chấm') }}:</span> {{ $scoring['scored'] }}</p>
+                                <p><span class="font-semibold">{{ __('Thấp nhất') }}:</span> {{ $scoring['min_score'] }}</p>
+                                <p><span class="font-semibold">{{ __('Cao nhất') }}:</span> {{ $scoring['max_score'] }}</p>
+                            </div>
                         </div>
                     @endif
                 </x-filament::section>
@@ -204,7 +203,6 @@
                     </div>
 
                     @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
-                        'showReset' => true,
                         'showTest' => auth()->user()?->role === 'admin',
                     ])
                 </x-filament::section>

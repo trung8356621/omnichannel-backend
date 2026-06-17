@@ -19,7 +19,21 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 2rem;
+    gap: 1.5rem 2rem;
+}
+
+.seo-score-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.875rem;
+    min-width: 7rem;
+}
+
+@media (min-width: 640px) {
+    .seo-score-donut {
+        flex-wrap: nowrap;
+    }
 }
 
 .seo-score-donut__chart {

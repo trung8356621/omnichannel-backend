@@ -77,7 +77,10 @@ final class RunIncrementalDomainSyncJob implements ShouldBeUnique, ShouldQueue
         $state['message'] = $exception?->getMessage()
             ?? __('seo-content-ai::filament.domain.sync_incremental_failed');
 
-        Cache::put($cacheKey, $state, now()->addMinutes(30));
-        Cache::forget(IncrementalDomainSyncCache::fullItemsCacheKey($cacheKey));
+        Cache::put(
+            $cacheKey,
+            IncrementalDomainSyncCache::touch($state),
+            now()->addHours(2),
+        );
     }
 }

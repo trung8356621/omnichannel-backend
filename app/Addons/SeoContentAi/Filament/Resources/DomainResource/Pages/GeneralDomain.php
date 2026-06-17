@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
+use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
@@ -48,6 +49,8 @@ class GeneralDomain extends Page
     public int $incrementalSyncTotal = 0;
 
     public bool $incrementalSyncRunning = false;
+
+    public bool $incrementalSyncResumable = false;
 
     public function mount(int|string $record): void
     {
@@ -97,6 +100,11 @@ class GeneralDomain extends Page
         $this->incrementalSyncTotal = (int) $progress['total'];
         $this->incrementalSyncRunning = (bool) $progress['running'];
 
+        $userId = (int) auth()->id();
+        $siteId = (int) $this->getRecord()->getKey();
+        $state = Cache::get(IncrementalDomainSyncCache::cacheKey($userId, $siteId));
+        $this->incrementalSyncResumable = IncrementalDomainSyncCache::isResumable(is_array($state) ? $state : null);
+
         $this->dispatch(
             'incremental-sync-progress',
             done: $this->incrementalSyncProgress,
@@ -126,9 +134,17 @@ class GeneralDomain extends Page
         return app(DomainOverviewService::class)->isSiteSynced((int) $this->getRecord()->getKey());
     }
 
-    public function getResetAndFullSyncConfirmMessage(): string
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function getIncrementalSyncCacheState(): ?array
     {
-        return __('seo-content-ai::filament.domain.reset_full_sync_confirm');
+        $state = Cache::get(IncrementalDomainSyncCache::cacheKey(
+            (int) auth()->id(),
+            (int) $this->getRecord()->getKey(),
+        ));
+
+        return is_array($state) ? $state : null;
     }
 
     /**
@@ -291,7 +307,6 @@ class GeneralDomain extends Page
         return [
             $this->deleteDomainAction(),
             $this->syncIncrementalAction(),
-            $this->resetAndFullSyncAction(),
             $this->testSyncDataAction(),
         ];
     }
@@ -307,7 +322,19 @@ class GeneralDomain extends Page
             ->modalDescription(__('seo-content-ai::filament.domain.delete_domain_description'))
             ->modalSubmitActionLabel(__('seo-content-ai::filament.domain.delete_domain_submit'))
             ->action(function (): void {
-                $this->getRecord()->delete();
+                /** @var Site $site */
+                $site = $this->getRecord();
+
+                app(ClearDomainArticlesService::class)->clear($site);
+
+                $userId = (int) auth()->id();
+                $siteId = (int) $site->getKey();
+                Cache::forget(IncrementalDomainSyncCache::cacheKey($userId, $siteId));
+                Cache::forget(IncrementalDomainSyncCache::fullItemsCacheKey(
+                    IncrementalDomainSyncCache::cacheKey($userId, $siteId),
+                ));
+
+                $site->delete();
 
                 Notification::make()
                     ->title(__('seo-content-ai::filament.domain.delete_domain_success'))
@@ -326,26 +353,6 @@ class GeneralDomain extends Page
             ->icon('heroicon-o-arrow-down-tray')
             ->action(function (): void {
                 $this->runIncrementalSyncAction();
-            });
-    }
-
-    protected function resetAndFullSyncAction(): Action
-    {
-        return Action::make('reset_and_full_sync')
-            ->label(__('seo-content-ai::filament.domain.reset_full_sync'))
-            ->icon('heroicon-o-arrow-path')
-            ->color('danger')
-            ->requiresConfirmation()
-            ->modalHeading(__('seo-content-ai::filament.domain.reset_full_sync_heading'))
-            ->modalDescription(fn (): string => $this->getResetAndFullSyncConfirmMessage())
-            ->modalSubmitActionLabel(__('seo-content-ai::filament.domain.reset_full_sync_submit'))
-            ->action(function (): void {
-                Notification::make()
-                    ->title(__('seo-content-ai::filament.domain.reset_full_sync_started'))
-                    ->warning()
-                    ->send();
-
-                $this->runResetAndFullSync();
             });
     }
 
@@ -389,11 +396,36 @@ class GeneralDomain extends Page
 
         $userId = (int) auth()->id();
         $siteId = (int) $this->getRecord()->getKey();
+        $runner = app(IncrementalDomainSyncRunner::class);
 
-        if (app(IncrementalDomainSyncRunner::class)->isRunning($userId, $siteId)) {
+        if ($runner->isRunning($userId, $siteId)) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.domain.sync_incremental_already_running'))
                 ->warning()
+                ->send();
+
+            return;
+        }
+
+        $cacheKey = IncrementalDomainSyncCache::cacheKey($userId, $siteId);
+        $cachedState = $this->getIncrementalSyncCacheState();
+
+        if (IncrementalDomainSyncCache::isResumable($cachedState)) {
+            $resumingState = IncrementalDomainSyncCache::markResuming($cachedState);
+            Cache::put($cacheKey, $resumingState, now()->addHours(2));
+
+            $progress = IncrementalDomainSyncCache::progressFromState($resumingState);
+            $this->applyIncrementalSyncProgress($progress);
+
+            RunIncrementalDomainSyncJob::dispatch($siteId, $userId);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.sync_incremental_resumed'))
+                ->body(__('seo-content-ai::filament.domain.sync_incremental_resumed_hint', [
+                    'done' => $progress['done'],
+                    'total' => $progress['total'],
+                ]))
+                ->info()
                 ->send();
 
             return;
@@ -425,13 +457,14 @@ class GeneralDomain extends Page
             return;
         }
 
-        $cacheKey = IncrementalDomainSyncCache::cacheKey($userId, $siteId);
         Cache::put($cacheKey, IncrementalDomainSyncCache::initialState($prepared, $refs), now()->addHours(2));
+        Cache::forget(IncrementalDomainSyncCache::fullItemsCacheKey($cacheKey));
 
         $total = count($refs);
         $this->incrementalSyncTotal = $total;
         $this->incrementalSyncProgress = 0;
         $this->incrementalSyncRunning = true;
+        $this->incrementalSyncResumable = false;
 
         $this->dispatch('incremental-sync-progress', done: 0, total: $total, running: true);
 
@@ -444,21 +477,6 @@ class GeneralDomain extends Page
             ]))
             ->info()
             ->send();
-    }
-
-    private function runResetAndFullSync(): void
-    {
-        @set_time_limit(300);
-
-        /** @var Site $site */
-        $site = $this->getRecord();
-
-        $result = app(SyncDomainContentService::class)->resetAndFullSync($site);
-        $this->notifySyncResult(
-            $result,
-            __('seo-content-ai::filament.domain.reset_full_sync_success'),
-            __('seo-content-ai::filament.domain.reset_full_sync_failed'),
-        );
     }
 
     private function runDomainSyncTest(): void

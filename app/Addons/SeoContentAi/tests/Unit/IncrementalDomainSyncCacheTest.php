@@ -19,6 +19,7 @@ final class IncrementalDomainSyncCacheTest extends TestCase
                 ['id' => 3],
             ],
             'offset' => 1,
+            'updated_at' => now()->toIso8601String(),
         ]);
 
         $this->assertSame(1, $progress['done']);
@@ -42,5 +43,48 @@ final class IncrementalDomainSyncCacheTest extends TestCase
         $this->assertSame(2, $progress['done']);
         $this->assertFalse($progress['running']);
         $this->assertSame('Done', $progress['message']);
+    }
+
+    public function test_is_resumable_when_stale_running_with_partial_offset(): void
+    {
+        $state = [
+            'status' => IncrementalDomainSyncCache::STATUS_RUNNING,
+            'refs' => array_fill(0, 10, ['id' => 1]),
+            'offset' => 4,
+            'started_at' => now()->subMinutes(10)->toIso8601String(),
+            'updated_at' => now()->subMinutes(10)->toIso8601String(),
+        ];
+
+        $this->assertTrue(IncrementalDomainSyncCache::isResumable($state));
+        $this->assertFalse(IncrementalDomainSyncCache::isActivelyRunning($state));
+    }
+
+    public function test_is_actively_running_when_recently_updated(): void
+    {
+        $state = [
+            'status' => IncrementalDomainSyncCache::STATUS_RUNNING,
+            'refs' => array_fill(0, 10, ['id' => 1]),
+            'offset' => 4,
+            'updated_at' => now()->toIso8601String(),
+        ];
+
+        $this->assertTrue(IncrementalDomainSyncCache::isActivelyRunning($state));
+        $this->assertFalse(IncrementalDomainSyncCache::isResumable($state));
+    }
+
+    public function test_mark_resuming_sets_running_status(): void
+    {
+        $state = [
+            'status' => IncrementalDomainSyncCache::STATUS_FAILED,
+            'refs' => [['id' => 1], ['id' => 2]],
+            'offset' => 1,
+            'message' => 'Error',
+        ];
+
+        $resumed = IncrementalDomainSyncCache::markResuming($state);
+
+        $this->assertSame(IncrementalDomainSyncCache::STATUS_RUNNING, $resumed['status']);
+        $this->assertNull($resumed['message']);
+        $this->assertArrayHasKey('updated_at', $resumed);
     }
 }

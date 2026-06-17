@@ -36,7 +36,9 @@ final class IncrementalDomainSyncRunner
 
     public function isRunning(int $userId, int $siteId): bool
     {
-        return $this->readProgress($userId, $siteId)['running'];
+        $state = Cache::get(IncrementalDomainSyncCache::cacheKey($userId, $siteId));
+
+        return IncrementalDomainSyncCache::isActivelyRunning(is_array($state) ? $state : null);
     }
 
     public function run(Site $site, int $userId): void
@@ -103,7 +105,11 @@ final class IncrementalDomainSyncRunner
                 );
                 $state['status'] = IncrementalDomainSyncCache::STATUS_RUNNING;
 
-                Cache::put($cacheKey, $state, now()->addHours(2));
+                Cache::put(
+                    $cacheKey,
+                    IncrementalDomainSyncCache::touch($state),
+                    now()->addHours(2),
+                );
 
                 if ($state['offset'] >= count($refs)) {
                     $this->markCompleted($cacheKey, $fullItemsKey, $state, $userId);
@@ -168,8 +174,17 @@ final class IncrementalDomainSyncRunner
         $state['status'] = IncrementalDomainSyncCache::STATUS_FAILED;
         $state['message'] = $message;
 
-        Cache::put($cacheKey, $state, now()->addMinutes(30));
-        Cache::forget($fullItemsKey);
+        Cache::put(
+            $cacheKey,
+            IncrementalDomainSyncCache::touch($state),
+            now()->addHours(2),
+        );
+
+        $total = count(is_array($state['refs'] ?? null) ? $state['refs'] : []);
+        $offset = (int) ($state['offset'] ?? 0);
+        if ($offset >= $total) {
+            Cache::forget($fullItemsKey);
+        }
 
         $this->notifyUser(
             $userId,

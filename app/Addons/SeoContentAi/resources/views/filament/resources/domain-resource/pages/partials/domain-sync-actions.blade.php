@@ -1,5 +1,4 @@
 @props([
-    'showReset' => false,
     'showTest' => false,
 ])
 
@@ -57,6 +56,8 @@
             <span wire:loading.remove wire:target="runIncrementalSyncAction">
                 @if ($incrementalSyncRunning)
                     {{ __('seo-content-ai::filament.domain.sync_incremental_running') }}
+                @elseif ($incrementalSyncResumable)
+                    {{ __('seo-content-ai::filament.domain.sync_incremental_resume') }}
                 @else
                     {{ __('seo-content-ai::filament.domain.sync_incremental') }}
                 @endif
@@ -65,20 +66,6 @@
                 {{ __('seo-content-ai::filament.domain.sync_incremental_preparing') }}
             </span>
         </x-filament::button>
-
-        @if ($showReset)
-            <x-filament::button
-                type="button"
-                color="danger"
-                icon="heroicon-o-arrow-path"
-                wire:click="mountAction('reset_and_full_sync')"
-                wire:loading.attr="disabled"
-                wire:target="runIncrementalSyncAction, mountAction('reset_and_full_sync')"
-                :disabled="$incrementalSyncRunning"
-            >
-                {{ __('seo-content-ai::filament.domain.reset_full_sync') }}
-            </x-filament::button>
-        @endif
 
         @if ($showTest)
             <x-filament::button
