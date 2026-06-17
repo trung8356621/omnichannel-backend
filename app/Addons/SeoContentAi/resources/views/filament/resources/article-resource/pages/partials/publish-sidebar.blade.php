@@ -357,6 +357,75 @@
                 </div>
             @endif
 
+            @if ($this->siteHasPolylang())
+                <div class="text-xs">
+                    <span class="text-gray-500 dark:text-gray-400">Ngôn ngữ:</span>
+                    <span class="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold text-sky-800 dark:bg-sky-950 dark:text-sky-200">
+                        {{ $this->getArticleLanguageLabel() }}
+                    </span>
+                </div>
+
+                @php
+                    $translationConnections = $this->getTranslationConnections();
+                @endphp
+                @if ($translationConnections !== [])
+                    <div class="text-xs space-y-1.5 pt-1 border-t border-gray-200 dark:border-gray-700">
+                        <div class="font-semibold text-gray-700 dark:text-gray-200">Bản dịch liên kết</div>
+                        @foreach ($translationConnections as $connection)
+                            <div class="flex items-start justify-between gap-2">
+                                <div class="min-w-0">
+                                    @if (($connection['status'] ?? '') === 'linked')
+                                        <span class="text-gray-800 dark:text-gray-100">
+                                            {{ $connection['flag'] ?? '🌐' }} {{ $connection['label'] ?? $connection['lang'] }}:
+                                            Linked
+                                            @if (! empty($connection['wp_post_id']))
+                                                (WP ID: {{ $connection['wp_post_id'] }})
+                                            @endif
+                                        </span>
+                                    @else
+                                        <span class="text-amber-700 dark:text-amber-300">
+                                            {{ $connection['flag'] ?? '🌐' }} {{ $connection['label'] ?? $connection['lang'] }}: Chưa có bản dịch
+                                        </span>
+                                    @endif
+                                </div>
+                                <div class="flex shrink-0 items-center gap-1">
+                                    @if (($connection['status'] ?? '') === 'linked' && ! empty($connection['edit_url']))
+                                        <a
+                                            href="{{ $connection['edit_url'] }}"
+                                            class="inline-flex h-6 w-6 items-center justify-center rounded border border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-800"
+                                            title="Mở bản dịch"
+                                            aria-label="Mở bản dịch {{ $connection['label'] ?? $connection['lang'] }}"
+                                        >
+                                            ↗
+                                        </a>
+                                    @elseif (($connection['status'] ?? '') === 'missing' && ! empty($connection['wp_post_id']))
+                                        <button
+                                            type="button"
+                                            wire:click.stop="importMissingTranslation('{{ $connection['lang'] }}')"
+                                            wire:loading.attr="disabled"
+                                            wire:target="importMissingTranslation"
+                                            class="rounded border border-sky-300 px-1.5 py-0.5 text-[10px] font-semibold text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-200 dark:hover:bg-sky-950"
+                                        >
+                                            Import
+                                        </button>
+                                    @else
+                                        <button
+                                            type="button"
+                                            wire:click.stop="requestTranslationGeneration('{{ $connection['lang'] }}')"
+                                            wire:loading.attr="disabled"
+                                            wire:target="requestTranslationGeneration"
+                                            class="rounded border border-amber-300 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-200 dark:hover:bg-amber-950"
+                                        >
+                                            Tạo bản dịch
+                                        </button>
+                                    @endif
+                                </div>
+                            </div>
+                        @endforeach
+                    </div>
+                @endif
+            @endif
+
             <div class="text-xs">
                 <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.post_type') }}:</span>
                 <strong class="text-gray-800 dark:text-gray-100" x-text="postTypeLabel()"></strong>
@@ -547,7 +616,7 @@
                 x-on:click="requestSave()"
                 wire:loading.attr="disabled"
                 wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
-                @disabled($articleHeavyActionBusy)
+                x-bind:disabled="$wire.articleHeavyActionBusy || $root.syncPageLocked"
                 class="seo-publish-icon-btn is-primary @if ($articleHeavyActionBusy && $articleHeavyAction === 'save') is-busy @endif"
                 x-bind:title="saveButtonTitle()"
                 x-bind:aria-label="saveButtonTitle()"
@@ -569,7 +638,7 @@
                     x-on:click="requestSync()"
                     wire:loading.attr="disabled"
                     wire:target="requestSaveArticle,requestSyncToWordPress,applyPublishBoxFromClient,persistProductAlbumFromClient,persistArticleLocal,syncArticleToWordPress,saveArticleFaqs,finalizePendingEditorCollect"
-                    @disabled($articleHeavyActionBusy)
+                    x-bind:disabled="$wire.articleHeavyActionBusy || $root.syncPageLocked"
                     class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
                     title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
                     aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
@@ -596,12 +665,10 @@
             <button
                 type="button"
                 wire:click="toggleArticleReview"
-                @if (! $record->is_reviewed)
-                    wire:confirm="{{ __('seo-content-ai::filament.article_list.review_article_description') }}"
-                @endif
+                @if (! $record->is_reviewed) wire:confirm="{{ __('seo-content-ai::filament.article_list.review_article_description') }}" @endif
                 wire:loading.attr="disabled"
                 wire:target="toggleArticleReview,approveArticle"
-                @disabled(! $this->canToggleArticleReview())
+                @if (! $this->canToggleArticleReview()) disabled @endif
                 class="seo-publish-icon-btn is-success @if ($record->is_reviewed) is-active @endif"
                 title="{{ $record->is_reviewed ? __('seo-content-ai::filament.article_list.reviewed') : $approvedToggleTitle }}"
                 aria-label="{{ __('seo-content-ai::filament.article_list.reviewed') }}"
@@ -615,7 +682,9 @@
             </button>
 
             @if ($record->wp_post_id)
-                @php($wpPermalink = $this->getArticlePermalink())
+                @php
+                    $wpPermalink = $this->getArticlePermalink();
+                @endphp
                 @if ($wpPermalink !== '')
                     <a
                         href="{{ $wpPermalink }}"

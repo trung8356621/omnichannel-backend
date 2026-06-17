@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Forms\DomainTechnicalSeoForm;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
+use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Forms;
@@ -14,14 +15,13 @@ use Filament\Forms\Components\Actions\Action as FormInputAction;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
-use Filament\Resources\Resource;
+use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Table;
-use Filament\Notifications\Notification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Str;
 
-class DomainResource extends Resource
+class DomainResource extends SeoPanelResource
 {
     protected static ?string $model = Site::class;
 
@@ -90,9 +90,9 @@ class DomainResource extends Resource
                 Forms\Components\Select::make('seo_domain_type')
                     ->label(__('seo-content-ai::filament.domain.website_type'))
                     ->options([
-                        'news'         => 'News',
-                        'production'   => 'Production',
-                        'e-commerce'   => 'E-commerce',
+                        'news' => 'News',
+                        'production' => 'Production',
+                        'e-commerce' => 'E-commerce',
                     ])
                     ->required()
                     ->native(false),
@@ -130,10 +130,35 @@ class DomainResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('domain')
+                Tables\Columns\ViewColumn::make('domain')
                     ->label(__('seo-content-ai::filament.domain.domain'))
-                    ->searchable()
+                    ->view('seo-content-ai::filament.tables.columns.domain-with-description')
+                    ->searchable(query: function (Builder $query, string $search): Builder {
+                        return $query->where('domain', 'like', '%'.$search.'%');
+                    })
                     ->sortable(),
+                Tables\Columns\TextColumn::make('domain_tone')
+                    ->label(__('seo-content-ai::filament.domain.domain_tone'))
+                    ->getStateUsing(function (Site $record): string {
+                        $tone = app(SiteDomainPromptContextService::class)
+                            ->tableSummaryForSite($record)['tone'];
+
+                        return $tone !== '' ? $tone : '—';
+                    })
+                    ->wrap()
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('domain_cta')
+                    ->label(__('seo-content-ai::filament.domain.list_cta'))
+                    ->getStateUsing(function (Site $record): string {
+                        $shortcodes = app(SiteDomainPromptContextService::class)
+                            ->tableSummaryForSite($record)['cta_shortcodes'];
+
+                        return $shortcodes !== [] ? implode(', ', $shortcodes) : '—';
+                    })
+                    ->fontFamily('mono')
+                    ->size('sm')
+                    ->wrap()
+                    ->toggleable(),
                 Tables\Columns\ViewColumn::make('is_main')
                     ->label(__('seo-content-ai::filament.domain.main_domain'))
                     ->view('seo-content-ai::filament.tables.columns.domain-main-star'),

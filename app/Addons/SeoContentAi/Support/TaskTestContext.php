@@ -20,6 +20,8 @@ final class TaskTestContext
         public readonly ?int $siteId = null,
         public readonly ?string $postType = null,
         public readonly ?string $projectTaskType = null,
+        public readonly ?string $rewriteMode = null,
+        public readonly ?string $rewriteNotes = null,
     ) {}
 
     public function withProjectTaskType(string $projectTaskType): self
@@ -33,6 +35,40 @@ final class TaskTestContext
             siteId: $this->siteId,
             postType: $this->postType,
             projectTaskType: $projectTaskType,
+            rewriteMode: $this->rewriteMode,
+            rewriteNotes: $this->rewriteNotes,
+        );
+    }
+
+    public function withRewriteOptions(?string $rewriteMode, ?string $rewriteNotes = null): self
+    {
+        return new self(
+            article: $this->article,
+            isNewArticle: $this->isNewArticle,
+            matchedBy: $this->matchedBy,
+            variables: $this->variables,
+            summary: $this->summary,
+            siteId: $this->siteId,
+            postType: $this->postType,
+            projectTaskType: $this->projectTaskType,
+            rewriteMode: $rewriteMode,
+            rewriteNotes: $rewriteNotes,
+        );
+    }
+
+    public function withVariables(array $variables): self
+    {
+        return new self(
+            article: $this->article,
+            isNewArticle: $this->isNewArticle,
+            matchedBy: $this->matchedBy,
+            variables: $variables,
+            summary: $this->summary,
+            siteId: $this->siteId,
+            postType: $this->postType,
+            projectTaskType: $this->projectTaskType,
+            rewriteMode: $this->rewriteMode,
+            rewriteNotes: $this->rewriteNotes,
         );
     }
 
@@ -47,6 +83,8 @@ final class TaskTestContext
             siteId: $siteId,
             postType: $this->postType,
             projectTaskType: $this->projectTaskType,
+            rewriteMode: $this->rewriteMode,
+            rewriteNotes: $this->rewriteNotes,
         );
     }
 
@@ -64,6 +102,8 @@ final class TaskTestContext
             'site_id' => $this->siteId,
             'post_type' => $this->postType,
             'project_task_type' => $this->projectTaskType,
+            'rewrite_mode' => $this->rewriteMode,
+            'rewrite_notes' => $this->rewriteNotes,
         ];
     }
 
@@ -94,6 +134,8 @@ final class TaskTestContext
             siteId: is_numeric($data['site_id'] ?? null) ? (int) $data['site_id'] : null,
             postType: is_string($data['post_type'] ?? null) ? $data['post_type'] : null,
             projectTaskType: is_string($data['project_task_type'] ?? null) ? $data['project_task_type'] : null,
+            rewriteMode: is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
+            rewriteNotes: is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
         );
     }
 }

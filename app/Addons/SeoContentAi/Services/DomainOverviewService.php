@@ -338,4 +338,54 @@ final class DomainOverviewService
     {
         return SeoArticle::query()->where('site_id', $siteId)->exists();
     }
+
+    /**
+     * @return array{
+     *     status: string,
+     *     label: string,
+     *     color: string,
+     *     detail: string,
+     * }
+     */
+    public function getBridgeConnectionStatus(Site $site): array
+    {
+        $api = $this->getApiTokenSummary($site);
+        $hasRead = (bool) ($api['has_read_token'] ?? false);
+        $hasMigration = (bool) ($api['has_migration_token'] ?? false);
+        $fetchedAt = trim((string) ($api['seo_plugin_fetched_at'] ?? ''));
+
+        if (! $hasRead || ! $hasMigration) {
+            return [
+                'status' => 'disconnected',
+                'label' => __('seo-content-ai::filament.dashboard.bridge_disconnected'),
+                'color' => 'danger',
+                'detail' => __('seo-content-ai::filament.dashboard.bridge_missing_tokens'),
+            ];
+        }
+
+        if ($fetchedAt !== '') {
+            return [
+                'status' => 'connected',
+                'label' => __('seo-content-ai::filament.dashboard.bridge_connected'),
+                'color' => 'success',
+                'detail' => __('seo-content-ai::filament.dashboard.bridge_last_check', ['time' => $fetchedAt]),
+            ];
+        }
+
+        if ($this->isSiteSynced((int) $site->getKey())) {
+            return [
+                'status' => 'connected',
+                'label' => __('seo-content-ai::filament.dashboard.bridge_connected'),
+                'color' => 'success',
+                'detail' => __('seo-content-ai::filament.dashboard.bridge_synced_content'),
+            ];
+        }
+
+        return [
+            'status' => 'warning',
+            'label' => __('seo-content-ai::filament.dashboard.bridge_pending'),
+            'color' => 'warning',
+            'detail' => __('seo-content-ai::filament.dashboard.bridge_tokens_only'),
+        ];
+    }
 }

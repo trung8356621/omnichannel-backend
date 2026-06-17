@@ -4,17 +4,15 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
-use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWatermarkOverlayStorage;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
-use Filament\Pages\Page;
 use Illuminate\Database\Eloquent\Collection;
 use Livewire\Attributes\Url;
 
-class WatermarkEditor extends Page
+class WatermarkEditor extends SeoPanelPage
 {
     protected static ?string $navigationIcon = 'heroicon-o-paint-brush';
 
@@ -74,12 +72,12 @@ class WatermarkEditor extends Page
     public function getInitialDesignConfig(): array
     {
         if ($this->siteId === null) {
-            return (new SeoWatermarkSetting())->defaultDesignConfig();
+            return (new SeoWatermarkSetting)->defaultDesignConfig();
         }
 
         $setting = SeoWatermarkSetting::query()->where('site_id', $this->siteId)->first();
         if ($setting === null) {
-            return (new SeoWatermarkSetting())->defaultDesignConfig();
+            return (new SeoWatermarkSetting)->defaultDesignConfig();
         }
 
         $design = is_array($setting->design_config) && $setting->design_config !== []

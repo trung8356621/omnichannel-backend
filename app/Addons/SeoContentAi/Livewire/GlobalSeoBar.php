@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Livewire;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 use Livewire\Component;
@@ -35,6 +37,7 @@ class GlobalSeoBar extends Component
 
         session(['seo_simulated_role' => $this->simulatedRole]);
         $this->syncGlobalContentProjectSelection();
+        $this->bootstrapDatabaseForCurrentSite();
     }
 
     public function updatedGlobalSiteId($value): void
@@ -53,8 +56,11 @@ class GlobalSeoBar extends Component
 
         $this->globalSiteId = $siteId;
         SeoAccessControl::setGlobalSiteId($siteId);
+        $this->bootstrapDatabaseForSite($siteId);
         $this->syncGlobalContentProjectSelection();
         session()->save();
+
+        $this->dispatch('seoGlobalSiteChanged', siteId: $siteId);
 
         $this->redirect($this->resolveReturnUrl(), navigate: false);
     }
@@ -178,7 +184,7 @@ class GlobalSeoBar extends Component
 
     private function resolveReturnUrl(): string
     {
-        $fallback = url('/seo');
+        $fallback = SeoConnectionContext::panelUrl();
 
         $referer = (string) request()->headers->get('referer', '');
         if ($referer === '') {
@@ -191,5 +197,35 @@ class GlobalSeoBar extends Component
         }
 
         return $referer;
+    }
+
+    private function bootstrapDatabaseForCurrentSite(): void
+    {
+        $siteId = $this->globalSiteId ?? SeoAccessControl::globalSiteId();
+        $this->bootstrapDatabaseForSite($siteId);
+    }
+
+    private function bootstrapDatabaseForSite(?int $siteId): void
+    {
+        $service = app(SeoDatabaseConnectionService::class);
+        $hash = SeoConnectionContext::hash();
+
+        if ($hash !== null) {
+            try {
+                $service->bootstrapByHash($hash);
+
+                return;
+            } catch (\RuntimeException) {
+                // fallback below
+            }
+        }
+
+        if ($siteId !== null && $siteId > 0) {
+            $service->bootstrapBySiteId($siteId);
+
+            return;
+        }
+
+        $service->bootstrapLegacySharedConnection();
     }
 }

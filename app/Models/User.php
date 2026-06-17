@@ -53,4 +53,19 @@ class User extends Authenticatable
     {
         return $this->hasMany(User::class, 'parent_id');
     }
+
+    public function sites()
+    {
+        return $this->hasMany(Site::class);
+    }
+
+    public function seoConnections()
+    {
+        return $this->belongsToMany(
+            SeoDatabaseConnection::class,
+            'seo_connection_users',
+            'user_id',
+            'connection_id',
+        )->withTimestamps();
+    }
 }

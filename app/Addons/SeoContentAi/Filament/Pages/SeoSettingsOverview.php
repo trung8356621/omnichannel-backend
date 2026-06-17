@@ -56,6 +56,16 @@ class SeoSettingsOverview extends Page implements HasForms
         $this->teamChatForm->fill($this->teamChatSettingsData);
     }
 
+    /**
+     * @return array<int, string>
+     */
+    protected function getForms(): array
+    {
+        return [
+            'teamChatForm',
+        ];
+    }
+
     public function teamChatForm(Form $form): Form
     {
         return $form
@@ -125,7 +135,7 @@ class SeoSettingsOverview extends Page implements HasForms
                     'ok' => $result['ok'],
                     'failed' => $result['failed'],
                 ])
-                . ($result['messages'] !== [] ? "\n" . implode("\n", $result['messages']) : ''),
+                .($result['messages'] !== [] ? "\n".implode("\n", $result['messages']) : ''),
             );
 
         $result['failed'] === 0 ? $notification->success() : $notification->warning();

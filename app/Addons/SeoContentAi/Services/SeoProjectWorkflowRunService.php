@@ -17,7 +17,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 final class SeoProjectWorkflowRunService
 {
-    public const TEST_RUN_LIMIT = 3;
+    public const TEST_RUN_LIMIT = 1;
 
     public function __construct(
         private readonly TaskTestInputResolver $inputResolver,

@@ -4,28 +4,30 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Providers;
 
-use App\Addons\RegistersAddonDatabase;
-use App\Addons\SeoContentAi\Filament\Widgets\WordPressPluginWidget;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
-use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
-use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
+use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
+use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
+use Filament\Facades\Filament;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
-use Filament\Pages;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -45,8 +47,6 @@ use Livewire\Livewire;
 
 class SeoPanelProvider extends PanelProvider
 {
-    use RegistersAddonDatabase;
-
     public function register(): void
     {
         parent::register();
@@ -63,7 +63,27 @@ class SeoPanelProvider extends PanelProvider
 
         $this->loadViewsFrom($addonRoot.'/resources/views', 'seo-content-ai');
         $this->loadTranslationsFrom($addonRoot.'/lang', 'seo-content-ai');
-        $this->registerAddonDatabase($addonRoot, 'omi_seo_ai', $addonRoot.'/database/migrations');
+
+        Route::pattern('connection_hash', '[a-zA-Z0-9]{32,64}');
+
+        Route::middleware(['web'])
+            ->get('/seo', SeoPanelRedirectController::class)
+            ->name('seo.panel.redirect');
+
+        Filament::serving(function (): void {
+            if (filament()->getCurrentPanel()?->getId() !== 'seo') {
+                return;
+            }
+
+            $routeHash = request()->route('connection_hash');
+            if (is_string($routeHash) && SeoConnectionContext::isValidHashFormat($routeHash)) {
+                SeoConnectionContext::applyUrlDefaults($routeHash);
+
+                return;
+            }
+
+            SeoConnectionContext::applyUrlDefaults();
+        });
 
         FilamentView::registerRenderHook(
             'panels::global-search.after',
@@ -123,6 +143,7 @@ class SeoPanelProvider extends PanelProvider
                 return new HtmlString(
                     '<script>'
                     .'window.__SEO_I18N_LOCALE__ = '.json_encode(app()->getLocale()).';'
+                    .'window.__SEO_CONNECTION_HASH__ = '.json_encode(SeoConnectionContext::hash()).';'
                     .'document.documentElement.setAttribute("lang", '.json_encode(str_replace('_', '-', app()->getLocale())).');'
                     .'</script>'
                 );
@@ -146,6 +167,7 @@ class SeoPanelProvider extends PanelProvider
             SubstituteBindings::class,
             Authenticate::class,
             CheckMainRole::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('api/seo/media')
             ->group(function (): void {
@@ -195,6 +217,7 @@ class SeoPanelProvider extends PanelProvider
             SubstituteBindings::class,
             Authenticate::class,
             CheckMainRole::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('api/seo/articles')
             ->group(function (): void {
@@ -238,6 +261,7 @@ class SeoPanelProvider extends PanelProvider
             SubstituteBindings::class,
             Authenticate::class,
             CheckMainRole::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('api/seo/watermark')
             ->group(function (): void {
@@ -263,6 +287,7 @@ class SeoPanelProvider extends PanelProvider
             VerifyCsrfToken::class,
             SubstituteBindings::class,
             Authenticate::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('api/seo/team')
             ->group(function (): void {
@@ -284,6 +309,7 @@ class SeoPanelProvider extends PanelProvider
             SubstituteBindings::class,
             Authenticate::class,
             CheckMainRole::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('api/ai')
             ->group(function (): void {
@@ -303,6 +329,7 @@ class SeoPanelProvider extends PanelProvider
             SubstituteBindings::class,
             Authenticate::class,
             CheckMainRole::class,
+            SetDynamicSeoDatabase::class,
         ])
             ->prefix('seo')
             ->group(function (): void {
@@ -330,7 +357,7 @@ class SeoPanelProvider extends PanelProvider
     {
         return $panel
             ->id('seo')
-            ->path('seo')
+            ->path('seo/{connection_hash}')
             ->login(\App\Addons\SeoContentAi\Filament\Pages\Auth\SeoLogin::class)
             ->databaseNotifications()
             ->databaseNotificationsPolling('30s')
@@ -346,22 +373,23 @@ class SeoPanelProvider extends PanelProvider
                 in: __DIR__.'/../Filament/Pages',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Pages'
             )
-            ->pages([
-                Pages\Dashboard::class,
-            ])
-            ->widgets([
-                WordPressPluginWidget::class,
-            ])
+            ->discoverWidgets(
+                in: __DIR__.'/../Filament/Widgets',
+                for: 'App\\Addons\\SeoContentAi\\Filament\\Widgets'
+            )
+            ->widgets([])
             ->middleware([
                 EncryptCookies::class,
                 AddQueuedCookiesToResponse::class,
                 StartSession::class,
                 AuthenticateSession::class,
                 ShareErrorsFromSession::class,
+                SetDynamicSeoDatabaseByHash::class,
                 VerifyCsrfToken::class,
                 SubstituteBindings::class,
                 DisableBladeIconComponents::class,
                 DispatchServingFilamentEvent::class,
+                SetDynamicSeoDatabase::class,
             ])
             ->authMiddleware([
                 Authenticate::class,

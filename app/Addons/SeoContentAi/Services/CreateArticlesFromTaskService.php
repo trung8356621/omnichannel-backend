@@ -131,10 +131,16 @@ final class CreateArticlesFromTaskService
      */
     public function runPublishWorkflowForContext(TaskTestContext $context, int $siteId): array
     {
-        $taskId = $this->settings->getPublishArticleTaskId();
+        $isContentRewrite = $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT;
+        $taskId = $isContentRewrite
+            ? ($this->settings->getRewriteArticleTaskId() ?? $this->settings->getPublishArticleTaskId())
+            : $this->settings->getPublishArticleTaskId();
+
         if ($taskId === null) {
             throw new \InvalidArgumentException(
-                'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Tùy chỉnh để chọn task.',
+                $isContentRewrite
+                    ? 'Chưa cấu hình quy trình Viết lại bài. Vào SEO → Cài đặt → Quy trình để chọn task.'
+                    : 'Chưa cấu hình quy trình Đăng bài viết. Vào SEO → Tùy chỉnh để chọn task.',
             );
         }
 
@@ -151,9 +157,13 @@ final class CreateArticlesFromTaskService
         $this->assertSiteAccessible($resolvedSiteId);
         $this->syncDomainLinkListKeywords($resolvedSiteId);
 
-        $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
-        if ($keyword === '') {
-            $keyword = trim((string) ($context->variables['post_title'] ?? ''));
+        if ($isContentRewrite) {
+            $keyword = trim((string) ($context->variables['input'] ?? ''));
+        } else {
+            $keyword = trim((string) ($context->variables['focus_keyword'] ?? ''));
+            if ($keyword === '') {
+                $keyword = trim((string) ($context->variables['post_title'] ?? ''));
+            }
         }
 
         if ($keyword === '') {
@@ -161,7 +171,9 @@ final class CreateArticlesFromTaskService
                 'success' => false,
                 'article_id' => null,
                 'steps' => [],
-                'message' => 'Thiếu từ khóa / tiêu đề.',
+                'message' => $isContentRewrite
+                    ? 'Thiếu nội dung đầu vào (Markdown).'
+                    : 'Thiếu từ khóa / tiêu đề.',
             ];
         }
 

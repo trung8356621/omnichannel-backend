@@ -1,10 +1,14 @@
 <?php
+
+declare(strict_types=1);
+
 namespace App\Filament\Resources;
 
+use App\Addons\SeoContentAi\Support\SeoSiteServiceDatabaseConfigurator;
 use App\Filament\Resources\SiteServiceResource\Pages;
-use App\Models\SiteService;
 use App\Models\Service;
 use App\Models\Site;
+use App\Models\SiteService;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -43,7 +47,7 @@ class SiteServiceResource extends Resource
                         // Chọn Site (chỉ hiện site của user hiện tại)
                         Forms\Components\Select::make('site_id')
                             ->label(__('Select Site'))
-                            ->options(fn() => Site::where('user_id', auth()->id())->pluck('domain', 'id'))
+                            ->options(fn () => Site::where('user_id', auth()->id())->pluck('domain', 'id'))
                             ->required()
                             ->searchable()
                             ->preload(),
@@ -53,19 +57,21 @@ class SiteServiceResource extends Resource
                          */
                         Forms\Components\Select::make('service_id')
                             ->label(__('Select Service'))
-                            ->options(fn() => Service::where('is_active', true)->pluck('name', 'id'))
+                            ->options(fn () => Service::where('is_active', true)->pluck('name', 'id'))
                             ->required()
                             ->live() // Kích hoạt tương tác thời gian thực
                             ->afterStateUpdated(function ($state, Forms\Set $set) {
-                                if (!$state) {
+                                if (! $state) {
                                     $set('settings', []);
+
                                     return;
                                 }
 
                                 // 1. Tìm thông tin Service được chọn
                                 $service = Service::find($state);
-                                if (!$service)
+                                if (! $service) {
                                     return;
+                                }
 
                                 // 2. Xác định Class Settings của Addon dựa trên namespace
                                 // Ví dụ: App\Addons\SeoContentAi\Settings
@@ -78,7 +84,7 @@ class SiteServiceResource extends Resource
 
                                 // 3. Nếu class tồn tại, gọi getDefaults() và đổ vào trường settings
                                 if (class_exists($settingsClass) && method_exists($settingsClass, 'getDefaults')) {
-                                    $defaults = (new $settingsClass())->getDefaults();
+                                    $defaults = (new $settingsClass)->getDefaults();
                                     $set('settings', $defaults);
                                 } else {
                                     $set('settings', []);
@@ -96,19 +102,18 @@ class SiteServiceResource extends Resource
                             ->required(),
                     ])->columns(2),
 
-                // Phần cấu hình JSON (Settings)
+                ...SeoSiteServiceDatabaseConfigurator::formSchema(),
+
                 Forms\Components\Section::make(__('Service Settings'))
                     ->description(__('Configure specific parameters for this service instance.'))
                     ->schema([
-                        // Sử dụng KeyValue hoặc Repeater tùy vào loại service
-                        // Ở đây dùng KeyValue cho linh hoạt nhất với JSON
                         Forms\Components\KeyValue::make('settings')
                             ->label(__('Custom Configuration'))
                             ->keyLabel(__('Parameter Name'))
                             ->valueLabel(__('Value'))
                             ->addActionLabel(__('Add Parameter'))
-                            ->helperText(__('Example: api_key, webhook_url, target_language, etc.')),
-                    ])
+                            ->helperText(__('Example: api_key, webhook_url, target_language, db_config_type, etc.')),
+                    ]),
             ]);
     }
 
@@ -122,7 +127,6 @@ class SiteServiceResource extends Resource
                 Tables\Actions\DeleteAction::make(),
             ];
         }
-
 
         return $table
             ->columns([
@@ -140,13 +144,13 @@ class SiteServiceResource extends Resource
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('Status'))
                     ->badge()
-                    ->color(fn(string $state): string => match ($state) {
+                    ->color(fn (string $state): string => match ($state) {
                         'active' => 'success',
                         'inactive' => 'danger',
                         'maintenance' => 'warning',
                         default => 'gray',
                     })
-                    ->formatStateUsing(fn(string $state): string => __($state)),
+                    ->formatStateUsing(fn (string $state): string => __($state)),
 
                 Tables\Columns\TextColumn::make('updated_at')
                     ->label(__('Last Updated'))
@@ -156,7 +160,7 @@ class SiteServiceResource extends Resource
             ->filters([
                 Tables\Filters\SelectFilter::make('site_id')
                     ->label(__('Filter by Site'))
-                    ->options(fn() => Site::where('user_id', auth()->id())->pluck('domain', 'id')),
+                    ->options(fn () => Site::where('user_id', auth()->id())->pluck('domain', 'id')),
 
                 Tables\Filters\SelectFilter::make('service_id')
                     ->label(__('Filter by Service'))
@@ -170,7 +174,7 @@ class SiteServiceResource extends Resource
                 //     ->color('success')
                 //     ->url(fn(SiteService $record): string => "/admin/{$record->service->slug}/dashboard?site_id={$record->site_id}")
                 //     ->visible(fn(SiteService $record) => $record->status === 'active'),
-                ...$actions
+                ...$actions,
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([

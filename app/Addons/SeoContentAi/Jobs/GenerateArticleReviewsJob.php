@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Jobs;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Models\User;
 use Filament\Notifications\Notification;
 use Illuminate\Bus\Queueable;
@@ -32,11 +33,20 @@ final class GenerateArticleReviewsJob implements ShouldQueue
         public int $userId,
     ) {}
 
-    public function handle(ArticleQuickPostReviewService $reviewService): void
-    {
+    public function handle(
+        ArticleQuickPostReviewService $reviewService,
+        SeoDatabaseConnectionService $databaseConnection,
+    ): void {
+        $databaseConnection->bootstrapLegacySharedConnection();
+
         $article = SeoArticle::query()->find($this->articleId);
+        if ($article instanceof SeoArticle && (int) ($article->site_id ?? 0) > 0) {
+            $databaseConnection->bootstrapSeoDatabaseConnection((int) $article->site_id);
+            $article = SeoArticle::query()->find($this->articleId);
+        }
+
         if (! $article instanceof SeoArticle) {
-            $this->notifyUser(false, 'Không tìm thấy bài viết #' . $this->articleId . '.');
+            $this->notifyUser(false, 'Không tìm thấy bài viết #'.$this->articleId.'.');
 
             return;
         }
@@ -87,6 +97,6 @@ final class GenerateArticleReviewsJob implements ShouldQueue
 
     private function readyCacheKey(): string
     {
-        return 'seo_article_reviews_ready:' . $this->articleId . ':' . $this->userId;
+        return 'seo_article_reviews_ready:'.$this->articleId.':'.$this->userId;
     }
 }

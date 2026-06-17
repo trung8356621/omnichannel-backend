@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\Site;
 
 final class SeoMediaImageEditorResolverService
@@ -70,7 +71,10 @@ final class SeoMediaImageEditorResolverService
             $params['tab'] = $tab;
         }
 
-        return route('filament.seo.pages.media-image-editor', $params);
+        return route(
+            'filament.seo.pages.media-image-editor',
+            SeoConnectionContext::mergePanelRouteParameters($params),
+        );
     }
 
     private function resolveLocalMediaIdFromUrl(int $siteId, string $url): int

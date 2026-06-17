@@ -5,19 +5,17 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
-use App\Addons\SeoContentAi\Services\AiModelRouterService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\ApiConnection;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
 
-class AiConnectionResource extends Resource
+class AiConnectionResource extends SeoPanelResource
 {
     protected static ?string $model = ApiConnection::class;
 
@@ -70,17 +68,17 @@ class AiConnectionResource extends Resource
                     ->helperText(fn (Get $get): ?HtmlString => match ($get('provider')) {
                         'gemini' => new HtmlString(
                             '<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" '
-                            . 'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
-                            . 'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            . e('👉 How to get Gemini API key from Google AI Studio')
-                            . '</a>'
+                            .'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
+                            .'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
+                            .e('👉 How to get Gemini API key from Google AI Studio')
+                            .'</a>'
                         ),
                         'claude' => new HtmlString(
                             '<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" '
-                            . 'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
-                            . 'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            . e('👉 How to get Claude API key from Anthropic Console')
-                            . '</a>'
+                            .'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
+                            .'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
+                            .e('👉 How to get Claude API key from Anthropic Console')
+                            .'</a>'
                         ),
                         default => null,
                     }),

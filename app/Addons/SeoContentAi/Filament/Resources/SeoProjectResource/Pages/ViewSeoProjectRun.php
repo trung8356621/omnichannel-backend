@@ -123,6 +123,7 @@ class ViewSeoProjectRun extends Page
     public function getQueueBootstrapData(): array
     {
         return [
+            'livewireId' => $this->getId(),
             'runStatus' => (string) ($this->projectRun?->status ?? ''),
             'taskIds' => $this->getQueueTaskIds(),
             'autorun' => request()->boolean('autorun'),

@@ -55,9 +55,14 @@ final class ArticleCtaPlaceholderService
             return [];
         }
 
+        $siteModel = $site instanceof Site ? $site : Site::query()->find((int) $site);
+        if ($siteModel === null) {
+            return [];
+        }
+
         $values = [];
 
-        foreach ($this->promptContext->getForSite($site)['cta'] ?? [] as $row) {
+        foreach ($this->promptContext->getForSite($siteModel)['cta'] ?? [] as $row) {
             if (! is_array($row)) {
                 continue;
             }
@@ -72,6 +77,20 @@ final class ArticleCtaPlaceholderService
             $values[$type] = $value;
         }
 
+        $values['website'] = trim((string) $siteModel->domain);
+
+        $phones = $this->collectSlotValues($values, SiteDomainPromptContextService::PHONE_SLOT_TYPES, 'phone');
+        if ($phones !== []) {
+            $values['_phone_pool'] = $phones;
+            $values['phone'] = $phones[0];
+        }
+
+        $emails = $this->collectSlotValues($values, SiteDomainPromptContextService::EMAIL_SLOT_TYPES, 'email');
+        if ($emails !== []) {
+            $values['_email_pool'] = $emails;
+            $values['email'] = $emails[0];
+        }
+
         if (! isset($values['hotline']) && isset($values['phone'])) {
             $values['hotline'] = $values['phone'];
         }
@@ -81,6 +100,56 @@ final class ArticleCtaPlaceholderService
         }
 
         return $values;
+    }
+
+    /**
+     * @param  array<string, string>  $values
+     * @param  list<string>  $slots
+     * @return list<string>
+     */
+    private function collectSlotValues(array $values, array $slots, string $legacyType): array
+    {
+        $collected = [];
+
+        foreach ($slots as $slot) {
+            $value = trim((string) ($values[$slot] ?? ''));
+            if ($value !== '') {
+                $collected[] = $value;
+            }
+        }
+
+        $legacyValue = trim((string) ($values[$legacyType] ?? ''));
+        if ($legacyValue !== '' && ! in_array($legacyValue, $collected, true)) {
+            $collected[] = $legacyValue;
+        }
+
+        return array_values(array_unique($collected));
+    }
+
+    /**
+     * @param  array<string, string>  $values
+     * @return list<string>
+     */
+    private function collectPhoneValues(array $values): array
+    {
+        return $this->collectSlotValues(
+            $values,
+            SiteDomainPromptContextService::PHONE_SLOT_TYPES,
+            'phone',
+        );
+    }
+
+    /**
+     * @param  array<string, string>  $values
+     * @return list<string>
+     */
+    private function collectEmailValues(array $values): array
+    {
+        return $this->collectSlotValues(
+            $values,
+            SiteDomainPromptContextService::EMAIL_SLOT_TYPES,
+            'email',
+        );
     }
 
     /**
@@ -102,7 +171,7 @@ final class ArticleCtaPlaceholderService
                     continue;
                 }
 
-                if (preg_match('/\[' . preg_quote($type, '/') . '\]/iu', $content) === 1) {
+                if (preg_match('/\['.preg_quote($type, '/').'\]/iu', $content) === 1) {
                     $found[$type] = true;
                 }
             }
@@ -141,9 +210,34 @@ final class ArticleCtaPlaceholderService
         $added = [];
         if ($usedTypes !== []) {
             $values = $this->resolveValuesForSite($site);
+            unset($values['_phone_pool'], $values['_email_pool']);
 
             $missing = [];
             foreach ($usedTypes as $type) {
+                if ($type === 'website') {
+                    continue;
+                }
+
+                if ($type === 'phone') {
+                    if ($this->collectPhoneValues($values) === []) {
+                        $missing[] = 'phone';
+                    }
+
+                    continue;
+                }
+
+                if ($type === 'email') {
+                    if ($this->collectEmailValues($values) === []) {
+                        $missing[] = 'email';
+                    }
+
+                    continue;
+                }
+
+                if (SiteDomainPromptContextService::isGlobalOnlyCtaType($type)) {
+                    continue;
+                }
+
                 if (trim((string) ($values[$type] ?? '')) === '') {
                     $missing[] = $type;
                 }
@@ -175,13 +269,30 @@ final class ArticleCtaPlaceholderService
 
         $html = $this->stripBlankPlaceholderMarkup($html);
         $values = $this->resolveValuesForSite($site);
+        unset($values['_phone_pool'], $values['_email_pool']);
 
         foreach (array_keys(self::PLACEHOLDER_TYPES) as $type) {
+            if ($type === 'website') {
+                continue;
+            }
+
+            if ($type === 'phone') {
+                if ($this->collectPhoneValues($values) !== []) {
+                    continue;
+                }
+            }
+
+            if ($type === 'email') {
+                if ($this->collectEmailValues($values) !== []) {
+                    continue;
+                }
+            }
+
             if (trim((string) ($values[$type] ?? '')) !== '') {
                 continue;
             }
 
-            $pattern = '/\[' . preg_quote($type, '/') . '\]/iu';
+            $pattern = '/\['.preg_quote($type, '/').'\]/iu';
             $replacement = sprintf(
                 '<span class="%s" data-cta-type="%s">[%s]</span>',
                 self::BLANK_PLACEHOLDER_CLASS,
@@ -205,8 +316,8 @@ final class ArticleCtaPlaceholderService
         }
 
         return (string) preg_replace(
-            '/<span\s+class="' . preg_quote(self::BLANK_PLACEHOLDER_CLASS, '/')
-            . '"[^>]*data-cta-type="([a-z_]+)"[^>]*>\[\1\]<\/span>/iu',
+            '/<span\s+class="'.preg_quote(self::BLANK_PLACEHOLDER_CLASS, '/')
+            .'"[^>]*data-cta-type="([a-z_]+)"[^>]*>\[\1\]<\/span>/iu',
             '[$1]',
             $html,
         );
@@ -246,15 +357,70 @@ final class ArticleCtaPlaceholderService
         }
 
         $values = $this->resolveValuesForSite($site);
+        $phonePool = $values['_phone_pool'] ?? [];
+        $emailPool = $values['_email_pool'] ?? [];
+        unset($values['_phone_pool'], $values['_email_pool']);
+
+        if ($phonePool !== []) {
+            $html = (string) preg_replace_callback(
+                '/\[phone\]/iu',
+                function () use ($phonePool): string {
+                    $picked = $phonePool[array_rand($phonePool)];
+
+                    return $this->buildReplacement('phone', $picked);
+                },
+                $html,
+            );
+        }
+
+        if ($emailPool !== []) {
+            $html = (string) preg_replace_callback(
+                '/\[email\]/iu',
+                function () use ($emailPool): string {
+                    $picked = $emailPool[array_rand($emailPool)];
+
+                    return $this->buildReplacement('email', $picked);
+                },
+                $html,
+            );
+        }
 
         foreach (array_keys(self::PLACEHOLDER_TYPES) as $type) {
+            if (in_array($type, ['phone', 'email'], true)) {
+                continue;
+            }
+
             $value = trim((string) ($values[$type] ?? ''));
             if ($value === '') {
                 continue;
             }
 
-            $pattern = '/\[' . preg_quote($type, '/') . '\]/iu';
+            $pattern = '/\['.preg_quote($type, '/').'\]/iu';
             $replacement = $this->buildReplacement($type, $value);
+
+            $html = (string) preg_replace($pattern, $replacement, $html);
+        }
+
+        foreach (SiteDomainPromptContextService::PHONE_SLOT_TYPES as $slot) {
+            $value = trim((string) ($values[$slot] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+
+            $pattern = '/\['.preg_quote($slot, '/').'\]/iu';
+            $replacement = $this->buildReplacement('phone', $value);
+
+            $html = (string) preg_replace($pattern, $replacement, $html);
+        }
+
+        foreach (SiteDomainPromptContextService::EMAIL_SLOT_TYPES as $slot) {
+            $value = trim((string) ($values[$slot] ?? ''));
+            if ($value === '') {
+                continue;
+            }
+
+            $pattern = '/\['.preg_quote($slot, '/').'\]/iu';
+            $replacement = $this->buildReplacement('email', $value);
 
             $html = (string) preg_replace($pattern, $replacement, $html);
         }

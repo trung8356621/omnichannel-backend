@@ -81,6 +81,8 @@ final class SeoProjectTaskSyncService
                     'loai_san_pham' => $task['loai_san_pham'] ?? null,
                     'source_content' => $task['source_content'],
                     'description' => $task['description'] ?? null,
+                    'rewrite_mode' => $task['rewrite_mode'] ?? $previous?->rewrite_mode ?? SeoProjectTask::REWRITE_MODE_KEYWORD,
+                    'rewrite_notes' => $task['rewrite_notes'] ?? $previous?->rewrite_notes,
                     'target_date' => $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
                     'status' => $previous?->status ?? SeoProjectTask::STATUS_PENDING,
                 ]);
@@ -150,6 +152,16 @@ final class SeoProjectTaskSyncService
                 }
             }
 
+            if ($type === SeoProjectTask::TYPE_REWRITE) {
+                $rewriteMode = SeoProjectTask::normalizeRewriteMode($row['rewrite_mode'] ?? null);
+                $item['rewrite_mode'] = $rewriteMode;
+
+                $rewriteNotes = trim((string) ($row['rewrite_notes'] ?? ''));
+                $item['rewrite_notes'] = $rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT && $rewriteNotes !== ''
+                    ? $rewriteNotes
+                    : null;
+            }
+
             $out[] = $item;
         }
 
@@ -179,6 +191,12 @@ final class SeoProjectTaskSyncService
                         : null,
                 'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
                     ? SeoProjectTask::normalizePostType($task->post_type)
+                    : null,
+                'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE
+                    ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
+                    : null,
+                'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
+                    ? $task->rewrite_notes
                     : null,
             ])
             ->all();

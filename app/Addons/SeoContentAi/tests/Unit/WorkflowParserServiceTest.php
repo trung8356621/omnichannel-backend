@@ -699,4 +699,36 @@ HTML;
         $this->assertStringContainsString('href="/ykk"', $stripped);
         $this->assertStringContainsString('khóa kéo YKK', html_entity_decode($stripped, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
     }
+
+    public function test_convert_html_fragment_to_markdown_strips_wordpress_shortcodes(): void
+    {
+        $parser = $this->parser();
+
+        $html = <<<'HTML'
+<h2>Tiêu đề</h2>
+<p>Đoạn mở đầu [gallery ids="1,2,3"] và [omi_faq].</p>
+<p>[caption id="99" align="alignnone" width="600"]<img src="/a.jpg" alt=""/>Chú thích[/caption]</p>
+<p>[vc_row][vc_column width="1/2"]Cột trái[/vc_column][vc_column width="1/2"]Cột phải[/vc_column][/vc_row]</p>
+HTML;
+
+        $markdown = $parser->convertHtmlFragmentToMarkdown($html);
+
+        $this->assertStringContainsString('## Tiêu đề', $markdown);
+        $this->assertStringContainsString('Đoạn mở đầu', $markdown);
+        $this->assertStringContainsString('Cột trái', $markdown);
+        $this->assertStringContainsString('Cột phải', $markdown);
+        $this->assertStringNotContainsString('[gallery', $markdown);
+        $this->assertStringNotContainsString('[omi_faq]', $markdown);
+        $this->assertStringNotContainsString('[caption', $markdown);
+        $this->assertStringNotContainsString('[vc_row]', $markdown);
+    }
+
+    public function test_strip_wordpress_shortcodes_preserves_escaped_brackets(): void
+    {
+        $parser = $this->parser();
+
+        $result = $parser->stripWordPressShortcodes('Literal [[gallery]] here.');
+
+        $this->assertSame('Literal [gallery] here.', $result);
+    }
 }

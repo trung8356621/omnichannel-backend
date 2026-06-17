@@ -131,9 +131,10 @@
                         {{ $this->teamChatForm }}
 
                         <div class="mt-4">
-                            <x-filament::button type="submit">
-                                {{ __('seo-content-ai::filament.settings_overview.team_chat_save') }}
-                            </x-filament::button>
+                            <x-seo-content-ai::form-save-button
+                                target="saveTeamChatSettings"
+                                :label="__('seo-content-ai::filament.settings_overview.team_chat_save')"
+                            />
                         </div>
                     </form>
                 </section>

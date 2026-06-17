@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\DomainSyncManifestComparator;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
@@ -15,9 +16,12 @@ use Throwable;
 
 class SyncDomainContentService
 {
+    private const INCREMENTAL_FETCH_CHUNK = 40;
+
     public function __construct(
         private readonly WordPressArticleTimestampService $timestampService,
         private readonly ArticleTocExtractionService $tocExtraction,
+        private readonly DomainSyncManifestComparator $manifestComparator,
     ) {}
 
     /**
@@ -123,6 +127,492 @@ class SyncDomainContentService
                 'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Lập kế hoạch đồng bộ bổ sung (manifest + so sánh local).
+     *
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     refs?: array<int, array<string, mixed>>,
+     *     skipped?: int,
+     *     new_count?: int,
+     *     update_count?: int,
+     *     total?: int
+     * }
+     */
+    public function prepareIncrementalSync(Site $site): array
+    {
+        $validation = $this->validateWordPressSite($site);
+        if ($validation !== null) {
+            return $validation;
+        }
+
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        $manifestUrl = $this->buildSyncManifestUrl($site);
+
+        try {
+            $siteInfoResult = app(WordPressSiteInfoService::class)->fetchAndStore($site);
+            if (! ($siteInfoResult['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => 'Không lấy được thông tin plugin SEO từ WordPress: '
+                        .(string) ($siteInfoResult['message'] ?? 'Lỗi không xác định.'),
+                ];
+            }
+
+            $manifestResponse = Http::timeout(120)
+                ->acceptJson()
+                ->withToken($readToken)
+                ->get($manifestUrl);
+
+            if ($manifestResponse->status() === 404) {
+                return [
+                    'success' => false,
+                    'message' => 'Plugin WordPress chưa hỗ trợ đồng bộ bổ sung (cần TVH SEO AI Bridge ≥ 1.0.41). '
+                        .'Hãy cập nhật plugin hoặc dùng «Làm sạch & Đồng bộ lại».',
+                ];
+            }
+
+            if (! $manifestResponse->successful()) {
+                $message = (string) ($manifestResponse->json('message') ?? $manifestResponse->body());
+
+                return [
+                    'success' => false,
+                    'message' => 'WordPress trả lỗi HTTP '.$manifestResponse->status().': '.mb_substr($message, 0, 300),
+                ];
+            }
+
+            $manifestPayload = $manifestResponse->json();
+            if (! is_array($manifestPayload) || ! ($manifestPayload['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => 'Phản hồi manifest WordPress không hợp lệ.',
+                ];
+            }
+
+            $entries = is_array($manifestPayload['entries'] ?? null) ? $manifestPayload['entries'] : [];
+            $localArticles = SeoArticle::query()
+                ->where('site_id', $site->id)
+                ->where('wp_post_id', '>', 0)
+                ->get(['wp_post_id', 'type', 'updated_at']);
+
+            $plan = $this->manifestComparator->resolveFetchRefs($entries, $localArticles);
+            $refs = $plan['refs'];
+
+            Log::info('SeoContentAi incremental sync plan', [
+                'site_id' => $site->id,
+                'manifest_entries' => count($entries),
+                'to_fetch' => count($refs),
+                'new_count' => $plan['new_count'],
+                'update_count' => $plan['update_count'],
+                'skipped' => $plan['skipped'],
+            ]);
+
+            if ($refs === []) {
+                return [
+                    'success' => true,
+                    'message' => 'Không có thay đổi mới trên WordPress. Đã bỏ qua '.$plan['skipped'].' mục.',
+                    'refs' => [],
+                    'skipped' => $plan['skipped'],
+                    'new_count' => 0,
+                    'update_count' => 0,
+                    'total' => 0,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => sprintf(
+                    'Sẽ đồng bộ %d mục (%d mới, %d cập nhật, %d bỏ qua).',
+                    count($refs),
+                    $plan['new_count'],
+                    $plan['update_count'],
+                    $plan['skipped'],
+                ),
+                'refs' => $refs,
+                'skipped' => $plan['skipped'],
+                'new_count' => $plan['new_count'],
+                'update_count' => $plan['update_count'],
+                'total' => count($refs),
+            ];
+        } catch (Throwable $e) {
+            Log::error('SeoContentAi incremental sync prepare failed', [
+                'site_id' => $site->id,
+                'url' => $manifestUrl,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Xử lý một lô refs (10–20 bài) — gọi từ Livewire nhiều lần.
+     *
+     * @param  array<int, array<string, mixed>>  $chunkRefs
+     * @param  array{full_sync_items?: array<int, array<string, mixed>>|null}  $state
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     synced?: array<string, int>,
+     *     imported?: int,
+     *     state?: array{full_sync_items?: array<int, array<string, mixed>>|null}
+     * }
+     */
+    public function processIncrementalChunk(Site $site, array $chunkRefs, array $state = []): array
+    {
+        if ($chunkRefs === []) {
+            return [
+                'success' => true,
+                'message' => 'Không có mục trong lô này.',
+                'synced' => $this->emptySyncedCounts(),
+                'imported' => 0,
+                'state' => $state,
+            ];
+        }
+
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return [
+                'success' => false,
+                'message' => 'Thiếu SEO Read Token.',
+            ];
+        }
+
+        try {
+            $items = $this->fetchItemsByRefs($site, $readToken, $chunkRefs);
+
+            if ($items === null) {
+                $fullItems = $state['full_sync_items'] ?? null;
+                if (! is_array($fullItems)) {
+                    $fullItems = $this->fetchFullSyncItems($site, $readToken);
+                    if ($fullItems === null) {
+                        return [
+                            'success' => false,
+                            'message' => 'Không tải được nội dung từ WordPress.',
+                        ];
+                    }
+
+                    $state['full_sync_items'] = $fullItems;
+                }
+
+                $items = $this->filterItemsByRefs($fullItems, $chunkRefs);
+            }
+
+            if ($items === []) {
+                return [
+                    'success' => true,
+                    'message' => 'Lô hiện tại không có dữ liệu khớp trên WordPress.',
+                    'synced' => $this->emptySyncedCounts(),
+                    'imported' => 0,
+                    'state' => $state,
+                ];
+            }
+
+            $synced = $this->importItems($site, $items);
+
+            return [
+                'success' => true,
+                'message' => sprintf('Đã xử lý %d mục trong lô.', count($items)),
+                'synced' => $synced,
+                'imported' => count($items),
+                'state' => $state,
+            ];
+        } catch (Throwable $e) {
+            Log::error('SeoContentAi incremental sync chunk failed', [
+                'site_id' => $site->id,
+                'chunk_size' => count($chunkRefs),
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Lỗi khi xử lý lô đồng bộ: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    public function incrementalSyncChunkSize(): int
+    {
+        $size = (int) config('seo-content-ai.incremental_sync_chunk_size', 15);
+
+        return max(5, min(50, $size));
+    }
+
+    /**
+     * @param  array<string, int>  $base
+     * @param  array<string, int>  $add
+     * @return array<string, int>
+     */
+    public function mergeSyncedCounts(array $base, array $add): array
+    {
+        foreach ($add as $key => $count) {
+            $base[$key] = (int) ($base[$key] ?? 0) + (int) $count;
+        }
+
+        return $base;
+    }
+
+    /**
+     * @deprecated Dùng prepareIncrementalSync + IncrementalDomainSyncRunner qua queue job.
+     *
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     synced?: array<string, int>,
+     *     skipped?: int,
+     *     new_count?: int,
+     *     update_count?: int
+     * }
+     */
+    public function syncIncremental(Site $site): array
+    {
+        $prepared = $this->prepareIncrementalSync($site);
+        if (! ($prepared['success'] ?? false)) {
+            return $prepared;
+        }
+
+        $refs = is_array($prepared['refs'] ?? null) ? $prepared['refs'] : [];
+        if ($refs === []) {
+            return [
+                'success' => true,
+                'message' => (string) ($prepared['message'] ?? ''),
+                'synced' => $this->emptySyncedCounts(),
+                'skipped' => (int) ($prepared['skipped'] ?? 0),
+                'new_count' => (int) ($prepared['new_count'] ?? 0),
+                'update_count' => (int) ($prepared['update_count'] ?? 0),
+            ];
+        }
+
+        $accumulated = $this->emptySyncedCounts();
+        $state = [];
+
+        foreach (array_chunk($refs, $this->incrementalSyncChunkSize()) as $chunkRefs) {
+            $chunk = $this->processIncrementalChunk($site, $chunkRefs, $state);
+            if (! ($chunk['success'] ?? false)) {
+                return $chunk;
+            }
+
+            $state = is_array($chunk['state'] ?? null) ? $chunk['state'] : $state;
+            $accumulated = $this->mergeSyncedCounts(
+                $accumulated,
+                is_array($chunk['synced'] ?? null) ? $chunk['synced'] : [],
+            );
+        }
+
+        return [
+            'success' => true,
+            'message' => sprintf(
+                'Đồng bộ bổ sung xong: %d mục mới, %d cập nhật, %d bỏ qua.',
+                (int) ($prepared['new_count'] ?? 0),
+                (int) ($prepared['update_count'] ?? 0),
+                (int) ($prepared['skipped'] ?? 0),
+            ),
+            'synced' => $accumulated,
+            'skipped' => (int) ($prepared['skipped'] ?? 0),
+            'new_count' => (int) ($prepared['new_count'] ?? 0),
+            'update_count' => (int) ($prepared['update_count'] ?? 0),
+        ];
+    }
+
+    /**
+     * Xóa toàn bộ nội dung local của domain rồi đồng bộ full từ WordPress.
+     *
+     * @return array{success:bool,message:string,synced?:array<string,int>,deleted?:int}
+     */
+    public function resetAndFullSync(Site $site): array
+    {
+        $validation = $this->validateWordPressSite($site);
+        if ($validation !== null) {
+            return $validation;
+        }
+
+        $clearResult = app(ClearDomainArticlesService::class)->clear($site);
+        if (! ($clearResult['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($clearResult['message'] ?? 'Không dọn dẹp được dữ liệu local.'),
+            ];
+        }
+
+        $syncResult = $this->sync($site, ['is_test' => false, 'limit_per_type' => 0]);
+        if (! ($syncResult['success'] ?? false)) {
+            return $syncResult;
+        }
+
+        return [
+            'success' => true,
+            'message' => sprintf(
+                'Đã xóa %d bản ghi local và tải lại từ WordPress. %s',
+                (int) ($clearResult['deleted'] ?? 0),
+                (string) ($syncResult['message'] ?? ''),
+            ),
+            'synced' => is_array($syncResult['synced'] ?? null) ? $syncResult['synced'] : [],
+            'deleted' => (int) ($clearResult['deleted'] ?? 0),
+        ];
+    }
+
+    /**
+     * @return array{success:bool,message:string}|null
+     */
+    private function validateWordPressSite(Site $site): ?array
+    {
+        $site->loadMissing('metas');
+
+        $platform = (string) ($site->getMeta('seo_platform') ?? '');
+        if ($platform !== 'wordpress') {
+            return [
+                'success' => false,
+                'message' => 'Site chưa cấu hình nền tảng WordPress.',
+            ];
+        }
+
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return [
+                'success' => false,
+                'message' => 'Thiếu SEO Read Token. Hãy lưu token trong trang chỉnh sửa domain.',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $refs
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function fetchItemsByRefs(Site $site, string $readToken, array $refs): ?array
+    {
+        $itemsUrl = $this->buildSyncItemsUrl($site);
+        $items = [];
+
+        foreach (array_chunk($refs, self::INCREMENTAL_FETCH_CHUNK) as $chunk) {
+            $response = Http::timeout(120)
+                ->acceptJson()
+                ->withToken($readToken)
+                ->post($itemsUrl, ['refs' => $chunk]);
+
+            if ($response->status() === 404) {
+                return null;
+            }
+
+            if (! $response->successful()) {
+                Log::warning('SeoContentAi sync items chunk failed', [
+                    'site_id' => $site->id,
+                    'status' => $response->status(),
+                    'body' => mb_substr((string) $response->body(), 0, 300),
+                ]);
+
+                return null;
+            }
+
+            $payload = $response->json();
+            if (! is_array($payload) || ! ($payload['success'] ?? false)) {
+                return null;
+            }
+
+            $batch = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+            foreach ($batch as $item) {
+                if (is_array($item)) {
+                    $items[] = $item;
+                }
+            }
+        }
+
+        return $items;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>|null
+     */
+    private function fetchFullSyncItems(Site $site, string $readToken): ?array
+    {
+        $response = Http::timeout(300)
+            ->acceptJson()
+            ->withToken($readToken)
+            ->get($this->buildSyncUrl($site), [
+                'is_test' => 0,
+                'limit_per_type' => 0,
+            ]);
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $payload = $response->json();
+        if (! is_array($payload) || ! ($payload['success'] ?? false)) {
+            return null;
+        }
+
+        $items = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+
+        return array_values(array_filter($items, static fn (mixed $item): bool => is_array($item)));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @param  array<int, array<string, mixed>>  $refs
+     * @return array<int, array<string, mixed>>
+     */
+    private function filterItemsByRefs(array $items, array $refs): array
+    {
+        $wanted = [];
+        foreach ($refs as $ref) {
+            $type = strtolower(trim((string) ($ref['type'] ?? '')));
+            $wpId = (int) ($ref['wp_id'] ?? 0);
+            if ($type !== '' && $wpId > 0) {
+                $wanted[$type.'|'.$wpId] = true;
+            }
+        }
+
+        if ($wanted === []) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $items,
+            static function (mixed $item) use ($wanted): bool {
+                if (! is_array($item)) {
+                    return false;
+                }
+
+                $type = strtolower(trim((string) ($item['type'] ?? '')));
+                $wpId = (int) ($item['wp_id'] ?? 0);
+
+                return isset($wanted[$type.'|'.$wpId]);
+            },
+        ));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $refs
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchItemsViaFullSyncFilter(Site $site, string $readToken, array $refs): array
+    {
+        $allItems = $this->fetchFullSyncItems($site, $readToken);
+
+        return $allItems === null ? [] : $this->filterItemsByRefs($allItems, $refs);
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function emptySyncedCounts(): array
+    {
+        return [
+            'article' => 0,
+            'product' => 0,
+            'category' => 0,
+            'product_category' => 0,
+            'other' => 0,
+        ];
     }
 
     /**
@@ -288,6 +778,7 @@ class SyncDomainContentService
 
             $this->syncSeoMetaFromWordPress($article, $item);
             $this->syncFocusKeyword($site, $userId, $article, $item);
+            app(WordPressArticleSyncService::class)->applyMultilingualFromSyncPayload($article, $site, $item);
 
             $syncFlags->clearAll($article);
 
@@ -523,6 +1014,16 @@ class SyncDomainContentService
     private function buildSyncUrl(Site $site): string
     {
         return $this->buildSiteBaseUrl($site).'/wp-json/omi-seo-ai/v1/sync';
+    }
+
+    private function buildSyncManifestUrl(Site $site): string
+    {
+        return $this->buildSiteBaseUrl($site).'/wp-json/omi-seo-ai/v1/sync/manifest';
+    }
+
+    private function buildSyncItemsUrl(Site $site): string
+    {
+        return $this->buildSiteBaseUrl($site).'/wp-json/omi-seo-ai/v1/sync/items';
     }
 
     private function buildSiteBaseUrl(Site $site): string

@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource;
 use Filament\Actions;
-use Filament\Resources\Pages\EditRecord;
 
-class EditTask extends EditRecord
+class EditTask extends SeoEditRecord
 {
     protected static string $resource = TaskResource::class;
 

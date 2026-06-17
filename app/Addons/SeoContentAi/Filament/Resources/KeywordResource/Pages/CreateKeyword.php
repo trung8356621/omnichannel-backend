@@ -5,11 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use Filament\Resources\Pages\CreateRecord;
 
-class CreateKeyword extends CreateRecord
+class CreateKeyword extends SeoCreateRecord
 {
     protected static string $resource = KeywordResource::class;
 

@@ -133,8 +133,13 @@
         </div>
 
         <div class="seo-image-opt__actions">
-            <x-filament::button wire:click="save" wire:loading.attr="disabled">
-                Save settings
+            <x-filament::button
+                wire:click="save"
+                wire:loading.attr="disabled"
+                wire:target="save"
+            >
+                <span wire:loading.remove wire:target="save">Save settings</span>
+                <span wire:loading wire:target="save">{{ __('seo-content-ai::filament.common.saving') }}</span>
             </x-filament::button>
         </div>
     </div>

@@ -12,6 +12,8 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_PUBLISH_ARTICLE = 'publish_article_task_id';
 
+    public const KEY_REWRITE_ARTICLE = 'rewrite_article_task_id';
+
     public const KEY_POST_REVIEW = 'post_review_task_id';
 
     public const KEY_CREATE_IMAGE = 'create_image_prompt_id';
@@ -56,6 +58,7 @@ final class SeoCreateArticleSettingsService
 
         return [
             self::KEY_PUBLISH_ARTICLE => $publish,
+            self::KEY_REWRITE_ARTICLE => $this->positiveIntOrNull($data[self::KEY_REWRITE_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($data[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
@@ -100,6 +103,11 @@ final class SeoCreateArticleSettingsService
     public function getPublishArticleTaskId(): ?int
     {
         return $this->getSettings()[self::KEY_PUBLISH_ARTICLE];
+    }
+
+    public function getRewriteArticleTaskId(): ?int
+    {
+        return $this->getSettings()[self::KEY_REWRITE_ARTICLE];
     }
 
     public function getPostReviewTaskId(): ?int
@@ -158,6 +166,7 @@ final class SeoCreateArticleSettingsService
 
         WpOption::set(self::OPTION_KEY, [
             self::KEY_PUBLISH_ARTICLE => $publish,
+            self::KEY_REWRITE_ARTICLE => $this->positiveIntOrNull($settings[self::KEY_REWRITE_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($settings[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
@@ -184,6 +193,7 @@ final class SeoCreateArticleSettingsService
     {
         return [
             self::KEY_PUBLISH_ARTICLE => null,
+            self::KEY_REWRITE_ARTICLE => null,
             self::KEY_POST_REVIEW => null,
             self::KEY_CREATE_IMAGE => null,
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => null,

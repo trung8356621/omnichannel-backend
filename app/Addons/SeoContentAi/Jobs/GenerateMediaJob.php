@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -51,8 +52,16 @@ class GenerateMediaJob implements ShouldQueue
         PromptMediaStorageService $promptMediaStorage,
         PromptPostProcessingApplyService $postProcessing,
         PromptResultLinkService $promptResultLinks,
+        SeoDatabaseConnectionService $databaseConnection,
     ): void {
+        $databaseConnection->bootstrapLegacySharedConnection();
+
         $media = SeoMedia::query()->find($this->seoMediaId);
+        if ($media instanceof SeoMedia && (int) ($media->site_id ?? 0) > 0) {
+            $databaseConnection->bootstrapSeoDatabaseConnection((int) $media->site_id);
+            $media = SeoMedia::query()->find($this->seoMediaId);
+        }
+
         $prompt = SeoPrompt::query()->where('is_active', true)->find($this->promptId);
 
         if (! $media instanceof SeoMedia || ! $prompt instanceof SeoPrompt) {

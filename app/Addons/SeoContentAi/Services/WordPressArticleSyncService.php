@@ -7,8 +7,8 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
-use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
@@ -992,5 +992,13 @@ final class WordPressArticleSyncService
             'success' => false,
             'message' => 'Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.',
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    public function applyMultilingualFromSyncPayload(SeoArticle $article, Site $site, array $item): void
+    {
+        app(ArticlePolylangSyncService::class)->applyFromSyncPayload($article, $site, $item);
     }
 }

@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
+use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
@@ -24,7 +25,6 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
 use Filament\Notifications\Notification;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Filters\Filter;
@@ -37,7 +37,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
-class ArticleResource extends Resource
+class ArticleResource extends SeoPanelResource
 {
     protected static ?string $model = SeoArticle::class;
 
@@ -158,6 +158,21 @@ class ArticleResource extends Resource
                         ? Str::ucfirst(str_replace('_', ' ', $state))
                         : '—')
                     ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('language')
+                    ->label(__('seo-content-ai::filament.article_list.language'))
+                    ->visible(fn (): bool => app(SitePolylangService::class)->anyAccessibleSiteHasPolylang())
+                    ->badge()
+                    ->color('gray')
+                    ->formatStateUsing(function (?string $state, SeoArticle $record): string {
+                        $record->loadMissing('site');
+
+                        return app(SitePolylangService::class)->languageLabel(
+                            (string) ($state ?? ''),
+                            $record->site,
+                        );
+                    })
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('author')
                     ->label(__('seo-content-ai::filament.article_list.author'))
                     ->badge()
@@ -207,6 +222,7 @@ class ArticleResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: false),
             ])
             ->defaultSort('updated_at', 'desc')
+            ->defaultKeySort()
             ->filters([
                 SelectFilter::make('site_id')
                     ->label(__('seo-content-ai::filament.article_list.domain'))
@@ -232,6 +248,21 @@ class ArticleResource extends Resource
                         }
 
                         $query->where('site_id', $siteId);
+                    }),
+                SelectFilter::make('language')
+                    ->label('Ngôn ngữ')
+                    ->visible(fn (): bool => app(SitePolylangService::class)->anyAccessibleSiteHasPolylang())
+                    ->options(fn (): array => app(SitePolylangService::class)->defaultLanguageOptions())
+                    ->native(false)
+                    ->placeholder('Tất cả ngôn ngữ')
+                    ->indicator('Ngôn ngữ')
+                    ->query(function (Builder $query, array $data): void {
+                        $lang = trim((string) ($data['value'] ?? ''));
+                        if ($lang === '') {
+                            return;
+                        }
+
+                        $query->where('language', $lang);
                     }),
                 SelectFilter::make('type')
                     ->label(__('seo-content-ai::filament.article_list.post_type'))
@@ -778,21 +809,14 @@ class ArticleResource extends Resource
                     $siteId = static::resolveArticleSiteId($record);
 
                     if (static::resolveDirectAssignContentProjectId($siteId) !== null) {
-                        return [];
+                        return static::assignRewriteModeFormFields();
                     }
 
-                    return [
-                        static::assignContentProjectSelectField(
-                            fn (): ?int => $siteId,
-                        ),
-                    ];
+                    return static::assignContentProjectFormFields(
+                        fn (): ?int => $siteId,
+                    );
                 })
-                ->requiresConfirmation(fn (SeoArticle $record): bool => static::resolveDirectAssignContentProjectId(
-                    static::resolveArticleSiteId($record),
-                ) === null)
-                ->modalHidden(fn (SeoArticle $record): bool => static::resolveDirectAssignContentProjectId(
-                    static::resolveArticleSiteId($record),
-                ) !== null)
+                ->requiresConfirmation(false)
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
@@ -803,6 +827,8 @@ class ArticleResource extends Resource
                     $summary = static::assignArticlesToContentProject(
                         Collection::make([$record]),
                         $projectId,
+                        is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
+                        is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
                     );
 
                     Notification::make()
@@ -990,6 +1016,43 @@ class ArticleResource extends Resource
     }
 
     /**
+     * @return list<Forms\Components\Component>
+     */
+    public static function assignRewriteModeFormFields(): array
+    {
+        return [
+            Forms\Components\Select::make('rewrite_mode')
+                ->label(__('seo-content-ai::filament.projects.rewrite_mode'))
+                ->options(SeoProjectTask::rewriteModeOptions())
+                ->default(SeoProjectTask::REWRITE_MODE_KEYWORD)
+                ->required()
+                ->native(false)
+                ->live(),
+            Forms\Components\Textarea::make('rewrite_notes')
+                ->label(__('seo-content-ai::filament.projects.rewrite_notes'))
+                ->placeholder(__('seo-content-ai::filament.projects.rewrite_notes_placeholder'))
+                ->rows(3)
+                ->visible(fn (Get $get): bool => SeoProjectTask::normalizeRewriteMode($get('rewrite_mode')) === SeoProjectTask::REWRITE_MODE_CONTENT)
+                ->columnSpanFull(),
+        ];
+    }
+
+    /**
+     * @param  callable(Get=): ?int  $resolveSiteId
+     * @param  (callable(): ?string)|null  $resolveHelperText
+     * @return list<Forms\Components\Component>
+     */
+    public static function assignContentProjectFormFields(
+        callable $resolveSiteId,
+        ?callable $resolveHelperText = null,
+    ): array {
+        return array_merge(
+            [static::assignContentProjectSelectField($resolveSiteId, $resolveHelperText)],
+            static::assignRewriteModeFormFields(),
+        );
+    }
+
+    /**
      * @param  callable(Get=): ?int  $resolveSiteId
      */
     private static function resolveAssignContentProjectSiteId(callable $resolveSiteId, ?Get $get = null): ?int
@@ -1138,8 +1201,12 @@ class ArticleResource extends Resource
      * @param  SupportCollection<int, SeoArticle>|Collection<int, SeoArticle>  $records
      * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}
      */
-    public static function assignArticlesToContentProject(SupportCollection $records, int $projectId): array
-    {
+    public static function assignArticlesToContentProject(
+        SupportCollection $records,
+        int $projectId,
+        ?string $rewriteMode = null,
+        ?string $rewriteNotes = null,
+    ): array {
         $project = SeoProject::query()->find($projectId);
         if (! $project instanceof SeoProject) {
             return [
@@ -1176,8 +1243,12 @@ class ArticleResource extends Resource
         $alreadyInProject = 0;
         $projectSiteId = (int) ($project->site_id ?? 0);
         $targetProjectId = (int) $project->id;
+        $normalizedRewriteMode = SeoProjectTask::normalizeRewriteMode($rewriteMode);
+        $normalizedRewriteNotes = $normalizedRewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT
+            ? (trim((string) ($rewriteNotes ?? '')) !== '' ? trim((string) $rewriteNotes) : null)
+            : null;
 
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, $normalizedRewriteMode, $normalizedRewriteNotes, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
             $project->refresh();
             $max = $project->maxTasksAllowed();
             $currentTotal = (int) ($project->total_tasks ?? 0);
@@ -1231,6 +1302,8 @@ class ArticleResource extends Resource
                     'type' => SeoProjectTask::TYPE_REWRITE,
                     'source_content' => $sourceContent,
                     'description' => null,
+                    'rewrite_mode' => $normalizedRewriteMode,
+                    'rewrite_notes' => $normalizedRewriteNotes,
                     'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
                     'status' => SeoProjectTask::STATUS_PENDING,
                 ]);

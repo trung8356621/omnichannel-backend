@@ -60,4 +60,18 @@ final class WordPressArticleTimestampService
             return null;
         }
     }
+
+    public function remoteIsNewerThanLocal(?Carbon $localUpdated, mixed $remoteModified): bool
+    {
+        $remote = $this->parse($remoteModified);
+        if ($remote === null) {
+            return false;
+        }
+
+        if ($localUpdated === null) {
+            return true;
+        }
+
+        return $remote->getTimestamp() > $localUpdated->getTimestamp();
+    }
 }

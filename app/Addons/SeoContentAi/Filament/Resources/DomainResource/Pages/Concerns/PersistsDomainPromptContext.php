@@ -24,7 +24,7 @@ trait PersistsDomainPromptContext
         $site->loadMissing('metas');
 
         $data['promptContext'] = $this->preparePromptContextForForm(
-            app(SiteDomainPromptContextService::class)->getForSite($site),
+            app(SiteDomainPromptContextService::class)->getRawPayloadForSite($site),
         );
 
         return $data;
@@ -52,6 +52,12 @@ trait PersistsDomainPromptContext
             'tone' => trim((string) ($ctx['tone'] ?? '')),
             'short_description' => (string) ($ctx['short_description'] ?? ''),
             'cta_intro' => (string) ($ctx['cta_intro'] ?? ''),
+            'phone_1' => trim((string) ($ctx['phone_1'] ?? '')),
+            'phone_2' => trim((string) ($ctx['phone_2'] ?? '')),
+            'phone_3' => trim((string) ($ctx['phone_3'] ?? '')),
+            'email_1' => trim((string) ($ctx['email_1'] ?? '')),
+            'email_2' => trim((string) ($ctx['email_2'] ?? '')),
+            'email_3' => trim((string) ($ctx['email_3'] ?? '')),
             'cta' => $this->repeaterItemsFromState($ctx['cta'] ?? []),
             'links' => $this->repeaterItemsFromState($ctx['links'] ?? []),
         ];
@@ -100,13 +106,40 @@ trait PersistsDomainPromptContext
      */
     protected function preparePromptContextForForm(array $context): array
     {
+        $service = app(SiteDomainPromptContextService::class);
+
         return [
             'tone' => (string) ($context['tone'] ?? ''),
             'short_description' => (string) ($context['short_description'] ?? ''),
             'cta_intro' => (string) ($context['cta_intro'] ?? ''),
-            'cta' => $this->repeaterStateForFill($context['cta'] ?? []),
+            'phone_1' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_1'),
+            'phone_2' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_2'),
+            'phone_3' => $service->ctaValueFromRows($context['cta'] ?? [], 'phone_3'),
+            'email_1' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_1'),
+            'email_2' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_2'),
+            'email_3' => $service->ctaValueFromRows($context['cta'] ?? [], 'email_3'),
+            'cta' => $this->repeaterStateForFill($this->filterDedicatedCtaRows($context['cta'] ?? [])),
             'links' => $this->repeaterStateForFill($context['links'] ?? []),
         ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     * @return list<array<string, mixed>>
+     */
+    protected function filterDedicatedCtaRows(array $items): array
+    {
+        return array_values(array_filter(
+            $items,
+            static fn (array $row): bool => ! in_array(
+                mb_strtolower(trim((string) ($row['type'] ?? ''))),
+                [
+                    ...SiteDomainPromptContextService::reservedCtaTypes(),
+                    ...SiteDomainPromptContextService::globalOnlyCtaTypes(),
+                ],
+                true,
+            ),
+        ));
     }
 
     /**

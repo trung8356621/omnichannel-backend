@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
@@ -21,14 +22,15 @@ use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqExtractDebugService;
-use App\Addons\SeoContentAi\Services\ArticleFeaturedSnippetGeneratorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqGeneratorService;
 use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
+use App\Addons\SeoContentAi\Services\ArticleFeaturedSnippetGeneratorService;
 use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
+use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
@@ -38,9 +40,9 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
-use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
+use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Addons\SeoContentAi\Services\VirtualCommentService;
@@ -57,7 +59,6 @@ use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use Filament\Actions;
 use Filament\Notifications\Notification;
-use Filament\Resources\Pages\EditRecord;
 use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -65,7 +66,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 
-class EditArticle extends EditRecord
+class EditArticle extends SeoEditRecord
 {
     protected static string $resource = ArticleResource::class;
 
@@ -497,21 +498,14 @@ class EditArticle extends EditRecord
                     $siteId = ArticleResource::resolveArticleSiteId($this->record);
 
                     if (ArticleResource::resolveDirectAssignContentProjectId($siteId) !== null) {
-                        return [];
+                        return ArticleResource::assignRewriteModeFormFields();
                     }
 
-                    return [
-                        ArticleResource::assignContentProjectSelectField(
-                            fn (): ?int => $siteId,
-                        ),
-                    ];
+                    return ArticleResource::assignContentProjectFormFields(
+                        fn (): ?int => $siteId,
+                    );
                 })
-                ->requiresConfirmation(fn (): bool => ArticleResource::resolveDirectAssignContentProjectId(
-                    ArticleResource::resolveArticleSiteId($this->record),
-                ) === null)
-                ->modalHidden(fn (): bool => ArticleResource::resolveDirectAssignContentProjectId(
-                    ArticleResource::resolveArticleSiteId($this->record),
-                ) !== null)
+                ->requiresConfirmation(false)
                 ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                 ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
@@ -522,6 +516,8 @@ class EditArticle extends EditRecord
                     $summary = ArticleResource::assignArticlesToContentProject(
                         collect([$this->record]),
                         $projectId,
+                        is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
+                        is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
                     );
 
                     Notification::make()
@@ -1965,6 +1961,11 @@ class EditArticle extends EditRecord
         $this->skipRender();
     }
 
+    protected function shouldDisableSeoFormSave(): bool
+    {
+        return $this->articleHeavyActionBusy;
+    }
+
     public function requestSaveArticle(): void
     {
         if ($this->articleHeavyActionBusy) {
@@ -2042,6 +2043,72 @@ class EditArticle extends EditRecord
         return (bool) $this->record->is_reviewed
             ? __('seo-content-ai::filament.article_list.reviewed')
             : __('seo-content-ai::filament.article_list.not_reviewed');
+    }
+
+    public function siteHasPolylang(): bool
+    {
+        $this->record->loadMissing('site');
+
+        return app(SitePolylangService::class)->isPolylangEnabledForSite($this->record->site);
+    }
+
+    public function getArticleLanguageLabel(): string
+    {
+        return app(ArticlePolylangSyncService::class)->currentLanguageLabel($this->record);
+    }
+
+    /**
+     * @return list<array{lang: string, label: string, flag: string, article_id: int|null, wp_post_id: int|null, edit_url: string|null, status: string}>
+     */
+    public function getTranslationConnections(): array
+    {
+        if (! $this->siteHasPolylang()) {
+            return [];
+        }
+
+        return app(ArticlePolylangSyncService::class)->translationConnectionsForArticle($this->record);
+    }
+
+    public function importMissingTranslation(string $targetLang): void
+    {
+        $result = app(ArticlePolylangSyncService::class)->importTranslationForLanguage($this->record, $targetLang);
+
+        if (! ($result['success'] ?? false)) {
+            Notification::make()
+                ->title('Import bản dịch')
+                ->body((string) ($result['message'] ?? 'Thất bại.'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $editUrl = trim((string) ($result['edit_url'] ?? ''));
+        if ($editUrl !== '') {
+            $this->redirect($editUrl);
+
+            return;
+        }
+
+        Notification::make()
+            ->title('Import bản dịch')
+            ->body((string) ($result['message'] ?? 'Đã import.'))
+            ->success()
+            ->send();
+    }
+
+    public function requestTranslationGeneration(string $targetLang): void
+    {
+        $label = app(SitePolylangService::class)->languageLabel(
+            $targetLang,
+            $this->record->site,
+        );
+
+        Notification::make()
+            ->title('Tạo bản dịch')
+            ->body('Chưa có bản «'.$label.'» trên WordPress. Tạo bản dịch trong WP/Polylang hoặc chạy Quy trình SEO để sinh nội dung.')
+            ->warning()
+            ->send();
     }
 
     public function canToggleArticleReview(): bool

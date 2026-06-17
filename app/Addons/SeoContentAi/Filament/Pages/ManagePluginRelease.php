@@ -18,10 +18,9 @@ use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
 use Illuminate\Support\Facades\Storage;
 
-class ManagePluginRelease extends Page implements HasForms
+class ManagePluginRelease extends SeoPanelPage implements HasForms
 {
     use InteractsWithForms;
 

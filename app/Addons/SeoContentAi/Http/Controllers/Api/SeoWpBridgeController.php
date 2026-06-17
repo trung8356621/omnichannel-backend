@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Http\Controllers\Api;
 
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
@@ -13,6 +14,10 @@ use Illuminate\Support\Facades\Log;
 
 class SeoWpBridgeController extends Controller
 {
+    public function __construct(
+        private readonly SeoDatabaseConnectionService $databaseConnection,
+    ) {}
+
     /**
      * GET /api/seo-wp-bridge/ping — kiểm tra token + domain từ plugin WP.
      */
@@ -27,6 +32,8 @@ class SeoWpBridgeController extends Controller
         if ($site === null) {
             return response()->json(['success' => false, 'message' => 'Token không hợp lệ.'], 401);
         }
+
+        $this->databaseConnection->bootstrapBySiteId((int) $site->id);
 
         $siteUrl = trim((string) $request->input('site_url', ''));
         $hostOk = $siteUrl === '' || $this->siteUrlMatchesSite($site, $siteUrl);
@@ -62,6 +69,8 @@ class SeoWpBridgeController extends Controller
                 'message' => 'Token không hợp lệ hoặc site chưa cấu hình SEO.',
             ], 401);
         }
+
+        $this->databaseConnection->bootstrapBySiteId((int) $site->id);
 
         $siteUrl = trim((string) $request->input('site_url', ''));
         if ($siteUrl !== '' && ! $this->siteUrlMatchesSite($site, $siteUrl)) {

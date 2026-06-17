@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
+use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
 
@@ -94,7 +95,9 @@ final class ListSeoProjectRuns extends Page
                 ->icon('heroicon-o-beaker')
                 ->color('warning')
                 ->requiresConfirmation()
-                ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading'))
+                ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading', [
+                    'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
+                ]))
                 ->modalDescription(fn () => SeoProjectResource::runWorkflowModalDescription(
                     $this->project,
                     SeoProjectWorkflowRunService::TEST_RUN_LIMIT,

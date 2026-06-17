@@ -6,23 +6,23 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
-use Filament\Actions\Action;
-use Filament\Actions\Concerns\InteractsWithActions;
-use Filament\Actions\Contracts\HasActions;
 use Filament\Forms;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
-use Illuminate\Database\Eloquent\Collection;
+use Filament\Tables;
+use Filament\Tables\Concerns\InteractsWithTable;
+use Filament\Tables\Contracts\HasTable;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
-class SeoTeam extends Page implements HasActions
+class SeoTeam extends SeoPanelPage implements HasTable
 {
-    use InteractsWithActions;
+    use InteractsWithTable;
 
     protected static ?string $slug = 'team';
 
@@ -36,6 +36,102 @@ class SeoTeam extends Page implements HasActions
 
     protected static string $view = 'seo-content-ai::filament.pages.seo-team';
 
+    public function table(Table $table): Table
+    {
+        return $table
+            ->query(fn (): Builder => $this->teamMembersQuery())
+            ->heading(__('seo-content-ai::filament.team.team_list'))
+            ->description(__('seo-content-ai::filament.team.add_team_member_hint'))
+            ->emptyStateHeading(__('seo-content-ai::filament.team.no_members'))
+            ->emptyStateIcon('heroicon-o-users')
+            ->columns([
+                Tables\Columns\TextColumn::make('name')
+                    ->label(__('seo-content-ai::filament.team.name'))
+                    ->searchable()
+                    ->sortable()
+                    ->weight('medium'),
+
+                Tables\Columns\TextColumn::make('email')
+                    ->label(__('seo-content-ai::filament.team.email'))
+                    ->searchable()
+                    ->sortable()
+                    ->copyable(),
+
+                Tables\Columns\SelectColumn::make('seo_role')
+                    ->label(__('seo-content-ai::filament.team.seo_role'))
+                    ->options($this->seoRoleOptions())
+                    ->selectablePlaceholder(false)
+                    ->sortable()
+                    ->beforeStateUpdated(function (mixed $state, User $record): void {
+                        $this->assertCanManageMember($record);
+                    }),
+
+                Tables\Columns\TextColumn::make('status')
+                    ->label(__('seo-content-ai::filament.team.status'))
+                    ->badge()
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        User::STATUS_BLOCK => __('seo-content-ai::filament.team.user_status_banned'),
+                        User::STATUS_PENDING => __('seo-content-ai::filament.team.user_status_pending'),
+                        default => __('seo-content-ai::filament.team.user_status_normal'),
+                    })
+                    ->color(fn (string $state): string => match ($state) {
+                        User::STATUS_BLOCK => 'danger',
+                        User::STATUS_PENDING => 'warning',
+                        default => 'success',
+                    }),
+
+                Tables\Columns\ToggleColumn::make('is_banned')
+                    ->label(__('seo-content-ai::filament.team.ban_toggle'))
+                    ->onColor('danger')
+                    ->offColor('success')
+                    ->getStateUsing(fn (User $record): bool => $record->status === User::STATUS_BLOCK)
+                    ->updateStateUsing(function (User $record, bool $state): void {
+                        $this->assertCanManageMember($record);
+
+                        $record->update([
+                            'status' => $state ? User::STATUS_BLOCK : User::STATUS_NORMAL,
+                        ]);
+
+                        Notification::make()
+                            ->title($state
+                                ? __('seo-content-ai::filament.team.member_banned')
+                                : __('seo-content-ai::filament.team.member_unbanned'))
+                            ->success()
+                            ->send();
+                    })
+                    ->tooltip(__('seo-content-ai::filament.team.ban_toggle_hint')),
+            ])
+            ->defaultSort('name')
+            ->paginated([10, 25, 50])
+            ->headerActions([
+                $this->addMemberAction(),
+            ])
+            ->actions([
+                Tables\Actions\Action::make('removeFromTeam')
+                    ->label(__('seo-content-ai::filament.team.remove_member'))
+                    ->icon('heroicon-o-user-minus')
+                    ->color('danger')
+                    ->requiresConfirmation()
+                    ->modalHeading(__('seo-content-ai::filament.team.remove_member'))
+                    ->modalDescription(__('seo-content-ai::filament.team.remove_member_confirm'))
+                    ->action(function (User $record): void {
+                        $this->assertCanManageMember($record);
+
+                        $record->update([
+                            'parent_id' => null,
+                            'role' => User::ROLE_OWNER,
+                            'seo_role' => null,
+                            'status' => User::STATUS_NORMAL,
+                        ]);
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.team.member_removed'))
+                            ->success()
+                            ->send();
+                    }),
+            ]);
+    }
+
     /**
      * @return array<string, string>
      */
@@ -48,27 +144,12 @@ class SeoTeam extends Page implements HasActions
         ];
     }
 
-    /**
-     * @return Collection<int, User>
-     */
-    public function getTeamMembersProperty(): Collection
+    public function addMemberAction(): Tables\Actions\Action
     {
-        $user = auth()->user();
-        if (! $user instanceof User) {
-            return new Collection();
-        }
-
-        return User::query()
-            ->where('parent_id', (int) $user->id)
-            ->orderBy('name')
-            ->get();
-    }
-
-    public function addMemberAction(): Action
-    {
-        return Action::make('addMember')
+        return Tables\Actions\Action::make('addMember')
             ->label(__('seo-content-ai::filament.team.add_member'))
             ->icon('heroicon-o-user-plus')
+            ->color('success')
             ->modalHeading(__('seo-content-ai::filament.team.add_team_member'))
             ->modalDescription(__('seo-content-ai::filament.team.add_team_member_hint'))
             ->modalSubmitActionLabel(__('seo-content-ai::filament.team.add_member'))
@@ -77,11 +158,6 @@ class SeoTeam extends Page implements HasActions
             ->action(function (array $data): void {
                 $this->persistTeamMember($data);
             });
-    }
-
-    protected function getHeaderActions(): array
-    {
-        return [];
     }
 
     /**
@@ -185,7 +261,9 @@ class SeoTeam extends Page implements HasActions
             return;
         }
 
+        $ownerId = SeoAccessControl::accountOwnerId() ?? (int) $owner->id;
         $existingUserId = (int) ($data['existingUserId'] ?? 0);
+
         if ($existingUserId > 0) {
             $existing = User::query()->find($existingUserId);
             if (! $existing instanceof User) {
@@ -199,7 +277,7 @@ class SeoTeam extends Page implements HasActions
             }
 
             try {
-                $this->attachExistingMember($owner, $existing);
+                $this->attachExistingMember($ownerId, $existing);
             } catch (ValidationException $exception) {
                 Notification::make()
                     ->title(__('seo-content-ai::filament.team.member_add_failed'))
@@ -226,7 +304,7 @@ class SeoTeam extends Page implements HasActions
         ])->validate();
 
         User::query()->create([
-            'parent_id' => (int) $owner->id,
+            'parent_id' => $ownerId,
             'role' => User::ROLE_STAFF,
             'seo_role' => (string) $validated['memberSeoRole'],
             'status' => User::STATUS_NORMAL,
@@ -241,28 +319,28 @@ class SeoTeam extends Page implements HasActions
             ->send();
     }
 
-    private function attachExistingMember(User $owner, User $existing): void
+    private function attachExistingMember(int $ownerId, User $existing): void
     {
-        if ((int) $existing->id === (int) $owner->id) {
+        if ((int) $existing->id === $ownerId) {
             throw ValidationException::withMessages([
                 'memberEmail' => __('seo-content-ai::filament.team.cannot_add_self'),
             ]);
         }
 
-        if ((int) $existing->parent_id === (int) $owner->id) {
+        if ((int) $existing->parent_id === $ownerId) {
             throw ValidationException::withMessages([
                 'memberEmail' => __('seo-content-ai::filament.team.already_team_member'),
             ]);
         }
 
-        if ((int) $existing->parent_id > 0 && (int) $existing->parent_id !== (int) $owner->id) {
+        if ((int) $existing->parent_id > 0 && (int) $existing->parent_id !== $ownerId) {
             throw ValidationException::withMessages([
                 'memberEmail' => __('seo-content-ai::filament.team.already_other_team'),
             ]);
         }
 
         $existing->update([
-            'parent_id' => (int) $owner->id,
+            'parent_id' => $ownerId,
             'role' => User::ROLE_STAFF,
             'seo_role' => SeoAccessControl::normalizeRole(
                 (string) ($existing->seo_role ?: SeoAccessControl::ROLE_CONTENT_MANAGER),
@@ -288,13 +366,10 @@ class SeoTeam extends Page implements HasActions
             return [];
         }
 
-        /** @var User|null $owner */
-        $owner = auth()->user();
-        if (! $owner instanceof User) {
+        $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
+        if ($ownerId <= 0) {
             return [];
         }
-
-        $ownerId = (int) $owner->id;
 
         return User::query()
             ->where('email', 'like', '%'.$term.'%')
@@ -316,6 +391,24 @@ class SeoTeam extends Page implements HasActions
                 return [(string) $user->email => $label];
             })
             ->all();
+    }
+
+    private function teamMembersQuery(): Builder
+    {
+        $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
+
+        return User::query()
+            ->where('parent_id', $ownerId)
+            ->where('role', User::ROLE_STAFF);
+    }
+
+    private function assertCanManageMember(User $member): void
+    {
+        $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
+
+        if ((int) $member->parent_id !== $ownerId || $member->role !== User::ROLE_STAFF) {
+            abort(403);
+        }
     }
 
     public static function canAccess(): bool

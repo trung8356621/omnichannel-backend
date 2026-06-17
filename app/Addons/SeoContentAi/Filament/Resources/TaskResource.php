@@ -4,19 +4,18 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
-use App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
+use App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
 use Filament\Forms\Form;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 
-class TaskResource extends Resource
+class TaskResource extends SeoPanelResource
 {
     protected static ?string $model = SeoTask::class;
 

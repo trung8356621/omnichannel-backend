@@ -26,7 +26,6 @@
 
 <div
     class="article-seo-cell{{ $canEditMainKeyword ? ' article-seo-cell--planner' : '' }}"
-    wire:key="article-seo-{{ $record->id }}"
     x-data="{
         open: false,
         keywordOriginal: @js($mainKeywordValue),

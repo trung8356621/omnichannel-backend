@@ -7,11 +7,11 @@ namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsDomainPromptContext;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsSeoDomainMetas;
-use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
+use App\Addons\SeoContentAi\Services\SeoDomainCtaGlobalSettingsService;
 use App\Models\Site;
-use Filament\Resources\Pages\CreateRecord;
 
-class CreateDomain extends CreateRecord
+class CreateDomain extends SeoCreateRecord
 {
     use PersistsDomainPromptContext;
     use PersistsSeoDomainMetas;
@@ -27,7 +27,7 @@ class CreateDomain extends CreateRecord
             'promptContext' => $this->preparePromptContextForForm([
                 'tone' => '',
                 'short_description' => '',
-                'cta_intro' => SiteDomainPromptContextService::DEFAULT_CTA_INTRO,
+                'cta_intro' => app(SeoDomainCtaGlobalSettingsService::class)->getDefaultCtaIntro(),
                 'cta' => [],
                 'links' => [],
             ]),

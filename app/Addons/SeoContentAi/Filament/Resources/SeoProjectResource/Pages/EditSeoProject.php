@@ -4,15 +4,15 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Carbon\Carbon;
 use Filament\Actions;
-use Filament\Resources\Pages\EditRecord;
 
-class EditSeoProject extends EditRecord
+class EditSeoProject extends SeoEditRecord
 {
     protected static string $resource = SeoProjectResource::class;
 
@@ -92,15 +92,17 @@ class EditSeoProject extends EditRecord
         app(SeoProjectTaskSyncService::class)->sync($record, $tasksData);
     }
 
+    protected function shouldDisableSeoFormSave(): bool
+    {
+        return SeoAccessControl::isContentManager();
+    }
+
     protected function getFormActions(): array
     {
-        if (SeoAccessControl::isContentManager()) {
-            return [
-                $this->getCancelFormAction(),
-            ];
-        }
-
-        return parent::getFormActions();
+        return [
+            $this->getSaveFormAction(),
+            $this->getCancelFormAction(),
+        ];
     }
 
     protected function getHeaderActions(): array

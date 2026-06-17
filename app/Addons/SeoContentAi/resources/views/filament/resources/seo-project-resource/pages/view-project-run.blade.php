@@ -2,12 +2,11 @@
     $queueBootstrap = $this->getQueueBootstrapData();
 @endphp
 
-@vite([
-    'app/Addons/SeoContentAi/resources/css/project-run-queue.css',
-    'app/Addons/SeoContentAi/resources/js/project-run-queue.js',
-])
-
 <x-filament-panels::page>
+    @push('styles')
+        @vite('app/Addons/SeoContentAi/resources/css/project-run-queue.css')
+    @endpush
+
     <div
         class="space-y-6"
         x-data="seoProjectRunQueue(@js($queueBootstrap))"
@@ -236,4 +235,8 @@
             </div>
         </x-filament::section>
     </div>
+
+    @push('scripts')
+        @vite('app/Addons/SeoContentAi/resources/js/project-run-queue.js')
+    @endpush
 </x-filament-panels::page>

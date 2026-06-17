@@ -13,9 +13,10 @@
                     {{ $this->form }}
 
                     <div class="flex justify-end">
-                        <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('Save settings') }}
-                        </x-filament::button>
+                        <x-seo-content-ai::form-save-button
+                            target="savePromptSettings"
+                            :label="__('Save settings')"
+                        />
                     </div>
                 </form>
             </div>

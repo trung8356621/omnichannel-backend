@@ -7,10 +7,10 @@ namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsDomainPromptContext;
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages\Concerns\PersistsSeoDomainMetas;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Models\Site;
-use Filament\Resources\Pages\EditRecord;
 
-class EditDomain extends EditRecord
+class EditDomain extends SeoEditRecord
 {
     use PersistsDomainPromptContext;
     use PersistsSeoDomainMetas;

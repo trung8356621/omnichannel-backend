@@ -26,8 +26,7 @@ final class ArticleFeaturedSnippetGeneratorService
         private readonly SimpleMarkdownHtmlConverter $markdownConverter,
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly PromptResultLinkService $promptResultLinks,
-    ) {
-    }
+    ) {}
 
     public function generate(SeoArticle $article): string
     {

@@ -8,11 +8,10 @@ use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
 use Illuminate\Database\Eloquent\Collection;
 use Livewire\Attributes\Url;
 
-class ImageOptimizationSettings extends Page
+class ImageOptimizationSettings extends SeoPanelPage
 {
     protected static ?string $navigationIcon = 'heroicon-o-adjustments-horizontal';
 
@@ -79,7 +78,7 @@ class ImageOptimizationSettings extends Page
 
         if ($settings === null) {
             $settings = SeoImageOptimizationSetting::query()->whereNull('site_id')->first()
-                ?? new SeoImageOptimizationSetting();
+                ?? new SeoImageOptimizationSetting;
         }
 
         $this->data = $settings->toFormData();

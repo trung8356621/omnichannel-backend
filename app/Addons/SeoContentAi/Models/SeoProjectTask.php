@@ -17,6 +17,10 @@ class SeoProjectTask extends Model
 
     public const TYPE_NEW_KEYWORD = 'new_keyword';
 
+    public const REWRITE_MODE_KEYWORD = 'keyword';
+
+    public const REWRITE_MODE_CONTENT = 'content';
+
     public const POST_TYPE_ARTICLE = 'article';
 
     public const POST_TYPE_PRODUCT = 'product';
@@ -55,6 +59,31 @@ class SeoProjectTask extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(SeoProject::class, 'project_id');
+    }
+
+    public function article(): BelongsTo
+    {
+        return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public static function rewriteModeOptions(): array
+    {
+        return [
+            self::REWRITE_MODE_KEYWORD => __('seo-content-ai::filament.projects.rewrite_mode_keyword'),
+            self::REWRITE_MODE_CONTENT => __('seo-content-ai::filament.projects.rewrite_mode_content'),
+        ];
+    }
+
+    public static function normalizeRewriteMode(mixed $value): string
+    {
+        $normalized = trim((string) $value);
+
+        return in_array($normalized, [self::REWRITE_MODE_KEYWORD, self::REWRITE_MODE_CONTENT], true)
+            ? $normalized
+            : self::REWRITE_MODE_KEYWORD;
     }
 
     /**

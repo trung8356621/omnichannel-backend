@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\User;
 use Filament\Notifications\Actions\Action;
 use Filament\Notifications\Notification;
@@ -32,7 +33,7 @@ final class SeoNotificationService
             ->actions([
                 Action::make('open')
                     ->label('Mở project')
-                    ->url(url('/seo/content-projects/'.$project->getKey().'/edit'))
+                    ->url(SeoConnectionContext::panelUrl('content-projects/'.$project->getKey().'/edit'))
                     ->button(),
             ])
             ->sendToDatabase($owner);
@@ -53,7 +54,7 @@ final class SeoNotificationService
                 ->actions([
                     Action::make('open')
                         ->label('Mở bài viết')
-                        ->url(url('/seo/articles/'.$article->getKey().'/edit'))
+                        ->url(SeoConnectionContext::panelUrl('articles/'.$article->getKey().'/edit'))
                         ->button(),
                 ])
                 ->sendToDatabase($planner);

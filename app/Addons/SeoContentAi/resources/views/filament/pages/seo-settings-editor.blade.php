@@ -13,9 +13,10 @@
                     {{ $this->form }}
 
                     <div class="flex justify-end">
-                        <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('seo-content-ai::filament.settings_editor.save') }}
-                        </x-filament::button>
+                        <x-seo-content-ai::form-save-button
+                            target="saveEditorSettings"
+                            :label="__('seo-content-ai::filament.settings_editor.save')"
+                        />
                     </div>
                 </form>
             </div>

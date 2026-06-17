@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
-use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
+use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
+use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
+use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
 use App\Models\Site;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
@@ -15,6 +17,7 @@ use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
@@ -40,6 +43,12 @@ class GeneralDomain extends Page
 
     public string $tokenPassword = '';
 
+    public int $incrementalSyncProgress = 0;
+
+    public int $incrementalSyncTotal = 0;
+
+    public bool $incrementalSyncRunning = false;
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -54,6 +63,46 @@ class GeneralDomain extends Page
         if (is_string($tab) && in_array($tab, ['keywords', 'links'], true)) {
             $this->internalLinkTab = $tab;
         }
+
+        $this->restoreIncrementalSyncProgressFromCache();
+    }
+
+    public function refreshIncrementalSyncProgress(): void
+    {
+        $wasRunning = $this->incrementalSyncRunning;
+
+        $this->applyIncrementalSyncProgress(
+            app(IncrementalDomainSyncRunner::class)->readProgress(
+                (int) auth()->id(),
+                (int) $this->getRecord()->getKey(),
+            ),
+        );
+
+        if ($wasRunning && ! $this->incrementalSyncRunning && $this->incrementalSyncTotal > 0) {
+            $this->dispatch('domain-sync-completed');
+        }
+    }
+
+    private function restoreIncrementalSyncProgressFromCache(): void
+    {
+        $this->refreshIncrementalSyncProgress();
+    }
+
+    /**
+     * @param  array{done: int, total: int, status: string, running: bool, message: ?string}  $progress
+     */
+    private function applyIncrementalSyncProgress(array $progress): void
+    {
+        $this->incrementalSyncProgress = (int) $progress['done'];
+        $this->incrementalSyncTotal = (int) $progress['total'];
+        $this->incrementalSyncRunning = (bool) $progress['running'];
+
+        $this->dispatch(
+            'incremental-sync-progress',
+            done: $this->incrementalSyncProgress,
+            total: $this->incrementalSyncTotal,
+            running: $this->incrementalSyncRunning,
+        );
     }
 
     public function getTitle(): string|Htmlable
@@ -61,7 +110,7 @@ class GeneralDomain extends Page
         /** @var Site $site */
         $site = $this->getRecord();
 
-        return __('Overview') . ': ' . $site->domain;
+        return __('Overview').': '.$site->domain;
     }
 
     public function getSite(): Site
@@ -77,12 +126,9 @@ class GeneralDomain extends Page
         return app(DomainOverviewService::class)->isSiteSynced((int) $this->getRecord()->getKey());
     }
 
-    public function getClearDomainConfirmMessage(): string
+    public function getResetAndFullSyncConfirmMessage(): string
     {
-        $count = app(ClearDomainArticlesService::class)->countForSite($this->getRecord());
-
-        return "This will permanently delete {$count} records from the SEO storage (synced posts, products, categories). "
-            . 'WordPress content is not changed. This action cannot be undone.';
+        return __('seo-content-ai::filament.domain.reset_full_sync_confirm');
     }
 
     /**
@@ -151,7 +197,7 @@ class GeneralDomain extends Page
 
     public function getInternalLinkTabUrl(string $tab): string
     {
-        return static::getUrl(['record' => $this->getRecord()]) . '?tab=' . urlencode($tab);
+        return static::getUrl(['record' => $this->getRecord()]).'?tab='.urlencode($tab);
     }
 
     public function getArticlesFilterUrl(string $band): string
@@ -232,68 +278,89 @@ class GeneralDomain extends Page
      */
     protected function getHeaderActions(): array
     {
-        return $this->domainActions();
+        return [
+            $this->deleteDomainAction(),
+        ];
     }
 
     /**
      * @return array<int, Action>
      */
-    protected function domainActions(): array
+    protected function getActions(): array
     {
         return [
-            Action::make('delete_domain')
-                ->label(__('Delete domain'))
-                ->icon('heroicon-o-trash')
-                ->color('danger')
-                ->requiresConfirmation()
-                ->modalHeading('Xóa domain')
-                ->modalDescription('Domain sẽ được chuyển vào thùng rác. Hành động này không xóa nội dung trên WordPress.')
-                ->modalSubmitActionLabel('Xóa domain')
-                ->action(function (): void {
-                    $this->getRecord()->delete();
-
-                    Notification::make()
-                        ->title('Đã xóa domain')
-                        ->success()
-                        ->send();
-
-                    $this->redirect(DomainResource::getUrl('index'), navigate: false);
-                }),
-            Action::make('sync_data')
-                ->label('Sync data')
-                ->color('warning')
-                ->icon('heroicon-o-arrow-path')
-                ->requiresConfirmation()
-                ->modalDescription('Run content sync from WordPress for this domain.')
-                ->action(function (): void {
-                    $this->runDomainSync(false);
-                    $this->redirectToOverview();
-                }),
-            Action::make('test_sync_data')
-                ->label('Test sync (debug)')
-                ->icon('heroicon-o-bug-ant')
-                ->color('danger')
-                ->visible(fn (): bool => auth()->user()?->role === 'admin')
-                ->requiresConfirmation()
-                ->modalDescription('Run sync test (limit 2 records per type).')
-                ->action(function (): void {
-                    $this->runDomainSync(true);
-                    $this->redirectToOverview();
-                }),
-            Action::make('clear_domain_content')
-                ->label('Cleanup')
-                ->icon('heroicon-o-trash')
-                ->color('danger')
-                ->visible(fn (): bool => $this->isSiteSynced())
-                ->requiresConfirmation()
-                ->modalHeading('Clean up domain content')
-                ->modalDescription(fn (): string => $this->getClearDomainConfirmMessage())
-                ->modalSubmitActionLabel('Delete all')
-                ->action(function (): void {
-                    $this->runClearDomainContent();
-                    $this->redirectToOverview();
-                }),
+            $this->deleteDomainAction(),
+            $this->syncIncrementalAction(),
+            $this->resetAndFullSyncAction(),
+            $this->testSyncDataAction(),
         ];
+    }
+
+    protected function deleteDomainAction(): Action
+    {
+        return Action::make('delete_domain')
+            ->label(__('seo-content-ai::filament.domain.delete_domain'))
+            ->icon('heroicon-o-trash')
+            ->color('danger')
+            ->requiresConfirmation()
+            ->modalHeading(__('seo-content-ai::filament.domain.delete_domain_heading'))
+            ->modalDescription(__('seo-content-ai::filament.domain.delete_domain_description'))
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.domain.delete_domain_submit'))
+            ->action(function (): void {
+                $this->getRecord()->delete();
+
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.domain.delete_domain_success'))
+                    ->success()
+                    ->send();
+
+                $this->redirect(DomainResource::getUrl('index'), navigate: false);
+            });
+    }
+
+    protected function syncIncrementalAction(): Action
+    {
+        return Action::make('sync_incremental')
+            ->label(__('seo-content-ai::filament.domain.sync_incremental'))
+            ->color('success')
+            ->icon('heroicon-o-arrow-down-tray')
+            ->action(function (): void {
+                $this->runIncrementalSyncAction();
+            });
+    }
+
+    protected function resetAndFullSyncAction(): Action
+    {
+        return Action::make('reset_and_full_sync')
+            ->label(__('seo-content-ai::filament.domain.reset_full_sync'))
+            ->icon('heroicon-o-arrow-path')
+            ->color('danger')
+            ->requiresConfirmation()
+            ->modalHeading(__('seo-content-ai::filament.domain.reset_full_sync_heading'))
+            ->modalDescription(fn (): string => $this->getResetAndFullSyncConfirmMessage())
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.domain.reset_full_sync_submit'))
+            ->action(function (): void {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.domain.reset_full_sync_started'))
+                    ->warning()
+                    ->send();
+
+                $this->runResetAndFullSync();
+            });
+    }
+
+    protected function testSyncDataAction(): Action
+    {
+        return Action::make('test_sync_data')
+            ->label(__('seo-content-ai::filament.domain.test_sync_debug'))
+            ->icon('heroicon-o-bug-ant')
+            ->color('gray')
+            ->visible(fn (): bool => auth()->user()?->role === 'admin')
+            ->requiresConfirmation()
+            ->modalDescription(__('seo-content-ai::filament.domain.test_sync_debug_description'))
+            ->action(function (): void {
+                $this->runDomainSyncTest();
+            });
     }
 
     private function applyPendingTokenVisibility(): void
@@ -316,49 +383,124 @@ class GeneralDomain extends Page
         return (bool) session('seo_domain_tokens_verified', false);
     }
 
-    private function redirectToOverview(): void
+    public function runIncrementalSyncAction(): void
     {
-        $this->redirect(static::getUrl(['record' => $this->getRecord()]), navigate: false);
-    }
+        @set_time_limit(120);
 
-    private function runClearDomainContent(): void
-    {
-        /** @var Site $site */
-        $site = $this->getRecord();
+        $userId = (int) auth()->id();
+        $siteId = (int) $this->getRecord()->getKey();
 
-        $result = app(ClearDomainArticlesService::class)->clear($site);
-
-        Notification::make()
-            ->title($result['deleted'] > 0 ? 'Cleanup completed' : 'No data')
-            ->body($result['message'])
-            ->success()
-            ->send();
-    }
-
-    private function runDomainSync(bool $isTest): void
-    {
-        /** @var Site $site */
-        $site = $this->getRecord();
-
-        $result = app(SyncDomainContentService::class)->sync($site, [
-            'is_test' => $isTest,
-            'limit_per_type' => $isTest ? 2 : 0,
-        ]);
-
-        if ($result['success']) {
+        if (app(IncrementalDomainSyncRunner::class)->isRunning($userId, $siteId)) {
             Notification::make()
-                ->title($isTest ? 'Test sync successful' : 'Sync successful')
-                ->body($result['message'])
-                ->success()
+                ->title(__('seo-content-ai::filament.domain.sync_incremental_already_running'))
+                ->warning()
                 ->send();
 
             return;
         }
 
+        /** @var Site $site */
+        $site = $this->getRecord();
+        $service = app(SyncDomainContentService::class);
+        $prepared = $service->prepareIncrementalSync($site);
+
+        if (! ($prepared['success'] ?? false)) {
+            $this->notifySyncResult(
+                $prepared,
+                __('seo-content-ai::filament.domain.sync_incremental_success'),
+                __('seo-content-ai::filament.domain.sync_incremental_failed'),
+            );
+
+            return;
+        }
+
+        $refs = is_array($prepared['refs'] ?? null) ? $prepared['refs'] : [];
+        if ($refs === []) {
+            $this->notifySyncResult(
+                $prepared,
+                __('seo-content-ai::filament.domain.sync_incremental_success'),
+                __('seo-content-ai::filament.domain.sync_incremental_failed'),
+            );
+
+            return;
+        }
+
+        $cacheKey = IncrementalDomainSyncCache::cacheKey($userId, $siteId);
+        Cache::put($cacheKey, IncrementalDomainSyncCache::initialState($prepared, $refs), now()->addHours(2));
+
+        $total = count($refs);
+        $this->incrementalSyncTotal = $total;
+        $this->incrementalSyncProgress = 0;
+        $this->incrementalSyncRunning = true;
+
+        $this->dispatch('incremental-sync-progress', done: 0, total: $total, running: true);
+
+        RunIncrementalDomainSyncJob::dispatch($siteId, $userId);
+
         Notification::make()
-            ->title($isTest ? 'Test sync failed' : 'Sync failed')
-            ->body($result['message'])
+            ->title(__('seo-content-ai::filament.domain.sync_incremental_started'))
+            ->body(__('seo-content-ai::filament.domain.sync_incremental_started_hint', [
+                'total' => $total,
+            ]))
+            ->info()
+            ->send();
+    }
+
+    private function runResetAndFullSync(): void
+    {
+        @set_time_limit(300);
+
+        /** @var Site $site */
+        $site = $this->getRecord();
+
+        $result = app(SyncDomainContentService::class)->resetAndFullSync($site);
+        $this->notifySyncResult(
+            $result,
+            __('seo-content-ai::filament.domain.reset_full_sync_success'),
+            __('seo-content-ai::filament.domain.reset_full_sync_failed'),
+        );
+    }
+
+    private function runDomainSyncTest(): void
+    {
+        /** @var Site $site */
+        $site = $this->getRecord();
+
+        $result = app(SyncDomainContentService::class)->sync($site, [
+            'is_test' => true,
+            'limit_per_type' => 2,
+        ]);
+
+        $this->notifySyncResult(
+            $result,
+            __('seo-content-ai::filament.domain.test_sync_debug_success'),
+            __('seo-content-ai::filament.domain.test_sync_debug_failed'),
+        );
+    }
+
+    /**
+     * @param  array{success:bool,message:string}  $result
+     */
+    private function notifySyncResult(array $result, string $successTitle, string $failureTitle): void
+    {
+        if ($result['success']) {
+            Notification::make()
+                ->title($successTitle)
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->persistent()
+                ->send();
+
+            $this->dispatch('domain-sync-completed');
+
+            return;
+        }
+
+        Notification::make()
+            ->title($failureTitle)
+            ->body((string) ($result['message'] ?? ''))
             ->danger()
+            ->persistent()
             ->send();
     }
 }

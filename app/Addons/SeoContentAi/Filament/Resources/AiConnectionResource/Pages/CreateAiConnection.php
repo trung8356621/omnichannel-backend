@@ -5,10 +5,10 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
 use App\Addons\SeoContentAi\Services\AiModelRouterService;
-use Filament\Resources\Pages\CreateRecord;
 
-class CreateAiConnection extends CreateRecord
+class CreateAiConnection extends SeoCreateRecord
 {
     protected static string $resource = AiConnectionResource::class;
 

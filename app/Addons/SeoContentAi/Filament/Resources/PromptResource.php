@@ -11,21 +11,19 @@ use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
-use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use App\Addons\SeoContentAi\Support\PromptVariableSync;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\ApiConnection;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Collection;
 
-class PromptResource extends Resource
+class PromptResource extends SeoPanelResource
 {
     protected static ?string $model = SeoPrompt::class;
 
@@ -167,9 +165,9 @@ class PromptResource extends Resource
                                             ])
                                             ->placeholder(
                                                 "# Role\nYou are an expert...\n\n"
-                                                . "# Context\nSystem...\n\n"
-                                                . "# Task: Main image\nCapture product image...\n\n"
-                                                . "# Sub-task: Side shot\n..."
+                                                ."# Context\nSystem...\n\n"
+                                                ."# Task: Main image\nCapture product image...\n\n"
+                                                ."# Sub-task: Side shot\n..."
                                             ),
                                     ]),
                                 Forms\Components\Section::make(__('seo-content-ai::filament.prompt.post_processing.title'))
@@ -263,7 +261,7 @@ class PromptResource extends Resource
                     default => (string) $ai->provider,
                 };
 
-                $label = $ai->name . ' (' . $providerName . ')';
+                $label = $ai->name.' ('.$providerName.')';
 
                 return [$ai->id => $label];
             })
@@ -321,7 +319,7 @@ class PromptResource extends Resource
 
             $name = trim((string) ($part->name ?? ''));
             if (in_array($role, ['task', 'sub_task'], true) && $name !== '') {
-                $heading .= ': ' . $name;
+                $heading .= ': '.$name;
             }
 
             $content = trim((string) ($part->content ?? ''));
@@ -329,18 +327,18 @@ class PromptResource extends Resource
                 continue;
             }
 
-            $block = '# ' . $heading . "\n" . $content;
+            $block = '# '.$heading."\n".$content;
             $meta = is_array($part->meta ?? null) ? $part->meta : [];
 
             $rules = trim((string) ($meta['rules'] ?? ''));
             if ($rules !== '') {
-                $block .= "\n\nRules:\n" . $rules;
+                $block .= "\n\nRules:\n".$rules;
             }
 
             if ($role === 'sub_task') {
                 $specific = trim((string) ($meta['specific_constraints'] ?? ''));
                 if ($specific !== '') {
-                    $block .= "\n\nSpecific constraints (sub-prompt):\n" . $specific;
+                    $block .= "\n\nSpecific constraints (sub-prompt):\n".$specific;
                 }
             }
 

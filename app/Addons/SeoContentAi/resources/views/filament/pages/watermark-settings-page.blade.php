@@ -72,9 +72,10 @@
             {{ $this->form }}
 
             <div class="flex justify-end">
-                <x-filament::button type="submit" size="md">
-                    Save settings
-                </x-filament::button>
+                <x-seo-content-ai::form-save-button
+                    target="save"
+                    :label="__('Save settings')"
+                />
             </div>
         </form>
     </div>

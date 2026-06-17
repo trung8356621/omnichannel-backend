@@ -4,10 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\TaskResource\Pages;
 
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource;
-use Filament\Resources\Pages\CreateRecord;
 
-class CreateTask extends CreateRecord
+class CreateTask extends SeoCreateRecord
 {
     protected static string $resource = TaskResource::class;
 

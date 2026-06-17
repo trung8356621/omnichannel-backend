@@ -24,9 +24,10 @@
                             {{ __('seo-content-ai::filament.settings_keywords.debug_cta') }}
                         </x-filament::button>
 
-                        <x-filament::button type="submit" icon="heroicon-o-check">
-                            {{ __('seo-content-ai::filament.settings_keywords.save') }}
-                        </x-filament::button>
+                        <x-seo-content-ai::form-save-button
+                            target="saveKeywordSettings"
+                            :label="__('seo-content-ai::filament.settings_keywords.save')"
+                        />
                     </div>
                 </form>
 

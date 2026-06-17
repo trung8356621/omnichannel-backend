@@ -25,14 +25,13 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
 use Filament\Notifications\Notification;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
-class SeoProjectResource extends Resource
+class SeoProjectResource extends SeoPanelResource
 {
     protected static ?string $model = SeoProject::class;
 
@@ -273,6 +272,23 @@ class SeoProjectResource extends Resource
                                             : null,
                                     ),
 
+                                Forms\Components\Select::make('rewrite_mode')
+                                    ->label(__('seo-content-ai::filament.projects.rewrite_mode'))
+                                    ->options(SeoProjectTask::rewriteModeOptions())
+                                    ->default(SeoProjectTask::REWRITE_MODE_KEYWORD)
+                                    ->required()
+                                    ->native(false)
+                                    ->live()
+                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_REWRITE),
+
+                                Forms\Components\Textarea::make('rewrite_notes')
+                                    ->label(__('seo-content-ai::filament.projects.rewrite_notes'))
+                                    ->placeholder(__('seo-content-ai::filament.projects.rewrite_notes_placeholder'))
+                                    ->rows(3)
+                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_REWRITE
+                                        && SeoProjectTask::normalizeRewriteMode($get('rewrite_mode')) === SeoProjectTask::REWRITE_MODE_CONTENT)
+                                    ->columnSpanFull(),
+
                                 Forms\Components\TextInput::make('loai_san_pham')
                                     ->label(__('seo-content-ai::filament.projects.loai_san_pham'))
                                     ->placeholder(__('seo-content-ai::filament.projects.loai_san_pham_placeholder'))
@@ -301,6 +317,9 @@ class SeoProjectResource extends Resource
 
                                 if ($type === SeoProjectTask::TYPE_REWRITE) {
                                     $prefix = '[Viết lại]';
+                                    if (SeoProjectTask::normalizeRewriteMode($state['rewrite_mode'] ?? null) === SeoProjectTask::REWRITE_MODE_CONTENT) {
+                                        $prefix = '[Viết lại/nội dung]';
+                                    }
                                 } else {
                                     $postTypeLabels = [
                                         SeoProjectTask::POST_TYPE_ARTICLE => 'Article',
@@ -309,7 +328,7 @@ class SeoProjectResource extends Resource
                                         SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'Product Category',
                                     ];
                                     $postType = SeoProjectTask::normalizePostType($state['post_type'] ?? null);
-                                    $prefix = '[' . ($postTypeLabels[$postType] ?? 'Article') . ']';
+                                    $prefix = '['.($postTypeLabels[$postType] ?? 'Article').']';
                                 }
 
                                 return $content !== '' ? "{$prefix} {$content}" : __('seo-content-ai::filament.projects.article_items');

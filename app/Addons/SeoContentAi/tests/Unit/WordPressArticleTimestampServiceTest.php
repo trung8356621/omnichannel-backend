@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\WordPressArticleTimestampService;
+use Illuminate\Support\Carbon;
 use PHPUnit\Framework\TestCase;
 
 final class WordPressArticleTimestampServiceTest extends TestCase
@@ -42,5 +43,15 @@ final class WordPressArticleTimestampServiceTest extends TestCase
 
         self::assertArrayNotHasKey('created_at', $attributes);
         self::assertArrayNotHasKey('updated_at', $attributes);
+    }
+
+    public function test_remote_modified_is_newer_than_local(): void
+    {
+        $service = new WordPressArticleTimestampService;
+        $local = Carbon::parse('2026-06-01 10:00:00');
+
+        self::assertTrue($service->remoteIsNewerThanLocal($local, '2026-06-02 10:00:00'));
+        self::assertFalse($service->remoteIsNewerThanLocal($local, '2026-06-01 10:00:00'));
+        self::assertFalse($service->remoteIsNewerThanLocal($local, null));
     }
 }

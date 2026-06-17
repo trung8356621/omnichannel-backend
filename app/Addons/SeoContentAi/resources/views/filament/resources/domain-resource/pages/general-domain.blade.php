@@ -12,7 +12,6 @@
     $internalLinksUrl = DomainResource::getUrl('internal-links', ['record' => $site]);
     $technicalUrl = DomainResource::getUrl('edit', ['record' => $site]);
     $editDomainUrl = DomainResource::getUrl('edit', ['record' => $site]);
-    $canDeleteDomain = DomainResource::canDelete($site);
     $keywordsTabUrl = $this->getInternalLinkTabUrl('keywords');
     $linksTabUrl = $this->getInternalLinkTabUrl('links');
 
@@ -40,7 +39,7 @@
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
-<div>
+<div @if($incrementalSyncRunning) wire:poll.5s="refreshIncrementalSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif
@@ -54,28 +53,15 @@
                 {{ __('Read token & Migration token. Bấm icon mắt để hiển thị; focus ô input để tự copy.') }}
             </x-slot>
             <x-slot name="headerEnd">
-                <div class="flex flex-wrap items-center gap-2">
-                    <x-filament::button
-                        tag="a"
-                        :href="$editDomainUrl"
-                        size="sm"
-                        color="gray"
-                        icon="heroicon-o-pencil-square"
-                    >
-                        {{ __('Chỉnh sửa') }}
-                    </x-filament::button>
-                    @if($canDeleteDomain)
-                        <x-filament::button
-                            type="button"
-                            size="sm"
-                            color="danger"
-                            icon="heroicon-o-trash"
-                            wire:click="mountAction('delete_domain')"
-                        >
-                            {{ __('Xóa domain') }}
-                        </x-filament::button>
-                    @endif
-                </div>
+                <x-filament::button
+                    tag="a"
+                    :href="$editDomainUrl"
+                    size="sm"
+                    color="gray"
+                    icon="heroicon-o-pencil-square"
+                >
+                    {{ __('Chỉnh sửa') }}
+                </x-filament::button>
             </x-slot>
 
             @if(($api['platform'] ?? '') !== 'wordpress')
@@ -143,16 +129,10 @@
                 <x-slot name="description">
                     {{ __('Website chưa có dữ liệu trong kho SEO. Chạy đồng bộ từ WordPress.') }}
                 </x-slot>
-                <div class="seo-sync-actions !border-0 !pt-0 !mt-0">
-                    <x-filament::button type="button" color="warning" icon="heroicon-o-arrow-path" wire:click="mountAction('sync_data')">
-                        {{ __('Đồng bộ dữ liệu') }}
-                    </x-filament::button>
-                    @if(auth()->user()?->role === 'admin')
-                        <x-filament::button type="button" color="danger" icon="heroicon-o-bug-ant" wire:click="mountAction('test_sync_data')">
-                            {{ __('Test đồng bộ (Debug)') }}
-                        </x-filament::button>
-                    @endif
-                </div>
+                @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
+                    'showReset' => false,
+                    'showTest' => auth()->user()?->role === 'admin',
+                ])
             </x-filament::section>
         @else
             <div class="seo-domain-overview__grid seo-domain-overview__grid--2">
@@ -223,19 +203,10 @@
                         <p class="sm:col-span-2 text-gray-500">{{ __('Tổng') }}: {{ $stats['total'] }} {{ __('bản ghi') }}</p>
                     </div>
 
-                    <div class="seo-sync-actions">
-                        <x-filament::button type="button" color="warning" icon="heroicon-o-arrow-path" wire:click="mountAction('sync_data')">
-                            {{ __('Đồng bộ dữ liệu') }}
-                        </x-filament::button>
-                        @if(auth()->user()?->role === 'admin')
-                            <x-filament::button type="button" color="danger" icon="heroicon-o-bug-ant" wire:click="mountAction('test_sync_data')">
-                                {{ __('Test đồng bộ (Debug)') }}
-                            </x-filament::button>
-                        @endif
-                        <x-filament::button type="button" color="danger" icon="heroicon-o-trash" wire:click="mountAction('clear_domain_content')">
-                            {{ __('Dọn dẹp') }}
-                        </x-filament::button>
-                    </div>
+                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
+                        'showReset' => true,
+                        'showTest' => auth()->user()?->role === 'admin',
+                    ])
                 </x-filament::section>
             </div>
 

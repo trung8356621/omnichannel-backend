@@ -20,7 +20,8 @@ class WordPressPluginWidget extends Widget
 
     public static function canView(): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return SeoAccessControl::canAccessManagerFeatures()
+            && SeoAccessControl::hasGlobalSiteScope();
     }
 
     /**

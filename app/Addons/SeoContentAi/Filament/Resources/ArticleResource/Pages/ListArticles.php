@@ -26,6 +26,11 @@ class ListArticles extends ListRecords
 
     public function setSeoScoreBandFilter(?string $band = null): void
     {
+        $this->tableFilters ??= [];
+
+        // Legacy query-string key from older filter UI — ignore to avoid stale state.
+        unset($this->tableFilters['seo_score']);
+
         if ($band === null || $band === '') {
             unset($this->tableFilters['seo_score_band']);
         } else {
@@ -34,7 +39,9 @@ class ListArticles extends ListRecords
             ];
         }
 
-        $this->resetPage($this->getTablePaginationPageName());
+        $this->getTableFiltersForm()->fill($this->tableFilters);
+        $this->handleTableFilterUpdates();
+        $this->flushCachedTableRecords();
     }
 
     public function syncArticleMainKeyword(int $articleId, string $phrase): void

@@ -1,4 +1,10 @@
-document.addEventListener('alpine:init', () => {
+function registerSeoProjectRunQueue() {
+    if (window.__seoProjectRunQueueRegistered) {
+        return;
+    }
+
+    window.__seoProjectRunQueueRegistered = true;
+
     Alpine.store('seoRunQueue', {
         isRunning: false,
         stopRequested: false,
@@ -23,25 +29,65 @@ document.addEventListener('alpine:init', () => {
 
     Alpine.data('seoProjectRunQueue', (config = {}) => ({
         config,
-        wire: null,
 
         init() {
-            this.wire = this.$wire;
-
             const shouldRun =
                 (this.config.autorun || this.config.runStatus === 'running')
                 && Array.isArray(this.config.taskIds)
                 && this.config.taskIds.length > 0;
 
-            if (shouldRun) {
-                queueMicrotask(() => this.processQueue());
+            if (!shouldRun) {
+                return;
             }
+
+            this.$nextTick(() => {
+                queueMicrotask(() => this.processQueue());
+            });
+        },
+
+        resolveWire() {
+            const livewireId = String(this.config?.livewireId ?? '').trim();
+            if (livewireId !== '' && typeof window.Livewire?.find === 'function') {
+                const component = window.Livewire.find(livewireId);
+                if (component?.call) {
+                    return {
+                        runItemQueued: (taskId) => component.call('runItemQueued', taskId),
+                        completeRunQueue: (stopped) => component.call('completeRunQueue', stopped),
+                        refresh: async () => {
+                            if (typeof component.$wire?.$refresh === 'function') {
+                                await component.$wire.$refresh();
+
+                                return;
+                            }
+
+                            if (typeof component.$refresh === 'function') {
+                                await component.$refresh();
+                            }
+                        },
+                    };
+                }
+            }
+
+            if (this.$wire?.runItemQueued) {
+                return {
+                    runItemQueued: (taskId) => this.$wire.runItemQueued(taskId),
+                    completeRunQueue: (stopped) => this.$wire.completeRunQueue(stopped),
+                    refresh: async () => {
+                        if (typeof this.$wire.$refresh === 'function') {
+                            await this.$wire.$refresh();
+                        }
+                    },
+                };
+            }
+
+            return null;
         },
 
         async processQueue() {
             const store = Alpine.store('seoRunQueue');
+            const wire = this.resolveWire();
 
-            if (store.isRunning || !this.wire) {
+            if (store.isRunning || !wire) {
                 return;
             }
 
@@ -59,7 +105,7 @@ document.addEventListener('alpine:init', () => {
                 store.currentTaskId = taskId;
                 this.markRowRunning(taskId);
 
-                const response = await this.wire.runItemQueued(taskId);
+                const response = await wire.runItemQueued(taskId);
 
                 if (response?.stats) {
                     this.updateStats(response.stats);
@@ -78,12 +124,10 @@ document.addEventListener('alpine:init', () => {
             }
 
             store.currentTaskId = null;
-            await this.wire.completeRunQueue(stopped);
+            await wire.completeRunQueue(stopped);
             store.reset();
 
-            if (typeof this.wire.$refresh === 'function') {
-                await this.wire.$refresh();
-            }
+            await wire.refresh();
 
             if (stopped) {
                 return;
@@ -191,4 +235,10 @@ document.addEventListener('alpine:init', () => {
                 .replaceAll("'", '&#39;');
         },
     }));
-});
+}
+
+if (window.Alpine) {
+    registerSeoProjectRunQueue();
+} else {
+    document.addEventListener('alpine:init', registerSeoProjectRunQueue);
+}

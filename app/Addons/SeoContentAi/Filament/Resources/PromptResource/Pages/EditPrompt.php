@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
+use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Filament\Actions;
-use Filament\Resources\Pages\EditRecord;
 
-class EditPrompt extends EditRecord
+class EditPrompt extends SeoEditRecord
 {
     protected static string $resource = PromptResource::class;
 

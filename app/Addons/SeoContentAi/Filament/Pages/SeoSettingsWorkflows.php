@@ -48,6 +48,11 @@ class SeoSettingsWorkflows extends Page implements HasForms
                     __('seo-content-ai::filament.settings_workflows.publish_article_hint'),
                 ),
                 $this->taskSelect(
+                    SeoCreateArticleSettingsService::KEY_REWRITE_ARTICLE,
+                    __('seo-content-ai::filament.settings_workflows.rewrite_article'),
+                    __('seo-content-ai::filament.settings_workflows.rewrite_article_hint'),
+                ),
+                $this->taskSelect(
                     SeoCreateArticleSettingsService::KEY_POST_REVIEW,
                     __('seo-content-ai::filament.settings_workflows.post_review'),
                     __('seo-content-ai::filament.settings_workflows.post_review_hint'),
@@ -145,6 +150,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
 
         $settings->saveSettings([
             SeoCreateArticleSettingsService::KEY_PUBLISH_ARTICLE => $data[SeoCreateArticleSettingsService::KEY_PUBLISH_ARTICLE] ?? null,
+            SeoCreateArticleSettingsService::KEY_REWRITE_ARTICLE => $data[SeoCreateArticleSettingsService::KEY_REWRITE_ARTICLE] ?? null,
             SeoCreateArticleSettingsService::KEY_POST_REVIEW => $data[SeoCreateArticleSettingsService::KEY_POST_REVIEW] ?? null,
             SeoCreateArticleSettingsService::KEY_CREATE_IMAGE => $data[SeoCreateArticleSettingsService::KEY_CREATE_IMAGE] ?? null,
             SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $data[SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null,

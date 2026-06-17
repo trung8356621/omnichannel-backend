@@ -2195,6 +2195,67 @@ class WorkflowParserService
         return trim($html);
     }
 
+    public function convertHtmlFragmentToMarkdown(string $html): string
+    {
+        $html = $this->stripWordPressShortcodes($html);
+        $html = $this->stripFaqShortcodeArtifacts($html);
+
+        return $this->htmlFragmentToMarkdown($html);
+    }
+
+    /**
+     * Gỡ toàn bộ shortcode WordPress (self-closing, enclosing, lồng nhau).
+     * [[shortcode]] (escape WP) được giữ dạng plain text [shortcode].
+     */
+    public function stripWordPressShortcodes(string $content): string
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return '';
+        }
+
+        /** @var array<string, string> $escapedLiterals */
+        $escapedLiterals = [];
+        $content = (string) preg_replace_callback(
+            '/\[\[([^\]]+)\]\]/',
+            static function (array $matches) use (&$escapedLiterals): string {
+                $token = '___WP_SC_ESC_' . count($escapedLiterals) . '___';
+                $escapedLiterals[$token] = '[' . $matches[1] . ']';
+
+                return $token;
+            },
+            $content,
+        );
+
+        $iterations = 0;
+        do {
+            $before = $content;
+
+            $content = (string) preg_replace(
+                '/\[(?!\/)([a-z0-9_-]+)(?:[^\]]*)?\](.*?)\[\/\1\]/is',
+                '$2',
+                $content,
+            );
+
+            $content = (string) preg_replace(
+                '/\[(?:\/[a-z0-9_-]+|[a-z0-9_-]+)(?:[^\]]*)?\]/i',
+                '',
+                $content,
+            );
+
+            $iterations++;
+        } while ($content !== $before && $iterations < 50);
+
+        foreach ($escapedLiterals as $token => $literal) {
+            $content = str_replace($token, $literal, $content);
+        }
+
+        $content = (string) preg_replace('/[ \t]+/u', ' ', $content);
+        $content = (string) preg_replace("/\n{3,}/u", "\n\n", $content);
+
+        return trim($content);
+    }
+
     private function htmlFragmentToMarkdown(string $html): string
     {
         $dom = new DOMDocument();

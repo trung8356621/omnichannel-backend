@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWatermarkService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Actions\Action;
 use Filament\Forms\Components\FileUpload;
@@ -18,12 +18,11 @@ use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
-use Filament\Pages\Page;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Attributes\Url;
 
-class WatermarkSettingsPage extends Page implements HasForms
+class WatermarkSettingsPage extends SeoPanelPage implements HasForms
 {
     use InteractsWithForms;
 
@@ -278,14 +277,14 @@ class WatermarkSettingsPage extends Page implements HasForms
             ? 'Watermark + optimize (WebP)'
             : 'Optimize only (skip .webp files)';
 
-        $body = $modeLabel . "\n";
+        $body = $modeLabel."\n";
         $body .= sprintf(
             'Local - watermarked: %d · optimized: %d · skipped: %d.',
             (int) ($result['local_watermark'] ?? 0),
             (int) ($result['local_optimize'] ?? 0),
             (int) ($result['local_skipped'] ?? 0),
         );
-        $body .= "\n" . sprintf(
+        $body .= "\n".sprintf(
             'WordPress - watermarked: %d · optimized: %d · skipped: %d.',
             (int) ($result['wp_watermark'] ?? 0),
             (int) ($result['wp_optimize'] ?? 0),
@@ -293,7 +292,7 @@ class WatermarkSettingsPage extends Page implements HasForms
         );
 
         if ((int) ($result['wp_errors'] ?? 0) > 0) {
-            $body .= "\nWP errors: " . (int) $result['wp_errors'] . '.';
+            $body .= "\nWP errors: ".(int) $result['wp_errors'].'.';
         }
 
         if ($this->batchApplyWatermark) {
@@ -325,9 +324,9 @@ class WatermarkSettingsPage extends Page implements HasForms
                 ->modalHeading('Apply to all images')
                 ->modalDescription(
                     'Optimize images (resize, WebP based on "Image optimization settings"). '
-                    . 'If watermark is enabled: apply watermark before optimization. '
-                    . 'Optimize-only mode skips files already in .webp format. '
-                    . 'WordPress images are backed up on Laravel when edited.'
+                    .'If watermark is enabled: apply watermark before optimization. '
+                    .'Optimize-only mode skips files already in .webp format. '
+                    .'WordPress images are backed up on Laravel when edited.'
                 )
                 ->action('applyBatchToCurrentSite')
                 ->visible(fn (): bool => $this->siteId !== null),

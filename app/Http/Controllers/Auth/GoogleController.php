@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Auth;
 
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Http\RedirectResponse;
@@ -66,6 +67,14 @@ class GoogleController extends Controller
 
     private function resolveLoginPath(string $fallbackUrl): string
     {
-        return str_starts_with($fallbackUrl, '/seo') ? '/seo/login' : '/admin/login';
+        if (! str_starts_with($fallbackUrl, '/seo')) {
+            return '/admin/login';
+        }
+
+        $hash = app(SeoDatabaseConnectionService::class)->resolveRedirectHash(auth()->user());
+
+        return $hash !== null
+            ? '/seo/'.$hash.'/login'
+            : '/seo';
     }
 }

@@ -22,7 +22,6 @@ use Filament\Forms\Form;
 use Filament\Forms\Get;
 use Filament\Forms\Set;
 use Filament\Notifications\Notification;
-use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Enums\FiltersLayout;
 use Filament\Tables\Table;
@@ -34,7 +33,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Js;
 use Illuminate\Support\Str;
 
-class KeywordResource extends Resource
+class KeywordResource extends SeoPanelResource
 {
     public const LINK_ROLE_MAIN = 'main';
 
