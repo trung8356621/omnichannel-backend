@@ -24,6 +24,7 @@ final class SeoProjectWorkflowRunService
         private readonly CreateArticlesFromTaskService $articleRunner,
         private readonly SeoProjectRunErrorFormatter $errorFormatter,
         private readonly PromptResultLinkService $promptResultLinks,
+        private readonly SeoProjectArticleOwnerSyncService $articleOwnerSync,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -71,7 +72,15 @@ final class SeoProjectWorkflowRunService
     {
         $items = is_array($run->items) ? $run->items : [];
 
-        return $this->persistRunItems($run, $items, true);
+        $run = $this->persistRunItems($run, $items, true);
+        $run->loadMissing('project');
+
+        $project = $run->project;
+        if (! $project instanceof SeoProject) {
+            return $run;
+        }
+
+        return app(SeoProjectRunConsolidationService::class)->maybeConsolidate($project) ?? $run;
     }
 
     public function execute(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
@@ -112,8 +121,14 @@ final class SeoProjectWorkflowRunService
         $items = is_array($run->items) ? $run->items : [];
         $changed = false;
 
+        $consolidation = app(SeoProjectRunConsolidationService::class);
+
         foreach ($items as $index => $item) {
             if (! is_array($item) || (string) ($item['status'] ?? '') !== 'failed') {
+                continue;
+            }
+
+            if ($consolidation->hasSuccessfulRunItem($project, $item)) {
                 continue;
             }
 
@@ -414,6 +429,15 @@ final class SeoProjectWorkflowRunService
             'source_content' => $failedTask->source_content,
             'description' => $failedTask->description,
             'target_date' => $failedTask->target_date,
+            'article_id' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
+                ? $failedTask->article_id
+                : null,
+            'rewrite_mode' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
+                ? SeoProjectTask::normalizeRewriteMode($failedTask->rewrite_mode)
+                : SeoProjectTask::REWRITE_MODE_KEYWORD,
+            'rewrite_notes' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
+                ? $failedTask->rewrite_notes
+                : null,
             'status' => SeoProjectTask::STATUS_PENDING,
         ]);
 
@@ -626,6 +650,15 @@ final class SeoProjectWorkflowRunService
             SeoProjectTask::STATUS_COMPLETED,
             $articleId > 0 ? $articleId : null,
         );
+
+        if ($articleId <= 0) {
+            return;
+        }
+
+        $task->loadMissing('project');
+        if ($task->project instanceof SeoProject) {
+            $this->articleOwnerSync->assignWriterToArticle($task->project, $articleId);
+        }
     }
 
     private function persistTaskState(SeoProjectTask $task, string $status, ?int $articleId): void

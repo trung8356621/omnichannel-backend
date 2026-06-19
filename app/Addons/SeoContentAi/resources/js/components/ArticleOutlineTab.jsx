@@ -1,24 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, Loader2, Pencil, Plus, RefreshCw, ShieldAlert, Sparkles, Trash2 } from 'lucide-react';
+import { csrfToken, seoArticleApiHeaders } from '../utils/seoArticleApi';
 
 const outlineUrl = (articleId) => `/api/seo/articles/${articleId}/outline`;
+const outlineRefreshUrl = (articleId) => `/api/seo/articles/${articleId}/outline/refresh`;
 const checkDuplicatesUrl = (articleId) => `/api/seo/articles/${articleId}/outline/check-duplicates`;
 const headingUrl = (articleId, headingId) => `/api/seo/articles/${articleId}/outline/${headingId}`;
 const generateUrl = (articleId, headingId) =>
     `/api/seo/articles/${articleId}/outline/${headingId}/generate`;
-
-function csrfToken() {
-    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
-}
 
 async function requestJson(url, options = {}) {
     const response = await fetch(url, {
         credentials: 'same-origin',
         ...options,
         headers: {
-            Accept: 'application/json',
             'Content-Type': 'application/json',
             ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+            ...seoArticleApiHeaders(),
             ...(options.headers ?? {}),
         },
     });
@@ -37,6 +35,10 @@ async function requestJson(url, options = {}) {
 
 function normalizeOutlineHeadingText(text) {
     return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function headingHtmlHasLink(html) {
+    return /<a[\s>]/i.test(String(html ?? ''));
 }
 
 /** Tìm node outline theo id, kèm groupId (H2 container). */
@@ -128,12 +130,33 @@ function patchTreeNode(nodes, headingId, patch) {
 }
 
 function removeTreeNodeById(nodes, headingId) {
+    const targetId = String(headingId);
+
     return nodes
-        .filter((node) => Number(node.id) !== Number(headingId))
+        .filter((node) => String(node.id) !== targetId)
         .map((node) => ({
             ...node,
             children: Array.isArray(node.children) ? removeTreeNodeById(node.children, headingId) : [],
         }));
+}
+
+function replaceTreeNodeId(nodes, oldId, newNode) {
+    const targetId = String(oldId);
+
+    return nodes.map((node) => {
+        if (String(node.id) === targetId) {
+            return {
+                ...newNode,
+                children: Array.isArray(node.children) ? node.children : [],
+            };
+        }
+
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            return { ...node, children: replaceTreeNodeId(node.children, oldId, newNode) };
+        }
+
+        return node;
+    });
 }
 
 function swapSiblingInTree(nodes, nodeId, direction) {
@@ -186,6 +209,7 @@ function HeadingBlock({
     onSelectGroup,
     onJumpToEditor,
     onSaveText,
+    onSaveHtml,
     onGenerate,
     onMoveUp,
     onMoveDown,
@@ -193,13 +217,17 @@ function HeadingBlock({
     canMoveUp = false,
     canMoveDown = false,
     canDelete = false,
+    canGenerateOutlineHeading = false,
+    resolveHeadingInnerHtml = null,
     busyHeadingId,
     duplicateInfo = null,
     onSelectDuplicate,
 }) {
     const [editing, setEditing] = useState(false);
+    const [htmlEditMode, setHtmlEditMode] = useState(false);
     const [draft, setDraft] = useState(node.heading_text);
     const inputRef = useRef(null);
+    const textareaRef = useRef(null);
     const clickTimerRef = useRef(null);
     const copyTimerRef = useRef(null);
     const [copied, setCopied] = useState(false);
@@ -209,21 +237,39 @@ function HeadingBlock({
     useEffect(() => {
         if (!editing) {
             setDraft(node.heading_text);
+            setHtmlEditMode(false);
         }
     }, [node.heading_text, editing]);
 
     useEffect(() => {
         if (editing) {
+            if (htmlEditMode) {
+                textareaRef.current?.focus();
+                textareaRef.current?.select();
+                return;
+            }
+
             inputRef.current?.focus();
             inputRef.current?.select();
         }
-    }, [editing]);
+    }, [editing, htmlEditMode]);
+
+    const startEditing = useCallback(() => {
+        const innerHtml = typeof resolveHeadingInnerHtml === 'function'
+            ? String(resolveHeadingInnerHtml(node) ?? '').trim()
+            : '';
+        const useHtml = headingHtmlHasLink(innerHtml);
+
+        setHtmlEditMode(useHtml);
+        setDraft(useHtml ? innerHtml : node.heading_text);
+        setEditing(true);
+    }, [node, resolveHeadingInnerHtml]);
 
     useEffect(() => {
         if (editingHeadingId === node.id && !editing) {
-            setEditing(true);
+            startEditing();
         }
-    }, [editingHeadingId, node.id, editing]);
+    }, [editingHeadingId, node.id, editing, startEditing]);
 
     const endEditing = useCallback(() => {
         setEditing(false);
@@ -234,13 +280,36 @@ function HeadingBlock({
 
     const commitDraft = useCallback(() => {
         endEditing();
+
+        if (htmlEditMode) {
+            const nextHtml = draft.trim();
+            const currentHtml = typeof resolveHeadingInnerHtml === 'function'
+                ? String(resolveHeadingInnerHtml(node) ?? '').trim()
+                : '';
+
+            if (nextHtml === '' || nextHtml === currentHtml) {
+                setDraft(node.heading_text);
+                return;
+            }
+
+            const doc = new DOMParser().parseFromString(`<div>${nextHtml}</div>`, 'text/html');
+            const plainText = normalizeOutlineHeadingText(doc.body.textContent);
+            if (plainText === '') {
+                setDraft(node.heading_text);
+                return;
+            }
+
+            onSaveHtml?.(node, nextHtml, plainText);
+            return;
+        }
+
         const next = draft.replace(/\s+/g, ' ').trim();
         if (next === '' || next === node.heading_text) {
             setDraft(node.heading_text);
             return;
         }
         onSaveText(node, next);
-    }, [draft, endEditing, node, onSaveText]);
+    }, [draft, endEditing, htmlEditMode, node, onSaveHtml, onSaveText, resolveHeadingInnerHtml]);
 
     useEffect(
         () => () => {
@@ -338,25 +407,47 @@ function HeadingBlock({
             <div className="seo-outline-block__main">
                 <span className="seo-outline-block__level">H{node.level}</span>
                 {editing ? (
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        className="seo-outline-block__input"
-                        value={draft}
-                        maxLength={255}
-                        onChange={(e) => setDraft(e.target.value)}
-                        onBlur={commitDraft}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                                e.preventDefault();
-                                commitDraft();
-                            }
-                            if (e.key === 'Escape') {
-                                setDraft(node.heading_text);
-                                endEditing();
-                            }
-                        }}
-                    />
+                    htmlEditMode ? (
+                        <textarea
+                            ref={textareaRef}
+                            className="seo-outline-block__input seo-outline-block__textarea"
+                            value={draft}
+                            rows={3}
+                            onChange={(e) => setDraft(e.target.value)}
+                            onBlur={commitDraft}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Escape') {
+                                    setDraft(
+                                        typeof resolveHeadingInnerHtml === 'function'
+                                            ? String(resolveHeadingInnerHtml(node) ?? '').trim()
+                                            : node.heading_text,
+                                    );
+                                    endEditing();
+                                }
+                            }}
+                            placeholder="HTML heading (vd: Túi xách <a href=&quot;/slug&quot;>nam</a>)"
+                        />
+                    ) : (
+                        <input
+                            ref={inputRef}
+                            type="text"
+                            className="seo-outline-block__input"
+                            value={draft}
+                            maxLength={255}
+                            onChange={(e) => setDraft(e.target.value)}
+                            onBlur={commitDraft}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commitDraft();
+                                }
+                                if (e.key === 'Escape') {
+                                    setDraft(node.heading_text);
+                                    endEditing();
+                                }
+                            }}
+                        />
+                    )
                 ) : (
                     <span className="seo-outline-block__text" title="Click: nhảy tới editor · Double-click: focus nhóm">
                         {node.heading_text}
@@ -429,33 +520,35 @@ function HeadingBlock({
                         onClick={(e) => {
                             e.stopPropagation();
                             if (!isBusy) {
-                                setEditing(true);
+                                startEditing();
                             }
                         }}
                     >
                         <span className="seo-outline-block__action-label">Sửa tay</span>
                         <Pencil size={14} strokeWidth={1.75} />
                     </button>
-                    <button
-                        type="button"
-                        className="seo-outline-block__action-btn seo-outline-block__action-btn--ai"
-                        disabled={isBusy}
-                        onClick={(e) => {
-                            e.stopPropagation();
-                            if (!isBusy) {
-                                onGenerate(node);
-                            }
-                        }}
-                    >
-                        <span className="seo-outline-block__action-label">
-                            {isBusy ? 'Đang gen...' : 'AI gen'}
-                        </span>
-                        {isBusy ? (
-                            <Loader2 size={14} strokeWidth={1.75} className="seo-outline-spin" />
-                        ) : (
-                            <Sparkles size={14} strokeWidth={1.75} />
-                        )}
-                    </button>
+                    {canGenerateOutlineHeading ? (
+                        <button
+                            type="button"
+                            className="seo-outline-block__action-btn seo-outline-block__action-btn--ai"
+                            disabled={isBusy}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (!isBusy) {
+                                    onGenerate(node);
+                                }
+                            }}
+                        >
+                            <span className="seo-outline-block__action-label">
+                                {isBusy ? 'Đang gen...' : 'AI gen'}
+                            </span>
+                            {isBusy ? (
+                                <Loader2 size={14} strokeWidth={1.75} className="seo-outline-spin" />
+                            ) : (
+                                <Sparkles size={14} strokeWidth={1.75} />
+                            )}
+                        </button>
+                    ) : null}
                     <button
                         type="button"
                         className="seo-outline-block__action-btn seo-outline-block__action-btn--danger"
@@ -487,9 +580,12 @@ function OutlineTree({
     onSelectGroup,
     onJumpToEditor,
     onSaveText,
+    onSaveHtml,
     onGenerate,
     onMoveHeading,
     onDeleteHeading,
+    canGenerateOutlineHeading = false,
+    resolveHeadingInnerHtml = null,
     busyHeadingId,
     duplicateByHeadingId = null,
     onSelectDuplicate,
@@ -526,6 +622,7 @@ function OutlineTree({
                             onSelectGroup={onSelectGroup}
                             onJumpToEditor={onJumpToEditor}
                             onSaveText={onSaveText}
+                            onSaveHtml={onSaveHtml}
                             onGenerate={onGenerate}
                             onMoveUp={(headingNode) => onMoveHeading?.(headingNode, 'prev')}
                             onMoveDown={(headingNode) => onMoveHeading?.(headingNode, 'next')}
@@ -533,6 +630,8 @@ function OutlineTree({
                             canMoveUp={canMoveUp}
                             canMoveDown={canMoveDown}
                             canDelete
+                            canGenerateOutlineHeading={canGenerateOutlineHeading}
+                            resolveHeadingInnerHtml={resolveHeadingInnerHtml}
                             busyHeadingId={busyHeadingId}
                             duplicateInfo={duplicateByHeadingId?.get(node.id) ?? null}
                             onSelectDuplicate={onSelectDuplicate}
@@ -549,9 +648,12 @@ function OutlineTree({
                                     onSelectGroup={onSelectGroup}
                                     onJumpToEditor={onJumpToEditor}
                                     onSaveText={onSaveText}
+                                    onSaveHtml={onSaveHtml}
                                     onGenerate={onGenerate}
                                     onMoveHeading={onMoveHeading}
                                     onDeleteHeading={onDeleteHeading}
+                                    canGenerateOutlineHeading={canGenerateOutlineHeading}
+                                    resolveHeadingInnerHtml={resolveHeadingInnerHtml}
                                     busyHeadingId={busyHeadingId}
                                     duplicateByHeadingId={duplicateByHeadingId}
                                     onSelectDuplicate={onSelectDuplicate}
@@ -625,13 +727,17 @@ export default function ArticleOutlineTab({
     articleId,
     headingCommand = null,
     outlineTreeSync = null,
+    canGenerateOutlineHeading = false,
+    resolveHeadingInnerHtml = null,
     onOutlineLoaded,
     onHeadingTextChange,
+    onHeadingHtmlChange,
     onJumpToEditorHeading,
     onOutlineMoveHeading,
     onOutlineDeleteHeading,
     onOutlineAddSection,
     onNotify,
+    onRequestEditorHtml = null,
 }) {
     const [tree, setTree] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -687,7 +793,7 @@ export default function ArticleOutlineTab({
         [onNotify],
     );
 
-    const loadOutline = useCallback(async () => {
+    const loadOutline = useCallback(async ({ reextract = false } = {}) => {
         setLoading(true);
         setError('');
         // Outline đổi -> thoát chế độ dò trùng.
@@ -699,7 +805,21 @@ export default function ArticleOutlineTab({
         setCompareArticleTitle('');
         setCompareError('');
         try {
-            const data = await requestJson(outlineUrl(articleId));
+            let data;
+            if (reextract) {
+                const html =
+                    typeof onRequestEditorHtml === 'function' ? String(onRequestEditorHtml() ?? '').trim() : '';
+                data = await requestJson(outlineRefreshUrl(articleId), {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        reextract: true,
+                        html,
+                    }),
+                });
+            } else {
+                data = await requestJson(outlineUrl(articleId));
+            }
+
             const outline = Array.isArray(data.outline) ? data.outline : [];
             setTree(outline);
             onOutlineLoaded?.(outline);
@@ -708,7 +828,7 @@ export default function ArticleOutlineTab({
         } finally {
             setLoading(false);
         }
-    }, [articleId, onOutlineLoaded]);
+    }, [articleId, onOutlineLoaded, onRequestEditorHtml]);
 
     useEffect(() => {
         void loadOutline();
@@ -880,6 +1000,11 @@ export default function ArticleOutlineTab({
             setActiveGroupId(heading.id);
             setActiveHeadingId(heading.id);
 
+            window.requestAnimationFrame(() => {
+                const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+
             if (outlineTreeSync.focusEdit) {
                 window.requestAnimationFrame(() => {
                     const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
@@ -904,6 +1029,11 @@ export default function ArticleOutlineTab({
             setActiveGroupId(heading.id);
             setActiveHeadingId(heading.id);
 
+            window.requestAnimationFrame(() => {
+                const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+
             if (outlineTreeSync.focusEdit) {
                 window.requestAnimationFrame(() => {
                     const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
@@ -923,6 +1053,66 @@ export default function ArticleOutlineTab({
             setActiveHeadingId((current) =>
                 Number(current) === Number(outlineTreeSync.headingId) ? null : current,
             );
+
+            return;
+        }
+
+        if (outlineTreeSync.action === 'confirmHeading' && outlineTreeSync.tempHeadingId != null) {
+            const heading = outlineTreeSync.heading;
+            if (!heading?.id) {
+                return;
+            }
+
+            setTree((prev) => {
+                if (prev.some((node) => String(node.id) === String(heading.id))) {
+                    return prev;
+                }
+
+                const hasPending = prev.some(
+                    (node) => String(node.id) === String(outlineTreeSync.tempHeadingId),
+                );
+                if (hasPending) {
+                    return replaceTreeNodeId(prev, outlineTreeSync.tempHeadingId, {
+                        ...heading,
+                        children: [],
+                    });
+                }
+
+                if (outlineTreeSync.afterHeadingId != null) {
+                    return insertRootOutlineNodeAfter(prev, outlineTreeSync.afterHeadingId, heading);
+                }
+
+                return [...prev, { ...heading, children: [] }];
+            });
+            setEditingHeadingId(null);
+            setActiveGroupId(heading.id);
+            setActiveHeadingId(heading.id);
+
+            window.requestAnimationFrame(() => {
+                const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            });
+
+            if (outlineTreeSync.focusEdit) {
+                window.requestAnimationFrame(() => {
+                    const el = document.querySelector(`[data-outline-heading-id="${heading.id}"]`);
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                    setEditingHeadingId(heading.id);
+                });
+            }
+
+            return;
+        }
+
+        if (outlineTreeSync.action === 'patchText' && outlineTreeSync.headingId != null) {
+            const nextText = String(outlineTreeSync.newText ?? '').replace(/\s+/g, ' ').trim();
+            if (nextText === '') {
+                return;
+            }
+
+            setTree((prev) =>
+                patchTreeNode(prev, outlineTreeSync.headingId, { heading_text: nextText }),
+            );
         }
     }, [
         outlineTreeSync?.token,
@@ -930,7 +1120,9 @@ export default function ArticleOutlineTab({
         outlineTreeSync?.afterHeadingId,
         outlineTreeSync?.heading,
         outlineTreeSync?.headingId,
+        outlineTreeSync?.tempHeadingId,
         outlineTreeSync?.focusEdit,
+        outlineTreeSync?.newText,
     ]);
 
     const handleEditingHeadingEnd = useCallback(() => {
@@ -944,6 +1136,7 @@ export default function ArticleOutlineTab({
                 level: node.level,
                 oldText: node.heading_text,
                 newText,
+                headingId: node.id,
             });
         },
         [onHeadingTextChange],
@@ -975,6 +1168,46 @@ export default function ArticleOutlineTab({
             }
         },
         [applyHeadingPatch, articleId, notify],
+    );
+
+    const handleSaveHtml = useCallback(
+        async (node, headingHtml, plainText) => {
+            const newText = normalizeOutlineHeadingText(plainText);
+            if (newText === '') {
+                return;
+            }
+
+            applyHeadingPatch(node, newText);
+            onHeadingHtmlChange?.({
+                level: node.level,
+                oldText: node.heading_text,
+                headingHtml,
+                newText,
+                headingId: node.id,
+            });
+
+            try {
+                const data = await requestJson(headingUrl(articleId, node.id), {
+                    method: 'PUT',
+                    body: JSON.stringify({ heading_text: newText }),
+                });
+
+                const duplicates = Array.isArray(data.duplicates) ? data.duplicates : [];
+                if (duplicates.length > 0) {
+                    notify(
+                        'Cảnh báo trùng heading',
+                        `Heading này trùng với ${duplicates.length} heading khác trong site (vd: "${duplicates[0].article_title}").`,
+                        'warning',
+                    );
+                } else {
+                    notify('Outline', 'Đã lưu heading HTML.', 'success');
+                }
+            } catch (e) {
+                applyHeadingPatch({ ...node, heading_text: newText }, node.heading_text);
+                notify('Outline', e.message || 'Không lưu được heading.', 'danger');
+            }
+        },
+        [applyHeadingPatch, articleId, notify, onHeadingHtmlChange],
     );
 
     const handleGenerate = useCallback(
@@ -1049,7 +1282,7 @@ export default function ArticleOutlineTab({
                         disabled={loading}
                         onClick={(e) => {
                             e.stopPropagation();
-                            void loadOutline();
+                            void loadOutline({ reextract: true });
                         }}
                     >
                         <RefreshCw
@@ -1124,9 +1357,12 @@ export default function ArticleOutlineTab({
                                 onSelectGroup={handleSelectGroup}
                                 onJumpToEditor={handleJumpToEditor}
                                 onSaveText={handleSaveText}
+                                onSaveHtml={handleSaveHtml}
                                 onGenerate={handleGenerate}
                                 onMoveHeading={handleMoveHeading}
                                 onDeleteHeading={handleDeleteHeading}
+                                canGenerateOutlineHeading={canGenerateOutlineHeading}
+                                resolveHeadingInnerHtml={resolveHeadingInnerHtml}
                                 busyHeadingId={busyHeadingId}
                                 duplicateByHeadingId={duplicateByHeadingId}
                                 onSelectDuplicate={handleSelectDuplicate}
@@ -1188,9 +1424,12 @@ export default function ArticleOutlineTab({
                         onSelectGroup={handleSelectGroup}
                         onJumpToEditor={handleJumpToEditor}
                         onSaveText={handleSaveText}
+                        onSaveHtml={handleSaveHtml}
                         onGenerate={handleGenerate}
                         onMoveHeading={handleMoveHeading}
                         onDeleteHeading={handleDeleteHeading}
+                        canGenerateOutlineHeading={canGenerateOutlineHeading}
+                        resolveHeadingInnerHtml={resolveHeadingInnerHtml}
                         busyHeadingId={busyHeadingId}
                     />
                 </div>

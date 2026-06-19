@@ -22,6 +22,7 @@ final class TaskTestInputResolver
         private readonly SeoMainDomainService $mainDomain,
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly WorkflowParserService $workflowParser,
+        private readonly WordPressArticleContentService $wordPressContent,
     ) {}
 
     /**
@@ -145,24 +146,27 @@ final class TaskTestInputResolver
                 throw new \InvalidArgumentException('Không tìm thấy bài viết để viết lại theo nội dung.');
             }
 
-            $markdown = $this->workflowParser->convertHtmlFragmentToMarkdown((string) ($article->body ?? ''));
+            $article->loadMissing(['articleMetas', 'site']);
+            $html = trim($this->wordPressContent->resolveEditorHtml($article));
+            $markdown = $this->workflowParser->convertHtmlFragmentToMarkdown($html);
             if ($markdown === '') {
-                throw new \InvalidArgumentException('Bài viết không có nội dung HTML để chuyển sang Markdown.');
+                throw new \InvalidArgumentException(
+                    $html === ''
+                        ? 'Bài viết không có nội dung HTML để chuyển sang Markdown (kiểm tra body local, wp_post_content hoặc đồng bộ từ WordPress).'
+                        : 'Bài viết không có nội dung Markdown sau khi chuyển đổi (có thể chỉ còn shortcode hoặc khối không có chữ).',
+                );
             }
 
             $notes = trim((string) ($task->rewrite_notes ?? ''));
-            $input = $this->buildRewriteContentInput($markdown, $notes);
-
             $context = $this->contextFromArticle($article, 'id')
                 ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
                 ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_CONTENT, $notes !== '' ? $notes : null);
 
             $variables = $context->variables;
-            $variables['input'] = $input;
+            $variables['input'] = $markdown;
             $variables['post_content'] = $markdown;
-            if ($notes !== '') {
-                $variables['rewrite_notes'] = $notes;
-            }
+            $variables['rewrite_instruction'] = $notes;
+            $variables['rewrite_notes'] = $notes;
 
             $taskSiteId = (int) ($task->site_id ?? 0);
             if ($context->siteId === null && $taskSiteId > 0) {
@@ -175,15 +179,6 @@ final class TaskTestInputResolver
         } finally {
             $this->articleScope = null;
         }
-    }
-
-    private function buildRewriteContentInput(string $markdown, string $notes): string
-    {
-        if ($notes === '') {
-            return $markdown;
-        }
-
-        return "Yêu cầu chỉnh sửa:\n{$notes}\n\n---\n\nNội dung hiện tại (Markdown):\n\n{$markdown}";
     }
 
     private function resolveScoped(?int $articleId, ?string $title, ?string $keyword): TaskTestContext

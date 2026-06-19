@@ -19,7 +19,8 @@ final class ArticleCtaPlaceholderServiceTest extends TestCase
             $this->assertStringContainsString("[{$type}]", $guide);
         }
 
-        $this->assertStringContainsString('[Website/Hotline]', $guide);
+        $this->assertStringNotContainsString('—', $guide);
+        $this->assertStringNotContainsString('[Website/Hotline]', $guide);
     }
 
     public function test_format_cta_for_prompt_always_includes_guide(): void

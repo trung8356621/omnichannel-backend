@@ -32,16 +32,10 @@ final class ArticleCtaPlaceholderService
 
     public function placeholderGuideForPrompt(): string
     {
-        $lines = [
-            'Khi cần chèn thông tin liên hệ / CTA trong bài, BẮT BUỘC dùng placeholder sau (viết đúng cú pháp, không tự đặt tên khác như [Website/Hotline], [Liên hệ], …):',
-        ];
-
-        foreach (self::PLACEHOLDER_TYPES as $type => $label) {
-            $suffix = CtaLinkFormatter::isPlainTextType($type) ? ' (text thuần, không link)' : '';
-            $lines[] = "  [{$type}] — {$label}{$suffix}";
+        $lines = [];
+        foreach (array_keys(self::PLACEHOLDER_TYPES) as $type) {
+            $lines[] = "[{$type}]";
         }
-
-        $lines[] = 'Ví dụ: «Liên hệ tư vấn ngay tại [phone] hoặc [website] để nhận báo giá tốt nhất!»';
 
         return implode("\n", $lines);
     }

@@ -35,7 +35,7 @@ final class PromptTestPublishService
 
         return [
             'success' => true,
-            'message' => 'Đã lưu sườn bài (dàn ý + từ khóa ngữ nghĩa) vào meta bài viết #' . $article->id . '.',
+            'message' => 'Đã lưu sườn bài (dàn ý + từ khóa ngữ nghĩa) vào meta bài viết #'.$article->id.'.',
         ];
     }
 
@@ -71,12 +71,6 @@ final class PromptTestPublishService
             ? $h1Title
             : $this->resolveTitle($variables, $markdown, $article);
         $this->persistMetaDescription($article, $import['meta_description']);
-        if ($h1Title !== '') {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'seo_title'],
-                ['meta_value' => $h1Title],
-            );
-        }
 
         $update = [
             'title' => $title,

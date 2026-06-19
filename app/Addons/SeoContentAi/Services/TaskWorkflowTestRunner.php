@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 use App\Models\Site;
@@ -28,6 +29,7 @@ final class TaskWorkflowTestRunner
         private readonly WorkflowTagExtractorService $tagExtractor,
         private readonly WordPressCommentReviewService $commentReviewPublisher,
         private readonly PromptTestPublishService $promptPublisher,
+        private readonly WordPressArticleSyncService $wordPressArticleSync,
         private readonly WorkflowExistingAiOutputService $existingAiOutput,
         private readonly SeoMediaStorageService $mediaStorage,
         private readonly SeoCreateArticleSettingsService $createArticleSettings,
@@ -724,6 +726,23 @@ final class TaskWorkflowTestRunner
             $state->meta['article_markdown_published'] = true;
             $messages[] = (string) ($publish['message'] ?? 'Đã lưu nội dung bài viết (tiêu đề + body + meta).');
 
+            $wpSync = $this->syncRewrittenArticleToWordPressIfNeeded($context, $article);
+            if ($wpSync !== null) {
+                if (! ($wpSync['success'] ?? false)) {
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => 'action',
+                        'title' => $title,
+                        'action_type' => $actionType,
+                        'status' => 'failed',
+                        'article_id' => $article->id,
+                        'message' => (string) ($wpSync['message'] ?? 'Không thể đồng bộ bài viết lên WordPress.'),
+                    ];
+                }
+
+                $messages[] = (string) ($wpSync['message'] ?? 'Đã đồng bộ bài viết lên WordPress.');
+            }
+
             $outlineMarkdown = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
             if ($outlineMarkdown !== '') {
                 $article->articleMetas()->updateOrCreate(
@@ -1157,6 +1176,34 @@ final class TaskWorkflowTestRunner
     private function isArticlePersistAction(string $actionType): bool
     {
         return in_array($actionType, ['save_article', 'create_article', 'edit_article'], true);
+    }
+
+    /**
+     * @return array{success: bool, message: string}|null
+     */
+    private function syncRewrittenArticleToWordPressIfNeeded(TaskTestContext $context, SeoArticle $article): ?array
+    {
+        if (! $this->shouldSyncRewrittenArticleToWordPress($context, $article)) {
+            return null;
+        }
+
+        return $this->wordPressArticleSync->syncForArticle($article->fresh() ?? $article);
+    }
+
+    private function shouldSyncRewrittenArticleToWordPress(TaskTestContext $context, SeoArticle $article): bool
+    {
+        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
+            return false;
+        }
+
+        $isRewriteTask = $context->projectTaskType === SeoProjectTask::TYPE_REWRITE
+            || $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT;
+
+        if (! $isRewriteTask) {
+            return false;
+        }
+
+        return (int) ($article->wp_post_id ?? 0) > 0;
     }
 
     /**

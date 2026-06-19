@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Carbon\Carbon;
@@ -86,10 +87,26 @@ class EditSeoProject extends SeoEditRecord
 
         /** @var SeoProject $record */
         $record = $this->getRecord();
+        $monthChanged = $record->wasChanged('month');
+        $record = $record->fresh(['tasks']);
 
         $tasksData = $this->form->getState()['tasks_data'] ?? [];
+        $syncService = app(SeoProjectTaskSyncService::class);
+        $projectSiteId = $record->site_id !== null ? (int) $record->site_id : null;
 
-        app(SeoProjectTaskSyncService::class)->sync($record, $tasksData);
+        $incomingSignature = $syncService->tasksSignature($tasksData, $projectSiteId);
+        $existingSignature = $syncService->tasksSignature(
+            $syncService->tasksDataFromProject($record),
+            $projectSiteId,
+        );
+
+        if ($monthChanged || $incomingSignature !== $existingSignature) {
+            $syncService->sync($record, $tasksData);
+
+            return;
+        }
+
+        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($record);
     }
 
     protected function shouldDisableSeoFormSave(): bool

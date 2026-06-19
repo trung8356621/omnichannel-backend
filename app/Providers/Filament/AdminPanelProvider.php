@@ -4,6 +4,7 @@ namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\CustomLogin;
 use App\Filament\Pages\ManageServices;
+use App\Http\Middleware\Filament\RedirectStaffFromAdminPanel;
 use App\Models\Service;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
@@ -22,6 +23,7 @@ use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Session\Middleware\StartSession;
 use Illuminate\View\Middleware\ShareErrorsFromSession;
 use Schema;
+
 class AdminPanelProvider extends PanelProvider
 {
     public function panel(Panel $panel): Panel
@@ -41,7 +43,7 @@ class AdminPanelProvider extends PanelProvider
             ->discoverPages(in: app_path('Filament/Pages'), for: 'App\\Filament\\Pages')
             ->pages([
                 Pages\Dashboard::class,
-                ManageServices::class
+                ManageServices::class,
             ])
             ->discoverWidgets(in: app_path('Filament/Widgets'), for: 'App\\Filament\\Widgets')
             ->widgets([
@@ -60,6 +62,7 @@ class AdminPanelProvider extends PanelProvider
                 DispatchServingFilamentEvent::class,
             ])
             ->authMiddleware([
+                RedirectStaffFromAdminPanel::class,
                 Authenticate::class,
             ]);
 
@@ -121,7 +124,7 @@ class AdminPanelProvider extends PanelProvider
             // Ghi log lỗi nếu cần thiết nhưng không làm sập Panel
             report($e);
         }
+
         return $panel;
     }
 }
-

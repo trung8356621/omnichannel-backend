@@ -109,27 +109,39 @@ export function replaceFirstPlainTextWithLink(html, searchText, label, href) {
  * @returns {{ blockId: string, html: string } | null}
  */
 export function wrapFirstPlainTextWithLinkInBlocks(blocks, phrase, href) {
-    if (!Array.isArray(blocks) || blocks.length === 0) {
-        return null;
-    }
-
-    for (const block of blocks) {
-        if (block?.type === 'image' || !block?.content) {
-            continue;
-        }
-
-        const { html, replaced } = wrapFirstPlainTextWithLink(block.content, phrase, href);
-        if (replaced) {
-            return { blockId: block.id, html };
-        }
-    }
-
-    return null;
+    return wrapPlainTextWithLinkInBlocks(blocks, phrase, href, 0);
 }
 
-export function wrapFirstPlainTextWithLink(html, phrase, href) {
+export function countEligiblePlainTextOccurrences(html, phrase) {
+    const target = normalizeLinkText(phrase);
+    if (!target || !html) {
+        return 0;
+    }
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    let count = 0;
+
+    for (let index = 0; ; index += 1) {
+        if (!findPlainTextRangeInRoot(doc.body, target, index)) {
+            break;
+        }
+        count += 1;
+    }
+
+    return count;
+}
+
+/**
+ * @param {string} html
+ * @param {string} phrase
+ * @param {string} href
+ * @param {number} [occurrenceIndex]
+ * @returns {{ html: string, replaced: boolean }}
+ */
+export function wrapPlainTextWithLink(html, phrase, href, occurrenceIndex = 0) {
     const target = normalizeLinkText(phrase);
     const url = String(href ?? '').trim();
+    const matchIndex = Math.max(0, Number(occurrenceIndex) || 0);
 
     if (!target || !url || !html) {
         return { html, replaced: false };
@@ -137,7 +149,7 @@ export function wrapFirstPlainTextWithLink(html, phrase, href) {
 
     const doc = new DOMParser().parseFromString(html, 'text/html');
     const body = doc.body;
-    const match = findPlainTextRangeInRoot(body, target, 0);
+    const match = findPlainTextRangeInRoot(body, target, matchIndex);
 
     if (!match) {
         return { html, replaced: false };
@@ -149,4 +161,47 @@ export function wrapFirstPlainTextWithLink(html, phrase, href) {
         html: stripEditorTransientMarkup(body.innerHTML),
         replaced: ok,
     };
+}
+
+export function wrapFirstPlainTextWithLink(html, phrase, href) {
+    return wrapPlainTextWithLink(html, phrase, href, 0);
+}
+
+/**
+ * @param {Array<{ id: string, type?: string, content?: string }>} blocks
+ * @param {string} phrase
+ * @param {string} href
+ * @param {number} [occurrenceIndex]
+ * @returns {{ blockId: string, html: string } | null}
+ */
+export function wrapPlainTextWithLinkInBlocks(blocks, phrase, href, occurrenceIndex = 0) {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+        return null;
+    }
+
+    let remaining = Math.max(0, Number(occurrenceIndex) || 0);
+
+    for (const block of blocks) {
+        if (block?.type === 'image' || !block?.content) {
+            continue;
+        }
+
+        const count = countEligiblePlainTextOccurrences(block.content, phrase);
+        if (count <= 0) {
+            continue;
+        }
+
+        if (remaining < count) {
+            const { html, replaced } = wrapPlainTextWithLink(block.content, phrase, href, remaining);
+            if (replaced) {
+                return { blockId: block.id, html };
+            }
+
+            return null;
+        }
+
+        remaining -= count;
+    }
+
+    return null;
 }

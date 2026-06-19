@@ -32,7 +32,7 @@ use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
-use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
+use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
@@ -54,7 +54,9 @@ use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WorkflowParserService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use Filament\Actions;
@@ -136,6 +138,10 @@ class EditArticle extends SeoEditRecord
     /** @var 'save'|'sync'|null Thu thập HTML sau khi flush FAQ (Lưu / Đồng bộ WP). */
     public ?string $pendingEditorCollectTarget = null;
 
+    public ?string $pendingQuickTranslateLang = null;
+
+    public ?int $pendingQuickTranslateTargetArticleId = null;
+
     public bool $articleHeavyActionBusy = false;
 
     /** @var 'save'|'sync'|null */
@@ -186,6 +192,9 @@ class EditArticle extends SeoEditRecord
         $this->importFaqsFromWordPressOnLoad();
         $this->syncReviewedStatusFromExistingReviews();
 
+        $this->articleHeavyActionBusy = false;
+        $this->articleHeavyAction = null;
+
         $restoredMessage = session()->pull('seo_revision_restored');
         if (is_string($restoredMessage) && $restoredMessage !== '') {
             Notification::make()
@@ -210,12 +219,51 @@ class EditArticle extends SeoEditRecord
             $this->articleSlug = Str::slug($slug);
         }
 
+        $this->persistArticleSlugFromEditor();
+    }
+
+    /**
+     * @return array{google_serp_preview: array<string, mixed>, score: int|null, focus_keyword: string, article_slug: string, permalink_base: string, permalink_suffix: string}
+     */
+    public function updateSeoMetaFromEditor(string $focusKeyword, string $description, string $slug = ''): array
+    {
+        $this->focusKeyword = trim($focusKeyword);
+        $this->seoMetaDescription = trim($description);
+
+        if (trim($slug) !== '') {
+            $this->articleSlug = Str::slug($slug);
+        }
+
+        $this->persistSeoMetaFields();
+        $this->persistArticleSlugFromEditor(silent: true);
+        $this->clearInvalidRankMathSeoTitleMeta();
+        $this->dispatchSeoAnalyzePreview();
+
+        $preview = $this->getGoogleSerpPreview();
+        $this->dispatch('google-serp-preview-updated', preview: $preview);
+
+        $score = $this->record->fresh()?->seo_score;
+
+        return [
+            'google_serp_preview' => $preview,
+            'score' => $score !== null ? (int) round((float) $score) : null,
+            'focus_keyword' => trim($this->focusKeyword),
+            'article_slug' => trim($this->articleSlug),
+            'permalink_base' => $this->getPermalinkBase(),
+            'permalink_suffix' => $this->getPermalinkSuffix(),
+        ];
+    }
+
+    private function persistArticleSlugFromEditor(bool $silent = false): void
+    {
         $slug = Str::slug($this->articleSlug);
         if ($slug === '') {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.media_library.invalid_slug'))
-                ->warning()
-                ->send();
+            if (! $silent) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.media_library.invalid_slug'))
+                    ->warning()
+                    ->send();
+            }
 
             return;
         }
@@ -229,13 +277,16 @@ class EditArticle extends SeoEditRecord
 
         $this->record->update(['slug' => $slug]);
         $this->record->refresh();
+        $this->dispatchGoogleSerpPreviewUpdated();
 
         if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_edit.slug_saved_local'))
-                ->body(__('seo-content-ai::filament.article_edit.slug_saved_local_no_wp'))
-                ->success()
-                ->send();
+            if (! $silent) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_edit.slug_saved_local'))
+                    ->body(__('seo-content-ai::filament.article_edit.slug_saved_local_no_wp'))
+                    ->success()
+                    ->send();
+            }
 
             return;
         }
@@ -244,20 +295,42 @@ class EditArticle extends SeoEditRecord
         if ($result['success']) {
             $this->refreshArticleSlugFromWordPressAfterSync();
 
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_edit.slug_synced'))
-                ->body((string) ($result['message'] ?? ''))
-                ->success()
-                ->send();
+            if (! $silent) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_edit.slug_synced'))
+                    ->body((string) ($result['message'] ?? ''))
+                    ->success()
+                    ->send();
+            }
 
             return;
         }
 
-        Notification::make()
-            ->title(__('seo-content-ai::filament.article_edit.slug_sync_failed'))
-            ->body((string) ($result['message'] ?? ''))
-            ->warning()
-            ->send();
+        if (! $silent) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.slug_sync_failed'))
+                ->body((string) ($result['message'] ?? ''))
+                ->warning()
+                ->send();
+        }
+    }
+
+    private function clearInvalidRankMathSeoTitleMeta(): void
+    {
+        $this->record->loadMissing('articleMetas');
+
+        $rawSeoTitle = trim((string) ($this->record->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
+        if ($rawSeoTitle === '') {
+            return;
+        }
+
+        if (RankMathSeoValueNormalizer::normalizeTitle($rawSeoTitle) !== null) {
+            return;
+        }
+
+        $this->record->articleMetas()->where('meta_key', 'seo_title')->delete();
+        $this->seoTitle = '';
+        $this->seoTitleHydrated = '';
     }
 
     public function updatedFocusKeyword(): void
@@ -1781,7 +1854,7 @@ class EditArticle extends SeoEditRecord
     {
         return app(ArticleGoogleSerpPreviewService::class)->buildForArticle(
             $this->record,
-            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            trim($this->articleTitle),
             trim($this->seoMetaDescription),
             $this->getDisplayPermalink(),
         );
@@ -2108,6 +2181,132 @@ class EditArticle extends SeoEditRecord
             ->title('Tạo bản dịch')
             ->body('Chưa có bản «'.$label.'» trên WordPress. Tạo bản dịch trong WP/Polylang hoặc chạy Quy trình SEO để sinh nội dung.')
             ->warning()
+            ->send();
+    }
+
+    public function isDefaultLanguageArticle(): bool
+    {
+        $this->record->loadMissing('site');
+        $lang = trim((string) ($this->record->language ?? 'vi'));
+
+        return app(SitePolylangService::class)->isDefaultLanguage(
+            $lang,
+            $this->record->site,
+        );
+    }
+
+    public function canQuickTranslateLinkedArticle(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getTranslateArticlePromptId() !== null;
+    }
+
+    public function requestQuickTranslate(string $targetLang, ?int $targetArticleId = null): void
+    {
+        if (! $this->canQuickTranslateLinkedArticle()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.translate_failed'))
+                ->body(__('seo-content-ai::filament.article_edit.translate_no_prompt'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if (! $this->isDefaultLanguageArticle()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.translate_failed'))
+                ->body(__('seo-content-ai::filament.article_edit.translate_not_default_language'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $targetLang = trim($targetLang);
+        if ($targetLang === '' || $targetArticleId === null || $targetArticleId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.translate_failed'))
+                ->body(__('seo-content-ai::filament.article_edit.translate_invalid_target'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $this->pendingQuickTranslateLang = $targetLang;
+        $this->pendingQuickTranslateTargetArticleId = $targetArticleId;
+        $this->pendingEditorCollectTarget = 'quick-translate';
+        $this->dispatch('collect-editor-html', target: 'quick-translate');
+    }
+
+    public function quickTranslateLinkedArticle(string $editorHtml = ''): void
+    {
+        $targetLang = trim((string) ($this->pendingQuickTranslateLang ?? ''));
+        $targetArticleId = (int) ($this->pendingQuickTranslateTargetArticleId ?? 0);
+        $this->pendingQuickTranslateLang = null;
+        $this->pendingQuickTranslateTargetArticleId = null;
+        $this->pendingEditorCollectTarget = null;
+
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $this->beginHeavyArticleAction('quick-translate');
+
+        try {
+            $targetArticle = SeoArticle::query()->find($targetArticleId);
+            if (! $targetArticle instanceof SeoArticle) {
+                throw new \InvalidArgumentException(
+                    __('seo-content-ai::filament.article_edit.translate_invalid_target'),
+                );
+            }
+
+            $result = app(ArticleQuickTranslateService::class)->translateLinkedArticle(
+                $this->record,
+                $targetArticle,
+                $editorHtml,
+            );
+        } catch (\InvalidArgumentException $exception) {
+            $this->cancelHeavyArticleAction();
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.translate_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->cancelHeavyArticleAction();
+
+        $editUrl = trim((string) ($result['edit_url'] ?? ''));
+        $targetLanguage = trim((string) ($result['target_language'] ?? $targetLang));
+
+        if ($editUrl !== '') {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.translate_success'))
+                ->body(__('seo-content-ai::filament.article_edit.translate_success_body', [
+                    'language' => $targetLanguage,
+                ]))
+                ->success()
+                ->send();
+
+            $this->redirect($editUrl);
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_edit.translate_success'))
+            ->body(__('seo-content-ai::filament.article_edit.translate_success_body', [
+                'language' => $targetLanguage,
+            ]))
+            ->success()
             ->send();
     }
 
@@ -2471,7 +2670,7 @@ class EditArticle extends SeoEditRecord
         $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
             $this->record,
             trim((string) ($this->record->body ?? $this->editorHtml)),
-            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            trim($this->articleTitle),
             $this->articleSlug !== '' ? $this->articleSlug : trim((string) ($this->record->slug ?? '')),
             trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
         );
@@ -2538,7 +2737,7 @@ class EditArticle extends SeoEditRecord
             }
 
             $slug = Str::slug($this->articleSlug);
-            $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
+            $seoTitle = trim($this->articleTitle);
             $seoMetaDescription = trim($this->seoMetaDescription);
 
             $publishAt = $this->resolvePublishAtForSave();
@@ -2612,7 +2811,7 @@ class EditArticle extends SeoEditRecord
             app(SeoAnalyzerService::class)->analyzeSubmittedContent(
                 $this->record->fresh(),
                 $html,
-                trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+                trim($this->articleTitle),
                 $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
                 trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
             );
@@ -2796,7 +2995,6 @@ class EditArticle extends SeoEditRecord
         $h1Title = trim((string) ($import['h1_title'] ?? ''));
         if ($h1Title !== '') {
             $this->articleTitle = $h1Title;
-            $this->seoTitle = $h1Title;
         }
 
         $metaDescription = trim((string) ($import['meta_description'] ?? ''));
@@ -2817,7 +3015,7 @@ class EditArticle extends SeoEditRecord
         $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
             $this->record->fresh(),
             $html,
-            trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            trim($this->articleTitle),
             $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
             trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
         );
@@ -2957,7 +3155,13 @@ class EditArticle extends SeoEditRecord
      */
     public function getEditorSeoPayload(): array
     {
-        return app(ArticleEditorSeoPayloadService::class)->forArticle($this->record);
+        return array_merge(
+            app(ArticleEditorSeoPayloadService::class)->forArticle($this->record),
+            [
+                'article_slug' => trim($this->articleSlug),
+                'permalink_suffix' => $this->getPermalinkSuffix(),
+            ],
+        );
     }
 
     public function analyzeSeoDraft(string $html): void
@@ -2968,11 +3172,31 @@ class EditArticle extends SeoEditRecord
     public function updatedSeoTitle(): void
     {
         $this->dispatchSeoAnalyzePreview();
+        $this->dispatchGoogleSerpPreviewUpdated();
     }
 
     public function updatedSeoMetaDescription(): void
     {
         $this->dispatchSeoAnalyzePreview();
+        $this->dispatchGoogleSerpPreviewUpdated();
+    }
+
+    public function updatedArticleTitle(): void
+    {
+        $this->dispatchGoogleSerpPreviewUpdated();
+    }
+
+    /**
+     * @return array{google_serp_preview: array<string, mixed>}
+     */
+    public function updateSeoMetaDescriptionFromEditor(string $description): array
+    {
+        return $this->updateSeoMetaFromEditor($this->focusKeyword, $description, $this->articleSlug);
+    }
+
+    private function dispatchGoogleSerpPreviewUpdated(): void
+    {
+        $this->dispatch('google-serp-preview-updated', preview: $this->getGoogleSerpPreview());
     }
 
     private function dispatchSeoAnalyzePreview(?string $html = null): void
@@ -2983,7 +3207,7 @@ class EditArticle extends SeoEditRecord
         }
 
         $slug = Str::slug($this->articleSlug);
-        $seoTitle = trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle);
+        $seoTitle = trim($this->articleTitle);
         $seoMetaDescription = trim($this->seoMetaDescription);
 
         $result = app(SeoAnalyzerService::class)->analyzePreview(
@@ -3010,12 +3234,18 @@ class EditArticle extends SeoEditRecord
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
             'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
+            'can_generate_outline_heading' => $this->canGenerateOutlineHeading(),
         ];
     }
 
     public function canGenerateFeaturedSnippet(): bool
     {
         return app(SeoCreateArticleSettingsService::class)->getFeaturedSnippetPromptId() !== null;
+    }
+
+    public function canGenerateOutlineHeading(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getOutlineHeadingRegeneratorPromptId() !== null;
     }
 
     /**
@@ -3036,6 +3266,7 @@ class EditArticle extends SeoEditRecord
         return [
             'id' => (int) $this->record->id,
             'site_id' => $siteId,
+            'seo_connection_hash' => SeoConnectionContext::hash(),
             'content_revision' => hash('sha256', $contentRevisionSource),
             'media_picker_url' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'title' => (string) $this->articleTitle,
@@ -4031,7 +4262,13 @@ class EditArticle extends SeoEditRecord
     {
         $this->record->loadMissing('articleMetas');
 
-        $this->seoTitle = trim((string) ($this->record->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
+        $rawSeoTitle = trim((string) ($this->record->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
+        if ($rawSeoTitle !== '' && RankMathSeoValueNormalizer::normalizeTitle($rawSeoTitle) === null) {
+            $this->record->articleMetas()->where('meta_key', 'seo_title')->delete();
+        }
+
+        $this->seoTitle = trim($this->articleTitle);
+        $this->seoTitleHydrated = $this->seoTitle;
 
         $this->seoMetaDescription = trim((string) (
             $this->record->articleMetas->first(
@@ -4042,9 +4279,6 @@ class EditArticle extends SeoEditRecord
             )?->meta_value ?? ''
         ));
 
-        // Snapshot lúc mount — dùng để phân biệt «người dùng chủ động xóa»
-        // với «state cũ từ tab mở trước khi workflow ghi meta».
-        $this->seoTitleHydrated = $this->seoTitle;
         $this->seoMetaDescriptionHydrated = $this->seoMetaDescription;
 
         $this->focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '';
@@ -4058,9 +4292,7 @@ class EditArticle extends SeoEditRecord
     public function applyRevisionPreviewToEditor(string $title, array $seoMeta = []): void
     {
         $this->articleTitle = trim($title);
-
-        $seoTitle = trim((string) ($seoMeta['seo_title'] ?? ''));
-        $this->seoTitle = $seoTitle;
+        $this->seoTitle = trim($this->articleTitle);
 
         $this->seoMetaDescription = trim((string) ($seoMeta['meta_description'] ?? ''));
         $this->focusKeyword = trim((string) ($seoMeta['focus_keyword'] ?? ''));
@@ -4116,7 +4348,7 @@ class EditArticle extends SeoEditRecord
         $article = $this->record->fresh();
 
         return [
-            'seo_title' => trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            'seo_title' => trim($this->articleTitle),
             'meta_description' => trim($this->seoMetaDescription),
             'focus_keyword' => trim($this->focusKeyword),
             'seo_score' => $article?->seo_score !== null ? (float) $article->seo_score : null,
@@ -4128,23 +4360,7 @@ class EditArticle extends SeoEditRecord
     {
         $this->record->loadMissing('articleMetas');
 
-        $seoTitle = trim($this->seoTitle);
         $seoDescription = trim($this->seoMetaDescription);
-
-        if ($seoTitle === '') {
-            // Chỉ xóa khi lúc mount field có giá trị (người dùng chủ động xóa).
-            // Nếu mount đã rỗng mà DB có giá trị → workflow vừa ghi sau khi tab mở → giữ nguyên.
-            if (trim($this->seoTitleHydrated) !== '') {
-                $this->record->articleMetas()
-                    ->where('meta_key', 'seo_title')
-                    ->delete();
-            }
-        } else {
-            $this->record->articleMetas()->updateOrCreate(
-                ['meta_key' => 'seo_title'],
-                ['meta_value' => $seoTitle],
-            );
-        }
 
         foreach (['seo_meta_description', 'meta_description'] as $key) {
             if ($seoDescription === '') {
@@ -4187,7 +4403,7 @@ class EditArticle extends SeoEditRecord
     private function resolveLivewireSeoPayloadForWordPress(): array
     {
         return [
-            'seo_title' => trim($this->seoTitle) !== '' ? trim($this->seoTitle) : trim($this->articleTitle),
+            'seo_title' => '',
             'meta_description' => trim($this->seoMetaDescription),
             'focus_keyword' => trim($this->focusKeyword),
         ];

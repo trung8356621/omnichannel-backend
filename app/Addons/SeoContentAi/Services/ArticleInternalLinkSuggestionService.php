@@ -84,7 +84,7 @@ final class ArticleInternalLinkSuggestionService
                 continue;
             }
 
-            $resolved = $this->linkTargetResolver->resolveForPhraseOnSite($siteId, $phrase, $article);
+            $resolved = $this->linkTargetResolver->resolveForPhraseOnSite($siteId, $phrase, $article, sameLanguageOnly: true);
             $href = $resolved['href'] ?? null;
             $keywordId = (int) ($resolved['keyword_id'] ?? $keyword->id);
 

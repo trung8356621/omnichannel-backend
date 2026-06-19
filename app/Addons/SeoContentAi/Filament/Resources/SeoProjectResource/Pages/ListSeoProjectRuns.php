@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
@@ -36,6 +37,9 @@ final class ListSeoProjectRuns extends Page
             ->findOrFail($this->record);
 
         abort_unless(SeoAccessControl::canAccessContentProjectRun($this->project), 403);
+
+        app(SeoProjectRunConsolidationService::class)->maybeConsolidate($this->project);
+        $this->project->refresh();
     }
 
     public function getTitle(): string|Htmlable
@@ -51,6 +55,24 @@ final class ListSeoProjectRuns extends Page
             ->get() ?? collect();
     }
 
+    public function canStartWorkflowRun(): bool
+    {
+        if ($this->project === null) {
+            return false;
+        }
+
+        return app(SeoProjectRunConsolidationService::class)->hasRunnablePendingTasks($this->project);
+    }
+
+    public function isProjectFullyCompleted(): bool
+    {
+        if ($this->project === null) {
+            return false;
+        }
+
+        return app(SeoProjectRunConsolidationService::class)->isProjectFullyCompleted($this->project);
+    }
+
     protected function getHeaderActions(): array
     {
         return [
@@ -58,6 +80,10 @@ final class ListSeoProjectRuns extends Page
                 ->label(__('seo-content-ai::filament.projects.run_workflow'))
                 ->icon('heroicon-o-play')
                 ->color('success')
+                ->disabled(fn (): bool => ! $this->canStartWorkflowRun())
+                ->tooltip(fn (): ?string => $this->canStartWorkflowRun()
+                    ? null
+                    : __('seo-content-ai::filament.projects.run_workflow_disabled'))
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
                 ->modalDescription(fn () => SeoProjectResource::runWorkflowModalDescription($this->project))
@@ -94,6 +120,10 @@ final class ListSeoProjectRuns extends Page
                 ->label(__('seo-content-ai::filament.projects.test_run_workflow'))
                 ->icon('heroicon-o-beaker')
                 ->color('warning')
+                ->disabled(fn (): bool => ! $this->canStartWorkflowRun())
+                ->tooltip(fn (): ?string => $this->canStartWorkflowRun()
+                    ? null
+                    : __('seo-content-ai::filament.projects.run_workflow_disabled'))
                 ->requiresConfirmation()
                 ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading', [
                     'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,

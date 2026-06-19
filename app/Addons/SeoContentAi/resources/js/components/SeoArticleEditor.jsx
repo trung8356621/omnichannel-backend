@@ -14,9 +14,11 @@ import {
     scrollToFaqByIndex,
     scrollToFaqKeyword,
     scrollToKeywordAnchor,
+    scrollToPlainTextInBlock,
 } from '../utils/articleLinkScroll';
 import {
     wrapFirstPlainTextWithLink,
+    wrapPlainTextWithLinkInBlocks,
     replaceFirstPlainTextWithLink,
     replaceFirstPlainTextWithText,
 } from '../utils/articleLinkInsert';
@@ -32,6 +34,7 @@ import {
 import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
 import SeoScorePanel from './SeoScorePanel';
 import ArticleImagesTab from './ArticleImagesTab';
+import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
@@ -102,7 +105,7 @@ import {
     stripEditorTransientMarkup,
 } from '../utils/articleEditorTransientMarkup';
 import FaqAccordionPreview from './FaqAccordionPreview';
-import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle, Search, ListPlus, Sparkles, ListCollapse } from 'lucide-react';
+import { Undo2, Redo2, Plus, ChevronDown, ChevronRight, ImageIcon, Table, Link2, Wand2, AlertTriangle, Search, ListPlus, Sparkles, ListCollapse, Trash2 } from 'lucide-react';
 import {
     getSelectionHtmlFromEditor,
     getSelectionTextFromEditor,
@@ -348,6 +351,47 @@ const isSectionHeadingBlock = (block, section) =>
     !section?.isIntro &&
     section?.blockIds?.[0] === block?.id &&
     blockHasOutlineHeading(block);
+
+/** Section mới / lỗi: chỉ có H2 + đoạn trống, không block nội dung khác. */
+const sectionHasOnlyEmptyHeadingBody = (section, blockById) => {
+    if (section?.isIntro || !section?.blockIds?.length) {
+        return false;
+    }
+
+    for (let index = 1; index < section.blockIds.length; index += 1) {
+        const block = blockById.get(section.blockIds[index]);
+        if (!block) {
+            continue;
+        }
+
+        if (block.type === 'image') {
+            return false;
+        }
+
+        const plain = String(block.content ?? '')
+            .replace(/<[^>]*>/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (plain !== '') {
+            return false;
+        }
+    }
+
+    const headingBlock = blockById.get(section.blockIds[0]);
+    if (!headingBlock || headingBlock.type === 'image' || typeof headingBlock.content !== 'string') {
+        return false;
+    }
+
+    try {
+        const doc = new DOMParser().parseFromString(headingBlock.content, 'text/html');
+        doc.body.querySelector('h2, h3, h4')?.remove();
+        const rest = (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+        return rest === '';
+    } catch {
+        return false;
+    }
+};
 
 const outlineApiCsrfToken = () =>
     document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
@@ -1443,7 +1487,128 @@ function ActiveBlockEditor({
     );
 }
 
-function OutlineLockedHeadingBlock({ block, onActivate, onOutlineHeadingCommand }) {
+function SectionHeaderTitle({ sectionNumber, title, onSave, onFocusOutline, autoEditToken = 0 }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(title);
+    const inputRef = useRef(null);
+    const clickTimerRef = useRef(null);
+
+    useEffect(
+        () => () => {
+            if (clickTimerRef.current) {
+                window.clearTimeout(clickTimerRef.current);
+            }
+        },
+        [],
+    );
+
+    useEffect(() => {
+        if (!autoEditToken) {
+            return;
+        }
+
+        setEditing(true);
+    }, [autoEditToken]);
+
+    useEffect(() => {
+        if (!editing) {
+            setDraft(title);
+        }
+    }, [title, editing]);
+
+    useEffect(() => {
+        if (!editing || !inputRef.current) {
+            return;
+        }
+
+        inputRef.current.focus();
+        inputRef.current.select();
+    }, [editing]);
+
+    const commit = useCallback(() => {
+        const next = draft.replace(/\s+/g, ' ').trim();
+        setEditing(false);
+
+        if (next === '' || next === title) {
+            setDraft(title);
+            return;
+        }
+
+        onSave?.(next);
+    }, [draft, onSave, title]);
+
+    const handleTitleClick = useCallback(
+        (event) => {
+            event.stopPropagation();
+            if (editing) {
+                return;
+            }
+
+            if (clickTimerRef.current) {
+                window.clearTimeout(clickTimerRef.current);
+            }
+
+            clickTimerRef.current = window.setTimeout(() => {
+                clickTimerRef.current = null;
+                onFocusOutline?.();
+            }, 220);
+        },
+        [editing, onFocusOutline],
+    );
+
+    const handleTitleDoubleClick = useCallback((event) => {
+        event.stopPropagation();
+        if (clickTimerRef.current) {
+            window.clearTimeout(clickTimerRef.current);
+            clickTimerRef.current = null;
+        }
+        setEditing(true);
+    }, []);
+
+    return (
+        <h3 className="seo-section-header-title min-w-0 truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
+            <span
+                className="seo-section-header-title__prefix cursor-pointer"
+                onClick={handleTitleClick}
+            >
+                {`Section ${sectionNumber}: `}
+            </span>
+            {editing ? (
+                <input
+                    ref={inputRef}
+                    type="text"
+                    className="seo-section-header-title__input"
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onBlur={commit}
+                    onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                            event.preventDefault();
+                            commit();
+                        }
+                        if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setDraft(title);
+                            setEditing(false);
+                        }
+                    }}
+                    onClick={(event) => event.stopPropagation()}
+                />
+            ) : (
+                <span
+                    className="seo-section-header-title__text"
+                    onClick={handleTitleClick}
+                    onDoubleClick={handleTitleDoubleClick}
+                    title={t('editor_section_title_edit_hint')}
+                >
+                    {title}
+                </span>
+            )}
+        </h3>
+    );
+}
+
+function OutlineLockedHeadingBlock({ block, isSectionHeading = false, onActivate, onOutlineHeadingCommand }) {
     const lockedClickTimerRef = useRef(null);
 
     useEffect(
@@ -1464,38 +1629,53 @@ function OutlineLockedHeadingBlock({ block, onActivate, onOutlineHeadingCommand 
         [block, onOutlineHeadingCommand],
     );
 
+    const sharedProps = {
+        onClick: (event) => {
+            if (lockedClickTimerRef.current) {
+                window.clearTimeout(lockedClickTimerRef.current);
+            }
+            lockedClickTimerRef.current = window.setTimeout(() => {
+                lockedClickTimerRef.current = null;
+                onActivate?.();
+                dispatchOutlineCommand('focus', event);
+            }, 220);
+        },
+        onDoubleClick: (event) => {
+            if (lockedClickTimerRef.current) {
+                window.clearTimeout(lockedClickTimerRef.current);
+                lockedClickTimerRef.current = null;
+            }
+            onActivate?.();
+            dispatchOutlineCommand('edit', event);
+        },
+        onKeyDown: (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                dispatchOutlineCommand('focus', e);
+            }
+        },
+        role: 'button',
+        tabIndex: 0,
+        title: 'Click: focus Outline · Double-click: sửa trong Outline',
+    };
+
+    if (isSectionHeading) {
+        return (
+            <div
+                className="seo-block-preview seo-block-preview--outline-locked seo-block-preview--section-heading-only rounded border p-3 -mx-1"
+                {...sharedProps}
+            >
+                <p className="seo-section-heading-locked-hint">{t('editor_section_heading_outline_hint')}</p>
+            </div>
+        );
+    }
+
     return (
         <div
             className="seo-block-preview seo-block-preview--outline-locked seo-wp-content p-3 -mx-1 rounded border prose prose-slate max-w-none dark:prose-invert"
             dangerouslySetInnerHTML={{
                 __html: block.content || `<p class="text-gray-400 italic">${t('editor_click_to_edit')}</p>`,
             }}
-            onClick={(event) => {
-                if (lockedClickTimerRef.current) {
-                    window.clearTimeout(lockedClickTimerRef.current);
-                }
-                lockedClickTimerRef.current = window.setTimeout(() => {
-                    lockedClickTimerRef.current = null;
-                    onActivate?.();
-                    dispatchOutlineCommand('focus', event);
-                }, 220);
-            }}
-            onDoubleClick={(event) => {
-                if (lockedClickTimerRef.current) {
-                    window.clearTimeout(lockedClickTimerRef.current);
-                    lockedClickTimerRef.current = null;
-                }
-                onActivate?.();
-                dispatchOutlineCommand('edit', event);
-            }}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    dispatchOutlineCommand('focus', e);
-                }
-            }}
-            role="button"
-            tabIndex={0}
-            title="Click: focus Outline · Double-click: sửa trong Outline"
+            {...sharedProps}
         />
     );
 }
@@ -1521,6 +1701,7 @@ function BlockEditor({
     panelFaqs,
     introImagesLocked = false,
     outlineHeadingsLocked = false,
+    isSectionHeadingBlock = false,
     onOutlineHeadingCommand,
 }) {
     const blockHtml = displayContent ?? block.content;
@@ -1569,19 +1750,45 @@ function BlockEditor({
 
     if (isFaqShortcodeBlock) {
         return (
-            <div
-                className={`seo-faq-shortcode-block${isActive ? ' is-active' : ''}`}
-                onClick={onActivate}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        onActivate();
-                    }
-                }}
-                role="button"
-                tabIndex={0}
-                title={t('editor_faq_shortcode_hint')}
-            >
-                <FaqAccordionPreview faqs={panelFaqs} />
+            <div className={`seo-faq-shortcode-block${isActive ? ' is-active' : ''}`}>
+                {isActive ? (
+                    <div className="seo-block-toolbar seo-faq-shortcode-toolbar">
+                        <span className="block-editor-badge">FAQ Shortcode</span>
+                        <button
+                            type="button"
+                            className={`seo-toolbar-btn seo-toolbar-delete${!canDeleteBlock ? ' is-disabled' : ''}`}
+                            disabled={!canDeleteBlock}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                if (canDeleteBlock) {
+                                    onDelete?.();
+                                }
+                            }}
+                            title={
+                                canDeleteBlock
+                                    ? t('toolbar_delete_paragraph')
+                                    : t('toolbar_cannot_delete_last')
+                            }
+                        >
+                            <Trash2 size={16} />
+                        </button>
+                    </div>
+                ) : null}
+                <div
+                    className="seo-faq-shortcode-block__body"
+                    onClick={onActivate}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            onActivate();
+                        }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    title={t('editor_faq_shortcode_hint')}
+                >
+                    <FaqAccordionPreview faqs={panelFaqs} />
+                </div>
             </div>
         );
     }
@@ -1590,6 +1797,7 @@ function BlockEditor({
         return (
             <OutlineLockedHeadingBlock
                 block={block}
+                isSectionHeading={isSectionHeadingBlock}
                 onActivate={onActivate}
                 onOutlineHeadingCommand={onOutlineHeadingCommand}
             />
@@ -1691,6 +1899,7 @@ export default function SeoArticleEditor({
     const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
     const showReviewsTab = editorSettings?.show_reviews_tab !== false;
     const canGenerateFeaturedSnippet = editorSettings?.can_generate_featured_snippet === true;
+    const canGenerateOutlineHeading = editorSettings?.can_generate_outline_heading === true;
     const editorTabs = useMemo(() => {
         if (!isProductPost || !showReviewsTab) {
             return BASE_TABS;
@@ -1733,8 +1942,10 @@ export default function SeoArticleEditor({
     const [outlineHasSavedHeadings, setOutlineHasSavedHeadings] = useState(false);
     const [outlineHeadingCommand, setOutlineHeadingCommand] = useState(null);
     const [outlineTreeSync, setOutlineTreeSync] = useState(null);
+    const [sectionTitleEditRequest, setSectionTitleEditRequest] = useState(null);
     const [outlineHeadingKeys, setOutlineHeadingKeys] = useState(() => new Set());
     const outlineHeadingIdsByBlockIdRef = useRef(new Map());
+    const outlineHeadingIdsByKeyRef = useRef(new Map());
     const outlineAppendInflightRef = useRef(new Set());
     const outlineAppendDoneRef = useRef(new Set());
     const [insertMenu, setInsertMenu] = useState(null);
@@ -2034,6 +2245,19 @@ export default function SeoArticleEditor({
         }
 
         return map;
+    }, [editorSections]);
+
+    /** Block đầu mỗi section (H2 section) — luôn khóa TipTap, chỉ sửa qua Outline. */
+    const sectionHeadingBlockIds = useMemo(() => {
+        const ids = new Set();
+        for (const section of editorSections) {
+            if (section.isIntro || !section.blockIds?.length) {
+                continue;
+            }
+            ids.add(section.blockIds[0]);
+        }
+
+        return ids;
     }, [editorSections]);
 
     const isIntroBlockId = useCallback(
@@ -3546,6 +3770,14 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            const targetSectionId = sectionByBlockId.get(targetBlockId);
+            const sectionWasCollapsed =
+                targetSectionId != null && collapsedSectionIds[targetSectionId] === true;
+
+            if (sectionWasCollapsed) {
+                setCollapsedSectionIds((prev) => ({ ...prev, [targetSectionId]: false }));
+            }
+
             const currentActive = activeBlockIdRef.current;
             const needsBlockSwitch = currentActive !== targetBlockId;
 
@@ -3562,7 +3794,9 @@ export default function SeoArticleEditor({
                     return;
                 }
                 if (searchPlainText) {
-                    selectPlainTextInBlock(targetBlockId, text, localAnchorIndex);
+                    scrollToPlainTextInBlock(targetBlockId, text, localAnchorIndex, {
+                        onMiss: () => scrollToFaqKeyword(text, listIndex),
+                    });
                     return;
                 }
                 scrollToKeywordAnchor(targetBlockId, preferHrefMatch ? '' : text, localAnchorIndex, href, {
@@ -3570,13 +3804,15 @@ export default function SeoArticleEditor({
                 });
             };
 
-            if (needsBlockSwitch) {
-                window.setTimeout(runScroll, 60);
+            const scrollDelay = needsBlockSwitch || sectionWasCollapsed ? 90 : 0;
+
+            if (scrollDelay > 0) {
+                window.setTimeout(runScroll, scrollDelay);
             } else {
                 runScroll();
             }
         },
-        [clearTempMerge, commitActiveBlock, selectPlainTextInBlock],
+        [clearTempMerge, collapsedSectionIds, commitActiveBlock, sectionByBlockId],
     );
 
     const insertSuggestedLinkIntoContent = useCallback(
@@ -3588,8 +3824,30 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const notifyInserted = (editor, blockId) => {
-                persistEditorContentImmediately(editor, blockId);
+            const notifyInserted = (blockId, nextHtml) => {
+                const currentBlocks = blocksRef.current;
+                const nextBlocks = currentBlocks.map((item) =>
+                    item.id === blockId ? { ...item, content: nextHtml } : item,
+                );
+                blocksRef.current = nextBlocks;
+                setBlocks(nextBlocks);
+
+                const activeId = activeBlockIdRef.current;
+                if (activeId === blockId) {
+                    const editor = blockEditorsRef.current.get(blockId);
+                    if (editor && !editor.isDestroyed) {
+                        editor.commands.setContent(nextHtml, { emitUpdate: false });
+                    }
+                }
+
+                if (articleId) {
+                    saveDraft(articleId, {
+                        blocks: nextBlocks,
+                        html: exportBlocksToHtml(nextBlocks),
+                    });
+                    setSaveStatus('saved');
+                }
+
                 setExtractedLinks((prev) => {
                     const current = prev && typeof prev === 'object'
                         ? prev
@@ -3620,6 +3878,19 @@ export default function SeoArticleEditor({
 
             setActiveTab('editor');
             activeTabRef.current = 'editor';
+            commitActiveBlock();
+
+            const domResult = wrapPlainTextWithLinkInBlocks(
+                blocksRef.current,
+                text,
+                href,
+                occurrenceIndex,
+            );
+            if (domResult) {
+                notifyInserted(domResult.blockId, domResult.html);
+                return;
+            }
+
             let remainingIndex = occurrenceIndex;
             let targetBlockId = null;
             let localIndex = 0;
@@ -3656,9 +3927,6 @@ export default function SeoArticleEditor({
 
             const currentActive = activeBlockIdRef.current;
             if (currentActive !== targetBlockId) {
-                if (currentActive) {
-                    commitActiveBlock();
-                }
                 setActiveBlockId(targetBlockId);
             }
 
@@ -3666,10 +3934,16 @@ export default function SeoArticleEditor({
                 if (!insertLinkInEditor(editor, text, href)) {
                     return;
                 }
-                notifyInserted(editor, targetBlockId);
+                persistEditorContentImmediately(editor, targetBlockId);
+                notifyInserted(targetBlockId, blocksRef.current.find((item) => item.id === targetBlockId)?.content ?? '');
             });
         },
-        [commitActiveBlock, persistEditorContentImmediately, selectPlainTextInBlock],
+        [
+            articleId,
+            commitActiveBlock,
+            persistEditorContentImmediately,
+            selectPlainTextInBlock,
+        ],
     );
 
     const removeInternalLinkFromContent = useCallback(
@@ -4794,38 +5068,97 @@ export default function SeoArticleEditor({
         );
     }, []);
 
-    const moveBlock = useCallback(
+    const moveBlockToSection = useCallback(
         (blockId, direction) => {
             if (tempMergeRef.current) {
                 return;
             }
 
-            commitActiveBlock();
+            const id = String(blockId ?? '').trim();
+            if (!id) {
+                return;
+            }
+
+            const movingBlock = blocksRef.current.find((block) => block.id === id);
+            if (
+                movingBlock &&
+                outlineHasSavedHeadings &&
+                blockHasOutlineHeading(movingBlock) &&
+                !sectionHeadingBlockIds.has(id)
+            ) {
+                return;
+            }
+
+            const currentSectionIndex = editorSections.findIndex((section) => section.blockIds.includes(id));
+            if (currentSectionIndex < 0) {
+                return;
+            }
+
+            const targetSectionIndex =
+                direction === 'prev' ? currentSectionIndex - 1 : currentSectionIndex + 1;
+            if (targetSectionIndex < 0 || targetSectionIndex >= editorSections.length) {
+                return;
+            }
+
+            const targetSection = editorSections[targetSectionIndex];
+            const targetIds = (targetSection?.blockIds ?? []).filter((candidateId) => candidateId !== id);
+
             setInsertMenu(null);
 
+            const activeId = activeBlockIdRef.current;
+            let flushedHtml = null;
+            const activeEditor = activeId ? blockEditorsRef.current.get(activeId) : null;
+
+            if (activeEditor && !activeEditor.isDestroyed) {
+                const sourceHtml = blocksRef.current.find((block) => block.id === activeId)?.content ?? '';
+                flushedHtml = persistBlockHtmlFromEditor(sourceHtml, activeEditor.getHTML());
+            } else {
+                blockFlushRef.current?.();
+            }
+
             setBlocks((prev) => {
-                const index = prev.findIndex((b) => b.id === blockId);
-                if (index < 0) {
+                let working = prev;
+                if (flushedHtml != null && activeId) {
+                    working = working.map((block) =>
+                        block.id === activeId ? { ...block, content: flushedHtml } : block,
+                    );
+                }
+
+                const fromIndex = working.findIndex((block) => block.id === id);
+                if (fromIndex < 0) {
                     return prev;
                 }
 
-                const targetIndex = direction === 'up' ? index - 1 : index + 1;
-                if (targetIndex < 0 || targetIndex >= prev.length) {
-                    return prev;
-                }
-
-                const next = [...prev];
-                [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-                if (introSectionHasImageBlock(next)) {
+                const moving = working[fromIndex];
+                if (targetSection?.isIntro && moving?.type === 'image') {
                     notifyIntroNoImages();
 
                     return prev;
                 }
 
-                return normalizeBlocks(next);
+                const next = [...working];
+                next.splice(fromIndex, 1);
+
+                let insertAt = next.length;
+                if (direction === 'prev') {
+                    const lastTargetId = targetIds[targetIds.length - 1];
+                    const lastIndex = lastTargetId ? next.findIndex((block) => block.id === lastTargetId) : -1;
+                    insertAt = lastIndex >= 0 ? lastIndex + 1 : 0;
+                } else {
+                    const lastTargetId = targetIds[targetIds.length - 1];
+                    const lastIndex = lastTargetId ? next.findIndex((block) => block.id === lastTargetId) : -1;
+                    insertAt = lastIndex >= 0 ? lastIndex + 1 : next.length;
+                }
+
+                next.splice(insertAt, 0, moving);
+
+                return next;
             });
+
+            setActiveBlockId(id);
+            setGlobalEditor(null);
         },
-        [commitActiveBlock, notifyIntroNoImages],
+        [editorSections, notifyIntroNoImages, outlineHasSavedHeadings, sectionHeadingBlockIds],
     );
 
     const moveSection = useCallback(
@@ -4860,18 +5193,35 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            commitActiveBlock();
             setInsertMenu(null);
 
+            const activeId = activeBlockIdRef.current;
+            let flushedHtml = null;
+            const activeEditor = activeId ? blockEditorsRef.current.get(activeId) : null;
+
+            if (activeEditor && !activeEditor.isDestroyed) {
+                const sourceHtml = blocksRef.current.find((block) => block.id === activeId)?.content ?? '';
+                flushedHtml = persistBlockHtmlFromEditor(sourceHtml, activeEditor.getHTML());
+            } else {
+                blockFlushRef.current?.();
+            }
+
             setBlocks((prev) => {
+                let working = prev;
+                if (flushedHtml != null && activeId) {
+                    working = working.map((block) =>
+                        block.id === activeId ? { ...block, content: flushedHtml } : block,
+                    );
+                }
+
                 const fromBlocks = section.blockIds
-                    .map((blockId) => prev.find((block) => block.id === blockId))
+                    .map((blockId) => working.find((block) => block.id === blockId))
                     .filter(Boolean);
                 if (fromBlocks.length !== section.blockIds.length) {
                     return prev;
                 }
 
-                const withoutMoved = prev.filter((block) => !section.blockIds.includes(block.id));
+                const withoutMoved = working.filter((block) => !section.blockIds.includes(block.id));
                 const targetStart = withoutMoved.findIndex((block) => block.id === targetSection.blockIds[0]);
                 if (targetStart < 0) {
                     return prev;
@@ -4882,20 +5232,21 @@ export default function SeoArticleEditor({
                         ? targetStart
                         : targetStart + targetSection.blockIds.length;
 
-                return normalizeBlocks([
+                return [
                     ...withoutMoved.slice(0, insertAt),
                     ...fromBlocks,
                     ...withoutMoved.slice(insertAt),
-                ]);
+                ];
             });
 
+            setActiveBlockId(section.blockIds.find((blockId) => !sectionHeadingBlockIds.has(blockId)) ?? section.blockIds[0] ?? null);
             setGlobalEditor(null);
         },
-        [commitActiveBlock, editorSections],
+        [editorSections, sectionHeadingBlockIds],
     );
 
     const deleteSection = useCallback(
-        (section) => {
+        (section, options = {}) => {
             if (section?.isIntro) {
                 return;
             }
@@ -4920,7 +5271,8 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            if (!window.confirm(t('editor_delete_section_confirm'))) {
+            const skipConfirm = options.skipConfirm === true;
+            if (!skipConfirm && !window.confirm(t('editor_delete_section_confirm'))) {
                 return;
             }
 
@@ -4941,6 +5293,7 @@ export default function SeoArticleEditor({
             });
 
             outlineAppendDoneRef.current.delete(headingBlockId);
+            outlineAppendInflightRef.current.delete(headingBlockId);
 
             const headingId = outlineHeadingIdsByBlockIdRef.current.get(headingBlockId);
             if (headingId != null) {
@@ -4952,6 +5305,11 @@ export default function SeoArticleEditor({
                     headingId,
                 });
             } else {
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'remove',
+                    headingId: `pending-${headingBlockId}`,
+                });
                 const meta = extractOutlineHeadingFromBlock(headingBlock);
                 if (meta) {
                     setOutlineHeadingKeys((prev) => {
@@ -5343,10 +5701,13 @@ export default function SeoArticleEditor({
                 e.target.closest('.wp-article-links-keyword') ||
                 e.target.closest('.seo-article-faq-panel') ||
                 e.target.closest('.seo-faq-item') ||
+                e.target.closest('.seo-faq-shortcode-block') ||
+                e.target.closest('.omi-faq-editor-preview') ||
                 e.target.closest('.seo-fmt-dropdown-menu') ||
                 e.target.closest('.seo-block-insert-bar') ||
                 e.target.closest('.seo-block-insert-trigger') ||
                 e.target.closest('.seo-block-insert-menu') ||
+                e.target.closest('.seo-editor-block-slot') ||
                 e.target.closest('.seo-section-element-actions') ||
                 e.target.closest('.seo-block-editor-resize') ||
                 e.target.closest('.seo-image-block-picker')
@@ -5872,7 +6233,22 @@ export default function SeoArticleEditor({
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
 
     // Sync text heading từ tab Outline về block tương ứng trong editor chính.
-    const applyOutlineHeadingText = useCallback(({ level, oldText, newText }) => {
+    const resolveBlockIdForOutlineHeadingId = useCallback((headingId) => {
+        const targetId = Number(headingId);
+        if (!Number.isFinite(targetId)) {
+            return null;
+        }
+
+        for (const [blockId, mappedId] of outlineHeadingIdsByBlockIdRef.current.entries()) {
+            if (Number(mappedId) === targetId) {
+                return blockId;
+            }
+        }
+
+        return null;
+    }, []);
+
+    const applyOutlineHeadingText = useCallback(({ level, oldText, newText, headingId = null }) => {
         const normalizeText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
         const targetLevel = Number(level) || 0;
         const target = normalizeText(oldText);
@@ -5882,6 +6258,8 @@ export default function SeoArticleEditor({
         }
 
         const selector = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2, h3, h4';
+        const mappedBlockId = resolveBlockIdForOutlineHeadingId(headingId);
+        const headingTag = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2';
         let replaced = false;
 
         setBlocks((prev) =>
@@ -5890,10 +6268,28 @@ export default function SeoArticleEditor({
                     return block;
                 }
 
+                if (mappedBlockId && block.id !== mappedBlockId) {
+                    return block;
+                }
+
                 const doc = new DOMParser().parseFromString(block.content, 'text/html');
-                const headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
+                let headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
                     (node) => normalizeText(node.textContent) === target,
                 );
+
+                if (!headingNode && mappedBlockId === block.id) {
+                    headingNode = doc.body.querySelector(selector);
+                }
+
+                if (!headingNode && mappedBlockId === block.id) {
+                    replaced = true;
+
+                    return {
+                        ...block,
+                        content: `<${headingTag}>${replacement}</${headingTag}><p></p>`,
+                    };
+                }
+
                 if (!headingNode) {
                     return block;
                 }
@@ -5913,14 +6309,148 @@ export default function SeoArticleEditor({
                 next.delete(oldKey);
             }
             next.add(newKey);
+
+            const headingId = outlineHeadingIdsByKeyRef.current.get(oldKey);
+            if (headingId != null) {
+                outlineHeadingIdsByKeyRef.current.delete(oldKey);
+                outlineHeadingIdsByKeyRef.current.set(newKey, headingId);
+            }
+
             return next;
         });
-    }, []);
+    }, [resolveBlockIdForOutlineHeadingId]);
+
+    const resolveHeadingInnerHtml = useCallback((node) => {
+        const level = Number(node?.level ?? 0);
+        const headingText = normalizeOutlineHeadingText(node?.heading_text);
+        if (headingText === '') {
+            return '';
+        }
+
+        const blockId =
+            resolveBlockIdForOutlineHeadingId(node?.id) ??
+            findBlockIdForOutlineHeading(blocksRef.current, level, headingText);
+        if (!blockId) {
+            return '';
+        }
+
+        const block = blocksRef.current.find((item) => item.id === blockId);
+        if (!block?.content) {
+            return '';
+        }
+
+        const selector = level >= 2 && level <= 4 ? `h${level}` : 'h2, h3, h4';
+        const doc = new DOMParser().parseFromString(block.content, 'text/html');
+        const headingNode =
+            doc.body.querySelector(selector) ??
+            Array.from(doc.body.querySelectorAll(selector)).find(
+                (item) => normalizeOutlineHeadingText(item.textContent) === headingText,
+            );
+
+        return String(headingNode?.innerHTML ?? '').trim();
+    }, [resolveBlockIdForOutlineHeadingId]);
+
+    const applyOutlineHeadingHtml = useCallback(({ level, oldText, headingHtml, newText, headingId = null }) => {
+        const normalizeText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const targetLevel = Number(level) || 0;
+        const target = normalizeText(oldText);
+        const replacementHtml = String(headingHtml ?? '').trim();
+        const replacementText = normalizeText(newText);
+        if (target === '' || replacementHtml === '') {
+            return;
+        }
+
+        const selector = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2, h3, h4';
+        const mappedBlockId = resolveBlockIdForOutlineHeadingId(headingId);
+        const headingTag = targetLevel >= 2 && targetLevel <= 4 ? `h${targetLevel}` : 'h2';
+        let replacedBlockId = null;
+        let nextHtml = '';
+
+        setBlocks((prev) =>
+            prev.map((block) => {
+                if (replacedBlockId || block.type !== 'text' || !block.content) {
+                    return block;
+                }
+
+                if (mappedBlockId && block.id !== mappedBlockId) {
+                    return block;
+                }
+
+                const doc = new DOMParser().parseFromString(block.content, 'text/html');
+                let headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
+                    (node) => normalizeText(node.textContent) === target,
+                );
+
+                if (!headingNode && mappedBlockId === block.id) {
+                    headingNode = doc.body.querySelector(selector);
+                }
+
+                if (!headingNode && mappedBlockId === block.id) {
+                    replacedBlockId = block.id;
+                    nextHtml = `<${headingTag}>${replacementHtml}</${headingTag}><p></p>`;
+
+                    return { ...block, content: nextHtml };
+                }
+
+                if (!headingNode) {
+                    return block;
+                }
+
+                headingNode.innerHTML = replacementHtml;
+                replacedBlockId = block.id;
+                nextHtml = doc.body.innerHTML;
+
+                return { ...block, content: nextHtml };
+            }),
+        );
+
+        if (replacedBlockId && nextHtml !== '') {
+            const activeEditor = blockEditorsRef.current.get(replacedBlockId);
+            if (activeEditor && !activeEditor.isDestroyed) {
+                activeEditor.commands.setContent(nextHtml, { emitUpdate: false });
+            }
+        }
+
+        if (replacementText !== '') {
+            setOutlineHeadingKeys((prev) => {
+                const next = new Set(prev);
+                const oldKey = outlineHeadingKey(targetLevel, target);
+                const newKey = outlineHeadingKey(targetLevel, replacementText);
+                if (next.has(oldKey)) {
+                    next.delete(oldKey);
+                }
+                next.add(newKey);
+                return next;
+            });
+        }
+    }, [resolveBlockIdForOutlineHeadingId]);
 
     const handleOutlineLoaded = useCallback((outline) => {
-        const hasOutline = Array.isArray(outline) && outline.length > 0;
+        const nodes = Array.isArray(outline) ? outline : [];
+        const hasOutline = nodes.length > 0;
         setOutlineHasSavedHeadings(hasOutline);
-        setOutlineHeadingKeys(flattenOutlineHeadingKeys(outline));
+        setOutlineHeadingKeys(flattenOutlineHeadingKeys(nodes));
+
+        const byKey = new Map();
+        for (const node of flattenOutlineNodes(nodes)) {
+            const level = Number(node?.level ?? 0);
+            const text = normalizeOutlineHeadingText(node?.heading_text);
+            if (level >= 2 && text !== '' && node?.id != null) {
+                byKey.set(outlineHeadingKey(level, text), node.id);
+            }
+        }
+        outlineHeadingIdsByKeyRef.current = byKey;
+
+        for (const block of blocksRef.current) {
+            const meta = extractOutlineHeadingFromBlock(block);
+            if (!meta) {
+                continue;
+            }
+            const headingId = byKey.get(outlineHeadingKey(meta.level, meta.headingText));
+            if (headingId != null) {
+                outlineHeadingIdsByBlockIdRef.current.set(block.id, headingId);
+            }
+        }
     }, []);
 
     const handleOutlineHeadingAppended = useCallback(({ blockId, headingId, heading }) => {
@@ -5932,12 +6462,18 @@ export default function SeoArticleEditor({
         const level = Number(heading?.level ?? 2);
         const text = normalizeOutlineHeadingText(heading?.heading_text);
         if (text !== '') {
+            const key = outlineHeadingKey(level, text);
             setOutlineHeadingKeys((prev) => {
                 const next = new Set(prev);
-                next.add(outlineHeadingKey(level, text));
+                next.add(key);
                 return next;
             });
+            if (headingId != null) {
+                outlineHeadingIdsByKeyRef.current.set(key, headingId);
+            }
         }
+
+        setOutlineHasSavedHeadings(true);
     }, []);
 
     const appendOutlineHeadingForBlock = useCallback(
@@ -5954,6 +6490,20 @@ export default function SeoArticleEditor({
             outlineAppendInflightRef.current.add(id);
 
             const afterHeadingId = Number(options.afterHeadingId ?? 0) || null;
+            const optimisticId = `pending-${id}`;
+
+            setOutlineTreeSync({
+                token: Date.now(),
+                action: afterHeadingId !== null ? 'insertAfter' : 'append',
+                afterHeadingId,
+                heading: {
+                    id: optimisticId,
+                    heading_text: meta.headingText,
+                    level: meta.level ?? 2,
+                    children: [],
+                },
+                focusEdit: options.focusEdit === true,
+            });
 
             try {
                 const payload = {
@@ -5981,12 +6531,18 @@ export default function SeoArticleEditor({
                 });
                 setOutlineTreeSync({
                     token: Date.now(),
-                    action: afterHeadingId !== null ? 'insertAfter' : 'append',
+                    action: 'confirmHeading',
+                    tempHeadingId: optimisticId,
                     afterHeadingId,
                     heading,
-                    focusEdit: true,
+                    focusEdit: options.focusEdit === true,
                 });
             } catch (error) {
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'remove',
+                    headingId: optimisticId,
+                });
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
                         detail: {
@@ -6003,48 +6559,159 @@ export default function SeoArticleEditor({
         [articleId, handleOutlineHeadingAppended],
     );
 
-    const resolveOutlineHeadingIdForSection = useCallback(
-        async (section) => {
-            if (!section?.blockIds?.length || !articleId) {
-                return null;
+    const syncOutlineForNewSectionBlock = useCallback(
+        (headingBlock, afterHeadingId = null) => {
+            if (!articleId || !headingBlock) {
+                return;
             }
 
-            for (const blockId of section.blockIds) {
-                const headingId = outlineHeadingIdsByBlockIdRef.current.get(blockId);
-                if (headingId) {
-                    return headingId;
-                }
-            }
-
-            const headingBlock = section.blockIds
-                .map((blockId) => blocksRef.current.find((block) => block.id === blockId))
-                .find((block) => block && extractOutlineHeadingFromBlock(block));
-
-            const meta = headingBlock ? extractOutlineHeadingFromBlock(headingBlock) : null;
+            const meta = extractOutlineHeadingFromBlock(headingBlock);
             if (!meta) {
-                return null;
+                return;
             }
+
+            void appendOutlineHeadingForBlock(headingBlock.id, meta, {
+                afterHeadingId,
+                focusEdit: false,
+            });
+        },
+        [appendOutlineHeadingForBlock, articleId],
+    );
+
+    const resolveOutlineHeadingIdForSection = useCallback((section) => {
+        if (!section?.blockIds?.length || section.isIntro) {
+            return null;
+        }
+
+        const headingBlockId = section.blockIds[0];
+        const cached = outlineHeadingIdsByBlockIdRef.current.get(headingBlockId);
+        if (cached) {
+            return cached;
+        }
+
+        const block = blocksRef.current.find((item) => item.id === headingBlockId);
+        const meta = block ? extractOutlineHeadingFromBlock(block) : null;
+        if (!meta) {
+            return null;
+        }
+
+        const headingId = outlineHeadingIdsByKeyRef.current.get(
+            outlineHeadingKey(meta.level, meta.headingText),
+        );
+        if (headingId != null) {
+            outlineHeadingIdsByBlockIdRef.current.set(headingBlockId, headingId);
+        }
+
+        return headingId ?? null;
+    }, []);
+
+    const saveSectionTitleFromHeader = useCallback(
+        async (section, newText) => {
+            if (section?.isIntro) {
+                return;
+            }
+
+            const trimmed = String(newText ?? '').replace(/\s+/g, ' ').trim();
+            const oldText = String(section.title ?? '').replace(/\s+/g, ' ').trim();
+            if (trimmed === '' || trimmed === oldText) {
+                return;
+            }
+
+            const headingBlockId = section.blockIds[0];
+            const block = blocksRef.current.find((item) => item.id === headingBlockId);
+            const meta = block ? extractOutlineHeadingFromBlock(block) : null;
+            const level = meta?.level ?? 2;
+            const headingId = resolveOutlineHeadingIdForSection(section);
+
+            applyOutlineHeadingText({
+                level,
+                oldText,
+                newText: trimmed,
+                headingId,
+            });
+
+            if (headingId == null) {
+                if (!articleId) {
+                    return;
+                }
+
+                const sections = buildEditorSections(blocksRef.current);
+                const sectionIndex = sections.findIndex((item) => item.id === section.id);
+                let afterHeadingId = null;
+                if (sectionIndex > 0) {
+                    for (let i = sectionIndex - 1; i >= 0; i--) {
+                        const candidate = resolveOutlineHeadingIdForSection(sections[i]);
+                        if (candidate != null) {
+                            afterHeadingId = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                try {
+                    await appendOutlineHeadingForBlock(
+                        headingBlockId,
+                        { level, headingText: trimmed },
+                        { afterHeadingId, focusEdit: false },
+                    );
+                } catch (error) {
+                    applyOutlineHeadingText({
+                        level,
+                        oldText: trimmed,
+                        newText: oldText,
+                        headingId: null,
+                    });
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: 'Outline',
+                                body: error?.message || 'Không thêm được tiêu đề section vào outline.',
+                                status: 'danger',
+                            },
+                        }),
+                    );
+                }
+
+                return;
+            }
+
+            setOutlineTreeSync({
+                token: Date.now(),
+                action: 'patchText',
+                headingId,
+                newText: trimmed,
+            });
 
             try {
-                const data = await outlineApiRequest(articleId, '', { method: 'GET' });
-                const match = flattenOutlineNodes(data.outline ?? []).find(
-                    (node) =>
-                        Number(node.level) === Number(meta.level) &&
-                        normalizeOutlineHeadingText(node.heading_text) === meta.headingText,
+                await outlineApiRequest(articleId, `/${headingId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ heading_text: trimmed }),
+                });
+            } catch (error) {
+                applyOutlineHeadingText({
+                    level,
+                    oldText: trimmed,
+                    newText: oldText,
+                    headingId,
+                });
+                setOutlineTreeSync({
+                    token: Date.now(),
+                    action: 'patchText',
+                    headingId,
+                    newText: oldText,
+                });
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: 'Outline',
+                            body: error?.message || 'Không lưu được tiêu đề section.',
+                            status: 'danger',
+                        },
+                    }),
                 );
-
-                if (match?.id) {
-                    outlineHeadingIdsByBlockIdRef.current.set(headingBlock.id, match.id);
-
-                    return match.id;
-                }
-            } catch {
-                return null;
             }
-
-            return null;
         },
-        [articleId],
+        [appendOutlineHeadingForBlock, applyOutlineHeadingText, articleId, resolveOutlineHeadingIdForSection],
     );
 
     const switchTab = useCallback(
@@ -6074,6 +6741,27 @@ export default function SeoArticleEditor({
         rail.classList.add('is-pulse');
         window.setTimeout(() => rail.classList.remove('is-pulse'), 1200);
     }, []);
+
+    const focusOutlineFromSectionHeader = useCallback(
+        (section) => {
+            if (section?.isIntro || !section?.blockIds?.length) {
+                return;
+            }
+
+            const headingBlock = blocksRef.current.find((item) => item.id === section.blockIds[0]);
+            if (!headingBlock) {
+                return;
+            }
+
+            syncOutlineFocusFromBlock(headingBlock, 'focus');
+            outlineRailRef.current?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+                inline: 'start',
+            });
+        },
+        [syncOutlineFocusFromBlock],
+    );
 
     const handleOutlineHeadingFromEditor = useCallback(
         (action, block) => {
@@ -6110,9 +6798,32 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            if (sectionHeadingBlockIds.has(blockId)) {
+                const sectionId = sectionByBlockId.get(blockId);
+                if (sectionId) {
+                    setActiveTab('editor');
+                    setCollapsedSectionIds((prev) =>
+                        prev[sectionId]
+                            ? {
+                                  ...prev,
+                                  [sectionId]: false,
+                              }
+                            : prev,
+                    );
+                    window.requestAnimationFrame(() => {
+                        const sectionEl = document.querySelector(`[data-seo-section-id="${sectionId}"]`);
+                        sectionEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        sectionEl?.classList.add('is-outline-jump-highlight');
+                        window.setTimeout(() => sectionEl?.classList.remove('is-outline-jump-highlight'), 2400);
+                    });
+                }
+
+                return;
+            }
+
             focusImageBlock(blockId);
         },
-        [focusImageBlock],
+        [focusImageBlock, sectionByBlockId, sectionHeadingBlockIds],
     );
 
     useEffect(() => {
@@ -6198,6 +6909,16 @@ export default function SeoArticleEditor({
         });
     }, [editorSections]);
 
+    const focusNewSectionHeader = useCallback((sectionUiId) => {
+        setSectionTitleEditRequest({ sectionId: sectionUiId, token: Date.now() });
+        window.requestAnimationFrame(() => {
+            document.querySelector(`[data-seo-section-id="${sectionUiId}"]`)?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+            });
+        });
+    }, []);
+
     const addSection = useCallback(() => {
         if (tempMergeRef.current) {
             return;
@@ -6207,24 +6928,29 @@ export default function SeoArticleEditor({
 
         const newSectionBlock = createEmptySectionBlock();
         const sectionId = `section-${newSectionBlock.id}`;
+        const sections = buildEditorSections(blocksRef.current);
+        const lastSection = [...sections].reverse().find((item) => !item.isIntro) ?? null;
+        const afterHeadingId = lastSection ? resolveOutlineHeadingIdForSection(lastSection) : null;
 
         setBlocks((prev) => normalizeBlocks([...prev, newSectionBlock]));
         setInsertMenu(null);
         setActiveTab('editor');
-        setActiveBlockId(newSectionBlock.id);
+        setActiveBlockId(null);
         setGlobalEditor(null);
+        blockFlushRef.current = null;
         setCollapsedSectionIds((prev) => ({
             ...prev,
             [sectionId]: false,
         }));
 
-        if (outlineHasSavedHeadings) {
-            const meta = extractOutlineHeadingFromBlock(newSectionBlock);
-            if (meta) {
-                void appendOutlineHeadingForBlock(newSectionBlock.id, meta);
-            }
-        }
-    }, [appendOutlineHeadingForBlock, commitActiveBlock, outlineHasSavedHeadings]);
+        syncOutlineForNewSectionBlock(newSectionBlock, afterHeadingId);
+        focusNewSectionHeader(sectionId);
+    }, [
+        commitActiveBlock,
+        focusNewSectionHeader,
+        resolveOutlineHeadingIdForSection,
+        syncOutlineForNewSectionBlock,
+    ]);
 
     const addSectionAfter = useCallback(
         (section) => {
@@ -6251,28 +6977,23 @@ export default function SeoArticleEditor({
             });
             setInsertMenu(null);
             setActiveTab('editor');
-            setActiveBlockId(newSectionBlock.id);
+            setActiveBlockId(null);
             setGlobalEditor(null);
+            blockFlushRef.current = null;
             setCollapsedSectionIds((prev) => ({
                 ...prev,
                 [sectionId]: false,
             }));
 
-            if (outlineHasSavedHeadings) {
-                const meta = extractOutlineHeadingFromBlock(newSectionBlock);
-                if (meta) {
-                    void (async () => {
-                        const afterHeadingId = await resolveOutlineHeadingIdForSection(section);
-                        await appendOutlineHeadingForBlock(newSectionBlock.id, meta, { afterHeadingId });
-                    })();
-                }
-            }
+            const afterHeadingId = resolveOutlineHeadingIdForSection(section);
+            syncOutlineForNewSectionBlock(newSectionBlock, afterHeadingId);
+            focusNewSectionHeader(sectionId);
         },
         [
-            appendOutlineHeadingForBlock,
             commitActiveBlock,
-            outlineHasSavedHeadings,
+            focusNewSectionHeader,
             resolveOutlineHeadingIdForSection,
+            syncOutlineForNewSectionBlock,
         ],
     );
 
@@ -6327,7 +7048,7 @@ export default function SeoArticleEditor({
             if (outlineHasSavedHeadings && anchorSection) {
                 const meta = extractOutlineHeadingFromBlock(headingBlock);
                 if (meta) {
-                    const afterHeadingId = await resolveOutlineHeadingIdForSection(anchorSection);
+                    const afterHeadingId = resolveOutlineHeadingIdForSection(anchorSection);
                     await appendOutlineHeadingForBlock(headingBlock.id, meta, { afterHeadingId });
                 }
             }
@@ -6676,28 +7397,44 @@ export default function SeoArticleEditor({
                 }
             />
             <div className="seo-article-editor-workspace">
-                <aside
-                    ref={outlineRailRef}
-                    className="seo-article-editor-outline-rail"
-                    aria-label="Outline / Dàn ý"
-                >
-                    <ArticleOutlineTab
-                        articleId={articleId}
-                        headingCommand={outlineHeadingCommand}
-                        outlineTreeSync={outlineTreeSync}
-                        onOutlineLoaded={handleOutlineLoaded}
-                        onHeadingTextChange={applyOutlineHeadingText}
-                        onJumpToEditorHeading={jumpToOutlineHeading}
-                        onOutlineMoveHeading={handleOutlineMoveHeading}
-                        onOutlineDeleteHeading={handleOutlineDeleteHeading}
-                        onOutlineAddSection={addSection}
-                        onNotify={(payload) => {
-                            window.dispatchEvent(
-                                new CustomEvent('seo-article-editor-notify', { detail: payload }),
-                            );
-                        }}
+                <div className="seo-article-editor-left-rail">
+                    <ArticleGoogleSerpPreview
+                        initialPreview={initialSeo?.google_serp_preview ?? null}
+                        fallbackUrl={String(initialSeo?.google_serp_preview?.url ?? initialSeo?.site_domain ?? '#')}
+                        skipSeoScore={Boolean(initialSeo?.skip_seo_score)}
+                        initialFocusKeyword={String(initialSeo?.focus_keyword ?? '')}
+                        initialSlug={String(initialSeo?.article_slug ?? '')}
+                        permalinkBase={String(initialSeo?.permalink_base ?? '')}
+                        permalinkSuffix={String(initialSeo?.permalink_suffix ?? '')}
                     />
-                </aside>
+
+                    <aside
+                        ref={outlineRailRef}
+                        className="seo-article-editor-outline-rail"
+                        aria-label="Outline / Dàn ý"
+                    >
+                        <ArticleOutlineTab
+                            articleId={articleId}
+                            headingCommand={outlineHeadingCommand}
+                            outlineTreeSync={outlineTreeSync}
+                            canGenerateOutlineHeading={canGenerateOutlineHeading}
+                            resolveHeadingInnerHtml={resolveHeadingInnerHtml}
+                            onOutlineLoaded={handleOutlineLoaded}
+                            onHeadingTextChange={applyOutlineHeadingText}
+                            onHeadingHtmlChange={applyOutlineHeadingHtml}
+                            onJumpToEditorHeading={jumpToOutlineHeading}
+                            onOutlineMoveHeading={handleOutlineMoveHeading}
+                            onOutlineDeleteHeading={handleOutlineDeleteHeading}
+                            onOutlineAddSection={addSection}
+                            onNotify={(payload) => {
+                                window.dispatchEvent(
+                                    new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                                );
+                            }}
+                            onRequestEditorHtml={getExportHtml}
+                        />
+                    </aside>
+                </div>
 
                 <div className="seo-article-editor-mainpane">
             <div className="seo-editor-tabs">
@@ -6840,9 +7577,9 @@ export default function SeoArticleEditor({
                                 const sectionNumber = editorSections
                                     .slice(0, sectionIndex + 1)
                                     .filter((item) => !item.isIntro).length;
-                                const sectionLabel = section.isIntro
-                                    ? t('editor_intro')
-                                    : `Section ${sectionNumber}: ${section.title}`;
+                                const visibleBlockIds = section.isIntro
+                                    ? section.blockIds
+                                    : section.blockIds.filter((blockId) => !sectionHeadingBlockIds.has(blockId));
                                 const stats =
                                     sectionStats.get(section.id) ?? {
                                         imageCount: 0,
@@ -6853,10 +7590,13 @@ export default function SeoArticleEditor({
                                         linkCount: 0,
                                         wordCount: 0,
                                     };
+                                const canQuickDeleteEmptySection =
+                                    !section.isIntro && sectionHasOnlyEmptyHeadingBody(section, blockById);
 
                                 return (
                                     <section
                                         key={section.id}
+                                        data-seo-section-id={section.id}
                                         className="rounded-lg border border-gray-200 bg-white/80 dark:border-gray-700 dark:bg-slate-900/40"
                                     >
                                         <header className="flex items-center justify-between gap-3 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
@@ -6864,14 +7604,28 @@ export default function SeoArticleEditor({
                                                 <button
                                                     type="button"
                                                     onClick={() => toggleSectionCollapse(section.id)}
-                                                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-slate-700"
+                                                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded border border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-slate-700"
                                                     title={isCollapsed ? t('editor_expand_section') : t('editor_collapse_section')}
                                                 >
                                                     {isCollapsed ? <ChevronRight size={15} /> : <ChevronDown size={15} />}
                                                 </button>
-                                                <h3 className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
-                                                    {sectionLabel}
-                                                </h3>
+                                                {section.isIntro ? (
+                                                    <h3 className="truncate text-sm font-semibold text-gray-700 dark:text-gray-200">
+                                                        {t('editor_intro')}
+                                                    </h3>
+                                                ) : (
+                                                    <SectionHeaderTitle
+                                                        sectionNumber={sectionNumber}
+                                                        title={section.title}
+                                                        onSave={(nextTitle) => saveSectionTitleFromHeader(section, nextTitle)}
+                                                        onFocusOutline={() => focusOutlineFromSectionHeader(section)}
+                                                        autoEditToken={
+                                                            sectionTitleEditRequest?.sectionId === section.id
+                                                                ? sectionTitleEditRequest.token
+                                                                : 0
+                                                        }
+                                                    />
+                                                )}
                                             </div>
                                             <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
                                                 {!section.isIntro ? (
@@ -6941,6 +7695,18 @@ export default function SeoArticleEditor({
                                                     </button>
                                                 ) : null}
 
+                                                {canQuickDeleteEmptySection ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => deleteSection(section, { skipConfirm: true })}
+                                                        className="seo-section-header-icon-btn ml-1 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/70 dark:bg-rose-900/30 dark:text-rose-200"
+                                                        title={t('editor_delete_empty_section_hint')}
+                                                        aria-label={t('editor_delete_empty_section')}
+                                                    >
+                                                        <Trash2 size={12} />
+                                                    </button>
+                                                ) : null}
+
                                                 {!section.isIntro && canGenerateFeaturedSnippet ? (
                                                     <button
                                                         type="button"
@@ -6965,26 +7731,30 @@ export default function SeoArticleEditor({
                                                 ) : null}
 
                                                 <span className="ml-2 inline-block align-middle">
-                                                    {section.blockIds.length} block
+                                                    {visibleBlockIds.length} block
                                                 </span>
                                             </span>
                                         </header>
 
                                         {!isCollapsed ? (
                                             <div className="space-y-3 p-3">
-                                                {section.blockIds.map((blockId) => {
+                                                {visibleBlockIds.map((blockId) => {
                                                     const block = blockById.get(blockId);
                                                     if (!block) {
                                                         return null;
                                                     }
 
-                                                    const blockIndex = blockIndexMap.get(block.id) ?? 0;
+                                                    const isOutlineLockedHeadingBlock =
+                                                        outlineHasSavedHeadings &&
+                                                        blockHasOutlineHeading(block) &&
+                                                        !sectionHeadingBlockIds.has(block.id);
                                                     const isActive = activeBlockId === block.id;
                                                     const showInsert = isActive && !tempMerge;
-                                                    const canMoveUp = blockIndex > 0;
-                                                    const canMoveDown = blockIndex < blocks.length - 1;
-                                                    const handleMoveUp = () => moveBlock(block.id, 'up');
-                                                    const handleMoveDown = () => moveBlock(block.id, 'down');
+                                                    const showMoveButtons = showInsert && !isOutlineLockedHeadingBlock;
+                                                    const canMovePrevSection = sectionIndex > 0;
+                                                    const canMoveNextSection = sectionIndex < editorSections.length - 1;
+                                                    const handleMovePrevSection = () => moveBlockToSection(block.id, 'prev');
+                                                    const handleMoveNextSection = () => moveBlockToSection(block.id, 'next');
 
                                                     return (
                                                         <div
@@ -7001,10 +7771,11 @@ export default function SeoArticleEditor({
                                                                             insertMenu?.position === 'before'
                                                                         }
                                                                         onToggle={() => toggleInsertMenu(block.id, 'before')}
-                                                                        canMoveUp={canMoveUp}
-                                                                        canMoveDown={canMoveDown}
-                                                                        onMoveUp={handleMoveUp}
-                                                                        onMoveDown={handleMoveDown}
+                                                                        showMoveButtons={showMoveButtons}
+                                                                        canMovePrevSection={canMovePrevSection}
+                                                                        canMoveNextSection={canMoveNextSection}
+                                                                        onMovePrevSection={handleMovePrevSection}
+                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'before' ? (
@@ -7061,9 +7832,11 @@ export default function SeoArticleEditor({
                                                                 setGlobalEditor={setGlobalEditor}
                                                                 panelFaqs={panelFaqs}
                                                                 outlineHeadingsLocked={
-                                                                    outlineHasSavedHeadings &&
-                                                                    isBlockOutlineSynced(block)
+                                                                    sectionHeadingBlockIds.has(block.id) ||
+                                                                    (outlineHasSavedHeadings &&
+                                                                        blockHasOutlineHeading(block))
                                                                 }
+                                                                isSectionHeadingBlock={sectionHeadingBlockIds.has(block.id)}
                                                                 onOutlineHeadingCommand={handleOutlineHeadingFromEditor}
                                                                 onDelete={() => deleteBlock(block.id)}
                                                                 canDeleteBlock={blocks.length > 1}
@@ -7078,10 +7851,11 @@ export default function SeoArticleEditor({
                                                                             insertMenu?.position === 'after'
                                                                         }
                                                                         onToggle={() => toggleInsertMenu(block.id, 'after')}
-                                                                        canMoveUp={canMoveUp}
-                                                                        canMoveDown={canMoveDown}
-                                                                        onMoveUp={handleMoveUp}
-                                                                        onMoveDown={handleMoveDown}
+                                                                        showMoveButtons={showMoveButtons}
+                                                                        canMovePrevSection={canMovePrevSection}
+                                                                        canMoveNextSection={canMoveNextSection}
+                                                                        onMovePrevSection={handleMovePrevSection}
+                                                                        onMoveNextSection={handleMoveNextSection}
                                                                     />
                                                                     {insertMenu?.blockId === block.id &&
                                                                     insertMenu?.position === 'after' ? (

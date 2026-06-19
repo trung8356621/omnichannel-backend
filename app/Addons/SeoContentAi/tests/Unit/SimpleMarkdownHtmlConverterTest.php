@@ -151,4 +151,37 @@ MD);
         $this->assertStringContainsString('<td><b>Canvas</b></td>', $html);
         $this->assertStringContainsString('<hr>', $html);
     }
+
+    public function test_prepare_import_does_not_treat_meta_description_heading_as_h1(): void
+    {
+        $markdown = <<<'MD'
+# Meta Description
+
+Mô tả SEO thật.
+
+H1: Tiêu đề bài viết
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Tiêu đề bài viết', $prepared['h1_title']);
+        $this->assertSame('Mô tả SEO thật.', $prepared['meta_description']);
+        $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_extracts_hash_meta_description_heading(): void
+    {
+        $markdown = <<<'MD'
+# Meta Description
+
+Mô tả SEO cho bài viết.
+
+H1: Tiêu đề chính
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Mô tả SEO cho bài viết.', $prepared['meta_description']);
+        $this->assertSame('Tiêu đề chính', $prepared['h1_title']);
+    }
 }

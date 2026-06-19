@@ -129,6 +129,18 @@ class SeoSettingsWorkflows extends Page implements HasForms
                             ->native(false)
                             ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
                     ]),
+
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.translate_article_section'))
+                    ->description(__('seo-content-ai::filament.settings_workflows.translate_article_description'))
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_TRANSLATE_ARTICLE_PROMPT_ID)
+                            ->label(__('seo-content-ai::filament.settings_workflows.translate_article_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.translate_article_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptions())
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
+                    ]),
             ])
             ->statePath('settingsData');
     }
@@ -159,6 +171,7 @@ class SeoSettingsWorkflows extends Page implements HasForms
             SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_PROJECT_KEYWORDS_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
         ]);
 
         Notification::make()

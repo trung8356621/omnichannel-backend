@@ -32,6 +32,9 @@ final class SeoCreateArticleSettingsService
     /** Prompt tái sinh heading từ tab Outline (nút AI gen). */
     public const KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID = 'outline_heading_regenerator_prompt_id';
 
+    /** Prompt dịch bài viết (nút Dịch nhanh trên bản dịch liên kết). */
+    public const KEY_TRANSLATE_ARTICLE_PROMPT_ID = 'translate_article_prompt_id';
+
     /** @deprecated Dùng publish_article_task_id; vẫn đọc/ghi để tương thích wp_options cũ */
     public const KEY_LEGACY_TASK_ID = 'task_id';
 
@@ -68,6 +71,9 @@ final class SeoCreateArticleSettingsService
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null),
             self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $this->positiveIntOrNull(
                 $data[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
+            ),
+            self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $this->positiveIntOrNull(
+                $data[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
             ),
         ];
     }
@@ -133,6 +139,11 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_CREATE_VIDEO];
     }
 
+    public function getTranslateArticlePromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID];
+    }
+
     /**
      * @deprecated Dùng getCreateImagePromptId()
      */
@@ -177,6 +188,9 @@ final class SeoCreateArticleSettingsService
             self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $this->positiveIntOrNull(
                 $settings[self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
             ),
+            self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $this->positiveIntOrNull(
+                $settings[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
+            ),
             self::KEY_LEGACY_TASK_ID => $publish,
         ], 'no');
     }
@@ -202,6 +216,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_PROJECT_KEYWORDS_PROMPT_ID => null,
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => null,
             self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => null,
+            self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => null,
         ];
     }
 

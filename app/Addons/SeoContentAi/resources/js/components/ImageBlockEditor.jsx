@@ -8,7 +8,8 @@ import { appendProductAlbumItems } from '../utils/articleProductAlbumStorage';
 import { t } from '../utils/i18n';
 import ImageMetaEditForm from './imageMeta/ImageMetaEditForm';
 import { applyWordPressImageSize, detectWordPressImageSize } from '../utils/wordpressImageSize';
-import { resolveWordPressBaseUrl } from '../utils/wordpressImageUrl';
+import { resolveWordPressBaseUrl, resolveFullWordPressImageUrl } from '../utils/wordpressImageUrl';
+import { slugFromUrl } from '../utils/articleImagesUtils';
 
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
@@ -220,13 +221,33 @@ export default function ImageBlockEditor({
             const url = (data?.url ?? '').trim();
             if (!url) return;
 
-            const slug = (data?.slug ?? '').trim();
+            const embedMode = String(data?.embed_mode ?? '').toLowerCase();
+            const slug = (data?.slug ?? '').trim() || slugFromUrl(url);
+            const altText = (data?.alt_text ?? slug).trim() || slug;
+            const wpAttachmentId = Number(data?.wp_attachment_id ?? 0);
+            const seoMediaId = Number(data?.id ?? data?.seo_media_id ?? 0);
+
+            if (embedMode === 'wordpress') {
+                const wpUrl = resolveFullWordPressImageUrl(url);
+                commitImage({
+                    src: wpUrl,
+                    alt: altText,
+                    title: altText,
+                    slug: slug || undefined,
+                    wpSrc: wpUrl,
+                    wpAttachmentId: wpAttachmentId > 0 ? wpAttachmentId : undefined,
+                    seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+                });
+
+                return;
+            }
+
             commitImage({
                 src: url,
-                alt: slug,
-                title: slug,
+                alt: altText,
+                title: altText,
                 slug: slug || undefined,
-                seoMediaId: data?.id != null ? Number(data.id) : undefined,
+                seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
             });
         },
         // commitImage closes over onUpdate — stable enough per block session

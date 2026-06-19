@@ -82,6 +82,67 @@ final class SitePolylangService
         return $options[$slug] ?? strtoupper($slug);
     }
 
+    public function defaultLanguageSlugForSite(?Site $site): string
+    {
+        if (! $site instanceof Site) {
+            return 'vi';
+        }
+
+        $info = app(WordPressSiteInfoService::class)->getStoredSiteInfo($site);
+        $polylang = is_array($info) ? ($info['polylang'] ?? null) : null;
+        if (! is_array($polylang)) {
+            return 'vi';
+        }
+
+        $default = trim((string) ($polylang['default'] ?? ''));
+
+        return $default !== '' ? $default : 'vi';
+    }
+
+    public function isDefaultLanguage(string $slug, ?Site $site = null): bool
+    {
+        $slug = trim($slug);
+        if ($slug === '') {
+            return false;
+        }
+
+        return $slug === $this->defaultLanguageSlugForSite($site);
+    }
+
+    public function languageEnglishName(string $slug): string
+    {
+        $slug = strtolower(trim($slug));
+        if ($slug === '') {
+            return 'Unknown';
+        }
+
+        return match ($slug) {
+            'vi', 'vn' => 'Vietnamese',
+            'en', 'en-us' => 'English',
+            'en-gb' => 'English (United Kingdom)',
+            'fr' => 'French',
+            'de' => 'German',
+            'es' => 'Spanish',
+            'it' => 'Italian',
+            'pt', 'pt-br' => 'Portuguese',
+            'pt-pt' => 'Portuguese (Portugal)',
+            'ja', 'jp' => 'Japanese',
+            'ko', 'kr' => 'Korean',
+            'zh', 'zh-cn', 'cn' => 'Chinese (Simplified)',
+            'zh-tw' => 'Chinese (Traditional)',
+            'th' => 'Thai',
+            'id' => 'Indonesian',
+            'ms' => 'Malay',
+            'ru' => 'Russian',
+            'ar' => 'Arabic',
+            'hi' => 'Hindi',
+            'nl' => 'Dutch',
+            'pl' => 'Polish',
+            'tr' => 'Turkish',
+            default => ucfirst(str_replace(['-', '_'], ' ', $slug)),
+        };
+    }
+
     public function languageFlagEmoji(string $slug): string
     {
         return match (strtolower(trim($slug))) {

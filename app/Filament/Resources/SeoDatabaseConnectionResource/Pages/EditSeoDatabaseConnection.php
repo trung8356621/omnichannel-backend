@@ -61,6 +61,17 @@ class EditSeoDatabaseConnection extends EditRecord
 
     protected function mutateFormDataBeforeSave(array $data): array
     {
+        $userIds = array_values(array_filter(
+            array_map(static fn (mixed $id): int => (int) $id, is_array($data['users'] ?? null) ? $data['users'] : []),
+            static fn (int $id): bool => $id > 0,
+        ));
+
+        if ($userIds === []) {
+            throw ValidationException::withMessages([
+                'users' => 'Phải chọn ít nhất một owner/admin được phép truy cập workspace SEO này.',
+            ]);
+        }
+
         $this->assertConnectionTest($data);
 
         return $data;

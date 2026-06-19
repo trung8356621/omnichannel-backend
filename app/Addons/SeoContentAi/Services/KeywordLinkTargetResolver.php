@@ -14,13 +14,18 @@ final class KeywordLinkTargetResolver
 {
     public function __construct(
         private readonly WordPressArticleContentService $wpContent,
+        private readonly SitePolylangService $polylang,
     ) {}
 
     /**
      * @return array{href: string, keyword_id: int, keyword_type: string}|null
      */
-    public function resolveForPhraseOnSite(int $siteId, string $phrase, SeoArticle $currentArticle): ?array
-    {
+    public function resolveForPhraseOnSite(
+        int $siteId,
+        string $phrase,
+        SeoArticle $currentArticle,
+        bool $sameLanguageOnly = false,
+    ): ?array {
         $phrase = trim($phrase);
         if ($siteId <= 0 || $phrase === '') {
             return null;
@@ -40,7 +45,7 @@ final class KeywordLinkTargetResolver
             ->values();
 
         foreach ($keywords as $keyword) {
-            $href = $this->resolveForKeyword($keyword, $currentArticle);
+            $href = $this->resolveForKeyword($keyword, $currentArticle, $sameLanguageOnly);
             if ($href !== null && $href !== '') {
                 return [
                     'href' => $href,
@@ -58,16 +63,19 @@ final class KeywordLinkTargetResolver
         return $this->resolveForKeyword($keyword, $currentArticle);
     }
 
-    public function resolveForKeyword(Keyword $keyword, SeoArticle $currentArticle): ?string
+    public function resolveForKeyword(Keyword $keyword, SeoArticle $currentArticle, bool $sameLanguageOnly = false): ?string
     {
         $siteId = (int) ($currentArticle->site_id ?? 0);
+        $currentLang = $this->articleLanguage($currentArticle);
         $explicit = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
         if ($explicit !== '') {
-            return $explicit;
+            if (! $sameLanguageOnly || $this->urlMatchesArticleLanguage($siteId, $explicit, $currentLang)) {
+                return $explicit;
+            }
         }
 
         if (Keyword::isNormalType($keyword->type)) {
-            $fromLinks = $this->resolveFromInternalKeywordLinks($keyword, $currentArticle);
+            $fromLinks = $this->resolveFromInternalKeywordLinks($keyword, $currentArticle, $sameLanguageOnly);
             if ($fromLinks !== null) {
                 return $fromLinks;
             }
@@ -75,6 +83,7 @@ final class KeywordLinkTargetResolver
 
         $targetArticle = $keyword->articles()
             ->where('articles.id', '!=', (int) $currentArticle->id)
+            ->when($sameLanguageOnly, static fn ($query) => $query->where('articles.language', $currentLang))
             ->orderByPivot('is_main', 'desc')
             ->orderBy('articles.id')
             ->first();
@@ -85,6 +94,7 @@ final class KeywordLinkTargetResolver
 
         $mainArticle = $keyword->mainArticles()
             ->where('articles.id', '!=', (int) $currentArticle->id)
+            ->when($sameLanguageOnly, static fn ($query) => $query->where('articles.language', $currentLang))
             ->first();
 
         if ($mainArticle instanceof SeoArticle) {
@@ -116,15 +126,20 @@ final class KeywordLinkTargetResolver
         return rtrim($base, '/').'/'.ltrim($slug, '/');
     }
 
-    private function resolveFromInternalKeywordLinks(Keyword $keyword, SeoArticle $currentArticle): ?string
-    {
+    private function resolveFromInternalKeywordLinks(
+        Keyword $keyword,
+        SeoArticle $currentArticle,
+        bool $sameLanguageOnly = false,
+    ): ?string {
+        $siteId = (int) ($currentArticle->site_id ?? 0);
+        $currentLang = $this->articleLanguage($currentArticle);
         $currentPermalink = $this->normalizeUrlForCompare(
             $this->resolveArticlePublicUrl($currentArticle) ?? '',
         );
 
         $urls = $keyword->links()
             ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
-            ->where('seo_links.site_id', (int) ($currentArticle->site_id ?? 0))
+            ->where('seo_links.site_id', $siteId)
             ->orderBy('seo_links.id')
             ->pluck('seo_links.url');
 
@@ -138,12 +153,17 @@ final class KeywordLinkTargetResolver
                 continue;
             }
 
+            if ($sameLanguageOnly && ! $this->urlMatchesArticleLanguage($siteId, $trimmed, $currentLang)) {
+                continue;
+            }
+
             return $trimmed;
         }
 
         $linkedArticle = SeoArticle::query()
-            ->where('site_id', (int) ($currentArticle->site_id ?? 0))
+            ->where('site_id', $siteId)
             ->where('id', '!=', (int) $currentArticle->id)
+            ->when($sameLanguageOnly, static fn ($query) => $query->where('language', $currentLang))
             ->whereIn('id', function ($query) use ($keyword): void {
                 $query->select('source_article_id')
                     ->from('seo_links')
@@ -160,6 +180,134 @@ final class KeywordLinkTargetResolver
         }
 
         return null;
+    }
+
+    private function articleLanguage(SeoArticle $article): string
+    {
+        $lang = trim((string) ($article->language ?? ''));
+
+        return $lang !== '' ? $lang : 'vi';
+    }
+
+    private function urlMatchesArticleLanguage(int $siteId, string $url, string $language): bool
+    {
+        $site = $siteId > 0 ? Site::query()->find($siteId) : null;
+
+        $article = $this->findArticleByPublicUrl($siteId, $url);
+        if ($article instanceof SeoArticle) {
+            return $this->articleLanguage($article) === $language;
+        }
+
+        $inferredLang = $this->inferLanguageFromUrlPath($site instanceof Site ? $site : null, $url);
+        if ($inferredLang !== null) {
+            return $inferredLang === $language;
+        }
+
+        // Link list / category không có prefix ngôn ngữ — vẫn cho phép.
+        return true;
+    }
+
+    private function inferLanguageFromUrlPath(?Site $site, string $url): ?string
+    {
+        if (! $site instanceof Site || ! $this->polylang->isPolylangEnabledForSite($site)) {
+            return null;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path) || $path === '') {
+            if (! str_starts_with(trim($url), '/')) {
+                return null;
+            }
+
+            $path = trim($url);
+        }
+
+        $segments = array_values(array_filter(
+            explode('/', trim($path, '/')),
+            static fn (string $segment): bool => $segment !== '',
+        ));
+
+        $languageSlugs = array_keys($this->polylang->languageOptionsForSite($site));
+        if ($languageSlugs === []) {
+            return $this->polylang->defaultLanguageSlugForSite($site);
+        }
+
+        $defaultLang = $this->polylang->defaultLanguageSlugForSite($site);
+        if ($segments === []) {
+            return $defaultLang;
+        }
+
+        $first = strtolower($segments[0]);
+        if (in_array($first, $languageSlugs, true)) {
+            return $first;
+        }
+
+        return $defaultLang;
+    }
+
+    private function findArticleByPublicUrl(int $siteId, string $url): ?SeoArticle
+    {
+        if ($siteId <= 0) {
+            return null;
+        }
+
+        $normalizedTarget = $this->normalizeUrlForCompare($url);
+        if ($normalizedTarget === '') {
+            return null;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path) || $path === '') {
+            if (str_starts_with(trim($url), '/')) {
+                $path = trim($url);
+            } else {
+                return null;
+            }
+        }
+
+        $slug = $this->extractSlugFromPath($path);
+        if ($slug === '') {
+            return null;
+        }
+
+        $site = Site::query()->find($siteId);
+        $inferredLang = $this->inferLanguageFromUrlPath($site instanceof Site ? $site : null, $url);
+
+        $candidatesQuery = SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->where('slug', $slug);
+
+        if ($inferredLang !== null) {
+            $candidatesQuery->where('language', $inferredLang);
+        }
+
+        $candidates = $candidatesQuery->limit(10)->get();
+
+        foreach ($candidates as $candidate) {
+            if (! $candidate instanceof SeoArticle) {
+                continue;
+            }
+
+            $permalink = $this->resolveArticlePublicUrl($candidate);
+            if ($permalink !== null && $this->normalizeUrlForCompare($permalink) === $normalizedTarget) {
+                return $candidate;
+            }
+        }
+
+        /** @var SeoArticle|null $first */
+        $first = $candidates->first();
+
+        return $first instanceof SeoArticle ? $first : null;
+    }
+
+    private function extractSlugFromPath(string $path): string
+    {
+        $slug = basename(rtrim($path, '/'));
+        if ($slug === '' || $slug === '/') {
+            return '';
+        }
+
+        return (string) (preg_replace('/\.html?$/i', '', $slug) ?? $slug);
     }
 
     private function normalizeUrlForCompare(string $url): string

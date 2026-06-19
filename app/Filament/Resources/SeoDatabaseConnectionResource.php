@@ -118,21 +118,30 @@ class SeoDatabaseConnectionResource extends Resource
                     ->columns(2),
 
                 Forms\Components\Section::make('Phân quyền User')
-                    ->description('Owner được gán sẽ sử dụng connection này cho toàn bộ site của họ (staff kế thừa qua parent_id).')
+                    ->description('Chọn tài khoản owner/admin sở hữu site dùng workspace này. Staff kế thừa qua parent_id của owner.')
                     ->schema([
                         Forms\Components\Select::make('users')
                             ->label('Users được phép')
                             ->relationship(
-                                'users',
-                                'email',
-                                fn (Builder $query): Builder => $query
-                                    ->where('role', User::ROLE_OWNER)
-                                    ->orderBy('email'),
+                                name: 'users',
+                                titleAttribute: 'email',
+                                modifyQueryUsing: fn (Builder $query, ?SeoDatabaseConnection $record): Builder => static::modifyAllowedUsersQuery(
+                                    $query,
+                                    $record,
+                                ),
+                            )
+                            ->getOptionLabelFromRecordUsing(
+                                fn (User $user): string => sprintf(
+                                    '%s — %s',
+                                    (string) $user->email,
+                                    (string) $user->role,
+                                ),
                             )
                             ->multiple()
                             ->preload()
                             ->searchable()
-                            ->required(),
+                            ->required()
+                            ->helperText('Bao gồm owner/admin của site (sites.user_id). Không chọn staff.'),
                     ]),
             ]);
     }
@@ -183,5 +192,27 @@ class SeoDatabaseConnectionResource extends Resource
             'create' => Pages\CreateSeoDatabaseConnection::route('/create'),
             'edit' => Pages\EditSeoDatabaseConnection::route('/{record}/edit'),
         ];
+    }
+
+    /**
+     * Owner/admin được gán workspace SEO. Giữ user đã gán dù đổi role (tránh mất pivot khi sửa form).
+     *
+     * @param  Builder<User>  $query
+     * @return Builder<User>
+     */
+    public static function modifyAllowedUsersQuery(Builder $query, ?SeoDatabaseConnection $record = null): Builder
+    {
+        return $query
+            ->where(function (Builder $builder) use ($record): void {
+                $builder->whereIn('role', [User::ROLE_OWNER, User::ROLE_ADMIN]);
+
+                if ($record !== null) {
+                    $attachedIds = $record->users()->pluck('users.id')->all();
+                    if ($attachedIds !== []) {
+                        $builder->orWhereIn('users.id', $attachedIds);
+                    }
+                }
+            })
+            ->orderBy('email');
     }
 }

@@ -6,7 +6,6 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleHeading;
-use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Services\ArticleHeadingAiGenerateService;
 use App\Addons\SeoContentAi\Services\ArticleTocExtractionService;
 use App\Addons\SeoContentAi\Services\HeadingDuplicateCheckerService;
@@ -37,7 +36,7 @@ class ArticleOutlineController extends Controller
 
     public function index(SeoArticle $article): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         $headings = $article->headings()->get();
 
@@ -57,13 +56,43 @@ class ArticleOutlineController extends Controller
         ]);
     }
 
+    public function refresh(Request $request, SeoArticle $article): JsonResponse
+    {
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
+
+        $validated = $request->validate([
+            'html' => ['nullable', 'string'],
+            'reextract' => ['sometimes', 'boolean'],
+        ]);
+
+        if ($request->boolean('reextract')) {
+            $html = trim((string) ($validated['html'] ?? ''));
+            if ($html === '') {
+                $html = $this->tocExtraction->resolveArticleContent($article);
+            }
+
+            $this->tocExtraction->extractAndStore((int) $article->id, $html);
+        }
+
+        $headings = $article->headings()->get();
+
+        return response()->json([
+            'success' => true,
+            'article' => [
+                'id' => (int) $article->id,
+                'title' => (string) ($article->title ?? ''),
+            ],
+            'outline' => $this->buildTree($headings),
+        ]);
+    }
+
     /**
      * Dò trùng toàn bộ dàn ý hiện tại với các bài khác trong site.
      * Chỉ chạy khi user bấm nút "Dò trùng lặp" hoặc AI workflow gọi sau khi sinh outline.
      */
     public function checkDuplicates(SeoArticle $article): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         $headings = $article->headings()->get();
 
@@ -87,7 +116,7 @@ class ArticleOutlineController extends Controller
 
     public function store(Request $request, SeoArticle $article): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         $validated = $request->validate([
             'heading_text' => ['required', 'string', 'max:255'],
@@ -186,7 +215,7 @@ class ArticleOutlineController extends Controller
 
     public function update(Request $request, SeoArticle $article, SeoArticleHeading $heading): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless((int) $heading->article_id === (int) $article->id, 404);
 
         $validated = $request->validate([
@@ -225,7 +254,7 @@ class ArticleOutlineController extends Controller
 
     public function destroy(SeoArticle $article, SeoArticleHeading $heading): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless((int) $heading->article_id === (int) $article->id, 404);
 
         $headingId = (int) $heading->id;
@@ -239,7 +268,7 @@ class ArticleOutlineController extends Controller
 
     public function generate(SeoArticle $article, SeoArticleHeading $heading): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         abort_unless((int) $heading->article_id === (int) $article->id, 404);
 
         try {
@@ -301,23 +330,5 @@ class ArticleOutlineController extends Controller
             'sort_order' => (int) $heading->sort_order,
             'parent_id' => $heading->parent_id !== null ? (int) $heading->parent_id : null,
         ];
-    }
-
-    private function canAccessArticle(SeoArticle $article): bool
-    {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            return ArticleResource::canContentManagerAccessArticle($article);
-        }
-
-        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
     }
 }

@@ -145,9 +145,7 @@ export function buildImageSplitterUrl({ seoMediaId = null } = {}) {
     });
 }
 
-function csrfToken() {
-    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
-}
+import { csrfToken, seoArticleApiHeaders } from './seoArticleApi';
 
 let activeClipboardUpload = null;
 let lastClipboardPasteAt = 0;
@@ -197,13 +195,12 @@ export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = 
             formData.append('site_id', String(siteId));
         }
 
-        const token = csrfToken();
         const response = await fetch(UPLOAD_URL, {
             method: 'POST',
             body: formData,
             headers: {
-                ...(token ? { 'X-CSRF-TOKEN': token } : {}),
-                Accept: 'application/json',
+                ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+                ...seoArticleApiHeaders({ Accept: 'application/json' }),
             },
             credentials: 'same-origin',
         });
@@ -252,7 +249,7 @@ export async function importSeoMediaFromUrl(remoteUrl, { articleId = null, siteI
         headers: {
             'Content-Type': 'application/json',
             ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
-            Accept: 'application/json',
+            ...seoArticleApiHeaders({ Accept: 'application/json' }),
         },
         credentials: 'same-origin',
         body: JSON.stringify({

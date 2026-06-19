@@ -6,13 +6,13 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
-use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
+use App\Addons\SeoContentAi\Services\SeoMediaUrlImportResolverService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
@@ -30,6 +30,7 @@ class SeoMediaController extends Controller
         private readonly SeoMediaImageEditorResolverService $imageEditorResolver,
         private readonly SeoMediaLibraryImageActionService $imageActions,
         private readonly SeoImageSplitterService $imageSplitter,
+        private readonly SeoMediaUrlImportResolverService $urlImportResolver,
     ) {}
 
     public function upload(Request $request): JsonResponse
@@ -46,7 +47,7 @@ class SeoMediaController extends Controller
 
         if ($articleId !== null) {
             $article = SeoArticle::query()->findOrFail($articleId);
-            abort_unless($this->canAccessArticle($article), 403);
+            abort_unless(SeoAccessControl::canAccessArticle($article), 403);
             $siteId = (int) $article->site_id;
         } elseif ($siteId !== null) {
             abort_unless($this->canAccessSite($siteId), 403);
@@ -83,12 +84,20 @@ class SeoMediaController extends Controller
 
         if ($articleId !== null) {
             $article = SeoArticle::query()->findOrFail($articleId);
-            abort_unless($this->canAccessArticle($article), 403);
+            abort_unless(SeoAccessControl::canAccessArticle($article), 403);
             $siteId = (int) $article->site_id;
         } elseif ($siteId !== null) {
             abort_unless($this->canAccessSite($siteId), 403);
         } else {
             abort_unless(auth()->check(), 403);
+        }
+
+        $embedded = $this->urlImportResolver->resolveEmbeddedImport($siteId, (string) $validated['url']);
+        if (is_array($embedded)) {
+            return response()->json([
+                'success' => true,
+                ...$embedded,
+            ]);
         }
 
         try {
@@ -204,7 +213,7 @@ class SeoMediaController extends Controller
         if ($articleId !== null && $articleId > 0) {
             $article = SeoArticle::query()->find($articleId);
             if ($article instanceof SeoArticle) {
-                abort_unless($this->canAccessArticle($article), 403);
+                abort_unless(SeoAccessControl::canAccessArticle($article), 403);
                 $siteId = (int) $article->site_id;
             }
         }
@@ -357,7 +366,7 @@ class SeoMediaController extends Controller
         );
         if ($articleId !== null) {
             $article = SeoArticle::query()->findOrFail($articleId);
-            abort_unless($this->canAccessArticle($article), 403);
+            abort_unless(SeoAccessControl::canAccessArticle($article), 403);
         }
 
         /** @var list<\Illuminate\Http\UploadedFile> $pieceFiles */
@@ -453,7 +462,7 @@ class SeoMediaController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Lưu ảnh thành công',
-            'url' => $media->fresh()->publicUrl() . '?t=' . time(),
+            'url' => $media->fresh()->publicUrl().'?t='.time(),
         ]);
     }
 
@@ -469,7 +478,7 @@ class SeoMediaController extends Controller
 
     public function articleAiJobs(SeoArticle $article): JsonResponse
     {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         app(ArticleEditorMediaAiService::class)->reconcileStaleAiMediaJobs((int) $article->id);
 
@@ -655,7 +664,7 @@ class SeoMediaController extends Controller
             return null;
         }
 
-        $flatCandidate = 'uploads/seo_media/' . $filename;
+        $flatCandidate = 'uploads/seo_media/'.$filename;
         $flatQuery = SeoMedia::query()->where('path', $flatCandidate);
         if ($siteId !== null && $siteId > 0) {
             $flatQuery->where('site_id', $siteId);
@@ -680,7 +689,7 @@ class SeoMediaController extends Controller
         if ($articleId !== null) {
             $article = SeoArticle::query()->find($articleId);
 
-            return $article !== null && $this->canAccessArticle($article);
+            return $article !== null && SeoAccessControl::canAccessArticle($article);
         }
 
         if ($media->site_id !== null) {
@@ -688,24 +697,6 @@ class SeoMediaController extends Controller
         }
 
         return auth()->check();
-    }
-
-    private function canAccessArticle(SeoArticle $article): bool
-    {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            return ArticleResource::canContentManagerAccessArticle($article);
-        }
-
-        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
     }
 
     private function canAccessSite(int $siteId): bool

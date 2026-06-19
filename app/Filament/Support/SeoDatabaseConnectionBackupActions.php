@@ -60,7 +60,7 @@ final class SeoDatabaseConnectionBackupActions
                 ->disk('local')
                 ->directory('seo-db-imports')
                 ->required()
-                ->maxSize(512000)
+                ->maxSize((int) config('seo-content-ai.db_import_max_upload_kb', 512000))
                 ->acceptedFileTypes([
                     'application/sql',
                     'text/plain',

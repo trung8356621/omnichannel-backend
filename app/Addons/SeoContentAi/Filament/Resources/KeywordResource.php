@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Models\Tag;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
+use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
@@ -31,7 +32,6 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Js;
-use Illuminate\Support\Str;
 
 class KeywordResource extends SeoPanelResource
 {
@@ -1078,18 +1078,33 @@ class KeywordResource extends SeoPanelResource
         return static::getUrl('index');
     }
 
+    public static function buildIncludeTagFilterUrl(int $tagId): string
+    {
+        if ($tagId <= 0) {
+            return static::getUrl('index');
+        }
+
+        $base = static::getUrl('index');
+        $query = http_build_query([
+            'tableFilters' => [
+                'include_tags' => [
+                    'tag_ids' => [(string) $tagId],
+                ],
+            ],
+        ]);
+
+        return $base.(str_contains($base, '?') ? '&' : '?').$query;
+    }
+
     /**
      * @return array<int|string, string>
      */
     public static function tagFilterOptions(): array
     {
-        $query = Tag::query()->orderBy('name');
-
-        if (($globalSiteId = SeoAccessControl::globalSiteId()) !== null) {
-            $query->where('site_id', $globalSiteId);
-        }
-
-        return $query->pluck('name', 'id')->all();
+        return Tag::query()
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->all();
     }
 
     /**
@@ -2042,12 +2057,8 @@ class KeywordResource extends SeoPanelResource
                 ->relationship(
                     name: 'tags',
                     titleAttribute: 'name',
-                    modifyQueryUsing: function (Builder $query, Get $get, ?Keyword $record) use ($resolveSiteId): Builder {
-                        $siteId = $resolveSiteId($get, $record);
-
-                        return $siteId > 0
-                            ? $query->where('site_id', $siteId)->orderBy('name')
-                            : $query->whereRaw('0 = 1');
+                    modifyQueryUsing: function (Builder $query): Builder {
+                        return $query->orderBy('name');
                     },
                 )
                 ->createOptionForm([
@@ -2056,56 +2067,28 @@ class KeywordResource extends SeoPanelResource
                         ->required()
                         ->maxLength(255),
                 ])
-                ->createOptionUsing(function (array $data, Get $get, ?Keyword $record) use ($resolveSiteId): int {
-                    $siteId = $resolveSiteId($get, $record);
-                    if ($siteId <= 0) {
-                        throw new \RuntimeException(__('seo-content-ai::filament.keyword.tag_site_required'));
-                    }
-
+                ->createOptionUsing(function (array $data): int {
                     $name = trim((string) ($data['name'] ?? ''));
-                    $slug = static::resolveUniqueTagSlug($siteId, $name);
 
-                    return (int) Tag::query()->create([
-                        'site_id' => $siteId,
-                        'name' => $name,
-                        'slug' => $slug,
-                    ])->getKey();
+                    return (int) app(TagPersistenceService::class)
+                        ->findOrCreate($name)
+                        ->getKey();
                 });
 
             return $select;
         }
 
-        return $select->options(function () use ($resolveSiteId): array {
-            $siteId = (int) call_user_func($resolveSiteId);
-
-            if ($siteId <= 0) {
-                return [];
-            }
-
+        return $select->options(function (): array {
             return Tag::query()
-                ->where('site_id', $siteId)
                 ->orderBy('name')
                 ->pluck('name', 'id')
                 ->all();
         });
     }
 
-    public static function resolveUniqueTagSlug(int $siteId, string $name): string
+    public static function resolveUniqueTagSlug(string $name): string
     {
-        $baseSlug = Str::slug($name);
-        if ($baseSlug === '') {
-            $baseSlug = 'tag';
-        }
-
-        $slug = $baseSlug;
-        $suffix = 2;
-
-        while (Tag::query()->where('site_id', $siteId)->where('slug', $slug)->exists()) {
-            $slug = $baseSlug.'-'.$suffix;
-            $suffix++;
-        }
-
-        return $slug;
+        return app(TagPersistenceService::class)->resolveUniqueSlug($name);
     }
 
     /**

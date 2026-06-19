@@ -22,8 +22,8 @@ class WorkflowParserService
     public function __construct(
         private readonly SeoPromptSettingsService $promptSettings,
         private readonly SeoOverviewSettingsService $overviewSettings,
-    ) {
-    }
+    ) {}
+
     /**
      * Parse Dàn ý: Chuyển đổi Markdown H2, H3 thành Cấu trúc cây JSON
      * Lưu vào meta bài viết dưới dạng json (seo_article_outlines)
@@ -269,7 +269,7 @@ class WorkflowParserService
                     continue;
                 }
 
-                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+                $headingLine = str_repeat('#', $level).' '.$this->elementText($block);
                 if (! $this->isFaqSectionHeading($headingLine)) {
                     continue;
                 }
@@ -300,7 +300,7 @@ class WorkflowParserService
             return [
                 'level' => $level,
                 'text' => $text,
-                'html' => '<h' . $level . '>' . htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h' . $level . '>',
+                'html' => '<h'.$level.'>'.htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h'.$level.'>',
                 'heading_line' => $trimmed,
             ];
         }
@@ -330,7 +330,7 @@ class WorkflowParserService
             $level = $this->htmlHeadingLevel($tag);
 
             if ($level !== null) {
-                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+                $headingLine = str_repeat('#', $level).' '.$this->elementText($block);
                 if ($this->isFaqSectionHeading($headingLine)) {
                     continue;
                 }
@@ -385,7 +385,7 @@ class WorkflowParserService
             $level = $this->htmlHeadingLevel($tag);
 
             if ($level !== null) {
-                $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($block);
+                $headingLine = str_repeat('#', $level).' '.$this->elementText($block);
 
                 if ($this->isFaqSectionHeading($headingLine)) {
                     $inFaqSection = true;
@@ -436,7 +436,7 @@ class WorkflowParserService
             }
 
             if (in_array($tag, ['h3', 'h4', 'h5', 'h6'], true)) {
-                $headingLine = str_repeat('#', $level ?? 3) . ' ' . $this->elementText($block);
+                $headingLine = str_repeat('#', $level ?? 3).' '.$this->elementText($block);
                 if ($this->isFaqSectionHeading($headingLine)) {
                     continue;
                 }
@@ -482,9 +482,9 @@ class WorkflowParserService
             return $this->parseFaqsFromMarkdownLegacy($html, $treatAllAsFaqSection);
         }
 
-        $dom = new \DOMDocument();
+        $dom = new \DOMDocument;
         libxml_use_internal_errors(true);
-        @$dom->loadHTML('<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        @$dom->loadHTML('<?xml encoding="utf-8" ?><div id="omi-faq-root">'.$html.'</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
         libxml_clear_errors();
 
         $xpath = new \DOMXPath($dom);
@@ -512,11 +512,12 @@ class WorkflowParserService
             $lowerText = mb_strtolower($text);
 
             if (in_array($tag, ['h2', 'h3'], true)) {
-                $isFaqHeading = $this->isFaqSectionHeading('## ' . $text);
+                $isFaqHeading = $this->isFaqSectionHeading('## '.$text);
                 $isQuestionHeading = preg_match('/^(❓\s*)?(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $text) === 1;
 
                 if ($isFaqHeading) {
                     $inFaqSection = true;
+
                     continue;
                 } elseif ($inFaqSection && ! $treatAllAsFaqSection && ! $isQuestionHeading) {
                     $inFaqSection = false;
@@ -529,6 +530,7 @@ class WorkflowParserService
                     }
                     $currentQuestion = null;
                     $currentAnswerHtml = [];
+
                     continue;
                 }
             }
@@ -691,6 +693,7 @@ class WorkflowParserService
                 $faqSectionLevel = null;
                 $currentQuestion = null;
                 $answerLines = [];
+
                 continue;
             }
 
@@ -783,7 +786,7 @@ class WorkflowParserService
      */
     public function faqPlaceholderHtml(): string
     {
-        return '<p class="omi-faq-placeholder" data-omi-faq="1">' . self::FAQ_SHORTCODE_PLACEHOLDER . '</p>';
+        return '<p class="omi-faq-placeholder" data-omi-faq="1">'.self::FAQ_SHORTCODE_PLACEHOLDER.'</p>';
     }
 
     /**
@@ -799,13 +802,13 @@ class WorkflowParserService
         $html = $this->preprocessHtmlForFaqExtraction($html);
 
         $html = (string) preg_replace(
-            '/<p[^>]*class="[^"]*omi-faq-placeholder[^"]*"[^>]*>\s*' . preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/') . '\s*<\/p>/iu',
+            '/<p[^>]*class="[^"]*omi-faq-placeholder[^"]*"[^>]*>\s*'.preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/').'\s*<\/p>/iu',
             '',
             $html,
         );
 
         $html = (string) preg_replace(
-            '/\s*' . preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/') . '\s*/u',
+            '/\s*'.preg_quote(self::FAQ_SHORTCODE_PLACEHOLDER, '/').'\s*/u',
             '',
             $html,
         );
@@ -827,7 +830,7 @@ class WorkflowParserService
         $parts = [];
         $heading = trim($heading);
         if ($heading !== '') {
-            $parts[] = '<h2>' . htmlspecialchars($heading, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h2>';
+            $parts[] = '<h2>'.htmlspecialchars($heading, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h2>';
         }
 
         foreach ($faqs as $faq) {
@@ -837,18 +840,18 @@ class WorkflowParserService
                 continue;
             }
 
-            $parts[] = '<h3>' . htmlspecialchars($question, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</h3>';
+            $parts[] = '<h3>'.htmlspecialchars($question, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8').'</h3>';
 
             $more = trim((string) ($faq['more'] ?? ''));
             if ($more !== '') {
                 $parts[] = preg_match('/<[a-z][\s\S]*>/i', $more) === 1
                     ? $more
-                    : '<p>' . nl2br(htmlspecialchars($more, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false) . '</p>';
+                    : '<p>'.nl2br(htmlspecialchars($more, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false).'</p>';
             }
 
             $parts[] = preg_match('/<[a-z][\s\S]*>/i', $answer) === 1
                 ? $answer
-                : '<p>' . nl2br(htmlspecialchars($answer, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false) . '</p>';
+                : '<p>'.nl2br(htmlspecialchars($answer, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false).'</p>';
         }
 
         return implode("\n", $parts);
@@ -864,10 +867,10 @@ class WorkflowParserService
             return '';
         }
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
         $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">'.$html.'</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
         );
         libxml_clear_errors();
@@ -877,7 +880,7 @@ class WorkflowParserService
             return $html;
         }
 
-        $outDom = new DOMDocument();
+        $outDom = new DOMDocument;
         libxml_use_internal_errors(true);
         $container = $outDom->createElement('div');
         $outDom->appendChild($container);
@@ -891,7 +894,7 @@ class WorkflowParserService
             if ($node instanceof DOMElement) {
                 $tag = strtolower($node->tagName);
                 $level = $this->htmlHeadingLevel($tag);
-                $headingLine = $level !== null ? str_repeat('#', $level) . ' ' . $this->elementText($node) : '';
+                $headingLine = $level !== null ? str_repeat('#', $level).' '.$this->elementText($node) : '';
 
                 if ($level !== null) {
                     if ($this->isFaqSectionHeading($headingLine)) {
@@ -917,6 +920,7 @@ class WorkflowParserService
                             $this->appendPlaceholderToDom($outDom, $container);
                             $placeholderAdded = true;
                         }
+
                         continue;
                     }
 
@@ -1005,10 +1009,10 @@ class WorkflowParserService
             return $html;
         }
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
         $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">'.$html.'</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
         );
         libxml_clear_errors();
@@ -1018,7 +1022,7 @@ class WorkflowParserService
             return $html;
         }
 
-        $outDom = new DOMDocument();
+        $outDom = new DOMDocument;
         libxml_use_internal_errors(true);
         $container = $outDom->createElement('div');
         $outDom->appendChild($container);
@@ -1033,7 +1037,7 @@ class WorkflowParserService
             if ($node instanceof DOMElement) {
                 $tag = strtolower($node->tagName);
                 $level = $this->htmlHeadingLevel($tag);
-                $headingLine = $level !== null ? str_repeat('#', $level) . ' ' . $this->elementText($node) : '';
+                $headingLine = $level !== null ? str_repeat('#', $level).' '.$this->elementText($node) : '';
 
                 if ($level !== null && $this->isFaqSectionHeading($headingLine)) {
                     $container->appendChild($outDom->importNode($node, true));
@@ -1180,6 +1184,7 @@ class WorkflowParserService
                 $inFaqSection = false;
                 $faqSectionLevel = null;
                 $result[] = $line;
+
                 continue;
             }
 
@@ -1197,7 +1202,7 @@ class WorkflowParserService
 
         $cleaned = trim(implode("\n", $result));
         if ($cleaned !== '' && ! str_contains($cleaned, self::FAQ_SHORTCODE_PLACEHOLDER)) {
-            $cleaned .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+            $cleaned .= "\n\n".self::FAQ_SHORTCODE_PLACEHOLDER;
         }
 
         return $cleaned;
@@ -1239,7 +1244,7 @@ class WorkflowParserService
         }
 
         if (! $placeholderAdded) {
-            return trim($markdown) . "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+            return trim($markdown)."\n\n".self::FAQ_SHORTCODE_PLACEHOLDER;
         }
 
         $cleaned = trim(implode("\n", $result));
@@ -1248,7 +1253,7 @@ class WorkflowParserService
         }
 
         if (! str_contains($cleaned, self::FAQ_SHORTCODE_PLACEHOLDER)) {
-            $cleaned .= "\n\n" . self::FAQ_SHORTCODE_PLACEHOLDER;
+            $cleaned .= "\n\n".self::FAQ_SHORTCODE_PLACEHOLDER;
         }
 
         return $cleaned;
@@ -1340,7 +1345,7 @@ class WorkflowParserService
                 'tier' => self::SNIPPET_TIER_NONE,
                 'passed' => false,
                 'points' => 0,
-                'message' => 'Không có bảng hoặc cột không hợp lệ (' . $columnLabel . '). Ngưỡng: ' . $tierThresholdLabel,
+                'message' => 'Không có bảng hoặc cột không hợp lệ ('.$columnLabel.'). Ngưỡng: '.$tierThresholdLabel,
             ];
         }
 
@@ -1388,12 +1393,11 @@ class WorkflowParserService
         $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
         $minCols = $thresholds['min_columns'];
         $maxCols = $thresholds['max_columns'];
-        $best = null;
+        $candidates = [];
 
         if ($html !== null && trim($html) !== '') {
-            $htmlBest = $this->bestHtmlTableMetrics($html, $minCols, $maxCols);
-            if ($htmlBest !== null) {
-                $best = $htmlBest;
+            foreach ($this->collectHtmlTableMetrics($html, $minCols, $maxCols) as $metrics) {
+                $candidates[] = $metrics;
             }
         }
 
@@ -1402,9 +1406,32 @@ class WorkflowParserService
             $markdownSource = $this->htmlFragmentToMarkdown($markdown);
         }
 
-        $markdownBest = $this->bestMarkdownTableMetrics($markdownSource, $minCols, $maxCols);
-        if ($markdownBest !== null && ($best === null || $markdownBest['data_rows'] > $best['data_rows'])) {
-            $best = $markdownBest;
+        foreach ($this->collectMarkdownTableMetrics($markdownSource, $minCols, $maxCols) as $metrics) {
+            $candidates[] = $metrics;
+        }
+
+        return $this->pickFeaturedSnippetMetricsByMaxPoints($candidates, $thresholds);
+    }
+
+    /**
+     * @param  list<array{data_rows: int, columns: int}>  $candidates
+     * @param  array{rows_min: int, rows_range: int, rows_max: int, min_columns: int, max_columns: int}  $thresholds
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function pickFeaturedSnippetMetricsByMaxPoints(array $candidates, array $thresholds): ?array
+    {
+        $best = null;
+        $bestPoints = -1;
+
+        foreach ($candidates as $metrics) {
+            $dataRows = (int) ($metrics['data_rows'] ?? 0);
+            $tier = $this->featuredSnippetTierFromDataRows($dataRows, $thresholds);
+            $points = $this->featuredSnippetPointsForTier($tier);
+
+            if ($best === null || $points > $bestPoints || ($points === $bestPoints && $dataRows > $best['data_rows'])) {
+                $best = $metrics;
+                $bestPoints = $points;
+            }
         }
 
         return $best;
@@ -1448,7 +1475,7 @@ class WorkflowParserService
             $details['faq'] = [
                 'passed' => true,
                 'points' => 10,
-                'message' => 'Có chứa cấu trúc FAQ chuẩn (' . $faqCount . ' câu hỏi)',
+                'message' => 'Có chứa cấu trúc FAQ chuẩn ('.$faqCount.' câu hỏi)',
             ];
         } else {
             $details['faq'] = [
@@ -1758,10 +1785,10 @@ class WorkflowParserService
 
     private function loadHtmlFaqRoot(string $html): ?DOMElement
     {
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
         $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div id="omi-faq-root">' . $html . '</div>',
+            '<?xml encoding="utf-8" ?><div id="omi-faq-root">'.$html.'</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
         );
         libxml_clear_errors();
@@ -1819,7 +1846,7 @@ class WorkflowParserService
         $level = $this->htmlHeadingLevel($tag);
 
         if ($level !== null) {
-            $headingLine = str_repeat('#', $level) . ' ' . $this->elementText($element);
+            $headingLine = str_repeat('#', $level).' '.$this->elementText($element);
             if ($this->isFaqSectionHeading($headingLine)) {
                 return null;
             }
@@ -2219,8 +2246,8 @@ class WorkflowParserService
         $content = (string) preg_replace_callback(
             '/\[\[([^\]]+)\]\]/',
             static function (array $matches) use (&$escapedLiterals): string {
-                $token = '___WP_SC_ESC_' . count($escapedLiterals) . '___';
-                $escapedLiterals[$token] = '[' . $matches[1] . ']';
+                $token = '___WP_SC_ESC_'.count($escapedLiterals).'___';
+                $escapedLiterals[$token] = '['.$matches[1].']';
 
                 return $token;
             },
@@ -2258,10 +2285,10 @@ class WorkflowParserService
 
     private function htmlFragmentToMarkdown(string $html): string
     {
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
         $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div>' . $html . '</div>',
+            '<?xml encoding="utf-8" ?><div>'.$html.'</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
         );
         libxml_clear_errors();
@@ -2304,14 +2331,14 @@ class WorkflowParserService
             }
 
             match ($tag) {
-                'h1' => $lines[] = '# ' . $text,
-                'h2' => $lines[] = '## ' . $text,
-                'h3' => $lines[] = '### ' . $text,
-                'h4' => $lines[] = '#### ' . $text,
-                'h5' => $lines[] = '##### ' . $text,
-                'h6' => $lines[] = '###### ' . $text,
+                'h1' => $lines[] = '# '.$text,
+                'h2' => $lines[] = '## '.$text,
+                'h3' => $lines[] = '### '.$text,
+                'h4' => $lines[] = '#### '.$text,
+                'h5' => $lines[] = '##### '.$text,
+                'h6' => $lines[] = '###### '.$text,
                 'p' => $lines[] = $text,
-                'li' => $lines[] = '- ' . $text,
+                'li' => $lines[] = '- '.$text,
                 'ul', 'ol' => $this->appendDomNodesAsMarkdown($child, $lines),
                 'br' => $lines[] = '',
                 default => $this->appendDomNodesAsMarkdown($child, $lines),
@@ -2417,71 +2444,79 @@ class WorkflowParserService
     }
 
     /**
-     * @return array{data_rows: int, columns: int}|null
+     * @return list<array{data_rows: int, columns: int}>
      */
-    private function bestHtmlTableMetrics(string $html, int $minCols, int $maxCols): ?array
+    private function collectHtmlTableMetrics(string $html, int $minCols, int $maxCols): array
     {
         $html = trim($html);
         if ($html === '' || preg_match('/<table\b/i', $html) !== 1) {
-            return null;
+            return [];
         }
 
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         libxml_use_internal_errors(true);
         $dom->loadHTML(
-            '<?xml encoding="utf-8" ?><div id="omi-snippet-root">' . $html . '</div>',
+            '<?xml encoding="utf-8" ?><div id="omi-snippet-root">'.$html.'</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
         );
         libxml_clear_errors();
 
         $root = $dom->getElementById('omi-snippet-root');
         if (! $root instanceof DOMElement) {
-            return null;
+            return [];
         }
 
-        $best = null;
+        $metricsList = [];
         foreach ($root->getElementsByTagName('table') as $table) {
-            if (! $table instanceof DOMElement) {
+            if (! $table instanceof DOMElement || ! $this->isTopLevelHtmlTable($table)) {
                 continue;
             }
 
             $metrics = $this->htmlTableFeaturedSnippetMetrics($table, $minCols, $maxCols);
-            if ($metrics === null) {
-                continue;
-            }
-
-            if ($best === null || $metrics['data_rows'] > $best['data_rows']) {
-                $best = $metrics;
+            if ($metrics !== null) {
+                $metricsList[] = $metrics;
             }
         }
 
-        return $best;
+        return $metricsList;
+    }
+
+    private function isTopLevelHtmlTable(DOMElement $table): bool
+    {
+        $parent = $table->parentNode;
+        while ($parent instanceof DOMElement) {
+            if (strtolower($parent->tagName) === 'table') {
+                return false;
+            }
+
+            $parent = $parent->parentNode;
+        }
+
+        return true;
     }
 
     /**
-     * @return array{data_rows: int, columns: int}|null
+     * @return list<array{data_rows: int, columns: int}>
      */
-    private function bestMarkdownTableMetrics(string $markdown, int $minCols, int $maxCols): ?array
+    private function collectMarkdownTableMetrics(string $markdown, int $minCols, int $maxCols): array
     {
         $lines = explode("\n", $markdown);
         $inTable = false;
         $rowCount = 0;
         $colCount = 0;
-        $best = null;
+        $metricsList = [];
 
-        $flush = function () use (&$inTable, &$rowCount, &$colCount, &$best, $minCols, $maxCols): void {
+        $flush = function () use (&$inTable, &$rowCount, &$colCount, &$metricsList, $minCols, $maxCols): void {
             if (! $inTable) {
                 return;
             }
 
             $dataRows = max(0, $rowCount - 1);
             if ($colCount >= $minCols && $colCount <= $maxCols) {
-                if ($best === null || $dataRows > $best['data_rows']) {
-                    $best = [
-                        'data_rows' => $dataRows,
-                        'columns' => $colCount,
-                    ];
-                }
+                $metricsList[] = [
+                    'data_rows' => $dataRows,
+                    'columns' => $colCount,
+                ];
             }
 
             $inTable = false;
@@ -2510,7 +2545,33 @@ class WorkflowParserService
             $flush();
         }
 
-        return $best;
+        return $metricsList;
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function bestHtmlTableMetrics(string $html, int $minCols, int $maxCols): ?array
+    {
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+
+        return $this->pickFeaturedSnippetMetricsByMaxPoints(
+            $this->collectHtmlTableMetrics($html, $minCols, $maxCols),
+            $thresholds,
+        );
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function bestMarkdownTableMetrics(string $markdown, int $minCols, int $maxCols): ?array
+    {
+        $thresholds = $this->promptSettings->getFeaturedSnippetThresholds();
+
+        return $this->pickFeaturedSnippetMetricsByMaxPoints(
+            $this->collectMarkdownTableMetrics($markdown, $minCols, $maxCols),
+            $thresholds,
+        );
     }
 
     /**

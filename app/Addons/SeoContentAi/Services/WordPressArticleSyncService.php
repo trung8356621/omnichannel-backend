@@ -248,10 +248,11 @@ final class WordPressArticleSyncService
             return $blocked;
         }
 
-        $seo = [];
-        if (array_key_exists('seo_title', $seoOverride)) {
-            $seo['seo_title'] = trim((string) $seoOverride['seo_title']);
-        }
+        $seo = [
+            'seo_title' => array_key_exists('seo_title', $seoOverride)
+                ? trim((string) $seoOverride['seo_title'])
+                : '',
+        ];
         if (array_key_exists('meta_description', $seoOverride)) {
             $seo['meta_description'] = trim((string) $seoOverride['meta_description']);
         }
@@ -896,13 +897,11 @@ final class WordPressArticleSyncService
     private function resolveSeoPayloadForWordPress(SeoArticle $article, ?array $override = null): array
     {
         $article->loadMissing('articleMetas');
+        $override = $override ?? [];
 
-        $seoTitle = trim((string) ($override['seo_title'] ?? ''));
-        if ($seoTitle === '') {
-            $seoTitle = trim((string) ($article->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''));
-        }
-        if ($seoTitle === '') {
-            $seoTitle = trim((string) ($article->title ?? ''));
+        $seoTitle = '';
+        if (array_key_exists('seo_title', $override)) {
+            $seoTitle = trim((string) $override['seo_title']);
         }
 
         $metaDescription = trim((string) ($override['meta_description'] ?? ''));

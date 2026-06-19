@@ -67,6 +67,18 @@
             </span>
         </x-filament::button>
 
+        <x-filament::button
+            type="button"
+            color="danger"
+            icon="heroicon-o-arrow-path"
+            wire:click="mountAction('resync_keywords')"
+            wire:loading.attr="disabled"
+            wire:target="mountAction('resync_keywords')"
+            :disabled="$incrementalSyncRunning"
+        >
+            {{ __('seo-content-ai::filament.keyword.resync_linked') }}
+        </x-filament::button>
+
         @if ($showTest)
             <x-filament::button
                 type="button"

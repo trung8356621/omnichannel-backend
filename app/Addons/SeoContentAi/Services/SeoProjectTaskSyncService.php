@@ -37,7 +37,7 @@ final class SeoProjectTaskSyncService
         if ($count > $max) {
             throw ValidationException::withMessages([
                 'tasks_data' => "Tháng {$carbonMonth->format('m/Y')} chỉ có tối đa {$max} ngày. "
-                    . "Bạn không thể đăng ký {$count} bài viết/từ khóa.",
+                    ."Bạn không thể đăng ký {$count} bài viết/từ khóa.",
             ]);
         }
     }
@@ -57,25 +57,28 @@ final class SeoProjectTaskSyncService
         DB::connection($project->getConnectionName())->transaction(function () use ($project, $sanitized, $carbonMonth): void {
             $existing = $project->tasks()
                 ->get()
-                ->keyBy(static fn (SeoProjectTask $task): string => implode('|', [
+                ->keyBy(static fn (SeoProjectTask $task): string => self::taskMatchKey(
                     (int) $task->site_id,
                     (string) $task->type,
-                    mb_strtolower(trim((string) $task->source_content)),
-                ]));
+                    (string) $task->source_content,
+                ));
 
             $project->tasks()->delete();
 
+            $usedArticleIds = [];
+
             foreach ($sanitized as $index => $task) {
-                $key = implode('|', [
+                $key = self::taskMatchKey(
                     (int) $task['site_id'],
                     (string) $task['type'],
-                    mb_strtolower(trim((string) $task['source_content'])),
-                ]);
+                    (string) $task['source_content'],
+                );
                 $previous = $existing->get($key);
+                $articleId = self::resolveArticleIdForRecreate($previous?->article_id, $usedArticleIds);
 
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
-                    'article_id' => $previous?->article_id,
+                    'article_id' => $articleId,
                     'type' => $task['type'],
                     'post_type' => $task['post_type'] ?? null,
                     'loai_san_pham' => $task['loai_san_pham'] ?? null,
@@ -92,6 +95,8 @@ final class SeoProjectTaskSyncService
                 'total_tasks' => count($sanitized),
             ]);
         });
+
+        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($project->fresh());
     }
 
     /**
@@ -101,6 +106,7 @@ final class SeoProjectTaskSyncService
     public function sanitizeTasksData(array $tasksData, ?int $defaultSiteId = null): array
     {
         $out = [];
+        $seen = [];
         $allowedSiteIds = $this->allowedSiteIds();
 
         foreach ($tasksData as $row) {
@@ -162,10 +168,59 @@ final class SeoProjectTaskSyncService
                     : null;
             }
 
+            $dedupeKey = self::taskMatchKey($siteId, $type, $content);
+            if (isset($seen[$dedupeKey])) {
+                continue;
+            }
+
+            $seen[$dedupeKey] = true;
             $out[] = $item;
         }
 
         return $out;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $tasksData
+     */
+    public function tasksSignature(array $tasksData, ?int $defaultSiteId = null): string
+    {
+        return json_encode(
+            $this->sanitizeTasksData($tasksData, $defaultSiteId),
+            JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR,
+        );
+    }
+
+    private static function taskMatchKey(int $siteId, string $type, string $sourceContent): string
+    {
+        return implode('|', [
+            $siteId,
+            $type,
+            mb_strtolower(trim($sourceContent)),
+        ]);
+    }
+
+    /**
+     * @param  array<int, true>  $usedArticleIds
+     */
+    private static function resolveArticleIdForRecreate(?int $articleId, array &$usedArticleIds): ?int
+    {
+        $normalized = (int) ($articleId ?? 0);
+        if ($normalized <= 0) {
+            return null;
+        }
+
+        if (isset($usedArticleIds[$normalized])) {
+            return null;
+        }
+
+        SeoProjectTask::query()
+            ->where('article_id', $normalized)
+            ->update(['article_id' => null]);
+
+        $usedArticleIds[$normalized] = true;
+
+        return $normalized;
     }
 
     /**

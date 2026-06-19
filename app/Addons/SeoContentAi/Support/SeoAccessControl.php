@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Models\Site;
 use App\Models\User;
@@ -174,6 +176,30 @@ final class SeoAccessControl
         }
 
         return self::accessibleSitesQuery()->whereKey($siteId)->exists();
+    }
+
+    public static function canAccessArticle(SeoArticle $article): bool
+    {
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            return false;
+        }
+
+        if (! self::canAccessSeoPanel($user)) {
+            return false;
+        }
+
+        if (in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
+            return true;
+        }
+
+        if (self::isContentManager()) {
+            return ArticleResource::canContentManagerAccessArticle($article);
+        }
+
+        $siteId = (int) ($article->site_id ?? 0);
+
+        return $siteId > 0 && self::canAccessSite($siteId);
     }
 
     public static function shouldApplyGlobalSiteScope(): bool

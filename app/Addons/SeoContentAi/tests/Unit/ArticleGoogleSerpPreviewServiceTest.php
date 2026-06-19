@@ -6,19 +6,23 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
-use App\Support\RankMathSchemaParser;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class ArticleGoogleSerpPreviewServiceTest extends TestCase
 {
     public function test_builds_product_preview_from_synthetic_schema(): void
     {
+        if (config('database.connections.omi_seo_ai') === null) {
+            $this->markTestSkipped('Connection omi_seo_ai chưa được cấu hình trong môi trường test.');
+        }
+
         $article = new SeoArticle([
             'title' => 'Balo học sinh',
             'type' => 'product',
         ]);
+        $article->setRelation('articleMetas', collect());
 
-        $preview = (new ArticleGoogleSerpPreviewService(new RankMathSchemaParser))->buildForArticle(
+        $preview = app(ArticleGoogleSerpPreviewService::class)->buildForArticle(
             $article,
             'Tiêu đề SEO tùy chỉnh',
             'Mô tả ngắn cho Google.',

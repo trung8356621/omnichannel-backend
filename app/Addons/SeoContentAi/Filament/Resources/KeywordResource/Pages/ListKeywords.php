@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
+use App\Addons\SeoContentAi\Filament\Resources\TagResource;
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Services\KeywordDomainResyncService;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
@@ -110,35 +110,11 @@ class ListKeywords extends ListRecords
                 ->url(KeywordResource::buildRootKeywordsUrl());
         }
 
-        $actions[] = Actions\Action::make('resync_keywords')
-            ->label(__('seo-content-ai::filament.keyword.resync_linked'))
-            ->icon('heroicon-o-arrow-path')
-            ->color('danger')
-            ->visible(fn (): bool => SeoAccessControl::globalSiteId() !== null)
-            ->requiresConfirmation()
-            ->modalHeading(__('seo-content-ai::filament.keyword.resync_linked'))
-            ->modalDescription(__('seo-content-ai::filament.keyword.resync_linked_confirm'))
-            ->modalSubmitActionLabel(__('seo-content-ai::filament.keyword.resync_linked_submit'))
-            ->action(function (KeywordDomainResyncService $resyncService): void {
-                $siteId = (int) (SeoAccessControl::globalSiteId() ?? 0);
-                if ($siteId <= 0) {
-                    Notification::make()
-                        ->title(__('seo-content-ai::filament.keyword.resync_linked_failed'))
-                        ->body(__('seo-content-ai::filament.keyword.resync_linked_no_domain'))
-                        ->danger()
-                        ->send();
-
-                    return;
-                }
-
-                $result = $resyncService->resetAndResync($siteId);
-
-                Notification::make()
-                    ->title(__('seo-content-ai::filament.keyword.resync_linked_completed'))
-                    ->body(__('seo-content-ai::filament.keyword.resync_linked_body', $result))
-                    ->success()
-                    ->send();
-            });
+        $actions[] = Actions\Action::make('manage_tags')
+            ->label(__('seo-content-ai::filament.keyword.manage_tags'))
+            ->icon('heroicon-o-tag')
+            ->color('gray')
+            ->url(TagResource::getUrl('index'));
 
         $actions[] = Actions\Action::make('add_keywords')
             ->label('Add keyword')

@@ -47,8 +47,12 @@ final class IncrementalDomainSyncCache
         }
 
         $refs = $state['refs'];
-        $total = count($refs);
-        $done = min($total, (int) ($state['offset'] ?? 0));
+        $refsTotal = count($refs);
+        $manifestTotal = (int) ($state['manifest_total'] ?? 0);
+        $skipped = max(0, (int) ($state['skipped'] ?? 0));
+        $offset = min($refsTotal, max(0, (int) ($state['offset'] ?? 0)));
+        $total = $manifestTotal > 0 ? $manifestTotal : $refsTotal;
+        $done = min($total, $skipped + $offset);
         $status = (string) ($state['status'] ?? self::STATUS_RUNNING);
 
         return [
@@ -153,6 +157,7 @@ final class IncrementalDomainSyncCache
             'status' => self::STATUS_RUNNING,
             'refs' => $refs,
             'offset' => 0,
+            'manifest_total' => (int) ($prepared['manifest_total'] ?? count($refs)),
             'skipped' => (int) ($prepared['skipped'] ?? 0),
             'new_count' => (int) ($prepared['new_count'] ?? 0),
             'update_count' => (int) ($prepared['update_count'] ?? 0),

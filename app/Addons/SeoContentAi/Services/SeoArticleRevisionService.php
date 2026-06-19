@@ -134,18 +134,10 @@ final class SeoArticleRevisionService
      */
     private function persistSeoMetaFromRevision(SeoArticle $article, array $seoMeta): void
     {
-        $seoTitle = trim((string) ($seoMeta['seo_title'] ?? ''));
         $metaDescription = trim((string) ($seoMeta['meta_description'] ?? ''));
         $focusKeyword = trim((string) ($seoMeta['focus_keyword'] ?? ''));
 
-        if ($seoTitle === '') {
-            $article->articleMetas()->where('meta_key', 'seo_title')->delete();
-        } else {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'seo_title'],
-                ['meta_value' => $seoTitle],
-            );
-        }
+        $article->articleMetas()->where('meta_key', 'seo_title')->delete();
 
         foreach (['seo_meta_description', 'meta_description'] as $key) {
             if ($metaDescription === '') {

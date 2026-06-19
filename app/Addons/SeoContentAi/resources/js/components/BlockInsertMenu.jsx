@@ -1,48 +1,57 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
+import { ChevronsDown, ChevronsUp, FileText, HelpCircle, Image as ImageIcon, Plus } from 'lucide-react';
 import { t } from '../utils/i18n';
 
 /**
  * @param {'before'|'after'} position
  * @param {boolean} open
  * @param {() => void} onToggle
- * @param {() => void} [onMoveUp]
- * @param {() => void} [onMoveDown]
- * @param {boolean} [canMoveUp]
- * @param {boolean} [canMoveDown]
+ * @param {() => void} [onMovePrevSection]
+ * @param {() => void} [onMoveNextSection]
+ * @param {boolean} [canMovePrevSection]
+ * @param {boolean} [canMoveNextSection]
+ * @param {boolean} [showMoveButtons]
  */
 export function BlockInsertBar({
     position,
     open,
     onToggle,
-    onMoveUp,
-    onMoveDown,
-    canMoveUp = false,
-    canMoveDown = false,
+    onMovePrevSection,
+    onMoveNextSection,
+    canMovePrevSection = false,
+    canMoveNextSection = false,
+    showMoveButtons = true,
 }) {
     return (
-        <div className={`seo-block-insert-bar seo-block-insert-bar--${position}`}>
-            <button
-                type="button"
-                className="seo-block-insert-btn seo-block-move-btn"
-                disabled={!canMoveUp}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => {
-                    e.stopPropagation();
-                    onMoveUp?.();
-                }}
-                title="Move block up"
-                aria-label="Move block up"
-            >
-                <ChevronUp size={16} strokeWidth={2.5} />
-            </button>
+        <div
+            className={`seo-block-insert-bar seo-block-insert-bar--${position}${showMoveButtons ? '' : ' seo-block-insert-bar--insert-only'}`}
+            onMouseDown={(e) => e.stopPropagation()}
+        >
+            {showMoveButtons ? (
+                <button
+                    type="button"
+                    className="seo-block-insert-btn seo-block-move-btn"
+                    disabled={!canMovePrevSection}
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (canMovePrevSection) {
+                            onMovePrevSection?.();
+                        }
+                    }}
+                    title={t('editor_move_block_prev_section')}
+                    aria-label={t('editor_move_block_prev_section')}
+                >
+                    <ChevronsUp size={16} strokeWidth={2.5} />
+                </button>
+            ) : null}
             <button
                 type="button"
                 className={`seo-block-insert-btn ${open ? 'is-open' : ''}`}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={(e) => {
                     e.stopPropagation();
-                    onToggle();
+                    onToggle?.();
                 }}
                 title={position === 'before' ? 'Insert content above' : 'Insert content below'}
                 aria-expanded={open}
@@ -50,20 +59,24 @@ export function BlockInsertBar({
             >
                 <Plus size={16} strokeWidth={2.5} />
             </button>
-            <button
-                type="button"
-                className="seo-block-insert-btn seo-block-move-btn"
-                disabled={!canMoveDown}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={(e) => {
-                    e.stopPropagation();
-                    onMoveDown?.();
-                }}
-                title="Move block down"
-                aria-label="Move block down"
-            >
-                <ChevronDown size={16} strokeWidth={2.5} />
-            </button>
+            {showMoveButtons ? (
+                <button
+                    type="button"
+                    className="seo-block-insert-btn seo-block-move-btn"
+                    disabled={!canMoveNextSection}
+                    onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (canMoveNextSection) {
+                            onMoveNextSection?.();
+                        }
+                    }}
+                    title={t('editor_move_block_next_section')}
+                    aria-label={t('editor_move_block_next_section')}
+                >
+                    <ChevronsDown size={16} strokeWidth={2.5} />
+                </button>
+            ) : null}
         </div>
     );
 }

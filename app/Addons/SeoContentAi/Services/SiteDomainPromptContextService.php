@@ -662,41 +662,13 @@ final class SiteDomainPromptContextService
     public function formatCtaForPrompt(array $items, string $intro = '', Site|int|null $site = null): string
     {
         $intro = trim($intro);
-        $lines = [];
-
-        if ($site !== null) {
-            $siteModel = $site instanceof Site ? $site : Site::query()->find((int) $site);
-            if ($siteModel instanceof Site) {
-                $lines[] = 'website: '.trim((string) $siteModel->domain);
-            }
-        }
-
-        foreach ($items as $item) {
-            $type = trim((string) ($item['type'] ?? ''));
-            $value = trim((string) ($item['value'] ?? ''));
-            if ($value === '') {
-                continue;
-            }
-
-            if (in_array(mb_strtolower($type), ['website', 'phone', 'email'], true)) {
-                continue;
-            }
-
-            $lines[] = $type !== '' ? "{$type}: {$value}" : $value;
-        }
-
         $guide = app(ArticleCtaPlaceholderService::class)->placeholderGuideForPrompt();
 
-        $parts = [];
-        if ($intro !== '') {
-            $parts[] = $intro;
-        }
-        $parts[] = $guide;
-        if ($lines !== []) {
-            $parts[] = "Giá trị đã cấu hình trên domain:\n".implode("\n", $lines);
+        if ($intro === '') {
+            return $guide;
         }
 
-        return implode("\n\n", $parts);
+        return $intro."\n\n".$guide;
     }
 
     /**

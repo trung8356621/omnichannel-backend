@@ -64,7 +64,7 @@ MD;
             $tableRows .= "| a{$i} | b{$i} |\n";
         }
 
-        $markdown = "## Intro\n\n## Câu hỏi thường gặp\n\n### Câu hỏi 1?\nTrả lời 1.\n\n" . $tableRows;
+        $markdown = "## Intro\n\n## Câu hỏi thường gặp\n\n### Câu hỏi 1?\nTrả lời 1.\n\n".$tableRows;
 
         $faqs = $parser->parseFaqs($markdown);
         $score = $parser->calculateSeoScore($markdown, $faqs);
@@ -721,6 +721,27 @@ HTML;
         $this->assertStringNotContainsString('[omi_faq]', $markdown);
         $this->assertStringNotContainsString('[caption', $markdown);
         $this->assertStringNotContainsString('[vc_row]', $markdown);
+    }
+
+    public function test_featured_snippet_uses_max_score_when_multiple_tables(): void
+    {
+        $parser = $this->parser();
+
+        $buildTable = static function (int $dataRows): string {
+            $rows = "<table><tr><th>H1</th><th>H2</th></tr>\n";
+            for ($i = 1; $i <= $dataRows; $i++) {
+                $rows .= "<tr><td>a{$i}</td><td>b{$i}</td></tr>\n";
+            }
+
+            return $rows.'</table>';
+        };
+
+        $html = $buildTable(4).$buildTable(10).$buildTable(6);
+        $score = $parser->resolveFeaturedSnippetTableScore('', $html);
+
+        $this->assertSame(10, $score['points']);
+        $this->assertSame('excellent', $score['tier']);
+        $this->assertSame(10, $score['data_rows']);
     }
 
     public function test_strip_wordpress_shortcodes_preserves_escaped_brackets(): void

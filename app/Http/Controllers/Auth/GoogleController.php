@@ -24,8 +24,6 @@ class GoogleController extends Controller
 
     public function handleGoogleCallback(): RedirectResponse
     {
-        $fallbackUrl = $this->resolveFallbackUrl();
-
         try {
             $client = new \GuzzleHttp\Client(['verify' => false]);
 
@@ -46,16 +44,26 @@ class GoogleController extends Controller
             Auth::login($user, true);
             request()->session()->regenerate();
 
-            return redirect()->intended($fallbackUrl);
+            if ($user->isStaff()) {
+                return redirect('/');
+            }
+
+            return redirect()->intended($this->resolveFallbackUrl($user));
         } catch (\Exception $e) {
             Log::error('Google Login Error: '.$e->getMessage());
 
-            return redirect($this->resolveLoginPath($fallbackUrl));
+            return redirect($this->resolveLoginPath($this->resolveFallbackUrl()));
         }
     }
 
-    private function resolveFallbackUrl(): string
+    private function resolveFallbackUrl(?User $user = null): string
     {
+        $user ??= auth()->user();
+
+        if ($user instanceof User && $user->isStaff()) {
+            return '/';
+        }
+
         $intended = session('url.intended');
 
         if (is_string($intended) && str_starts_with($intended, '/') && ! str_starts_with($intended, '//')) {

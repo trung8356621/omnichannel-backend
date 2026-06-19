@@ -33,6 +33,9 @@ return [
     /** Ngưỡng (bytes) chuyển import sang queue job. */
     'db_import_queue_threshold' => (int) env('SEO_CONTENT_AI_DB_IMPORT_QUEUE_THRESHOLD', 5 * 1024 * 1024),
 
+    /** Giới hạn upload file SQL backup (kilobytes) — đồng bộ Livewire + Filament FileUpload. */
+    'db_import_max_upload_kb' => (int) env('SEO_CONTENT_AI_DB_IMPORT_MAX_UPLOAD_KB', 512000),
+
     /** Thư mục tạm (disk local) cho backup/import SQL. */
     'db_backup_storage_dir' => 'seo-db-backups',
 

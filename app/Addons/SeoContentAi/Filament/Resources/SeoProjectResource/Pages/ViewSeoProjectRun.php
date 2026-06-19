@@ -480,7 +480,16 @@ class ViewSeoProjectRun extends Page
         }
 
         if ($this->projectRun->status === SeoProjectRun::STATUS_RUNNING) {
-            app(SeoProjectWorkflowRunService::class)->completeRunQueue($this->projectRun);
+            $completedRun = app(SeoProjectWorkflowRunService::class)->completeRunQueue($this->projectRun);
+            if ((int) $completedRun->id !== (int) $this->projectRun->id) {
+                $this->redirect(
+                    SeoProjectResource::getUrl('view-run', ['run' => $completedRun->id]),
+                    navigate: false,
+                );
+
+                return;
+            }
+
             $this->projectRun->refresh();
         }
 

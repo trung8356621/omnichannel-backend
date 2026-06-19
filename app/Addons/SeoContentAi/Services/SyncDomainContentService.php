@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\DomainSyncManifestComparator;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
@@ -200,10 +201,11 @@ class SyncDomainContentService
 
             $plan = $this->manifestComparator->resolveFetchRefs($entries, $localArticles);
             $refs = $plan['refs'];
+            $manifestTotal = count($entries);
 
             Log::info('SeoContentAi incremental sync plan', [
                 'site_id' => $site->id,
-                'manifest_entries' => count($entries),
+                'manifest_entries' => $manifestTotal,
                 'to_fetch' => count($refs),
                 'new_count' => $plan['new_count'],
                 'update_count' => $plan['update_count'],
@@ -219,6 +221,7 @@ class SyncDomainContentService
                     'new_count' => 0,
                     'update_count' => 0,
                     'total' => 0,
+                    'manifest_total' => $manifestTotal,
                 ];
             }
 
@@ -236,6 +239,7 @@ class SyncDomainContentService
                 'new_count' => $plan['new_count'],
                 'update_count' => $plan['update_count'],
                 'total' => count($refs),
+                'manifest_total' => $manifestTotal,
             ];
         } catch (Throwable $e) {
             Log::error('SeoContentAi incremental sync prepare failed', [
@@ -823,11 +827,14 @@ class SyncDomainContentService
         }
 
         $slug = trim((string) ($item['slug'] ?? ''));
-        if ($slug !== '') {
+        $normalizedSlug = RankMathSeoValueNormalizer::normalizeSlug($slug);
+        if ($normalizedSlug !== null && $normalizedSlug !== '') {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_slug'],
-                ['meta_value' => $slug],
+                ['meta_value' => $normalizedSlug],
             );
+        } elseif ($slug !== '' && RankMathSeoValueNormalizer::containsRankMathVariable($slug)) {
+            $article->articleMetas()->where('meta_key', 'wp_slug')->delete();
         }
 
         $permalink = trim((string) ($item['permalink'] ?? ''));
@@ -919,14 +926,6 @@ class SyncDomainContentService
      */
     private function syncSchemaAndWooCommerceMeta(SeoArticle $article, array $item): void
     {
-        $schema = trim((string) ($item['schema_json_ld'] ?? ''));
-        if ($schema !== '') {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'rank_math_schema_json'],
-                ['meta_value' => $schema],
-            );
-        }
-
         $woocommerce = is_array($item['woocommerce'] ?? null) ? $item['woocommerce'] : [];
         if ($woocommerce === []) {
             return;
@@ -976,11 +975,21 @@ class SyncDomainContentService
 
         $seo = is_array($item['seo'] ?? null) ? $item['seo'] : [];
 
+        $seoTitle = RankMathSeoValueNormalizer::normalizeTitle(
+            (string) ($seo['seo_title'] ?? ''),
+        );
+        $rawTitle = trim((string) ($seo['seo_title'] ?? ''));
+
         $metaMap = [
-            'seo_title' => (string) ($seo['seo_title'] ?? ''),
             'seo_meta_description' => (string) ($seo['meta_description'] ?? ''),
             'seo_focus_keyword' => (string) ($seo['focus_keyword'] ?? ''),
         ];
+
+        if ($seoTitle !== null && $seoTitle !== '') {
+            $metaMap['seo_title'] = $seoTitle;
+        } elseif ($rawTitle !== '') {
+            $article->articleMetas()->where('meta_key', 'seo_title')->delete();
+        }
 
         foreach ($metaMap as $metaKey => $metaValue) {
             $metaValue = trim($metaValue);

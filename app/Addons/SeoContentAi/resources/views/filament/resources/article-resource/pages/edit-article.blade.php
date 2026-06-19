@@ -142,6 +142,11 @@
             galleryPickerAnchorKey: null,
             init() {
                 this.syncFeaturedImageDraft();
+                if (this.$wire?.articleHeavyActionBusy) {
+                    this.$wire.set('articleHeavyActionBusy', false);
+                    this.$wire.set('articleHeavyAction', null);
+                }
+                this.unlockPageAfterHeavyActionFailure();
             },
             syncFeaturedImageDraft() {
                 const stored = window.__seoFeaturedImageStorage?.load?.(this.articleId);
@@ -159,9 +164,17 @@
                 window.__seoArticleHeavyActionOverlay?.show(this.heavyPageAction);
                 window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
 
+                clearTimeout(this._heavyActionUnlockTimer);
+                this._heavyActionUnlockTimer = setTimeout(() => {
+                    if (!this.$wire?.articleHeavyActionBusy) {
+                        this.unlockPageAfterHeavyActionFailure();
+                    }
+                }, 45000);
+
                 return true;
             },
             unlockPageAfterHeavyActionFailure() {
+                clearTimeout(this._heavyActionUnlockTimer);
                 this.syncPageLocked = false;
                 this.heavyPageAction = null;
                 window.__seoArticleHeavyActionOverlay?.hide();
@@ -792,6 +805,8 @@
                 runAfterMediaDrafts((d) => $wire.syncArticleToWordPress(d.html ?? ''));
             } else if (detail.target === 'generate-faq') {
                 runAfterMediaDrafts((d) => $wire.generateArticleFaqs(d.html ?? ''));
+            } else if (detail.target === 'quick-translate') {
+                runAfterMediaDrafts((d) => $wire.quickTranslateLinkedArticle(d.html ?? ''));
             } else {
                 runAfterMediaDrafts((d) => $wire.persistArticleLocal(d.html ?? ''));
             }
@@ -845,7 +860,7 @@
                     window.open(url, '_blank', 'noopener');
                 }
             } else if (action === 'toggle-seo') {
-                window.dispatchEvent(new CustomEvent('article-editor-toggle-seo-fields'));
+                window.dispatchEvent(new CustomEvent('google-serp-preview-open-edit'));
             }
         "
         x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
@@ -908,93 +923,33 @@
                 </div>
 
                 <div class="wp-postbox">
-                    <input
-                        type="text"
-                        wire:model.blur="articleTitle"
-                        placeholder="Thêm tiêu đề bài viết"
-                        class="wp-title-input"
-                    />
-
-                    <div
-                        class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400"
-                        x-data="{
-                            editingSlug: false,
-                            slug: @js(trim($articleSlug)),
-                            permalinkBase: @js($this->getPermalinkBase()),
-                            permalinkSuffix: @js($this->getPermalinkSuffix()),
-                            previewPermalink: @js($this->getDisplayPermalink()),
-                            hasWordPressPost: @js((int) ($record->wp_post_id ?? 0) > 0),
-                            normalizeSlug() {
-                                const fn = window.normalizeArticleSlug;
-                                if (typeof fn !== 'function') {
-                                    return;
-                                }
-                                const next = fn(this.slug);
-                                if (next !== this.slug) {
-                                    this.slug = next;
-                                }
-                            },
-                            async saveSlug() {
-                                this.normalizeSlug();
-                                await $wire.confirmArticleSlug(this.slug);
-                                this.editingSlug = false;
-                            },
-                        }"
-                    >
-                        <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
-                        <template x-if="editingSlug">
-                            <span class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1">
-                                <span class="text-gray-500" x-text="(permalinkBase || '') + '/'"></span>
-                                <input
-                                    type="text"
-                                    x-model="slug"
-                                    x-on:input="normalizeSlug()"
-                                    x-on:keydown.enter.prevent="saveSlug()"
-                                    class="inline-block min-w-[12rem] max-w-full flex-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 px-2 py-0.5 text-sm"
-                                />
-                                <span class="text-gray-500" x-show="permalinkSuffix !== ''" x-text="permalinkSuffix"></span>
-                                <button
-                                    type="button"
-                                    x-on:click="saveSlug()"
-                                    wire:loading.attr="disabled"
-                                    wire:target="confirmArticleSlug"
-                                    class="ml-2 text-primary-600 hover:underline text-xs disabled:opacity-50"
-                                >
-                                    <span wire:loading.remove wire:target="confirmArticleSlug">OK</span>
-                                    <span wire:loading wire:target="confirmArticleSlug">…</span>
-                                </button>
-                            </span>
-                        </template>
-                        <template x-if="!editingSlug">
-                            <span class="inline-flex min-w-0 flex-1 flex-wrap items-baseline gap-x-1">
-                                <template x-if="hasWordPressPost && previewPermalink">
-                                    <a
-                                        x-bind:href="previewPermalink"
-                                        target="_blank"
-                                        rel="noopener"
-                                        class="text-sky-600 dark:text-sky-400 hover:underline break-all"
-                                        x-text="previewPermalink"
-                                    ></a>
-                                </template>
-                                <template x-if="!hasWordPressPost || !previewPermalink">
-                                    <span
-                                        class="break-all text-gray-500 dark:text-gray-400"
-                                        x-text="previewPermalink || ((permalinkBase || '') !== '' ? permalinkBase + '/sample-post' : '#')"
-                                        title="URL dự kiến, chưa tồn tại trên WordPress"
-                                    ></span>
-                                </template>
-                                <button
-                                    type="button"
-                                    x-on:click="editingSlug = true"
-                                    class="ml-2 text-xs text-gray-500 hover:text-primary-600 hover:underline"
-                                >
-                                    Chỉnh sửa
-                                </button>
-                            </span>
-                        </template>
+                    <div class="wp-postbox-title-toolbar">
+                        <input
+                            type="text"
+                            wire:model.blur="articleTitle"
+                            placeholder="Thêm tiêu đề bài viết"
+                            class="wp-title-input"
+                        />
+                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
                     </div>
 
-                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-fields-collapsible')
+                    <div class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+                        <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
+                        @php($displayPermalink = trim($this->getDisplayPermalink()))
+                        @if($displayPermalink !== '' && (int) ($record->wp_post_id ?? 0) > 0)
+                            <a
+                                href="{{ $displayPermalink }}"
+                                target="_blank"
+                                rel="noopener"
+                                class="text-sky-600 dark:text-sky-400 hover:underline break-all"
+                            >{{ $displayPermalink }}</a>
+                        @else
+                            <span
+                                class="break-all text-gray-500 dark:text-gray-400"
+                                title="URL dự kiến, chưa tồn tại trên WordPress"
+                            >{{ $displayPermalink !== '' ? $displayPermalink : (trim($this->getPermalinkBase()) !== '' ? rtrim($this->getPermalinkBase(), '/') . '/' . $this->getDisplaySlug() : '#') }}</span>
+                        @endif
+                    </div>
                 </div>
 
                 <script type="application/json" id="seo-article-initial-html">@json($editorHtml)</script>
@@ -1011,7 +966,7 @@
                     window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ = @js($this->getId());
                 </script>
 
-                <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact"></div>
+                <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact min-w-0"></div>
 
                 <button
                     type="button"
@@ -1036,7 +991,7 @@
             >
                 <div class="wp-article-edit-rail">
                     <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-rail-top">
-                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-snippet-sidebar')
+                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.seo-polylang-widget')
                     </div>
 
                     <div

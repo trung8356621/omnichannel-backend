@@ -2,7 +2,11 @@
     <x-filament::section>
         <x-slot name="heading">{{ $this->project->name }}</x-slot>
         <x-slot name="description">
-            Run và Test run chỉ xử lý các hạng mục đang chờ; các hạng mục đã OK được bỏ qua.
+            @if ($this->isProjectFullyCompleted())
+                {{ __('seo-content-ai::filament.projects.run_history_completed_hint') }}
+            @else
+                Run và Test run chỉ xử lý các hạng mục đang chờ; các hạng mục đã OK được bỏ qua.
+            @endif
         </x-slot>
 
         <div class="overflow-x-auto">

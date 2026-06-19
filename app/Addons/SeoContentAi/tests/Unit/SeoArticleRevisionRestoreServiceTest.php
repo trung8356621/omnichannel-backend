@@ -47,10 +47,7 @@ final class SeoArticleRevisionRestoreServiceTest extends TestCase
         $this->assertSame(72.5, (float) $restored->seo_score);
 
         $restored->load('articleMetas');
-        $this->assertSame(
-            'Old SEO title',
-            (string) ($restored->articleMetas->firstWhere('meta_key', 'seo_title')?->meta_value ?? ''),
-        );
+        $this->assertNull($restored->articleMetas->firstWhere('meta_key', 'seo_title'));
         $this->assertSame(
             'Old meta description',
             (string) ($restored->articleMetas->firstWhere('meta_key', 'seo_meta_description')?->meta_value ?? ''),

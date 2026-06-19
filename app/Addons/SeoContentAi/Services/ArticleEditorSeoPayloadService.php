@@ -47,6 +47,24 @@ final class ArticleEditorSeoPayloadService
 
         $skipSeoScore = ! $article->countsTowardSeoScore();
 
+        $seoTitle = trim((string) ($article->title ?? ''));
+
+        $seoDescription = trim((string) (
+            $article->articleMetas->first(
+                static fn ($meta): bool => in_array((string) $meta->meta_key, [
+                    'seo_meta_description',
+                    'meta_description',
+                ], true),
+            )?->meta_value ?? ''
+        ));
+
+        $googleSerpPreview = app(ArticleGoogleSerpPreviewService::class)->buildForArticle(
+            $article,
+            $seoTitle,
+            $seoDescription,
+            app(WordPressArticleContentService::class)->resolvePermalink($article) ?: '',
+        );
+
         return [
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
             'site_domain' => trim((string) ($article->site?->domain ?? '')),
@@ -59,6 +77,11 @@ final class ArticleEditorSeoPayloadService
             'content_bonus' => $contentBonus,
             'extracted_links' => $extractedLinks,
             'suggested_internal_links' => $suggestedInternalLinks,
+            'google_serp_preview' => $googleSerpPreview,
+            'article_slug' => trim((string) ($article->slug ?? '')),
+            'permalink_base' => $article->site
+                ? rtrim(app(WordPressArticleContentService::class)->getPermalinkBase($article->site), '/')
+                : '',
             'domain_link_list_catalog' => app(DomainLinkListEditorService::class)->forSite($article->site),
             'domain_link_list' => app(DomainLinkListEditorService::class)->forArticle($article, $bodyHtml),
             'domain_cta_list' => app(DomainCtaEditorService::class)->forSite($article->site),

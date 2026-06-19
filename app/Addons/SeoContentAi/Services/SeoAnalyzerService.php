@@ -322,11 +322,15 @@ class SeoAnalyzerService
         }
 
         // Rule 10: Slug ngắn gọn
-        if (mb_strlen($slug) < 75) {
-            $good[] = $this->scoredLine('URL ngắn gọn (< 75 ký tự).', 5, true);
-        } else {
-            $errors[] = $this->scoredLine('URL quá dài (>= 75 ký tự).', 5, false);
+        $slugLength = mb_strlen($slug);
+        if ($slugLength > 85) {
+            $errors[] = $this->scoredLine('URL quá dài (> 85 ký tự).', 5, false);
             $totalScore -= 5;
+        } elseif ($slugLength >= 80) {
+            $warnings[] = $this->scoredLine('URL hơi dài (>= 80 ký tự, nên ngắn hơn).', 5, false);
+            $totalScore -= 2;
+        } else {
+            $good[] = $this->scoredLine('URL ngắn gọn (< 80 ký tự).', 5, true);
         }
 
         // Rule 11: Có internal link
@@ -693,13 +697,6 @@ class SeoAnalyzerService
 
     private function resolveSeoTitle(SeoArticle $article): string
     {
-        $article->loadMissing('articleMetas');
-
-        $meta = $article->articleMetas->firstWhere('meta_key', 'seo_title');
-        if ($meta && is_string($meta->meta_value) && trim($meta->meta_value) !== '') {
-            return trim($meta->meta_value);
-        }
-
         return trim((string) ($article->title ?? ''));
     }
 

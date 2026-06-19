@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use App\Models\Site;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -33,8 +34,7 @@ final class WordPressMediaLibraryService
         int $page = 1,
         int $perPage = 50,
         ?string $search = null,
-    ): array
-    {
+    ): array {
         $site->loadMissing('metas');
         $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
         if ($readToken === '') {
@@ -74,12 +74,12 @@ final class WordPressMediaLibraryService
             $response = Http::timeout(60)
                 ->acceptJson()
                 ->withToken($readToken)
-                ->get($base . '/wp-json/wp/v2/media', $query);
+                ->get($base.'/wp-json/wp/v2/media', $query);
 
             if (! $response->successful()) {
                 $message = (string) ($response->json('message') ?? $response->body());
 
-                return $this->emptyResult($page, 'WordPress trả lỗi HTTP ' . $response->status() . ': ' . mb_substr($message, 0, 300));
+                return $this->emptyResult($page, 'WordPress trả lỗi HTTP '.$response->status().': '.mb_substr($message, 0, 300));
             }
 
             $payload = $response->json();
@@ -144,7 +144,7 @@ final class WordPressMediaLibraryService
                 'error' => $e->getMessage(),
             ]);
 
-            return $this->emptyResult($page, 'Không kết nối được WordPress: ' . $e->getMessage());
+            return $this->emptyResult($page, 'Không kết nối được WordPress: '.$e->getMessage());
         }
     }
 
@@ -172,7 +172,7 @@ final class WordPressMediaLibraryService
             $response = Http::timeout(30)
                 ->acceptJson()
                 ->withToken($readToken)
-                ->get($base . '/wp-json/wp/v2/media/' . $attachmentId);
+                ->get($base.'/wp-json/wp/v2/media/'.$attachmentId);
 
             if (! $response->successful()) {
                 return null;
@@ -224,6 +224,57 @@ final class WordPressMediaLibraryService
 
             return null;
         }
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function fetchAttachmentBySourceUrl(Site $site, string $sourceUrl): ?array
+    {
+        $sourceUrl = WordPressImageUrl::toFullSize(trim($sourceUrl));
+        if ($sourceUrl === '') {
+            return null;
+        }
+
+        $slug = WordPressImageUrl::slugFromUrl($sourceUrl);
+        if ($slug === '') {
+            return null;
+        }
+
+        $searchTerms = array_values(array_unique(array_filter([
+            $slug,
+            Str::slug($slug),
+        ])));
+
+        foreach ($searchTerms as $search) {
+            $result = $this->fetch($site, null, 1, 50, $search);
+            $images = is_array($result['images'] ?? null) ? $result['images'] : [];
+
+            foreach ($images as $image) {
+                if (! is_array($image)) {
+                    continue;
+                }
+
+                $candidateUrl = trim((string) ($image['url'] ?? ''));
+                if ($candidateUrl === '') {
+                    continue;
+                }
+
+                if ($this->wordPressUploadPathsMatch($candidateUrl, $sourceUrl)) {
+                    return $image;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function wordPressUploadPathsMatch(string $left, string $right): bool
+    {
+        $leftPath = strtolower(rtrim((string) parse_url(WordPressImageUrl::toFullSize($left), PHP_URL_PATH), '/'));
+        $rightPath = strtolower(rtrim((string) parse_url(WordPressImageUrl::toFullSize($right), PHP_URL_PATH), '/'));
+
+        return $leftPath !== '' && $leftPath === $rightPath;
     }
 
     /**
@@ -294,12 +345,12 @@ final class WordPressMediaLibraryService
                     || str_contains($message, 'đường dẫn nào phù hợp')
                 )) {
                     $message = 'Plugin TVH SEO AI Bridge trên WordPress chưa có API xóa ảnh. '
-                        . 'Cập nhật plugin lên bản 1.0.12+ (WP Admin → TVH SEO AI → Kiểm tra cập nhật).';
+                        .'Cập nhật plugin lên bản 1.0.12+ (WP Admin → TVH SEO AI → Kiểm tra cập nhật).';
                 }
 
                 return [
                     'success' => false,
-                    'message' => 'WordPress trả lỗi HTTP ' . $response->status() . ': ' . mb_substr($message, 0, 300),
+                    'message' => 'WordPress trả lỗi HTTP '.$response->status().': '.mb_substr($message, 0, 300),
                 ];
             }
 
@@ -325,7 +376,7 @@ final class WordPressMediaLibraryService
 
             return [
                 'success' => false,
-                'message' => 'Không kết nối được WordPress: ' . $e->getMessage(),
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
     }
@@ -365,7 +416,7 @@ final class WordPressMediaLibraryService
     }
 
     /**
-     * @param array<string, mixed> $item
+     * @param  array<string, mixed>  $item
      */
     private function resolveWordPressMediaType(array $item): string
     {
@@ -389,11 +440,11 @@ final class WordPressMediaLibraryService
             ->withToken($writeToken);
 
         $attempts = [
-            fn () => $client->post($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId . '/delete'),
-            fn () => $client->post($base . '/wp-json/omi-seo-ai/v1/attachments/delete', [
+            fn () => $client->post($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId.'/delete'),
+            fn () => $client->post($base.'/wp-json/omi-seo-ai/v1/attachments/delete', [
                 'attachment_id' => $attachmentId,
             ]),
-            fn () => $client->delete($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId),
+            fn () => $client->delete($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId),
         ];
 
         $lastResponse = null;
@@ -410,6 +461,6 @@ final class WordPressMediaLibraryService
             }
         }
 
-        return $lastResponse ?? $client->delete($base . '/wp-json/omi-seo-ai/v1/attachments/' . $attachmentId);
+        return $lastResponse ?? $client->delete($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId);
     }
 }

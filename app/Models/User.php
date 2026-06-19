@@ -2,11 +2,14 @@
 
 namespace App\Models;
 
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use Filament\Models\Contracts\FilamentUser;
+use Filament\Panel;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-class User extends Authenticatable
+class User extends Authenticatable implements FilamentUser
 {
     use Notifiable;
     use SoftDeletes;
@@ -42,6 +45,19 @@ class User extends Authenticatable
     public function isStaff()
     {
         return $this->role === self::ROLE_STAFF;
+    }
+
+    public function canAccessPanel(Panel $panel): bool
+    {
+        if ((string) ($this->status ?? '') === self::STATUS_BLOCK) {
+            return false;
+        }
+
+        return match ($panel->getId()) {
+            'admin' => in_array((string) $this->role, [self::ROLE_ADMIN, self::ROLE_OWNER], true),
+            'seo' => SeoAccessControl::canAccessSeoPanel($this),
+            default => false,
+        };
     }
 
     public function owner()

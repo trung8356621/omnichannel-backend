@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Http\Middleware;
 
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
@@ -33,6 +34,10 @@ final class SetDynamicSeoDatabase
         }
 
         $siteId = $this->resolveSiteId($request);
+
+        if ($siteId === null || $siteId <= 0) {
+            $siteId = $this->resolveSiteIdFromArticleReference($request);
+        }
 
         if ($siteId !== null && $siteId > 0) {
             $this->databaseConnection->bootstrapBySiteId($siteId);
@@ -83,5 +88,26 @@ final class SetDynamicSeoDatabase
         }
 
         return null;
+    }
+
+    private function resolveSiteIdFromArticleReference(Request $request): ?int
+    {
+        $articleId = $request->route('article');
+        if (! is_numeric($articleId)) {
+            $inputArticleId = $request->input('article_id');
+            $articleId = is_numeric($inputArticleId) ? $inputArticleId : null;
+        }
+
+        if (! is_numeric($articleId) || (int) $articleId <= 0) {
+            return null;
+        }
+
+        $this->databaseConnection->bootstrapLegacySharedConnection();
+
+        $siteId = SeoArticle::query()
+            ->whereKey((int) $articleId)
+            ->value('site_id');
+
+        return is_numeric($siteId) && (int) $siteId > 0 ? (int) $siteId : null;
     }
 }

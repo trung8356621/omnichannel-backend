@@ -288,7 +288,11 @@ final class SimpleMarkdownHtmlConverter
             for ($cursor = $index + 1; $cursor < $lineCount; $cursor++) {
                 $nextLine = trim($lines[$cursor]);
                 if ($nextLine === '') {
-                    break;
+                    if ($parts !== []) {
+                        break;
+                    }
+
+                    continue;
                 }
 
                 if ($this->isMetaDescriptionLine($nextLine) || $this->parseH1Line($nextLine) !== null || $this->parseHeading($nextLine) !== null) {
@@ -333,7 +337,11 @@ final class SimpleMarkdownHtmlConverter
 
             $title = $this->cleanPlainHeadingText($text);
 
-            return $title !== '' ? $title : null;
+            if ($title === '' || $this->isMetaDescriptionHeadingLabel($title)) {
+                return null;
+            }
+
+            return $title;
         }
 
         if (preg_match('/^\*{0,2}\s*H1\s*:\s*(.+?)\*{0,2}\s*$/iu', $line, $matches) === 1) {
@@ -353,7 +361,16 @@ final class SimpleMarkdownHtmlConverter
 
     private function isMetaDescriptionLine(string $line): bool
     {
-        return preg_match('/^\*{0,2}\s*Meta\s+Description\s*:\*{0,2}/iu', $line) === 1;
+        if (preg_match('/^\*{0,2}\s*Meta\s+Description\s*:\*{0,2}/iu', $line) === 1) {
+            return true;
+        }
+
+        return preg_match('/^#{1,6}\s+Meta\s+Description\s*:?\s*$/iu', $line) === 1;
+    }
+
+    private function isMetaDescriptionHeadingLabel(string $text): bool
+    {
+        return preg_match('/^meta\s+description$/iu', trim($text)) === 1;
     }
 
     private function parseMetaDescriptionLine(string $line): string

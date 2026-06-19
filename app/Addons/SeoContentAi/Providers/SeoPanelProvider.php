@@ -24,7 +24,6 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
 use Filament\Facades\Filament;
-use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
@@ -34,6 +33,7 @@ use Filament\Support\Colors\Color;
 use Filament\Support\Enums\MaxWidth;
 use Filament\Support\Facades\FilamentView;
 use Filament\View\PanelsRenderHook;
+use Illuminate\Auth\Middleware\Authenticate as IlluminateAuthenticate;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\VerifyCsrfToken;
@@ -157,18 +157,20 @@ class SeoPanelProvider extends PanelProvider
         Route::get('storage/plugins/omi-seo-ai-bridge/info.json', [PluginUpdateController::class, 'infoJson'])
             ->name('seo.plugin.info-json');
 
-        Route::middleware([
+        $seoWebApiMiddleware = [
             EncryptCookies::class,
             AddQueuedCookiesToResponse::class,
             StartSession::class,
             AuthenticateSession::class,
             ShareErrorsFromSession::class,
             VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
+            IlluminateAuthenticate::class,
             CheckMainRole::class,
             SetDynamicSeoDatabase::class,
-        ])
+            SubstituteBindings::class,
+        ];
+
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('api/seo/media')
             ->group(function (): void {
                 Route::post('/upload', [SeoMediaController::class, 'upload'])
@@ -207,18 +209,7 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.media.save-edited');
             });
 
-        Route::middleware([
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
-            AuthenticateSession::class,
-            ShareErrorsFromSession::class,
-            VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
-            CheckMainRole::class,
-            SetDynamicSeoDatabase::class,
-        ])
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('api/seo/articles')
             ->group(function (): void {
                 Route::get('/{article}/outline', [ArticleOutlineController::class, 'index'])
@@ -230,6 +221,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/outline/check-duplicates', [ArticleOutlineController::class, 'checkDuplicates'])
                     ->whereNumber('article')
                     ->name('seo.articles.outline.check-duplicates');
+                Route::post('/{article}/outline/refresh', [ArticleOutlineController::class, 'refresh'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.outline.refresh');
                 Route::put('/{article}/outline/{heading}', [ArticleOutlineController::class, 'update'])
                     ->whereNumber('article')
                     ->whereNumber('heading')
@@ -251,18 +245,7 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.articles.revisions.show');
             });
 
-        Route::middleware([
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
-            AuthenticateSession::class,
-            ShareErrorsFromSession::class,
-            VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
-            CheckMainRole::class,
-            SetDynamicSeoDatabase::class,
-        ])
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('api/seo/watermark')
             ->group(function (): void {
                 Route::get('/settings', [SeoWatermarkController::class, 'showSettings'])
@@ -278,17 +261,19 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.watermark.save-new');
             });
 
-        Route::middleware([
+        $seoTeamApiMiddleware = [
             EncryptCookies::class,
             AddQueuedCookiesToResponse::class,
             StartSession::class,
             AuthenticateSession::class,
             ShareErrorsFromSession::class,
             VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
+            IlluminateAuthenticate::class,
             SetDynamicSeoDatabase::class,
-        ])
+            SubstituteBindings::class,
+        ];
+
+        Route::middleware($seoTeamApiMiddleware)
             ->prefix('api/seo/team')
             ->group(function (): void {
                 Route::get('/messages', [TeamMessageController::class, 'index'])
@@ -299,18 +284,7 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.team-messages.store');
             });
 
-        Route::middleware([
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
-            AuthenticateSession::class,
-            ShareErrorsFromSession::class,
-            VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
-            CheckMainRole::class,
-            SetDynamicSeoDatabase::class,
-        ])
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('api/ai')
             ->group(function (): void {
                 Route::get('/chat/models', [GlobalAiChatController::class, 'models'])
@@ -319,18 +293,7 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.global-ai-chat.store');
             });
 
-        Route::middleware([
-            EncryptCookies::class,
-            AddQueuedCookiesToResponse::class,
-            StartSession::class,
-            AuthenticateSession::class,
-            ShareErrorsFromSession::class,
-            VerifyCsrfToken::class,
-            SubstituteBindings::class,
-            Authenticate::class,
-            CheckMainRole::class,
-            SetDynamicSeoDatabase::class,
-        ])
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('seo')
             ->group(function (): void {
                 Route::get('/articles/{article}/media-picker', ArticleMediaPickerController::class)
@@ -392,7 +355,7 @@ class SeoPanelProvider extends PanelProvider
                 SetDynamicSeoDatabase::class,
             ])
             ->authMiddleware([
-                Authenticate::class,
+                \Filament\Http\Middleware\Authenticate::class,
                 CheckMainRole::class,
             ]);
     }

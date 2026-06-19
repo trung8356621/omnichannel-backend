@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
 use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
+use App\Addons\SeoContentAi\Services\KeywordDomainResyncService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
 use App\Models\Site;
@@ -307,6 +308,7 @@ class GeneralDomain extends Page
         return [
             $this->deleteDomainAction(),
             $this->syncIncrementalAction(),
+            $this->resyncKeywordsAction(),
             $this->testSyncDataAction(),
         ];
     }
@@ -353,6 +355,21 @@ class GeneralDomain extends Page
             ->icon('heroicon-o-arrow-down-tray')
             ->action(function (): void {
                 $this->runIncrementalSyncAction();
+            });
+    }
+
+    protected function resyncKeywordsAction(): Action
+    {
+        return Action::make('resync_keywords')
+            ->label(__('seo-content-ai::filament.keyword.resync_linked'))
+            ->icon('heroicon-o-arrow-path')
+            ->color('danger')
+            ->requiresConfirmation()
+            ->modalHeading(__('seo-content-ai::filament.keyword.resync_linked'))
+            ->modalDescription(__('seo-content-ai::filament.keyword.resync_linked_confirm'))
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.keyword.resync_linked_submit'))
+            ->action(function (): void {
+                $this->runRescrapeKeywordsAction();
             });
     }
 
@@ -462,20 +479,37 @@ class GeneralDomain extends Page
 
         $total = count($refs);
         $this->incrementalSyncTotal = $total;
-        $this->incrementalSyncProgress = 0;
+        $this->incrementalSyncProgress = (int) ($prepared['skipped'] ?? 0);
         $this->incrementalSyncRunning = true;
         $this->incrementalSyncResumable = false;
 
-        $this->dispatch('incremental-sync-progress', done: 0, total: $total, running: true);
+        $manifestTotal = (int) ($prepared['manifest_total'] ?? $total);
+        $initialDone = min($manifestTotal, (int) ($prepared['skipped'] ?? 0));
+
+        $this->dispatch('incremental-sync-progress', done: $initialDone, total: $manifestTotal > 0 ? $manifestTotal : $total, running: true);
 
         RunIncrementalDomainSyncJob::dispatch($siteId, $userId);
 
         Notification::make()
             ->title(__('seo-content-ai::filament.domain.sync_incremental_started'))
             ->body(__('seo-content-ai::filament.domain.sync_incremental_started_hint', [
-                'total' => $total,
+                'total' => $manifestTotal > 0 ? $manifestTotal : $total,
             ]))
             ->info()
+            ->send();
+    }
+
+    public function runRescrapeKeywordsAction(): void
+    {
+        @set_time_limit(120);
+
+        $siteId = (int) $this->getRecord()->getKey();
+        $result = app(KeywordDomainResyncService::class)->resetAndResync($siteId);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.keyword.resync_linked_completed'))
+            ->body(__('seo-content-ai::filament.keyword.resync_linked_body', $result))
+            ->success()
             ->send();
     }
 

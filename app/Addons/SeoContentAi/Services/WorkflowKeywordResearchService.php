@@ -10,13 +10,13 @@ use App\Addons\SeoContentAi\Models\Tag;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
-use Illuminate\Support\Str;
 
 final class WorkflowKeywordResearchService
 {
     public function __construct(
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordPersistenceService $keywordPersistence,
+        private readonly TagPersistenceService $tagPersistence,
     ) {}
 
     /**
@@ -216,7 +216,7 @@ final class WorkflowKeywordResearchService
                 continue;
             }
 
-            $tag = $this->findOrCreateTag($siteId, $name);
+            $tag = $this->findOrCreateTag($name);
             if ($tag === null) {
                 continue;
             }
@@ -234,40 +234,14 @@ final class WorkflowKeywordResearchService
         return count($tagIds);
     }
 
-    private function findOrCreateTag(int $siteId, string $name): ?Tag
+    private function findOrCreateTag(string $name): ?Tag
     {
-        $slug = $this->resolveUniqueTagSlug($siteId, $name);
-        if ($slug === '') {
+        $normalized = $this->tagPersistence->normalizeName($name);
+        if ($normalized === '') {
             return null;
         }
 
-        return Tag::query()->firstOrCreate(
-            [
-                'site_id' => $siteId,
-                'slug' => $slug,
-            ],
-            [
-                'name' => $name,
-            ],
-        );
-    }
-
-    private function resolveUniqueTagSlug(int $siteId, string $name): string
-    {
-        $baseSlug = Str::slug($name);
-        if ($baseSlug === '') {
-            $baseSlug = 'tag';
-        }
-
-        $slug = $baseSlug;
-        $suffix = 2;
-
-        while (Tag::query()->where('site_id', $siteId)->where('slug', $slug)->exists()) {
-            $slug = $baseSlug.'-'.$suffix;
-            $suffix++;
-        }
-
-        return $slug;
+        return $this->tagPersistence->findOrCreate($normalized);
     }
 
     private function isRelatedTopicsGroup(string $groupName): bool
