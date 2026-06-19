@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Models\Site;
 use Illuminate\Support\Facades\DB;
 
@@ -33,17 +34,15 @@ final class ClearDomainArticlesService
             ];
         }
 
-        $connection = (new SeoArticle())->getConnectionName();
+        $connection = (new SeoArticle)->getConnectionName();
 
-        DB::connection($connection)->transaction(function () use ($query, $connection): void {
-            $query->orderBy('id')->chunkById(100, function ($articles) use ($connection): void {
+        DB::connection($connection)->transaction(function () use ($query): void {
+            $query->orderBy('id')->chunkById(100, function ($articles): void {
                 $ids = $articles->pluck('id')->all();
 
                 if ($ids !== []) {
-                    DB::connection($connection)
-                        ->table('seo_prompt_resultables')
-                        ->where('prompt_resultable_type', SeoArticle::class)
-                        ->whereIn('prompt_resultable_id', $ids)
+                    SeoPromptResultLink::query()
+                        ->whereIn('article_id', $ids)
                         ->delete();
                 }
 

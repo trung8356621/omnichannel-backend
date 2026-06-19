@@ -1,9 +1,16 @@
-const STORAGE_PREFIX = 'seo-article-media-picker:v1';
+const STORAGE_PREFIX = 'seo-article-media-picker:v2';
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const CACHEABLE_TABS = new Set(['original', 'local']);
 
+function cacheScopeSuffix() {
+    const picker = typeof window !== 'undefined' ? window.__SEO_ARTICLE_MEDIA_PICKER__ : null;
+    const scope = picker && typeof picker === 'object' ? String(picker.cacheScope || '') : '';
+
+    return scope !== '' ? scope : 'default';
+}
+
 function buildCacheKey(siteId, tab, page) {
-    return `${STORAGE_PREFIX}:${Number(siteId)}:${String(tab)}:${Number(page)}`;
+    return `${STORAGE_PREFIX}:${cacheScopeSuffix()}:${Number(siteId)}:${String(tab)}:${Number(page)}`;
 }
 
 function isCacheableTab(tab) {
@@ -133,7 +140,7 @@ export function clearArticleMediaPickerCache(siteId) {
         return;
     }
 
-    const prefix = `${STORAGE_PREFIX}:${id}:`;
+    const prefix = `${STORAGE_PREFIX}:${cacheScopeSuffix()}:${id}:`;
     const keys = [];
     for (let index = 0; index < localStorage.length; index += 1) {
         const key = localStorage.key(index);

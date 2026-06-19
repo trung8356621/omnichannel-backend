@@ -25,6 +25,7 @@ function readBootstrap() {
             seoMediaId: null,
             slug: '',
             initialTab: MEDIA_EDITOR_TAB_ERASER,
+            canDeleteOriginal: true,
         };
     }
 
@@ -43,6 +44,7 @@ function readBootstrap() {
         seoMediaId: parseIntOrNull(el.dataset.seoMediaId) ?? imageId,
         slug: el.dataset.slug ?? '',
         initialTab,
+        canDeleteOriginal: el.dataset.canDeleteOriginal !== '0',
     };
 }
 
@@ -85,6 +87,7 @@ function mount() {
             seoMediaId={props.seoMediaId}
             wpAttachmentId={props.wpAttachmentId}
             slug={props.slug}
+            canDeleteOriginal={props.canDeleteOriginal}
             onSave={(url) => {
                 const isWpStaging = props.wpAttachmentId > 0;
                 notifyOpener({

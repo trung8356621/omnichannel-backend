@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Services\PromptLanguageVariableService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SiteDomainPromptContextService;
 use App\Models\Site;
@@ -34,6 +35,7 @@ final class PromptSiteContextVariable
             'article_length_default',
             'keyword_density_product',
             'keyword_density_default',
+            'language',
         ];
     }
 
@@ -62,7 +64,7 @@ final class PromptSiteContextVariable
     /**
      * @return array<string, string>
      */
-    public static function resolveForSite(?Site $site, ?string $postType = 'article'): array
+    public static function resolveForSite(?Site $site, ?string $postType = 'article', ?string $articleLanguageSlug = null): array
     {
         $postType = trim((string) $postType);
         if ($postType === '') {
@@ -77,14 +79,19 @@ final class PromptSiteContextVariable
             $siteContext->promptVariablesForSite($site),
         );
         $variables['tone'] = $siteContext->resolveToneForSite($site, $variables['tone'] ?? '');
+        $variables[PromptLanguageVariableService::NAME] = app(PromptLanguageVariableService::class)->resolve(
+            $site,
+            $articleLanguageSlug,
+        );
 
         return $variables;
     }
 
     /**
+     * @param  array<string, mixed>  $variables
      * @return array<string, string>
      */
-    public static function resolveForGlobalSite(?string $postType = null): array
+    public static function resolveForGlobalSite(?string $postType = null, array $variables = []): array
     {
         $siteId = SeoAccessControl::globalSiteId();
         $site = $siteId !== null && $siteId > 0
@@ -95,7 +102,36 @@ final class PromptSiteContextVariable
             $postType = 'article';
         }
 
-        return self::resolveForSite($site instanceof Site ? $site : null, $postType);
+        return self::resolveForSite(
+            $site instanceof Site ? $site : null,
+            $postType,
+            self::resolveArticleLanguageSlug($variables),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $variables
+     */
+    private static function resolveArticleLanguageSlug(array $variables): ?string
+    {
+        $slug = trim((string) ($variables['article_language'] ?? ''));
+        if ($slug !== '') {
+            return $slug;
+        }
+
+        $articleId = (int) ($variables['article_id'] ?? 0);
+        if ($articleId <= 0) {
+            return null;
+        }
+
+        $article = \App\Addons\SeoContentAi\Models\SeoArticle::query()->find($articleId);
+        if (! $article instanceof \App\Addons\SeoContentAi\Models\SeoArticle) {
+            return null;
+        }
+
+        $slug = trim((string) ($article->language ?? ''));
+
+        return $slug !== '' ? $slug : null;
     }
 
     /**
@@ -113,6 +149,16 @@ final class PromptSiteContextVariable
             }
         }
 
-        return array_merge($variables, self::resolveForGlobalSite($postType));
+        $resolved = self::resolveForGlobalSite($postType, $variables);
+
+        foreach ($resolved as $key => $value) {
+            if ($key === PromptLanguageVariableService::NAME && trim((string) ($variables[$key] ?? '')) !== '') {
+                continue;
+            }
+
+            $variables[$key] = $value;
+        }
+
+        return $variables;
     }
 }

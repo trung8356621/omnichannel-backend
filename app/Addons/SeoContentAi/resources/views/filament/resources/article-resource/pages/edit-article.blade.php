@@ -1,5 +1,8 @@
 @push('styles')
-    @vite('app/Addons/SeoContentAi/resources/css/article-edit-page.css')
+    @vite([
+        'app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js',
+        'app/Addons/SeoContentAi/resources/css/article-edit-page.css',
+    ])
 @endpush
 
 <x-filament-panels::page @class(['seo-article-edit-page'])>
@@ -298,7 +301,7 @@
             pickerWordPressLinked() {
                 return Boolean(window.__SEO_ARTICLE_MEDIA_PICKER__?.wordPressLinked);
             },
-            async fetchPickerImages({ resetPage = false } = {}) {
+            async fetchPickerImages({ resetPage = false, skipCache = false } = {}) {
                 if (this.pickerTab === 'article') {
                     await this.loadArticleTabFromEditor();
 
@@ -317,6 +320,14 @@
 
                 if (resetPage) {
                     this.pickerPage = 1;
+                }
+
+                if (
+                    !skipCache
+                    && this.pickerSearchQuery.trim() === ''
+                    && this.tryHydratePickerFromCache(this.pickerTab, this.pickerPage || 1)
+                ) {
+                    return;
                 }
 
                 this.pickerLoading = true;
@@ -532,11 +543,11 @@
                 }
 
                 const hydrated = this.tryHydratePickerFromCache(tab, 1);
-                this.pickerSuppressLoadingOverlay = hydrated;
-                if (!hydrated) {
-                    this.pickerLoading = true;
+                if (hydrated) {
+                    return;
                 }
 
+                this.pickerLoading = true;
                 await this.fetchPickerImages({ resetPage: true });
             },
             async pickerPrevPage() {
@@ -582,7 +593,7 @@
                 await this.fetchPickerImages();
             },
             async reloadPickerImages() {
-                await this.fetchPickerImages();
+                await this.fetchPickerImages({ skipCache: true });
             },
             async openArticleMediaModal(mode, blockId = null) {
                 this.clearGalleryPickerSelection();
@@ -605,10 +616,11 @@
 
                 this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
                 this.pickerTab = this.pickerWordPressLinked() ? 'original' : 'local';
-                const hydrated = this.tryHydratePickerFromCache(this.pickerTab, 1);
-                if (!hydrated) {
-                    await this.fetchPickerImages({ resetPage: true });
+                if (this.tryHydratePickerFromCache(this.pickerTab, 1)) {
+                    return;
                 }
+
+                await this.fetchPickerImages({ resetPage: true });
             },
             closeArticleMediaModal() {
                 this.clearGalleryPickerSelection();

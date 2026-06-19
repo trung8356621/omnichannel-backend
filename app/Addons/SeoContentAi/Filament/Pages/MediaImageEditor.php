@@ -7,9 +7,8 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
-use App\Models\Site;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
 use Livewire\Attributes\Url;
@@ -45,6 +44,8 @@ class MediaImageEditor extends Page
 
     public int $articleId = 0;
 
+    public bool $canDeleteOriginal = true;
+
     public function mount(): void
     {
         abort_unless($this->media !== null && $this->media > 0, 404);
@@ -65,10 +66,11 @@ class MediaImageEditor extends Page
 
         $this->imageUrl = $seoMedia->publicUrl();
         if ($pending?->edited_at !== null) {
-            $this->imageUrl .= '?t=' . $pending->edited_at->timestamp;
+            $this->imageUrl .= '?t='.$pending->edited_at->timestamp;
         }
 
         $this->pendingWpSync = $pendingService->hasPendingEdit($siteId, $this->wpAttachmentId);
+        $this->canDeleteOriginal = SeoAccessControl::canDeleteSeoMedia();
     }
 
     public function getTitle(): string|Htmlable
@@ -97,48 +99,14 @@ class MediaImageEditor extends Page
         if ($articleId !== null) {
             $article = SeoArticle::query()->find($articleId);
 
-            return $article !== null && $this->canAccessArticle($article);
+            return $article !== null && SeoAccessControl::canAccessArticle($article);
         }
 
         if ($media->site_id !== null) {
-            return $this->canAccessSite((int) $media->site_id);
+            return SeoAccessControl::canAccessSite((int) $media->site_id);
         }
 
         return auth()->check();
-    }
-
-    private function canAccessArticle(SeoArticle $article): bool
-    {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
-    }
-
-    private function canAccessSite(int $siteId): bool
-    {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($siteId)
-            ->where('user_id', $user->id)
-            ->exists();
     }
 
     public static function canAccess(): bool

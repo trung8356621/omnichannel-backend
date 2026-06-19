@@ -71,6 +71,29 @@ final class MediaLibraryArticleResolver
         return $map;
     }
 
+    /**
+     * @param  list<int>  $articleIds
+     * @return list<int>
+     */
+    public function wordpressAttachmentIdsForArticles(int $siteId, array $articleIds): array
+    {
+        if ($articleIds === []) {
+            return [];
+        }
+
+        $allowedArticles = array_flip($articleIds);
+        $map = $this->attachmentToArticleMap($siteId);
+        $attachmentIds = [];
+
+        foreach ($map as $wpAttachmentId => $articleId) {
+            if (isset($allowedArticles[(int) $articleId])) {
+                $attachmentIds[] = (int) $wpAttachmentId;
+            }
+        }
+
+        return array_values(array_unique($attachmentIds));
+    }
+
     public function editUrlForArticle(?int $articleId): ?string
     {
         if ($articleId === null || $articleId <= 0) {

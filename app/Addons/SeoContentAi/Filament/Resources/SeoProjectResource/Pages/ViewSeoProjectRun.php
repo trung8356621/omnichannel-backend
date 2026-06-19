@@ -98,6 +98,10 @@ class ViewSeoProjectRun extends Page
                 continue;
             }
 
+            if (SeoProjectTask::isManualRunType((string) ($item['type'] ?? ''))) {
+                continue;
+            }
+
             if ((bool) ($item['article_is_reviewed'] ?? false)) {
                 continue;
             }
@@ -191,6 +195,12 @@ class ViewSeoProjectRun extends Page
                         ? (string) ($task->description ?? '')
                         : null,
                 'target_date' => $task->target_date?->format('Y-m-d'),
+                'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE
+                    ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
+                    : null,
+                'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
+                    ? $task->rewrite_notes
+                    : null,
                 'status' => 'pending',
                 'article_id' => null,
                 'article_edit_url' => null,
@@ -204,9 +214,24 @@ class ViewSeoProjectRun extends Page
      */
     public function getAllItems(): array
     {
-        $items = array_merge($this->getResultItems(), $this->getPendingItems());
+        $results = $this->getResultItems();
+        $resultTaskIds = collect($results)
+            ->pluck('task_id')
+            ->filter(fn (mixed $taskId): bool => (int) $taskId > 0)
+            ->map(fn (mixed $taskId): int => (int) $taskId)
+            ->all();
 
-        return array_map(fn (array $item): array => $this->enrichItemArticleLink($item), $items);
+        $pending = collect($this->getPendingItems())
+            ->reject(fn (array $item): bool => in_array((int) ($item['task_id'] ?? 0), $resultTaskIds, true))
+            ->values()
+            ->all();
+
+        $items = array_merge($results, $pending);
+
+        return array_map(
+            fn (array $item): array => $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item)),
+            $items,
+        );
     }
 
     /**
@@ -355,7 +380,9 @@ class ViewSeoProjectRun extends Page
 
     public function getPendingCount(): int
     {
-        return count($this->getPendingItems());
+        return collect($this->getAllItems())
+            ->where('status', 'pending')
+            ->count();
     }
 
     public function isDebugMode(): bool
@@ -380,9 +407,94 @@ class ViewSeoProjectRun extends Page
         return SeoProjectResource::postTypeSelectOptions()[$postType] ?? $postType;
     }
 
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    public function itemTypeLabel(array $item): string
+    {
+        if ($this->itemIsImproveType($item)) {
+            return __('seo-content-ai::filament.projects.run_type_improve');
+        }
+
+        if (($item['type'] ?? '') === SeoProjectTask::TYPE_REWRITE) {
+            $mode = SeoProjectTask::normalizeRewriteMode($item['rewrite_mode'] ?? null);
+            $modeLabel = SeoProjectTask::rewriteModeOptions()[$mode] ?? $mode;
+
+            return __('seo-content-ai::filament.projects.run_type_rewrite').' ('.$modeLabel.')';
+        }
+
+        return __('seo-content-ai::filament.projects.run_type_new');
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    public function itemRewriteNotes(array $item): ?string
+    {
+        if (($item['type'] ?? '') !== SeoProjectTask::TYPE_REWRITE) {
+            return null;
+        }
+
+        $notes = trim((string) ($item['rewrite_notes'] ?? ''));
+
+        return $notes !== '' ? $notes : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function enrichItemRewriteMeta(array $item): array
+    {
+        if (($item['type'] ?? '') !== SeoProjectTask::TYPE_REWRITE) {
+            return $item;
+        }
+
+        $taskId = (int) ($item['task_id'] ?? 0);
+        if ($taskId > 0) {
+            $task = $this->projectRun?->project?->tasks?->firstWhere('id', $taskId);
+            if ($task instanceof SeoProjectTask) {
+                $item['rewrite_mode'] = SeoProjectTask::normalizeRewriteMode($task->rewrite_mode);
+                $item['rewrite_notes'] = $task->rewrite_notes;
+            }
+        }
+
+        $item['rewrite_mode'] = SeoProjectTask::normalizeRewriteMode($item['rewrite_mode'] ?? null);
+
+        $notes = trim((string) ($item['rewrite_notes'] ?? ''));
+        if (
+            $item['rewrite_mode'] !== SeoProjectTask::REWRITE_MODE_CONTENT
+            || $notes === ''
+        ) {
+            $item['rewrite_notes'] = null;
+        } else {
+            $item['rewrite_notes'] = $notes;
+        }
+
+        return $item;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    public function itemIsImproveType(array $item): bool
+    {
+        return SeoProjectTask::isManualRunType((string) ($item['type'] ?? ''));
+    }
+
     public function runItem(int $taskId): void
     {
         if ($this->projectRun === null) {
+            return;
+        }
+
+        if ($this->isImproveTaskId($taskId)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.run_item_failed'))
+                ->body(__('seo-content-ai::filament.projects.run_item_manual_hint'))
+                ->warning()
+                ->send();
+
             return;
         }
 
@@ -442,6 +554,13 @@ class ViewSeoProjectRun extends Page
             ];
         }
 
+        if ($this->isImproveTaskId($taskId)) {
+            return [
+                'success' => false,
+                'message' => __('seo-content-ai::filament.projects.run_item_manual_hint'),
+            ];
+        }
+
         $formatter = app(SeoProjectRunErrorFormatter::class);
 
         try {
@@ -454,7 +573,7 @@ class ViewSeoProjectRun extends Page
 
             return [
                 'success' => true,
-                'item' => $this->enrichItemArticleLink($item),
+                'item' => $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item)),
                 'displayError' => $formatter->displayMessage($item),
                 'stats' => $this->getRunStatsPayload(),
             ];
@@ -577,5 +696,23 @@ class ViewSeoProjectRun extends Page
                 ->color('gray')
                 ->url(SeoProjectResource::getUrl('index')),
         ];
+    }
+
+    private function isImproveTaskId(int $taskId): bool
+    {
+        if ($taskId <= 0) {
+            return false;
+        }
+
+        $project = $this->projectRun?->project;
+        if ($project === null) {
+            return false;
+        }
+
+        $type = $project->tasks()
+            ->whereKey($taskId)
+            ->value('type');
+
+        return SeoProjectTask::isManualRunType((string) ($type ?? ''));
     }
 }

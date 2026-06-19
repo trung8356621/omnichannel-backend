@@ -26,11 +26,12 @@ class SeoMediaLibraryService
         ?string $search = null,
         int $perPage = 48,
         ?int $articleId = null,
+        ?array $restrictToArticleIds = null,
     ): array {
         $perPage = max(1, min(100, $perPage));
         $page = max(1, $page);
 
-        $rows = $this->queryMedia($site, $month, $search, $articleId)->get();
+        $rows = $this->queryMedia($site, $month, $search, $articleId, $restrictToArticleIds)->get();
 
         $merged = $rows
             ->map(fn (SeoMedia $media): array => $this->mapMediaItem($media))
@@ -99,17 +100,49 @@ class SeoMediaLibraryService
     /**
      * @return \Illuminate\Database\Eloquent\Builder<SeoMedia>
      */
-    private function queryMedia(Site $site, ?string $month, ?string $search, ?int $articleId = null)
-    {
+    private function queryMedia(
+        Site $site,
+        ?string $month,
+        ?string $search,
+        ?int $articleId = null,
+        ?array $restrictToArticleIds = null,
+    ) {
         $query = SeoMedia::query();
 
         if ($articleId !== null && $articleId > 0) {
-            $query->where(function ($q) use ($site, $articleId): void {
-                $q->where('site_id', $site->id)
-                    ->orWhere('article_id', $articleId);
+            $wpAttachmentIds = app(MediaLibraryArticleResolver::class)
+                ->wordpressAttachmentIdsForArticles((int) $site->id, [$articleId]);
+
+            $query->where(function ($q) use ($articleId, $wpAttachmentIds): void {
+                $q->where('article_id', $articleId);
+
+                if ($wpAttachmentIds !== []) {
+                    $q->orWhere(function ($sub) use ($wpAttachmentIds): void {
+                        $sub->whereIn('wp_attachment_id', $wpAttachmentIds);
+                    });
+                }
             });
         } else {
             $query->where('site_id', $site->id);
+
+            if ($restrictToArticleIds !== null) {
+                if ($restrictToArticleIds === []) {
+                    return $query->whereRaw('0 = 1');
+                }
+
+                $wpAttachmentIds = app(MediaLibraryArticleResolver::class)
+                    ->wordpressAttachmentIdsForArticles((int) $site->id, $restrictToArticleIds);
+
+                $query->where(function ($q) use ($restrictToArticleIds, $wpAttachmentIds): void {
+                    $q->whereIn('article_id', $restrictToArticleIds);
+
+                    if ($wpAttachmentIds !== []) {
+                        $q->orWhere(function ($sub) use ($wpAttachmentIds): void {
+                            $sub->whereIn('wp_attachment_id', $wpAttachmentIds);
+                        });
+                    }
+                });
+            }
         }
 
         $query->orderByDesc('id');
@@ -123,7 +156,7 @@ class SeoMediaLibraryService
 
         $search = trim((string) $search);
         if ($search !== '') {
-            $like = '%' . addcslashes($search, '%_\\') . '%';
+            $like = '%'.addcslashes($search, '%_\\').'%';
             $query->where(function ($q) use ($like): void {
                 $q->where('slug', 'like', $like)
                     ->orWhere('filename', 'like', $like)

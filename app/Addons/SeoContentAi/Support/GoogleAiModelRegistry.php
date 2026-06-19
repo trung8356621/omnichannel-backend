@@ -57,6 +57,7 @@ final class GoogleAiModelRegistry
         'gemini-3.1-flash-image-preview' => ['label' => 'Nano Banana 2 (Gemini 3.1 Flash Image)', 'category' => self::CATEGORY_IMAGE_GEMINI, 'endpoint' => 'generateContent'],
         'gemini-3-pro-image-preview' => ['label' => 'Nano Banana Pro (Gemini 3 Pro Image)', 'category' => self::CATEGORY_IMAGE_GEMINI, 'endpoint' => 'generateContent'],
         'gemini-2.5-flash-image' => ['label' => 'Nano Banana (Gemini 2.5 Flash Image)', 'category' => self::CATEGORY_IMAGE_GEMINI, 'endpoint' => 'generateContent'],
+        'gemini-2.5-pro-image' => ['label' => 'Nano Banana Pro (Gemini 2.5 Pro Image)', 'category' => self::CATEGORY_IMAGE_GEMINI, 'endpoint' => 'generateContent'],
 
         // --- Video: Veo (predictLongRunning) ---
         'veo-3.1-generate-preview' => ['label' => 'Veo 3.1 Generate', 'category' => self::CATEGORY_VIDEO, 'endpoint' => 'predictLongRunning'],
@@ -130,17 +131,18 @@ final class GoogleAiModelRegistry
      *
      * @return list<string>
      */
-    public static function imageModelsToTry(?string $preferred = null, bool $excludeImagen = false): array
-    {
+    public static function imageModelsToTry(
+        ?string $preferred = null,
+        bool $excludeImagen = false,
+        ?array $customPriority = null,
+        ?int $inputLength = null,
+    ): array {
         $preferred = self::normalizeSlug((string) $preferred);
-        $defaults = [
-            'gemini-3.1-flash-image-preview',
-            'gemini-2.5-flash-image',
-            'gemini-3-pro-image-preview',
-            'imagen-4.0-fast-generate-001',
-            'imagen-4.0-generate-001',
-            'imagen-4.0-ultra-generate-001',
-        ];
+        $defaults = self::resolveImageModelPriority($customPriority);
+
+        if ($inputLength !== null && $inputLength >= 0) {
+            $defaults = ImageModelInputLengthPolicy::reorderModels($defaults, $inputLength);
+        }
 
         $models = $defaults;
         if ($preferred !== '' && self::categoryOf($preferred) !== self::CATEGORY_TEXT) {
@@ -149,18 +151,53 @@ final class GoogleAiModelRegistry
 
         if ($excludeImagen) {
             $models = array_filter($models, fn (string $model): bool => ! self::isImagenModel($model));
-
-            // Ảnh product gallery chạy theo batch nhiều ảnh. Gemini Pro Image thường chậm và
-            // hay timeout ở mốc HTTP 120s; chỉ dùng Pro khi người dùng chủ động chọn model đó.
-            if ($preferred === '') {
-                $models = array_filter(
-                    $models,
-                    static fn (string $model): bool => $model !== 'gemini-3-pro-image-preview',
-                );
-            }
         }
 
         return array_values(array_unique($models));
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function defaultImageModelPriority(): array
+    {
+        return [
+            'gemini-2.5-flash-image',
+            'gemini-2.5-pro-image',
+            'imagen-4.0-generate-001',
+        ];
+    }
+
+    /**
+     * @param  list<string|array{slug?: string}>|null  $customPriority
+     * @return list<string>
+     */
+    private static function resolveImageModelPriority(?array $customPriority): array
+    {
+        if ($customPriority === null || $customPriority === []) {
+            return self::defaultImageModelPriority();
+        }
+
+        $normalized = [];
+
+        foreach ($customPriority as $item) {
+            $slug = is_string($item)
+                ? trim($item)
+                : trim((string) (is_array($item) ? ($item['slug'] ?? '') : ''));
+
+            if ($slug === '') {
+                continue;
+            }
+
+            $slug = self::normalizeSlug($slug);
+            if ($slug !== '' && self::categoryOf($slug) !== self::CATEGORY_TEXT) {
+                $normalized[] = $slug;
+            }
+        }
+
+        $normalized = array_values(array_unique($normalized));
+
+        return $normalized !== [] ? $normalized : self::defaultImageModelPriority();
     }
 
     /**
@@ -173,7 +210,7 @@ final class GoogleAiModelRegistry
         $options = [];
         foreach (self::MODELS as $slug => $row) {
             if ($row['category'] === self::CATEGORY_TEXT) {
-                $options[$slug] = $row['label'] . ' — văn bản';
+                $options[$slug] = $row['label'].' — văn bản';
             }
         }
 
@@ -191,7 +228,7 @@ final class GoogleAiModelRegistry
         foreach (self::MODELS as $slug => $row) {
             if (in_array($row['category'], [self::CATEGORY_IMAGE_IMAGEN, self::CATEGORY_IMAGE_GEMINI], true)) {
                 $suffix = $row['category'] === self::CATEGORY_IMAGE_IMAGEN ? 'Imagen' : 'Nano Banana';
-                $options[$slug] = $row['label'] . ' — ' . $suffix;
+                $options[$slug] = $row['label'].' — '.$suffix;
             }
         }
 
@@ -206,7 +243,7 @@ final class GoogleAiModelRegistry
         $options = [];
         foreach (self::MODELS as $slug => $row) {
             if ($row['category'] === self::CATEGORY_VIDEO) {
-                $options[$slug] = $row['label'] . ' — video (async)';
+                $options[$slug] = $row['label'].' — video (async)';
             }
         }
 

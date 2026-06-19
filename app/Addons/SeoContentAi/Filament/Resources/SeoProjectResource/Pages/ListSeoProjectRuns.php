@@ -165,7 +165,7 @@ final class ListSeoProjectRuns extends Page
                 ->label(__('seo-content-ai::filament.projects.back_to_project'))
                 ->icon('heroicon-o-arrow-left')
                 ->color('gray')
-                ->url(fn (): string => SeoProjectResource::getUrl('edit', ['record' => $this->project])),
+                ->url(fn (): string => SeoProjectResource::projectRecordUrl($this->project)),
         ];
     }
 }

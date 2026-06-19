@@ -5,11 +5,9 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Console;
 
 use App\Addons\SeoContentAi\Models\PromptResult;
-use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 
 final class BackfillPromptResultLinksCommand extends Command
 {
@@ -19,7 +17,7 @@ final class BackfillPromptResultLinksCommand extends Command
         {--chunk=200 : Kích thước chunk khi quét dữ liệu}
         {--dry-run : Chỉ thống kê, không ghi dữ liệu}';
 
-    protected $description = 'Backfill bảng seo_prompt_result_links từ run items, pivot cũ và input_snapshot.';
+    protected $description = 'Backfill bảng seo_prompt_result_links từ run items và input_snapshot.';
 
     public function handle(PromptResultLinkService $linkService): int
     {
@@ -29,23 +27,21 @@ final class BackfillPromptResultLinksCommand extends Command
         $dryRun = (bool) $this->option('dry-run');
 
         $this->info('Bắt đầu backfill seo_prompt_result_links ...');
-        $this->line('Filter: article_id=' . ($articleId > 0 ? $articleId : 'ALL')
-            . ', run_id=' . ($runId > 0 ? $runId : 'ALL')
-            . ', dry_run=' . ($dryRun ? 'yes' : 'no'));
+        $this->line('Filter: article_id='.($articleId > 0 ? $articleId : 'ALL')
+            .', run_id='.($runId > 0 ? $runId : 'ALL')
+            .', dry_run='.($dryRun ? 'yes' : 'no'));
 
         $stats = [
             'workflow_links' => 0,
-            'pivot_links' => 0,
             'snapshot_links' => 0,
             'errors' => 0,
         ];
 
         try {
             $this->backfillFromWorkflowRuns($linkService, $articleId, $runId, $chunk, $dryRun, $stats);
-            $this->backfillFromLegacyPivot($linkService, $articleId, $chunk, $dryRun, $stats);
             $this->backfillFromPromptSnapshots($linkService, $articleId, $chunk, $dryRun, $stats);
         } catch (\Throwable $exception) {
-            $this->error('Backfill thất bại: ' . $exception->getMessage());
+            $this->error('Backfill thất bại: '.$exception->getMessage());
 
             return self::FAILURE;
         }
@@ -56,7 +52,6 @@ final class BackfillPromptResultLinksCommand extends Command
             ['Nguồn', 'Số link xử lý'],
             [
                 ['Workflow runs', (string) $stats['workflow_links']],
-                ['Legacy pivot', (string) $stats['pivot_links']],
                 ['Input snapshot', (string) $stats['snapshot_links']],
                 ['Errors', (string) $stats['errors']],
             ],
@@ -137,54 +132,6 @@ final class BackfillPromptResultLinksCommand extends Command
     /**
      * @param  array<string, int>  $stats
      */
-    private function backfillFromLegacyPivot(
-        PromptResultLinkService $linkService,
-        int $articleId,
-        int $chunk,
-        bool $dryRun,
-        array &$stats,
-    ): void {
-        $query = DB::connection('omi_seo_ai')
-            ->table('seo_prompt_resultables')
-            ->where('prompt_resultable_type', SeoArticle::class)
-            ->orderBy('id');
-
-        if ($articleId > 0) {
-            $query->where('prompt_resultable_id', $articleId);
-        }
-
-        $query->chunkById($chunk, function ($rows) use ($linkService, $dryRun, &$stats): void {
-            foreach ($rows as $row) {
-                $promptResultId = (int) ($row->prompt_result_id ?? 0);
-                $rowArticleId = (int) ($row->prompt_resultable_id ?? 0);
-                if ($promptResultId <= 0 || $rowArticleId <= 0) {
-                    continue;
-                }
-
-                $stats['pivot_links']++;
-                if ($dryRun) {
-                    continue;
-                }
-
-                try {
-                    $linkService->linkPromptResult(
-                        promptResultId: $promptResultId,
-                        articleId: $rowArticleId,
-                        source: 'legacy_pivot',
-                        meta: [
-                            'legacy_type' => (string) ($row->type ?? ''),
-                        ],
-                    );
-                } catch (\Throwable) {
-                    $stats['errors']++;
-                }
-            }
-        });
-    }
-
-    /**
-     * @param  array<string, int>  $stats
-     */
     private function backfillFromPromptSnapshots(
         PromptResultLinkService $linkService,
         int $articleId,
@@ -239,4 +186,3 @@ final class BackfillPromptResultLinksCommand extends Command
         });
     }
 }
-

@@ -431,14 +431,10 @@ final class SeoAccessControl
             return false;
         }
 
-        if (! in_array((string) $project->status, [
-            SeoProject::STATUS_PENDING,
-            SeoProject::STATUS_MANUAL,
-            SeoProject::STATUS_RUNNING,
-        ], true)) {
+        if (! $project->isExecutionMonthOpen()) {
             return false;
         }
 
-        return $project->maxTasksAllowed() > (int) ($project->total_tasks ?? 0);
+        return $project->canRegisterMoreTasks();
     }
 }

@@ -6,11 +6,10 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\PromptResult;
-use App\Addons\SeoContentAi\Support\AiModelCatalog;
-use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
-use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
+use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
+use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
 
@@ -51,6 +50,7 @@ final class PromptRunnerService
         $prompt->loadMissing(['aiConnection']);
 
         $variables = Utf8Sanitizer::variablesForAi($variables);
+        $variables = app(PromptLanguageVariableService::class)->mergeInto($variables);
 
         $connection = $prompt->aiConnection;
         if ($connection === null) {
@@ -389,7 +389,7 @@ final class PromptRunnerService
         $subTasks = $this->getDependentSubTaskParts($prompt);
 
         if ($subTaskIndex < 0 || $subTaskIndex >= $subTasks->count()) {
-            throw new PromptRunException('Không tìm thấy prompt con #' . ($subTaskIndex + 1) . ' trong chuỗi.');
+            throw new PromptRunException('Không tìm thấy prompt con #'.($subTaskIndex + 1).' trong chuỗi.');
         }
 
         if (trim((string) ($variables['PARENT_RESULT'] ?? '')) === '') {
@@ -399,7 +399,7 @@ final class PromptRunnerService
         /** @var SeoPromptPart $subTask */
         $subTask = $subTasks->get($subTaskIndex);
         $toolType = $this->normalizeToolType($prompt);
-        $stepName = filled($subTask->name) ? (string) $subTask->name : ('Prompt con ' . ($subTaskIndex + 1));
+        $stepName = filled($subTask->name) ? (string) $subTask->name : ('Prompt con '.($subTaskIndex + 1));
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
@@ -739,7 +739,7 @@ final class PromptRunnerService
             return Utf8Sanitizer::string($stepBlock);
         }
 
-        return Utf8Sanitizer::string(implode("\n\n", $systemBlocks) . "\n\n---\n\n" . $stepBlock);
+        return Utf8Sanitizer::string(implode("\n\n", $systemBlocks)."\n\n---\n\n".$stepBlock);
     }
 
     /**
@@ -764,6 +764,7 @@ final class PromptRunnerService
      */
     public function compilePrompt(SeoPrompt $prompt, array $variables): string
     {
+        $variables = app(PromptLanguageVariableService::class)->mergeInto($variables);
         $parts = $this->promptParts($prompt);
         $blocks = [];
 
@@ -805,7 +806,7 @@ final class PromptRunnerService
 
         $heading = self::ROLE_HEADINGS[$part->role] ?? ucfirst((string) $part->role);
         if (in_array($part->role, ['task', 'sub_task'], true) && filled($part->name)) {
-            $heading .= ': ' . Utf8Sanitizer::string((string) $part->name);
+            $heading .= ': '.Utf8Sanitizer::string((string) $part->name);
         }
 
         $lines = ["## {$heading}", $content];
@@ -889,7 +890,7 @@ final class PromptRunnerService
         if ($toolType === 'video') {
             throw new PromptRunException(
                 'Công cụ Video: dùng model Veo (veo-3.1-generate-preview, …) — chưa tích hợp poll async trong Prompt. '
-                . 'Tạm thời dán URL video vào PARENT_RESULT hoặc chọn Hình ảnh (Imagen / Nano Banana).',
+                .'Tạm thời dán URL video vào PARENT_RESULT hoặc chọn Hình ảnh (Imagen / Nano Banana).',
             );
         }
 
@@ -900,7 +901,7 @@ final class PromptRunnerService
         return match ($connection->provider) {
             'gemini' => $this->callGemini($connection, $compiled, $model),
             'claude' => $this->callClaude($prompt, $variables, $model, $isTaskMode, $compiled),
-            default => throw new PromptRunException('Nhà cung cấp AI không được hỗ trợ: ' . $connection->provider),
+            default => throw new PromptRunException('Nhà cung cấp AI không được hỗ trợ: '.$connection->provider),
         };
     }
 
@@ -984,7 +985,7 @@ final class PromptRunnerService
                 ?? $response->body();
 
             throw new PromptRunException(
-                'Gemini API lỗi (' . $model . ', ' . $apiVersion . '): ' . $this->truncateError((string) $message),
+                'Gemini API lỗi ('.$model.', '.$apiVersion.'): '.$this->truncateError((string) $message),
             );
         }
 
@@ -999,7 +1000,7 @@ final class PromptRunnerService
 
             throw new PromptRunException(
                 'Gemini không trả về nội dung'
-                . ($blockReason ? ' (' . $blockReason . ')' : '') . '.',
+                .($blockReason ? ' ('.$blockReason.')' : '').'.',
             );
         }
 
@@ -1033,7 +1034,7 @@ final class PromptRunnerService
 
     private function truncateError(string $message): string
     {
-        return mb_strlen($message) > 500 ? mb_substr($message, 0, 500) . '…' : $message;
+        return mb_strlen($message) > 500 ? mb_substr($message, 0, 500).'…' : $message;
     }
 
     private function enforceMediaOnlyOutput(string $output, string $toolType): string

@@ -64,7 +64,7 @@ final class SeoImageSplitterService
 
             $wpRow = $this->wpMediaLibrary->fetchAttachmentById($site, $wpAttachmentId);
             if ($wpRow === null || trim((string) ($wpRow['url'] ?? '')) === '') {
-                throw new \InvalidArgumentException('Không tải được ảnh WordPress #' . $wpAttachmentId . '.');
+                throw new \InvalidArgumentException('Không tải được ảnh WordPress #'.$wpAttachmentId.'.');
             }
 
             $media = $this->wpStaging->ensureStagingMedia($site, [
@@ -89,6 +89,7 @@ final class SeoImageSplitterService
         array $pieceFiles,
         ?int $articleId,
         ?int $originalSeoMediaId,
+        bool $deleteOriginal = true,
     ): array {
         if ($pieceFiles === []) {
             throw new \InvalidArgumentException('Chưa có ảnh con để lưu.');
@@ -111,7 +112,9 @@ final class SeoImageSplitterService
             ];
         }
 
-        $deleted = $this->deleteOriginalMedia($site, $originalSeoMediaId);
+        $deleted = $deleteOriginal
+            ? $this->deleteOriginalMedia($site, $originalSeoMediaId)
+            : false;
 
         return [
             'success' => true,

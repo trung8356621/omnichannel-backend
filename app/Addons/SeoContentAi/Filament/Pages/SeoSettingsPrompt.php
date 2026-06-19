@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
+use App\Addons\SeoContentAi\Services\PromptLanguageVariableService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Forms;
@@ -42,7 +43,10 @@ class SeoSettingsPrompt extends Page implements HasForms
             SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT => $raw[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT],
             SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT => $raw[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT],
             SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT => $raw[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT],
-            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS],
+            SeoPromptSettingsService::KEY_DEFAULT_PROMPT_LANGUAGE => $raw[SeoPromptSettingsService::KEY_DEFAULT_PROMPT_LANGUAGE],
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MIN => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MIN],
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_RANGE => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_RANGE],
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MAX => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MAX],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS],
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $raw[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS],
         ];
@@ -113,6 +117,17 @@ class SeoSettingsPrompt extends Page implements HasForms
                                     ->columnSpanFull(),
                             ]),
                     ]),
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.language_section'))
+                    ->description(__('seo-content-ai::filament.settings_prompt.language_section_description'))
+                    ->schema([
+                        Forms\Components\Select::make(SeoPromptSettingsService::KEY_DEFAULT_PROMPT_LANGUAGE)
+                            ->label(__('seo-content-ai::filament.settings_prompt.default_prompt_language'))
+                            ->helperText(__('seo-content-ai::filament.settings_prompt.default_prompt_language_hint'))
+                            ->options(fn (): array => PromptLanguageVariableService::defaultLanguageSlugOptions())
+                            ->searchable()
+                            ->required()
+                            ->native(false),
+                    ]),
                 Forms\Components\Section::make(__('seo-content-ai::filament.settings_prompt.featured_snippet'))
                     ->description(__('seo-content-ai::filament.settings_prompt.featured_snippet_description'))
                     ->schema([
@@ -171,7 +186,10 @@ class SeoSettingsPrompt extends Page implements HasForms
             SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT => $data[SeoPromptSettingsService::KEY_ARTICLE_LENGTH_DEFAULT] ?? '',
             SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT => $data[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_PRODUCT] ?? '',
             SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT => $data[SeoPromptSettingsService::KEY_KEYWORD_DENSITY_DEFAULT] ?? '',
-            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_ROWS] ?? 10,
+            SeoPromptSettingsService::KEY_DEFAULT_PROMPT_LANGUAGE => $data[SeoPromptSettingsService::KEY_DEFAULT_PROMPT_LANGUAGE] ?? 'vi',
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MIN => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MIN] ?? 6,
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_RANGE => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_RANGE] ?? 8,
+            SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MAX => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_ROWS_MAX] ?? 10,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MIN_COLUMNS] ?? 2,
             SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS => $data[SeoPromptSettingsService::KEY_FEATURED_SNIPPET_MAX_COLUMNS] ?? 5,
         ]);

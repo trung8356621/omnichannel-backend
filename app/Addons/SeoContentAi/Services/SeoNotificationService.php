@@ -27,12 +27,39 @@ final class SeoNotificationService
         }
 
         Notification::make()
-            ->title('Bạn có project nội dung mới')
+            ->title(__('seo-content-ai::filament.projects.notify_new_project_title'))
             ->body((string) $project->name)
             ->icon('heroicon-o-folder-plus')
             ->actions([
                 Action::make('open')
-                    ->label('Mở project')
+                    ->label(__('seo-content-ai::filament.projects.notify_open_project'))
+                    ->url(SeoConnectionContext::panelUrl('content-projects/'.$project->getKey().'/edit'))
+                    ->button(),
+            ])
+            ->sendToDatabase($owner);
+    }
+
+    public function notifyProjectOwnerTasksAdded(SeoProject $project, int $addedCount): void
+    {
+        if ($addedCount <= 0 || ! Schema::hasTable('notifications')) {
+            return;
+        }
+
+        $owner = User::query()->find((int) $project->user_id);
+        if (! $owner instanceof User || $owner->seo_role !== User::SEO_ROLE_CONTENT_MANAGER) {
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.projects.notify_tasks_added_title'))
+            ->body(__('seo-content-ai::filament.projects.notify_tasks_added_body', [
+                'project' => (string) $project->name,
+                'count' => $addedCount,
+            ]))
+            ->icon('heroicon-o-document-plus')
+            ->actions([
+                Action::make('open')
+                    ->label(__('seo-content-ai::filament.projects.notify_open_project'))
                     ->url(SeoConnectionContext::panelUrl('content-projects/'.$project->getKey().'/edit'))
                     ->button(),
             ])
@@ -47,8 +74,11 @@ final class SeoNotificationService
 
         foreach ($this->plannersForProject($project) as $planner) {
             Notification::make()
-                ->title('Project đã được duyệt')
-                ->body(sprintf('%s · %s', (string) $project->name, (string) $article->title))
+                ->title(__('seo-content-ai::filament.article_list.planner_notified_staff_done'))
+                ->body(__('seo-content-ai::filament.article_list.planner_notified_staff_done_body', [
+                    'project' => (string) $project->name,
+                    'title' => (string) $article->title,
+                ]))
                 ->icon('heroicon-o-check-badge')
                 ->success()
                 ->actions([

@@ -54,6 +54,14 @@ final class SeoProjectApprovalService
         return $projectId !== null ? (int) $projectId : null;
     }
 
+    public function contentManagerHasSubmitted(SeoArticle $article, User $user): bool
+    {
+        $project = $this->linkedProjectQuery($article, $user)->first();
+
+        return $project instanceof SeoProject
+            && $project->status === SeoProject::STATUS_APPROVED;
+    }
+
     private function linkedProjectQuery(SeoArticle $article, User $user): Builder
     {
         $runMeta = $article->articleMetas()

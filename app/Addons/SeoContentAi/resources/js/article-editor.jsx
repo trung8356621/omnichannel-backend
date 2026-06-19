@@ -462,7 +462,14 @@ function mountArticleEditorPage() {
 
     const chatRoot = document.getElementById('seo-article-ai-chat-root');
     if (chatRoot) {
-        getOrCreateReactRoot(chatRoot).render(<ArticleAiChatPanel articleId={articleId} aiDebug={aiDebug} />);
+        getOrCreateReactRoot(chatRoot).render(
+            <ArticleAiChatPanel
+                articleId={articleId}
+                aiDebug={aiDebug}
+                canGenerateImage={editorSettings?.can_generate_image !== false}
+                canGenerateVideo={editorSettings?.can_generate_video === true}
+            />,
+        );
     }
 
     const faqRoot = document.getElementById('seo-article-faq-root');

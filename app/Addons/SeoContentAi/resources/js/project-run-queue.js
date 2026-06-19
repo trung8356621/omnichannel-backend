@@ -31,18 +31,38 @@ function registerSeoProjectRunQueue() {
         config,
 
         init() {
+            const hasTaskIds = Array.isArray(this.config.taskIds) && this.config.taskIds.length > 0;
             const shouldRun =
                 (this.config.autorun || this.config.runStatus === 'running')
-                && Array.isArray(this.config.taskIds)
-                && this.config.taskIds.length > 0;
+                && hasTaskIds;
 
             if (!shouldRun) {
+                if (
+                    (this.config.autorun || this.config.runStatus === 'running')
+                    && this.config.runStatus === 'running'
+                    && !hasTaskIds
+                ) {
+                    this.$nextTick(() => {
+                        queueMicrotask(() => this.completeEmptyQueue());
+                    });
+                }
+
                 return;
             }
 
             this.$nextTick(() => {
                 queueMicrotask(() => this.processQueue());
             });
+        },
+
+        async completeEmptyQueue() {
+            const wire = this.resolveWire();
+            if (!wire) {
+                return;
+            }
+
+            await wire.completeRunQueue(false);
+            await wire.refresh();
         },
 
         resolveWire() {

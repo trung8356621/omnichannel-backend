@@ -611,21 +611,31 @@
             @endif
 
             @php
-                $approvedToggleTitle = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager()
-                    ? 'Đánh dấu project đã duyệt'
+                $isContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
+                $staffSubmitted = $isContentManager && $this->contentManagerSubmittedForReview();
+                $reviewButtonActive = $isContentManager ? $staffSubmitted : (bool) $record->is_reviewed;
+                $approvedToggleTitle = $isContentManager
+                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
                     : __('seo-content-ai::filament.article_list.mark_reviewed');
+                $reviewConfirm = $isContentManager
+                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
+                    : __('seo-content-ai::filament.article_list.review_article_description');
             @endphp
 
             <button
                 type="button"
                 wire:click="toggleArticleReview"
-                @if (! $record->is_reviewed) wire:confirm="{{ __('seo-content-ai::filament.article_list.review_article_description') }}" @endif
+                @if (! $reviewButtonActive) wire:confirm="{{ $reviewConfirm }}" @endif
                 wire:loading.attr="disabled"
                 wire:target="toggleArticleReview,approveArticle"
                 @if (! $this->canToggleArticleReview()) disabled @endif
-                class="seo-publish-icon-btn is-success @if ($record->is_reviewed) is-active @endif"
-                title="{{ $record->is_reviewed ? __('seo-content-ai::filament.article_list.reviewed') : $approvedToggleTitle }}"
-                aria-label="{{ __('seo-content-ai::filament.article_list.reviewed') }}"
+                class="seo-publish-icon-btn is-success @if ($reviewButtonActive) is-active @endif"
+                title="{{ $reviewButtonActive
+                    ? ($isContentManager
+                        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_already')
+                        : __('seo-content-ai::filament.article_list.reviewed'))
+                    : $approvedToggleTitle }}"
+                aria-label="{{ $approvedToggleTitle }}"
             >
                 <span wire:loading.remove wire:target="toggleArticleReview,approveArticle">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">

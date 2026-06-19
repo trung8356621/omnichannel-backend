@@ -8,9 +8,9 @@ use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Jobs\GenerateMediaJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
-use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -26,8 +26,7 @@ final class ArticleEditorMediaAiService
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly SeoPromptSettingsService $promptSettings,
-    ) {
-    }
+    ) {}
 
     /**
      * @return array{url: string, media_type: 'image', seo_media_id: int, status: string}
@@ -250,7 +249,8 @@ final class ArticleEditorMediaAiService
             );
 
             GenerateMediaJob::dispatch($placeholder->id, (int) $prompt->id, $variables, 'video')
-                ->onQueue('media_generation');
+                ->onQueue('media_generation')
+                ->afterResponse();
 
             return [
                 'url' => (string) $placeholder->url,
@@ -674,11 +674,12 @@ final class ArticleEditorMediaAiService
             $blockKey = 'none';
         }
 
-        return 'seo:ai-media-generate:' . $articleId . ':' . $toolType . ':' . sha1($blockKey);
+        return 'seo:ai-media-generate:'.$articleId.':'.$toolType.':'.sha1($blockKey);
     }
 
     /**
      * @template T
+     *
      * @param  callable(): T  $callback
      * @return T
      */
@@ -686,8 +687,7 @@ final class ArticleEditorMediaAiService
         string $lockKey,
         callable $callback,
         ?callable $onLockTimeout = null,
-    ): mixed
-    {
+    ): mixed {
         $store = Cache::getStore();
         if (! method_exists($store, 'lock')) {
             // Cache driver không hỗ trợ atomic lock (ví dụ array/file cũ).
@@ -851,7 +851,8 @@ final class ArticleEditorMediaAiService
         ]);
 
         GenerateMediaJob::dispatch($media->id, $promptId, $variables, $toolType)
-            ->onQueue('media_generation');
+            ->onQueue('media_generation')
+            ->afterResponse();
 
         return $media->fresh();
     }
@@ -902,7 +903,7 @@ final class ArticleEditorMediaAiService
             throw new \InvalidArgumentException('Bài viết không hợp lệ — không thể tạo job AI.');
         }
 
-        $slug = 'gen-' . now()->format('YmdHis') . '-' . random_int(100, 999);
+        $slug = 'gen-'.now()->format('YmdHis').'-'.random_int(100, 999);
         $editorBlockId = trim($editorBlockId);
 
         return SeoMedia::query()->create([
@@ -911,7 +912,7 @@ final class ArticleEditorMediaAiService
             'prompt_id' => $promptId,
             'prompt_variables' => $variables,
             'editor_block_id' => $editorBlockId !== '' ? Str::limit($editorBlockId, 64, '') : null,
-            'filename' => $slug . '.svg',
+            'filename' => $slug.'.svg',
             'slug' => $slug,
             'path' => SeoMedia::placeholderLoadingPath(),
             'url' => SeoMedia::placeholderLoadingUrl(),

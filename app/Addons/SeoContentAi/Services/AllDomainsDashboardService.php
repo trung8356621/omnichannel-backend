@@ -87,7 +87,7 @@ final class AllDomainsDashboardService
             $rows[] = [
                 'id' => $projectId,
                 'name' => trim((string) ($project->name ?: SeoProject::defaultNameFromMonth($project->month))),
-                'edit_url' => SeoProjectResource::getUrl('edit', ['record' => $projectId]),
+                'edit_url' => SeoProjectResource::projectRecordUrl($project),
                 'domain' => trim((string) ($project->site?->domain ?? '')),
                 'domain_url' => $project->site_id !== null
                     ? DomainResource::getUrl('general', ['record' => (int) $project->site_id])

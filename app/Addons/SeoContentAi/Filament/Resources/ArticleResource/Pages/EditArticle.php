@@ -34,6 +34,7 @@ use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
@@ -65,7 +66,6 @@ use Filament\Support\Enums\MaxWidth;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
-use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\On;
 
 class EditArticle extends SeoEditRecord
@@ -571,7 +571,7 @@ class EditArticle extends SeoEditRecord
                     $siteId = ArticleResource::resolveArticleSiteId($this->record);
 
                     if (ArticleResource::resolveDirectAssignContentProjectId($siteId) !== null) {
-                        return ArticleResource::assignRewriteModeFormFields();
+                        return ArticleResource::assignArticleTaskFormFields();
                     }
 
                     return ArticleResource::assignContentProjectFormFields(
@@ -586,11 +586,10 @@ class EditArticle extends SeoEditRecord
                     $siteId = ArticleResource::resolveArticleSiteId($this->record);
                     $projectId = ArticleResource::resolveDirectAssignContentProjectId($siteId)
                         ?? (int) ($data['project_id'] ?? 0);
-                    $summary = ArticleResource::assignArticlesToContentProject(
+                    $summary = ArticleResource::assignArticlesFromFormData(
                         collect([$this->record]),
                         $projectId,
-                        is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
-                        is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
+                        $data,
                     );
 
                     Notification::make()
@@ -1310,6 +1309,9 @@ class EditArticle extends SeoEditRecord
         $search = trim($this->mediaPickerSearch);
         $articleId = (int) $this->record->id;
         $library = app(SeoMediaLibraryService::class);
+        $accessScope = app(MediaLibraryAccessScope::class);
+        $restrictArticleIds = $accessScope->restrictedArticleIdsForSite((int) $site->id);
+        $restrictWpAttachmentIds = $accessScope->pickerWordPressAttachmentRestrictions((int) $site->id, $search);
 
         if ($this->mediaPickerTab === 'article') {
             $postImagesResult = app(ArticlePostImagesService::class)->fetchForMediaPicker(
@@ -1379,7 +1381,7 @@ class EditArticle extends SeoEditRecord
                     $this->mediaPickerPage,
                     $search !== '' ? $search : null,
                     24,
-                    $articleId,
+                    restrictToArticleIds: $restrictArticleIds,
                 )
                 : app(WordPressMediaLibraryService::class)->fetch(
                     $site,
@@ -1387,6 +1389,7 @@ class EditArticle extends SeoEditRecord
                     $this->mediaPickerPage,
                     24,
                     $search !== '' ? $search : null,
+                    includeAttachmentIds: $restrictWpAttachmentIds,
                 );
 
             $images = is_array($result['images'] ?? null) ? $result['images'] : [];
@@ -2317,10 +2320,30 @@ class EditArticle extends SeoEditRecord
         }
 
         if (SeoAccessControl::isContentManager()) {
-            return ArticleResource::articleIsInContentProject($this->record);
+            $user = auth()->user();
+            if (! $user instanceof \App\Models\User) {
+                return false;
+            }
+
+            return ArticleResource::articleIsInContentProject($this->record)
+                && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($this->record, $user);
         }
 
         return false;
+    }
+
+    public function contentManagerSubmittedForReview(): bool
+    {
+        if (! SeoAccessControl::isContentManager()) {
+            return false;
+        }
+
+        $user = auth()->user();
+        if (! $user instanceof \App\Models\User) {
+            return false;
+        }
+
+        return app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($this->record, $user);
     }
 
     public function getReviewedAtLabel(): ?string
@@ -2573,6 +2596,12 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
+        if (SeoAccessControl::isContentManager()) {
+            $this->approveArticle();
+
+            return;
+        }
+
         if ((bool) $this->record->is_reviewed) {
             ArticleResource::markArticleUnreviewed($this->record);
             $this->record->refresh();
@@ -2590,33 +2619,21 @@ class EditArticle extends SeoEditRecord
 
     public function approveArticle(): void
     {
-        if ((bool) $this->record->is_reviewed) {
+        if (SeoAccessControl::isContentManager()) {
+            ArticleResource::submitStaffEditingComplete($this->record);
+            $this->record->refresh();
+
             return;
         }
 
-        if (SeoAccessControl::isContentManager()) {
-            try {
-                app(SeoProjectApprovalService::class)->approveLinkedProject(
-                    $this->record,
-                    auth()->user(),
-                );
-            } catch (ValidationException $exception) {
-                Notification::make()
-                    ->title('Không thể duyệt project')
-                    ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
-                    ->danger()
-                    ->send();
-
-                return;
-            }
+        if ((bool) $this->record->is_reviewed) {
+            return;
         }
 
         $deletedCount = ArticleResource::markArticleReviewed($this->record);
 
         Notification::make()
-            ->title(SeoAccessControl::isContentManager()
-                ? 'Project đã được đánh dấu Đã duyệt'
-                : __('seo-content-ai::filament.article_list.article_reviewed'))
+            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
             ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
             ->success()
             ->send();
@@ -3235,7 +3252,19 @@ class EditArticle extends SeoEditRecord
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
             'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
             'can_generate_outline_heading' => $this->canGenerateOutlineHeading(),
+            'can_generate_image' => $this->canGenerateEditorImage(),
+            'can_generate_video' => $this->canGenerateEditorVideo(),
         ];
+    }
+
+    public function canGenerateEditorImage(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getCreateImagePromptId() !== null;
+    }
+
+    public function canGenerateEditorVideo(): bool
+    {
+        return app(SeoCreateArticleSettingsService::class)->getCreateVideoPromptId() !== null;
     }
 
     public function canGenerateFeaturedSnippet(): bool
@@ -3314,6 +3343,7 @@ class EditArticle extends SeoEditRecord
         return [
             'articleId' => (int) $this->record->id,
             'siteId' => (int) $this->record->site_id,
+            'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
             'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
             'i18n' => [
@@ -3789,6 +3819,13 @@ class EditArticle extends SeoEditRecord
             galleryUrls: $galleryUrls,
         );
 
+        if ((string) ($result['status'] ?? 'processing') === 'processing') {
+            Notification::make()
+                ->title(__('seo-content-ai::common.generating_image'))
+                ->body(__('seo-content-ai::common.placeholder_inserted'))
+                ->success()
+                ->send();
+        }
     }
 
     /**

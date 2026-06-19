@@ -11,7 +11,12 @@ function hydratePromptTemplate(template, variables) {
     });
 }
 
-export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: false } }) {
+export default function ArticleAiChatPanel({
+    articleId,
+    aiDebug = { enabled: false },
+    canGenerateImage = true,
+    canGenerateVideo = true,
+}) {
     const [selectedText, setSelectedText] = useState('');
     const [selectedHtml, setSelectedHtml] = useState('');
     const [activeBlockId, setActiveBlockId] = useState('');
@@ -52,11 +57,21 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
             generateLockRef.current = false;
         };
 
-        const onImageDone = () => {
+        const onImageDone = (event) => {
+            const status = String(event.detail?.status ?? '').toLowerCase();
+            if (status !== 'processing' && status !== 'pending' && status !== 'completed') {
+                return;
+            }
+
             setGeneratingImage(false);
             releaseLock();
         };
-        const onVideoDone = () => {
+        const onVideoDone = (event) => {
+            const status = String(event.detail?.status ?? '').toLowerCase();
+            if (status !== 'processing' && status !== 'pending' && status !== 'completed') {
+                return;
+            }
+
             setGeneratingVideo(false);
             releaseLock();
         };
@@ -188,7 +203,7 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                 <div className="seo-ai-chat-compose">
                     <textarea
                         className="seo-ai-chat-input"
-                        rows={5}
+                        rows={8}
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         placeholder={t('compose_placeholder')}
@@ -199,8 +214,12 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                             type="button"
                             className="seo-ai-chat-generate-image"
                             onClick={() => dispatchGenerate('image')}
-                            disabled={!canGenerate || busy || generateLockRef.current}
-                            title={t('generate_image')}
+                            disabled={!canGenerate || !canGenerateImage || busy || generateLockRef.current}
+                            title={
+                                !canGenerateImage
+                                    ? t('editor_generate_image_no_prompt')
+                                    : t('generate_image')
+                            }
                         >
                             <ImageIcon size={15} />
                             {generatingImage ? t('generating_image') : t('generate_image')}
@@ -209,8 +228,12 @@ export default function ArticleAiChatPanel({ articleId, aiDebug = { enabled: fal
                             type="button"
                             className="seo-ai-chat-generate-video"
                             onClick={() => dispatchGenerate('video')}
-                            disabled={!canGenerate || busy || generateLockRef.current}
-                            title={t('generate_video')}
+                            disabled={!canGenerate || !canGenerateVideo || busy || generateLockRef.current}
+                            title={
+                                !canGenerateVideo
+                                    ? t('editor_generate_video_no_prompt')
+                                    : t('generate_video')
+                            }
                         >
                             <Video size={15} />
                             {generatingVideo ? t('generating_video') : t('generate_video')}

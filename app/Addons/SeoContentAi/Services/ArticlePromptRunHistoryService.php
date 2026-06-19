@@ -6,8 +6,8 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use Illuminate\Support\Collection;
 
 final class ArticlePromptRunHistoryService
@@ -82,13 +82,7 @@ final class ArticlePromptRunHistoryService
             ->unique()
             ->values();
 
-        $attachedResults = $article->promptResults()
-            ->with('prompt')
-            ->orderBy('prompt_results.created_at')
-            ->get();
-
-        // Nhiều luồng editor (gallery image, quick review...) chỉ lưu article_id trong input_snapshot
-        // mà không attach pivot seo_prompt_resultables, nên cần suy luận thêm từ JSON snapshot.
+        // Nhiều luồng editor chỉ lưu article_id trong input_snapshot, cần suy luận thêm từ JSON snapshot.
         $snapshotResults = PromptResult::query()
             ->with('prompt')
             ->where(function ($query) use ($articleId): void {
@@ -102,7 +96,6 @@ final class ArticlePromptRunHistoryService
             ->get();
 
         $resultIds = $resultIds
-            ->merge($attachedResults->pluck('id')->map(static fn (mixed $id): int => (int) $id))
             ->merge($snapshotResults->pluck('id')->map(static fn (mixed $id): int => (int) $id))
             ->merge($linkedRows->pluck('prompt_result_id')->map(static fn (mixed $id): int => (int) $id))
             ->filter()
@@ -216,8 +209,7 @@ final class ArticlePromptRunHistoryService
             ->filter(fn (mixed $result): bool => $result instanceof PromptResult)
             ->values();
 
-        $articleLinkedResults = $attachedResults
-            ->merge($snapshotResults)
+        $articleLinkedResults = $snapshotResults
             ->merge($linkedResults)
             ->unique(fn (PromptResult $result): int => (int) $result->id)
             ->values();
@@ -231,7 +223,6 @@ final class ArticlePromptRunHistoryService
                         'status' => (string) $result->status,
                         'output' => (string) ($result->output_text ?? ''),
                         'message' => (string) ($result->error_message ?? ''),
-                        'type' => (string) ($result->pivot?->type ?? ''),
                     ],
                     $result,
                     0,

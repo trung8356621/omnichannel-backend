@@ -46,6 +46,7 @@ export default function ImageSplitterApp({
     embedded = false,
     fallbackImageUrl = '',
     splitPayload = null,
+    canDeleteOriginal = true,
 }) {
     const resultPaneRef = useRef(null);
     const previewRef = useRef(null);
@@ -216,7 +217,7 @@ export default function ImageSplitterApp({
     const canSave =
         pieces.length > 0 &&
         effectiveSiteId != null &&
-        (sourceMeta.seoMediaId ?? 0) > 0 &&
+        (canDeleteOriginal ? (sourceMeta.seoMediaId ?? 0) > 0 : true) &&
         !isSaving;
 
     const gridLines = useMemo(
@@ -374,7 +375,7 @@ export default function ImageSplitterApp({
         if (!canSave) {
             if (!effectiveSiteId) {
                 setError(t('splitter_missing_site_id'));
-            } else if (!(sourceMeta.seoMediaId > 0)) {
+            } else if (canDeleteOriginal && !(sourceMeta.seoMediaId > 0)) {
                 setError(t('splitter_missing_seo_media_id'));
             }
             return;
@@ -388,7 +389,7 @@ export default function ImageSplitterApp({
             const data = await saveSplitPiecesToLibrary({
                 siteId: effectiveSiteId,
                 articleId: effectiveArticleId,
-                originalSeoMediaId: sourceMeta.seoMediaId,
+                originalSeoMediaId: canDeleteOriginal ? sourceMeta.seoMediaId : null,
                 pieces,
             });
 
@@ -555,7 +556,9 @@ export default function ImageSplitterApp({
                     </div>
 
                     {pieces.length === 0 ? (
-                        <div className="empty-card">{t('splitter_empty_hint')}</div>
+                        <div className="empty-card">
+                            {canDeleteOriginal ? t('splitter_empty_hint') : t('splitter_empty_hint_keep_original')}
+                        </div>
                     ) : (
                         <div className="piece-grid">
                             {pieces.map((piece, idx) => (

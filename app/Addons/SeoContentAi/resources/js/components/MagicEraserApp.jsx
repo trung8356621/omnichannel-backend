@@ -18,6 +18,7 @@ export default function MagicEraserApp({
     wpAttachmentId = null,
     slug = '',
     initialTab = MEDIA_EDITOR_TAB_ERASER,
+    canDeleteOriginal = true,
 }) {
     const [activeTab, setActiveTab] = useState(initialTab);
     const [splitPayload, setSplitPayload] = useState(null);
@@ -72,6 +73,7 @@ export default function MagicEraserApp({
                             slug={slug}
                             imageUrl={imageUrl}
                             splitPayload={splitPayload}
+                            canDeleteOriginal={canDeleteOriginal}
                         />
                     )}
                 </div>

@@ -61,11 +61,30 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
+        return SeoAccessControl::canMutateContentProjects();
+    }
+
+    public static function canView(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        if (! $record instanceof SeoProject) {
+            return false;
+        }
+
         if (SeoAccessControl::isContentManager()) {
             return (int) $record->user_id === (int) auth()->id();
         }
 
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return SeoAccessControl::canAccessPlannerFeatures()
+            && static::getEloquentQuery()->whereKey($record->getKey())->exists();
+    }
+
+    public static function projectRecordUrl(SeoProject $record): string
+    {
+        if (static::canEdit($record)) {
+            return static::getUrl('edit', ['record' => $record]);
+        }
+
+        return static::getUrl('view', ['record' => $record]);
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
@@ -165,13 +184,17 @@ class SeoProjectResource extends SeoPanelResource
 
                                 $carbon = Carbon::parse($month)->startOfMonth();
                                 $max = $carbon->daysInMonth;
-                                $count = count($get('tasks_data') ?? []);
+                                $count = app(SeoProjectTaskSyncService::class)
+                                    ->countEffectiveTasks(is_array($get('tasks_data')) ? $get('tasks_data') : []);
+                                $monthOpen = now()->lte($carbon->copy()->endOfMonth()->endOfDay());
 
                                 return __('seo-content-ai::filament.projects.month_limit_hint', [
                                     'month' => $carbon->format('m/Y'),
                                     'max' => $max,
                                     'count' => $count,
-                                ]);
+                                ]).($monthOpen
+                                    ? ''
+                                    : ' '.__('seo-content-ai::filament.projects.execution_month_closed_short'));
                             })
                             ->columnSpanFull(),
 
@@ -240,7 +263,7 @@ class SeoProjectResource extends SeoPanelResource
                                     ->placeholder(__('seo-content-ai::filament.projects.keyword_placeholder'))
                                     ->required()
                                     ->maxLength(500)
-                                    ->visible(fn (Get $get): bool => $get('type') !== SeoProjectTask::TYPE_REWRITE),
+                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD),
 
                                 Forms\Components\Select::make('post_type')
                                     ->label(__('seo-content-ai::filament.article_list.post_type'))
@@ -252,14 +275,20 @@ class SeoProjectResource extends SeoPanelResource
                                     ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD),
 
                                 Forms\Components\Select::make('source_content')
-                                    ->label(__('seo-content-ai::filament.projects.title_of_article_to_rewrite'))
+                                    ->label(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_IMPROVE
+                                        ? __('seo-content-ai::filament.projects.title_of_article_to_improve')
+                                        : __('seo-content-ai::filament.projects.title_of_article_to_rewrite'))
                                     ->placeholder(__('seo-content-ai::filament.projects.title_to_rewrite_placeholder'))
                                     ->searchable()
                                     ->searchPrompt(__('seo-content-ai::filament.projects.rewrite_article_search_prompt'))
                                     ->searchDebounce(300)
                                     ->native(false)
                                     ->required()
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_REWRITE)
+                                    ->visible(fn (Get $get): bool => in_array(
+                                        (string) $get('type'),
+                                        SeoProjectTask::articlePickerTypes(),
+                                        true,
+                                    ))
                                     ->getSearchResultsUsing(
                                         fn (string $search, Get $get): array => static::searchArticlesForRewriteTitle(
                                             $search,
@@ -315,7 +344,9 @@ class SeoProjectResource extends SeoPanelResource
                                 $type = $state['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD;
                                 $content = trim((string) ($state['source_content'] ?? ''));
 
-                                if ($type === SeoProjectTask::TYPE_REWRITE) {
+                                if ($type === SeoProjectTask::TYPE_IMPROVE) {
+                                    $prefix = '[Tối ưu]';
+                                } elseif ($type === SeoProjectTask::TYPE_REWRITE) {
                                     $prefix = '[Viết lại]';
                                     if (SeoProjectTask::normalizeRewriteMode($state['rewrite_mode'] ?? null) === SeoProjectTask::REWRITE_MODE_CONTENT) {
                                         $prefix = '[Viết lại/nội dung]';
@@ -358,7 +389,7 @@ class SeoProjectResource extends SeoPanelResource
     {
         return $table
             ->recordUrl(
-                fn (SeoProject $record): string => static::getUrl('edit', ['record' => $record]),
+                fn (SeoProject $record): string => static::projectRecordUrl($record),
             )
             ->columns([
                 Tables\Columns\TextColumn::make('name')
@@ -367,7 +398,7 @@ class SeoProjectResource extends SeoPanelResource
                     ->sortable()
                     ->weight('bold')
                     ->url(
-                        fn (SeoProject $record): string => static::getUrl('edit', ['record' => $record]),
+                        fn (SeoProject $record): string => static::projectRecordUrl($record),
                     ),
 
                 Tables\Columns\TextColumn::make('user.name')
@@ -529,7 +560,10 @@ class SeoProjectResource extends SeoPanelResource
                                 ->send();
                         }
                     }),
-                Tables\Actions\EditAction::make(),
+                Tables\Actions\ViewAction::make()
+                    ->visible(fn (SeoProject $record): bool => static::canView($record) && ! static::canEdit($record)),
+                Tables\Actions\EditAction::make()
+                    ->visible(fn (SeoProject $record): bool => static::canEdit($record)),
             ])
             ->bulkActions([
                 Tables\Actions\BulkActionGroup::make([
@@ -591,6 +625,7 @@ class SeoProjectResource extends SeoPanelResource
             'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
             'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
+            'view' => Pages\ViewSeoProject::route('/{record}'),
             'edit' => Pages\EditSeoProject::route('/{record}/edit'),
         ];
     }
@@ -873,8 +908,9 @@ class SeoProjectResource extends SeoPanelResource
         }
 
         $existing = is_array($get('tasks_data')) ? $get('tasks_data') : [];
-        $maxMonth = app(SeoProjectTaskSyncService::class)->maxTasksForMonth($month);
-        $remaining = max(0, $maxMonth - count($existing));
+        $syncService = app(SeoProjectTaskSyncService::class);
+        $maxMonth = $syncService->maxTasksForMonth($month);
+        $remaining = max(0, $maxMonth - $syncService->countEffectiveTasks($existing));
 
         if ($remaining === 0) {
             Notification::make()

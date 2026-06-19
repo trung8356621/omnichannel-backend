@@ -70,6 +70,41 @@ class SeoProject extends Model
         return $this->monthCarbon()->daysInMonth;
     }
 
+    public function isExecutionMonthOpen(): bool
+    {
+        return now()->lte($this->monthCarbon()->copy()->endOfMonth()->endOfDay());
+    }
+
+    public function registeredTaskCount(): int
+    {
+        if ($this->relationLoaded('tasks')) {
+            return $this->tasks->count();
+        }
+
+        return (int) $this->tasks()->count();
+    }
+
+    public function remainingTaskCapacity(): int
+    {
+        return max(0, $this->maxTasksAllowed() - $this->registeredTaskCount());
+    }
+
+    public function canRegisterMoreTasks(): bool
+    {
+        return $this->isExecutionMonthOpen() && $this->remainingTaskCapacity() > 0;
+    }
+
+    public function syncTotalTasksCounter(): void
+    {
+        $count = (int) $this->tasks()->count();
+
+        if ((int) ($this->total_tasks ?? 0) === $count) {
+            return;
+        }
+
+        $this->update(['total_tasks' => $count]);
+    }
+
     public static function defaultNameFromMonth(Carbon|string $month): string
     {
         $carbon = Carbon::parse($month)->startOfMonth();

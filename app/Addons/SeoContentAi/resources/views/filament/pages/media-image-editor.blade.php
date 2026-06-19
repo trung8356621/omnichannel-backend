@@ -12,4 +12,5 @@
     data-pending-wp-sync="{{ $pendingWpSync ? '1' : '0' }}"
     data-library-url="{{ \App\Addons\SeoContentAi\Filament\Pages\MediaLibrary::getUrl() }}"
     data-initial-tab="{{ $tab ?? '' }}"
+    data-can-delete-original="{{ $canDeleteOriginal ? '1' : '0' }}"
 ></div>

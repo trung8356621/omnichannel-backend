@@ -5,16 +5,17 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Models\SeoMedia;
-use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
-use App\Addons\SeoContentAi\Services\SeoMediaWpEditStagingService;
-use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\GeneratedImageLibraryService;
+use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
+use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryDeleteService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Services\SeoMediaWpEditStagingService;
+use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
@@ -188,7 +189,7 @@ class MediaLibrary extends Page
         $this->previewPendingWpSync = false;
         $this->previewOpen = false;
 
-        $this->js('window.open(' . json_encode($resolved['editor_url']) . ', "_blank")');
+        $this->js('window.open('.json_encode($resolved['editor_url']).', "_blank")');
     }
 
     public function previewSyncToWordPress(): void
@@ -440,9 +441,19 @@ class MediaLibrary extends Page
             return;
         }
 
+        if (! SeoAccessControl::canAccessSite((int) $site->id)) {
+            $this->loadError = __('seo-content-ai::filament.media_runtime.domain_not_found_dot');
+
+            return;
+        }
+
         $month = filled($this->filterMonth) ? (string) $this->filterMonth : null;
 
         $search = filled($this->filterSearch) ? (string) $this->filterSearch : null;
+
+        $accessScope = app(MediaLibraryAccessScope::class);
+        $restrictArticleIds = $accessScope->restrictedArticleIdsForSite((int) $site->id);
+        $restrictWpAttachmentIds = $accessScope->restrictedWordPressAttachmentIds((int) $site->id, $restrictArticleIds);
 
         $result = match ($this->activeTab) {
             'local', 'generated' => app(SeoMediaLibraryService::class)->fetch(
@@ -450,12 +461,14 @@ class MediaLibrary extends Page
                 $month,
                 $this->page,
                 $search,
+                restrictToArticleIds: $restrictArticleIds,
             ),
             default => app(WordPressMediaLibraryService::class)->fetch(
                 $site,
                 $month,
                 $this->page,
                 search: $search,
+                includeAttachmentIds: $restrictWpAttachmentIds,
             ),
         };
 
@@ -677,7 +690,7 @@ class MediaLibrary extends Page
         } elseif ($successCount > 0) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.media_runtime.resize_partial'))
-                ->body("Success: {$successCount}. Failed: " . implode(', ', array_slice($failedLabels, 0, 5)))
+                ->body("Success: {$successCount}. Failed: ".implode(', ', array_slice($failedLabels, 0, 5)))
                 ->warning()
                 ->send();
         } else {
@@ -819,7 +832,7 @@ class MediaLibrary extends Page
                     $removedKeys[] = $key;
                 }
             } else {
-                $failedMessages[] = (string) ($image['slug'] ?? $key) . ': ' . ($result['message'] ?? '');
+                $failedMessages[] = (string) ($image['slug'] ?? $key).': '.($result['message'] ?? '');
             }
         }
 
@@ -859,7 +872,7 @@ class MediaLibrary extends Page
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.media_runtime.deleted_partial'))
-                ->body($partialBody . ' ' . implode(' ', array_slice($failedMessages, 0, 2)))
+                ->body($partialBody.' '.implode(' ', array_slice($failedMessages, 0, 2)))
                 ->warning()
                 ->send();
         } else {
@@ -1118,13 +1131,7 @@ class MediaLibrary extends Page
 
     private function resolveSitesQuery()
     {
-        $query = Site::query()->orderBy('domain');
-
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
-        }
-
-        return $query;
+        return SeoAccessControl::accessibleSitesQuery()->orderBy('domain');
     }
 
     /**
@@ -1145,7 +1152,7 @@ class MediaLibrary extends Page
     {
         $kind = (string) ($image['kind'] ?? 'local');
 
-        return $kind . '-' . $image['id'];
+        return $kind.'-'.$image['id'];
     }
 
     /**

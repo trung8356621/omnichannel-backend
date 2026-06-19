@@ -20,15 +20,26 @@ final class GeminiMediaGenerationService
 
     public function __construct(
         private readonly PromptMediaStorageService $promptMediaStorage,
+        private readonly SeoCreateArticleSettingsService $workflowSettings,
     ) {}
 
     /**
      * @return array{0: string, 1: array<string, mixed>|null}
      */
-    public function generateImage(ApiConnection $connection, string $prompt, ?string $preferredModel = null, bool $excludeImagen = false): array
-    {
+    public function generateImage(
+        ApiConnection $connection,
+        string $prompt,
+        ?string $preferredModel = null,
+        bool $excludeImagen = false,
+        ?int $inputLength = null,
+    ): array {
         $prompt = $this->normalizeImagePrompt(Utf8Sanitizer::string($prompt));
-        $models = GoogleAiModelRegistry::imageModelsToTry($preferredModel, $excludeImagen);
+        $models = GoogleAiModelRegistry::imageModelsToTry(
+            $preferredModel,
+            $excludeImagen,
+            $this->workflowSettings->getImageModelPriority(),
+            $inputLength,
+        );
         $lastError = null;
 
         foreach ($models as $model) {
@@ -80,7 +91,7 @@ final class GeminiMediaGenerationService
             $message = $response->json('error.message') ?? $response->body();
 
             throw new PromptRunException(
-                'Imagen API lỗi (' . $model . '): ' . $this->truncate((string) $message),
+                'Imagen API lỗi ('.$model.'): '.$this->truncate((string) $message),
             );
         }
 
@@ -110,7 +121,7 @@ final class GeminiMediaGenerationService
             return [$imageUrl, null];
         }
 
-        throw new PromptRunException('Imagen không trả về ảnh (' . $model . ').');
+        throw new PromptRunException('Imagen không trả về ảnh ('.$model.').');
     }
 
     /**
@@ -143,7 +154,7 @@ final class GeminiMediaGenerationService
             $message = $response->json('error.message') ?? $response->body();
 
             throw new PromptRunException(
-                'Gemini Image API lỗi (' . $model . '): ' . $this->truncate((string) $message),
+                'Gemini Image API lỗi ('.$model.'): '.$this->truncate((string) $message),
             );
         }
 
@@ -182,14 +193,14 @@ final class GeminiMediaGenerationService
             $blockReason = $response->json('candidates.0.finishReason')
                 ?? $response->json('promptFeedback.blockReason');
             $hint = $textLines !== []
-                ? ' | text=' . mb_substr(implode(' ', $textLines), 0, 180)
+                ? ' | text='.mb_substr(implode(' ', $textLines), 0, 180)
                 : '';
 
             throw new PromptRunException(
-                'Gemini Image không trả ảnh (' . $model . ')'
-                . ($blockReason ? ' — ' . $blockReason : '')
-                . $hint
-                . '. Thử Imagen 4 hoặc rút gọn prompt (≤480 token cho Imagen).',
+                'Gemini Image không trả ảnh ('.$model.')'
+                .($blockReason ? ' — '.$blockReason : '')
+                .$hint
+                .'. Thử Imagen 4 hoặc rút gọn prompt (≤480 token cho Imagen).',
             );
         }
 
@@ -281,6 +292,6 @@ final class GeminiMediaGenerationService
 
     private function truncate(string $message): string
     {
-        return mb_strlen($message) > 500 ? mb_substr($message, 0, 500) . '…' : $message;
+        return mb_strlen($message) > 500 ? mb_substr($message, 0, 500).'…' : $message;
     }
 }

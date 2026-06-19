@@ -17,15 +17,6 @@ class EditSeoProject extends SeoEditRecord
 {
     protected static string $resource = SeoProjectResource::class;
 
-    public function mount(int|string $record): void
-    {
-        parent::mount($record);
-
-        if (SeoAccessControl::isContentManager()) {
-            $this->form->disabled();
-        }
-    }
-
     public function getTitle(): string
     {
         /** @var SeoProject $record */
@@ -111,7 +102,7 @@ class EditSeoProject extends SeoEditRecord
 
     protected function shouldDisableSeoFormSave(): bool
     {
-        return SeoAccessControl::isContentManager();
+        return false;
     }
 
     protected function getFormActions(): array

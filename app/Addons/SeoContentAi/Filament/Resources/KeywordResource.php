@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Models\Tag;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
+use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -1929,11 +1930,7 @@ class KeywordResource extends SeoPanelResource
             ];
         }
 
-        if (! in_array((string) $project->status, [
-            SeoProject::STATUS_PENDING,
-            SeoProject::STATUS_MANUAL,
-            SeoProject::STATUS_RUNNING,
-        ], true)) {
+        if (! $project->isExecutionMonthOpen()) {
             return [
                 'added' => 0,
                 'duplicate' => 0,
@@ -1958,7 +1955,7 @@ class KeywordResource extends SeoPanelResource
         DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
             $project->refresh();
             $max = $project->maxTasksAllowed();
-            $currentTotal = (int) ($project->total_tasks ?? 0);
+            $currentTotal = $project->registeredTaskCount();
 
             $existingKeys = SeoProjectTask::query()
                 ->where('project_id', (int) $project->id)
@@ -2017,8 +2014,12 @@ class KeywordResource extends SeoPanelResource
                 $added++;
             }
 
-            $project->update(['total_tasks' => $currentTotal]);
+            $project->syncTotalTasksCounter();
         });
+
+        if ($added > 0) {
+            app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($project->fresh(), $added);
+        }
 
         return [
             'added' => $added,

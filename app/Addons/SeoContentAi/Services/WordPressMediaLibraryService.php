@@ -34,7 +34,19 @@ final class WordPressMediaLibraryService
         int $page = 1,
         int $perPage = 50,
         ?string $search = null,
+        ?array $includeAttachmentIds = null,
     ): array {
+        if ($includeAttachmentIds !== null) {
+            return $this->fetchIncludedAttachments(
+                $site,
+                $includeAttachmentIds,
+                $filterMonth,
+                $page,
+                $perPage,
+                $search,
+            );
+        }
+
         $site->loadMissing('metas');
         $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
         if ($readToken === '') {
@@ -412,6 +424,186 @@ final class WordPressMediaLibraryService
             'total_pages' => 1,
             'page' => max(1, $page),
             'error' => $error,
+        ];
+    }
+
+    /**
+     * @param  list<int>  $includeAttachmentIds
+     * @return array{
+     *     images: list<array<string, mixed>>,
+     *     total: int,
+     *     total_pages: int,
+     *     page: int,
+     *     error: string|null,
+     * }
+     */
+    private function fetchIncludedAttachments(
+        Site $site,
+        array $includeAttachmentIds,
+        ?string $filterMonth,
+        int $page,
+        int $perPage,
+        ?string $search,
+    ): array {
+        $perPage = max(1, min(100, $perPage));
+        $page = max(1, $page);
+
+        $ids = array_values(array_unique(array_filter(
+            array_map(static fn (mixed $id): int => (int) $id, $includeAttachmentIds),
+            static fn (int $id): bool => $id > 0,
+        )));
+
+        if ($ids === []) {
+            return $this->emptyResult($page, null);
+        }
+
+        $site->loadMissing('metas');
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        if ($readToken === '') {
+            return $this->emptyResult($page, 'Thiếu Read token trên domain. Cấu hình tại Danh sách tên miền.');
+        }
+
+        $base = $this->wpContent->getPermalinkBase($site);
+        if ($base === '') {
+            return $this->emptyResult($page, 'Không xác định được URL WordPress của domain.');
+        }
+
+        $images = [];
+        foreach (array_chunk($ids, 100) as $chunk) {
+            try {
+                $response = Http::timeout(60)
+                    ->acceptJson()
+                    ->withToken($readToken)
+                    ->get($base.'/wp-json/wp/v2/media', [
+                        'include' => implode(',', $chunk),
+                        'per_page' => count($chunk),
+                        'orderby' => 'include',
+                    ]);
+
+                if (! $response->successful()) {
+                    continue;
+                }
+
+                $payload = $response->json();
+                if (! is_array($payload)) {
+                    continue;
+                }
+
+                foreach ($payload as $item) {
+                    $mapped = $this->mapWordPressMediaItem(is_array($item) ? $item : null);
+                    if ($mapped !== null) {
+                        $images[] = $mapped;
+                    }
+                }
+            } catch (Throwable $e) {
+                Log::warning('WordPress restricted media fetch failed', [
+                    'site_id' => $site->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        $images = $this->editedPending->applyPendingEditsToWordPressImages((int) $site->id, $images);
+        $images = $this->filterWordPressImages($images, $filterMonth, $search);
+
+        usort(
+            $images,
+            static fn (array $a, array $b): int => strcmp((string) ($b['date'] ?? ''), (string) ($a['date'] ?? '')),
+        );
+
+        $total = count($images);
+        $totalPages = max(1, (int) ceil($total / $perPage));
+        $page = min($page, $totalPages);
+        $offset = ($page - 1) * $perPage;
+
+        return [
+            'images' => array_values(array_slice($images, $offset, $perPage)),
+            'total' => $total,
+            'total_pages' => $totalPages,
+            'page' => $page,
+            'error' => null,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $images
+     * @return list<array<string, mixed>>
+     */
+    private function filterWordPressImages(array $images, ?string $filterMonth, ?string $search): array
+    {
+        $filterMonth = trim((string) $filterMonth);
+        $monthPrefix = '';
+        if ($filterMonth !== '') {
+            try {
+                $monthPrefix = Carbon::createFromFormat('Y-m', $filterMonth)->format('Y-m');
+            } catch (Throwable) {
+                $monthPrefix = '';
+            }
+        }
+
+        $search = mb_strtolower(trim((string) $search));
+
+        return array_values(array_filter($images, function (array $image) use ($monthPrefix, $search): bool {
+            if ($monthPrefix !== '') {
+                $date = (string) ($image['date'] ?? '');
+                if ($date === '' || ! str_starts_with($date, $monthPrefix)) {
+                    return false;
+                }
+            }
+
+            if ($search === '') {
+                return true;
+            }
+
+            $haystack = mb_strtolower(implode(' ', array_filter([
+                (string) ($image['slug'] ?? ''),
+                (string) ($image['title'] ?? ''),
+                (string) ($image['alt'] ?? ''),
+            ])));
+
+            return str_contains($haystack, $search);
+        }));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $item
+     * @return array<string, mixed>|null
+     */
+    private function mapWordPressMediaItem(?array $item): ?array
+    {
+        if ($item === null) {
+            return null;
+        }
+
+        $id = (int) ($item['id'] ?? 0);
+        $url = trim((string) ($item['source_url'] ?? ''));
+        $thumbUrl = $this->resolveWordPressThumbnailUrl($item, $url);
+        if ($id <= 0 || $url === '') {
+            return null;
+        }
+
+        $title = $item['title'] ?? '';
+        if (is_array($title)) {
+            $title = (string) ($title['rendered'] ?? '');
+        }
+
+        $alt = (string) ($item['alt_text'] ?? '');
+        if ($alt === '' && is_array($item['meta'] ?? null)) {
+            $alt = (string) ($item['meta']['_wp_attachment_image_alt'] ?? '');
+        }
+
+        return [
+            'kind' => 'wordpress',
+            'id' => $id,
+            'wp_attachment_id' => $id,
+            'seo_media_id' => 0,
+            'url' => $url,
+            'thumb_url' => $thumbUrl,
+            'media_type' => $this->resolveWordPressMediaType($item),
+            'slug' => trim((string) ($item['slug'] ?? '')),
+            'title' => html_entity_decode(strip_tags($title), ENT_QUOTES | ENT_HTML5, 'UTF-8'),
+            'alt' => $alt,
+            'date' => (string) ($item['date'] ?? ''),
         ];
     }
 

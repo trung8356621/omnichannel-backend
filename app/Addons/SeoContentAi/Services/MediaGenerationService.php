@@ -6,8 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
-use App\Addons\SeoContentAi\Support\AiModelCategory;
-use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\ImageModelInputLengthPolicy;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
@@ -19,7 +18,6 @@ final class MediaGenerationService
 {
     public function __construct(
         private readonly GeminiMediaGenerationService $geminiMediaGeneration,
-        private readonly AiModelRouterService $aiModelRouter,
     ) {}
 
     /**
@@ -97,24 +95,25 @@ final class MediaGenerationService
         if ($connection->provider !== 'gemini') {
             throw new PromptRunException(
                 'Công cụ Hình ảnh cần kết nối Gemini (Imagen 4 hoặc Nano Banana). '
-                . 'AiExecutionService (Claude) chỉ dùng cho văn bản.',
+                .'AiExecutionService (Claude) chỉ dùng cho văn bản.',
             );
         }
 
-        $imagePrompt = $this->buildImageGenerationInput($compiled, $variables);
+        $compiledPromptLength = ImageModelInputLengthPolicy::measureCompiledPromptLength($compiled);
+        $imagePrompt = $this->buildImageGenerationInput($compiled, $variables, $compiledPromptLength);
         $excludeImagen = $this->isProductImageContext($variables);
-        $imageModel = $this->resolveImageModelSlug($connection, $routedModel, preferNanoBananaFirst: ! $excludeImagen);
         [$output, $usage] = $this->geminiMediaGeneration->generateImage(
             $connection,
             $imagePrompt,
-            $imageModel,
+            null,
             excludeImagen: $excludeImagen,
+            inputLength: $compiledPromptLength,
         );
 
         $firstLine = trim(explode("\n", trim($output), 2)[0] ?? '');
         if (! str_starts_with($firstLine, '/storage/')) {
             throw new PromptRunException(
-                'Hình ảnh lỗi: model không trả file ảnh hợp lệ (' . ($imageModel ?? 'nano-banana-auto') . ').',
+                'Hình ảnh lỗi: model không trả file ảnh hợp lệ (workflow image priority).',
             );
         }
 
@@ -212,59 +211,35 @@ final class MediaGenerationService
         return $this->executeImage($connection, $prompt, $compiled, $variables, $modelOverride);
     }
 
-    private function resolveImageModelSlug(
-        ApiConnection $connection,
-        ?string $routedModel,
-        bool $preferNanoBananaFirst = false,
-    ): ?string {
-        $routedModel = trim((string) $routedModel);
-
-        if ($preferNanoBananaFirst) {
-            if ($routedModel !== '' && GoogleAiModelRegistry::isGeminiNativeImageModel($routedModel)) {
-                return GoogleAiModelRegistry::normalizeSlug($routedModel);
-            }
-
-            return null;
-        }
-
-        if ($routedModel !== '' && ! GoogleAiModelRegistry::isTextModel($routedModel)) {
-            return GoogleAiModelRegistry::normalizeSlug($routedModel);
-        }
-
-        $active = $this->aiModelRouter->getActiveModel(
-            (int) $connection->id,
-            AiModelCategory::IMAGEN_PRO,
-        );
-
-        if ($active !== null) {
-            return GoogleAiModelRegistry::normalizeSlug((string) $active->raw_model_name);
-        }
-
-        return 'imagen-4.0-fast-generate-001';
-    }
-
     /**
      * @param  array<string, string>  $variables
      */
-    private function buildImageGenerationInput(string $compiled, array $variables): string
+    private function buildImageGenerationInput(string $compiled, array $variables, int $compiledPromptLength): string
     {
+        if (ImageModelInputLengthPolicy::shouldTruncateCompiledPrompt($compiledPromptLength)) {
+            $compiled = mb_substr(trim($compiled), 0, 8000)
+                ."\n\n[Prompt truncated — compiled prompt exceeded "
+                .ImageModelInputLengthPolicy::LONG_INPUT_CHARS
+                .' characters.]';
+        }
+
         $parent = trim((string) ($variables['PARENT_RESULT'] ?? ''));
         if ($parent !== '' && ! str_starts_with($parent, '/storage/')) {
             $parent = Utf8Sanitizer::string(mb_substr($parent, 0, 1800));
 
             return Utf8Sanitizer::string(
                 "Generate exactly ONE image. Do not output markdown or explanation.\n\n"
-                . "Use the following brief from previous step as context:\n"
-                . $parent
-                . "\n\nRender instructions for this step:\n"
-                . $compiled,
+                ."Use the following brief from previous step as context:\n"
+                .$parent
+                ."\n\nRender instructions for this step:\n"
+                .$compiled,
             );
         }
 
         return Utf8Sanitizer::string(
             "Generate exactly ONE image. Do not write instructions, Midjourney prompts, or markdown — output the image.\n\n"
-            . "Visual specification:\n\n"
-            . $compiled,
+            ."Visual specification:\n\n"
+            .$compiled,
         );
     }
 

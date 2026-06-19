@@ -68,16 +68,14 @@
                                 $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
                             @endphp
                             <tr
-                                class="align-top {{ $itemStatus === 'pending' ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
+                                class="align-top {{ in_array($itemStatus, ['pending', 'manual'], true) ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
                                 wire:key="run-row-{{ $taskId > 0 ? $taskId : $index }}"
                                 @if ($taskId > 0) data-run-task-id="{{ $taskId }}" @endif
                                 data-run-item-status="{{ $itemStatus }}"
                             >
                                 <td class="px-3 py-3 text-gray-600 dark:text-gray-300">{{ $index + 1 }}</td>
                                 <td class="px-3 py-3">
-                                    {{ ($item['type'] ?? '') === 'rewrite'
-                                        ? __('seo-content-ai::filament.projects.run_type_rewrite')
-                                        : __('seo-content-ai::filament.projects.run_type_new') }}
+                                    {{ $this->itemTypeLabel($item) }}
                                 </td>
                                 <td class="px-3 py-3">{{ $this->postTypeLabel($item['post_type'] ?? null) }}</td>
                                 <td class="px-3 py-3 font-medium text-gray-950 dark:text-white">
@@ -93,6 +91,13 @@
                                             </a>
                                         @else
                                             {{ $this->itemKeywordLabel($item) }}
+                                        @endif
+
+                                        @if ($rewriteNotes = $this->itemRewriteNotes($item))
+                                            <p class="mt-1 max-w-xl text-xs font-normal leading-5 text-gray-500 dark:text-gray-400">
+                                                {{ __('seo-content-ai::filament.projects.rewrite_notes') }}:
+                                                {{ $rewriteNotes }}
+                                            </p>
                                         @endif
 
                                         @if (filled($item['loai_san_pham'] ?? null))
@@ -117,6 +122,10 @@
                                     @elseif ($itemStatus === 'pending')
                                         <span class="inline-flex rounded-md bg-warning-50 px-2 py-0.5 text-xs font-medium text-warning-700 dark:bg-warning-500/10 dark:text-warning-400">
                                             {{ __('seo-content-ai::filament.projects.run_item_pending') }}
+                                        </span>
+                                    @elseif ($itemStatus === 'manual')
+                                        <span class="inline-flex rounded-md bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700 dark:bg-gray-500/10 dark:text-gray-300">
+                                            {{ __('seo-content-ai::filament.projects.run_item_manual') }}
                                         </span>
                                     @else
                                         <span class="inline-flex rounded-md bg-danger-50 px-2 py-0.5 text-xs font-medium text-danger-700 dark:bg-danger-500/10 dark:text-danger-400">
@@ -151,12 +160,28 @@
                                         <span class="text-warning-700 dark:text-warning-400">
                                             {{ __('seo-content-ai::filament.projects.run_item_pending_hint') }}
                                         </span>
+                                    @elseif ($itemStatus === 'manual')
+                                        {{ $item['message'] ?? __('seo-content-ai::filament.projects.run_item_manual_hint') }}
                                     @else
                                         {{ $item['message'] ?? '' }}
                                     @endif
                                 </td>
                                 <td class="px-3 py-3 seo-run-row-actions" data-run-actions>
-                                    @if ($taskId > 0 && in_array($itemStatus, ['success', 'failed', 'pending'], true))
+                                    @if ($taskId > 0 && $this->itemIsImproveType($item))
+                                        @if ($stepsUrl = $this->itemStepsUrl($item))
+                                            <x-filament::button
+                                                size="xs"
+                                                color="gray"
+                                                tag="a"
+                                                href="{{ $stepsUrl }}"
+                                                target="_blank"
+                                            >
+                                                Xem runs
+                                            </x-filament::button>
+                                        @else
+                                            —
+                                        @endif
+                                    @elseif ($taskId > 0 && in_array($itemStatus, ['success', 'failed', 'pending'], true))
                                         <div class="flex flex-wrap gap-2">
                                             @if ($stepsUrl = $this->itemStepsUrl($item))
                                                 <x-filament::button

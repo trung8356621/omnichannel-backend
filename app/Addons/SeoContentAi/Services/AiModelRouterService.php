@@ -269,12 +269,12 @@ final class AiModelRouterService
         ?int $excludeModelId = null,
     ): array {
         if ($attempt >= self::MAX_FAILOVER_ATTEMPTS) {
-            throw new PromptRunException('Đã thử toàn bộ model dự phòng trong nhóm «' . $category . '» nhưng đều thất bại.');
+            throw new PromptRunException('Đã thử toàn bộ model dự phòng trong nhóm «'.$category.'» nhưng đều thất bại.');
         }
 
         if (! AiModelCategory::matchesProvider($category, (string) $connection->provider)) {
             throw new PromptRunException(
-                'Nhóm model «' . $category . '» không tương thích với kết nối ' . $connection->provider . '.',
+                'Nhóm model «'.$category.'» không tương thích với kết nối '.$connection->provider.'.',
             );
         }
 
@@ -304,7 +304,7 @@ final class AiModelRouterService
         $fallbackRaw = $this->fallbackRawModelName($connection, $category);
         if ($fallbackRaw === '') {
             throw new PromptRunException(
-                'Không có model active trong DB cho nhóm «' . $category . '». Vào Cấu hình AI → Đồng bộ model.',
+                'Không có model active trong DB cho nhóm «'.$category.'». Vào Cấu hình AI → Đồng bộ model.',
             );
         }
 
@@ -524,6 +524,7 @@ final class AiModelRouterService
             ['gemini-3.1-flash-image-preview', 'Nano Banana 2 (Gemini 3.1 Flash Image)', AiModelCategory::IMAGEN_PRO, 210, ['generateContent']],
             ['gemini-3-pro-image-preview', 'Nano Banana Pro (Gemini 3 Pro Image)', AiModelCategory::IMAGEN_PRO, 205, ['generateContent']],
             ['gemini-2.5-flash-image', 'Nano Banana (Gemini 2.5 Flash Image)', AiModelCategory::IMAGEN_PRO, 190, ['generateContent']],
+            ['gemini-2.5-pro-image', 'Nano Banana Pro (Gemini 2.5 Pro Image)', AiModelCategory::IMAGEN_PRO, 188, ['generateContent']],
             ['gemini-3.1-pro-preview', 'Gemini 3.1 Pro', AiModelCategory::GEMINI_PRO, 200, ['generateContent']],
             ['gemini-3-flash-preview', 'Gemini 3 Flash', AiModelCategory::GEMINI_FLASH, 200, ['generateContent']],
             ['gemini-3.5-flash-preview', 'Gemini 3.5 Flash', AiModelCategory::GEMINI_FLASH, 195, ['generateContent']],
@@ -640,7 +641,7 @@ final class AiModelRouterService
         foreach ($connections as $connection) {
             if (blank($connection->api_key)) {
                 $failed++;
-                $messages[] = $connection->name . ': thiếu API Key';
+                $messages[] = $connection->name.': thiếu API Key';
 
                 continue;
             }
@@ -649,7 +650,7 @@ final class AiModelRouterService
                 $ok++;
             } else {
                 $failed++;
-                $messages[] = $connection->name . ': đồng bộ thất bại (kiểm tra log)';
+                $messages[] = $connection->name.': đồng bộ thất bại (kiểm tra log)';
             }
         }
 

@@ -6,43 +6,43 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 
 use App\Addons\SeoContentAi\Exceptions\AiModelsNotReadyException;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
-use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Filament\Pages\MediaImageEditor;
 use App\Addons\SeoContentAi\Filament\Pages\MediaLibrary;
-use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
+use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\PromptTestPublishService;
+use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\WordPressCommentReviewService;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
-use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
+use App\Addons\SeoContentAi\Support\PromptSiteContextVariable;
 use App\Addons\SeoContentAi\Support\PromptTokenUsage;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\Site;
-use Filament\Forms\Get;
-use Illuminate\Support\Collection;
-use Illuminate\Support\HtmlString;
-use Livewire\Attributes\Computed;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
+use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
+use Illuminate\Support\Collection;
+use Illuminate\Support\HtmlString;
+use Livewire\Attributes\Computed;
 
 class TestPrompt extends Page implements HasForms
 {
@@ -140,7 +140,7 @@ class TestPrompt extends Page implements HasForms
             ->getDependentSubTaskParts($this->getPrompt())
             ->map(static fn (SeoPromptPart $part, int $index): array => [
                 'index' => $index,
-                'name' => filled($part->name) ? (string) $part->name : ('Prompt con ' . ($index + 1)),
+                'name' => filled($part->name) ? (string) $part->name : ('Prompt con '.($index + 1)),
             ])
             ->values()
             ->all();
@@ -166,7 +166,7 @@ class TestPrompt extends Page implements HasForms
         $steps = $this->dependentSubTaskSteps;
         $idx = $this->chainSubTasksCompleted;
 
-        return 'Run sub-prompt: ' . ($steps[$idx]['name'] ?? ('Step ' . ($idx + 1)));
+        return 'Run sub-prompt: '.($steps[$idx]['name'] ?? ('Step '.($idx + 1)));
     }
 
     /**
@@ -381,7 +381,7 @@ class TestPrompt extends Page implements HasForms
     {
         $name = (string) ($this->getPrompt()->name ?: $this->getPrompt()->title);
 
-        return 'Test: ' . $name;
+        return 'Test: '.$name;
     }
 
     protected function getHeaderActions(): array
@@ -716,7 +716,7 @@ class TestPrompt extends Page implements HasForms
             $hasMore = $this->hasMoreSubTasksToRun();
 
             Notification::make()
-                ->title('Completed ' . ($this->dependentSubTaskSteps[$subTaskIndex]['name'] ?? 'sub-prompt'))
+                ->title('Completed '.($this->dependentSubTaskSteps[$subTaskIndex]['name'] ?? 'sub-prompt'))
                 ->body($hasMore ? 'Click button below to run next sub-prompt.' : 'Prompt chain completed.')
                 ->success()
                 ->send();
@@ -876,10 +876,10 @@ class TestPrompt extends Page implements HasForms
     {
         $parts = array_values(array_filter([
             $this->tokenUsageLabel,
-            filled($this->lastRawModelUsed) ? 'Model: ' . $this->lastRawModelUsed : null,
+            filled($this->lastRawModelUsed) ? 'Model: '.$this->lastRawModelUsed : null,
         ]));
 
-        return $parts !== [] ? 'AI result (' . implode(' · ', $parts) . ')' : 'AI result';
+        return $parts !== [] ? 'AI result ('.implode(' · ', $parts).')' : 'AI result';
     }
 
     public function shouldShowCompiledPreview(): bool
@@ -1009,7 +1009,7 @@ class TestPrompt extends Page implements HasForms
         return SeoMedia::query()
             ->where('path', $relative)
             ->orWhere('url', $url)
-            ->orWhere('url', 'like', '%' . $relative)
+            ->orWhere('url', 'like', '%'.$relative)
             ->orderByDesc('id')
             ->first();
     }
@@ -1120,7 +1120,7 @@ class TestPrompt extends Page implements HasForms
             return;
         }
 
-        $this->js('window.open(' . json_encode($resolved['editor_url']) . ', "_blank")');
+        $this->js('window.open('.json_encode($resolved['editor_url']).', "_blank")');
     }
 
     public function testResultMediaLibraryUrl(): ?string
@@ -1258,7 +1258,7 @@ class TestPrompt extends Page implements HasForms
         foreach ($variables as $value) {
             if (filled($value)) {
                 return mb_strlen((string) $value) > 48
-                    ? mb_substr((string) $value, 0, 48) . '…'
+                    ? mb_substr((string) $value, 0, 48).'…'
                     : (string) $value;
             }
         }
@@ -1266,10 +1266,10 @@ class TestPrompt extends Page implements HasForms
         if ($result->status === 'completed' && filled($result->output_text)) {
             $text = trim((string) $result->output_text);
 
-            return mb_strlen($text) > 48 ? mb_substr($text, 0, 48) . '…' : $text;
+            return mb_strlen($text) > 48 ? mb_substr($text, 0, 48).'…' : $text;
         }
 
-        return '#' . $result->id;
+        return '#'.$result->id;
     }
 
     protected function syncVariableValueKeys(): void
@@ -1312,7 +1312,7 @@ class TestPrompt extends Page implements HasForms
             $this->variableValues[PromptSiteContextVariable::POST_TYPE_FIELD] = $postType;
         }
 
-        $resolved = PromptSiteContextVariable::resolveForGlobalSite($postType);
+        $resolved = PromptSiteContextVariable::resolveForGlobalSite($postType, $this->variableValues);
 
         foreach (PromptSiteContextVariable::names() as $name) {
             if ($force || ! filled($this->variableValues[$name] ?? null)) {
@@ -1407,7 +1407,7 @@ class TestPrompt extends Page implements HasForms
         $labels = PromptResource::defaultVariableLabels();
         $siteId = SeoAccessControl::globalSiteId();
         $siteLabel = $siteId !== null && $siteId > 0
-            ? (string) (Site::query()->whereKey($siteId)->value('domain') ?? '#' . $siteId)
+            ? (string) (Site::query()->whereKey($siteId)->value('domain') ?? '#'.$siteId)
             : __('seo-content-ai::filament.prompt_test.no_domain_selected');
 
         return Forms\Components\Section::make(__('seo-content-ai::filament.prompt_test.site_context_section'))
@@ -1426,7 +1426,7 @@ class TestPrompt extends Page implements HasForms
                 Forms\Components\Grid::make(2)
                     ->schema(
                         collect(['tone', 'keyword_density', 'article_length', 'site_cta', 'site_short_description', 'site_domain'])
-                            ->map(fn (string $name): Forms\Components\Placeholder => Forms\Components\Placeholder::make('_preview_' . $name)
+                            ->map(fn (string $name): Forms\Components\Placeholder => Forms\Components\Placeholder::make('_preview_'.$name)
                                 ->dehydrated(false)
                                 ->label($labels[$name] ?? $name)
                                 ->content(function () use ($name): HtmlString {
@@ -1436,13 +1436,13 @@ class TestPrompt extends Page implements HasForms
                                     }
 
                                     $preview = mb_strlen($value) > 220
-                                        ? mb_substr($value, 0, 220) . '…'
+                                        ? mb_substr($value, 0, 220).'…'
                                         : $value;
 
                                     return new HtmlString(
                                         '<span class="text-sm font-medium text-gray-950 dark:text-white whitespace-pre-wrap">'
-                                        . e($preview)
-                                        . '</span>',
+                                        .e($preview)
+                                        .'</span>',
                                     );
                                 }),
                             )
@@ -1499,7 +1499,7 @@ class TestPrompt extends Page implements HasForms
 
                         return new HtmlString(
                             $text !== ''
-                                ? '<span class="text-sm font-medium text-gray-950 dark:text-white">' . e($text) . '</span>'
+                                ? '<span class="text-sm font-medium text-gray-950 dark:text-white">'.e($text).'</span>'
                                 : '<span class="text-sm text-gray-500">—</span>',
                         );
                     })

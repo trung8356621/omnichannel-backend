@@ -47,6 +47,11 @@ final class SeoPromptSettingsService
 
     public const KEY_KEYWORD_DENSITY_DEFAULT = 'keyword_density_default';
 
+    /** Ngôn ngữ mặc định cho prompt khi site không dùng Polylang (slug, vd. vi). */
+    public const KEY_DEFAULT_PROMPT_LANGUAGE = 'default_prompt_language';
+
+    private const DEFAULT_PROMPT_LANGUAGE = 'vi';
+
     private const DEFAULT_TONE_TEXT = 'Viết bằng giọng văn chuyên nghiệp, rõ ràng, phù hợp đối tượng đọc tại Việt Nam.';
 
     private const DEFAULT_ARTICLE_LENGTH_PRODUCT = '1000';
@@ -84,7 +89,7 @@ final class SeoPromptSettingsService
      */
     public static function withDefaults(): self
     {
-        $service = new self();
+        $service = new self;
         $service->inMemorySettings = $service->defaultSettings();
 
         return $service;
@@ -142,7 +147,16 @@ final class SeoPromptSettingsService
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull(
                 $data[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
             ),
+            self::KEY_DEFAULT_PROMPT_LANGUAGE => $this->normalizeLanguageSlug(
+                $data[self::KEY_DEFAULT_PROMPT_LANGUAGE] ?? null,
+                self::DEFAULT_PROMPT_LANGUAGE,
+            ),
         ];
+    }
+
+    public function getDefaultPromptLanguageSlug(): string
+    {
+        return $this->getSettings()[self::KEY_DEFAULT_PROMPT_LANGUAGE];
     }
 
     public function getFeaturedSnippetPromptId(): ?int
@@ -295,7 +309,18 @@ final class SeoPromptSettingsService
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => $this->positiveIntOrNull(
                 $settings[self::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
             ),
+            self::KEY_DEFAULT_PROMPT_LANGUAGE => $this->normalizeLanguageSlug(
+                $settings[self::KEY_DEFAULT_PROMPT_LANGUAGE] ?? null,
+                self::DEFAULT_PROMPT_LANGUAGE,
+            ),
         ], 'no');
+    }
+
+    private function normalizeLanguageSlug(mixed $value, string $default): string
+    {
+        $slug = strtolower(trim((string) ($value ?? '')));
+
+        return $slug !== '' ? mb_substr($slug, 0, 16) : $default;
     }
 
     /**
@@ -322,6 +347,7 @@ final class SeoPromptSettingsService
             self::KEY_FEATURED_SNIPPET_MIN_COLUMNS => 2,
             self::KEY_FEATURED_SNIPPET_MAX_COLUMNS => 5,
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => null,
+            self::KEY_DEFAULT_PROMPT_LANGUAGE => self::DEFAULT_PROMPT_LANGUAGE,
         ];
     }
 

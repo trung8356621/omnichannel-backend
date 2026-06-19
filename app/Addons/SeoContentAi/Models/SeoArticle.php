@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\MorphToMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
@@ -71,41 +70,6 @@ class SeoArticle extends Model
     public function site(): BelongsTo
     {
         return $this->belongsToOnDefaultConnection(Site::class, 'site_id');
-    }
-
-    /**
-     * Tất cả kết quả prompt gắn với bài viết (phân loại bằng pivot `type`).
-     */
-    public function promptResults(): MorphToMany
-    {
-        return $this->morphToMany(
-            SeoPromptResult::class,
-            'prompt_resultable',
-            'seo_prompt_resultables',
-            'prompt_resultable_id',
-            'prompt_result_id',
-        )
-            ->withPivot('type')
-            ->withTimestamps();
-    }
-
-    public function getPromptResultByType(string $type): ?SeoPromptResult
-    {
-        $result = $this->promptResults()
-            ->wherePivot('type', $type)
-            ->latest('seo_prompt_resultables.id')
-            ->first();
-
-        return $result instanceof SeoPromptResult ? $result : null;
-    }
-
-    public function attachPromptResult(int $promptResultId, string $type): void
-    {
-        $this->promptResults()
-            ->wherePivot('type', $type)
-            ->detach();
-
-        $this->promptResults()->attach($promptResultId, ['type' => $type]);
     }
 
     public function keywords(): BelongsToMany

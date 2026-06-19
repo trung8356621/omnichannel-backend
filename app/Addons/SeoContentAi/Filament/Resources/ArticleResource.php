@@ -12,12 +12,16 @@ use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
+use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
+use App\Models\User;
 use Carbon\Carbon;
 use Filament\Forms;
 use Filament\Forms\Components\Actions\Action as FormAction;
@@ -489,24 +493,17 @@ class ArticleResource extends SeoPanelResource
                             $siteId = static::resolveBulkArticlesSiteId($records);
 
                             if (static::resolveDirectAssignContentProjectId($siteId) !== null) {
-                                return [];
+                                return static::assignArticleTaskFormFields();
                             }
 
-                            return [
-                                static::assignContentProjectSelectField(
-                                    fn (): ?int => $siteId,
-                                    fn (): ?string => $siteId === null
-                                        ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
-                                        : null,
-                                ),
-                            ];
+                            return static::assignContentProjectFormFields(
+                                fn (): ?int => $siteId,
+                                fn (): ?string => $siteId === null
+                                    ? __('seo-content-ai::filament.article_list.assign_projects_mixed_domains')
+                                    : null,
+                            );
                         })
-                        ->requiresConfirmation(fn (Collection $records): bool => static::resolveDirectAssignContentProjectId(
-                            static::resolveBulkArticlesSiteId($records),
-                        ) === null)
-                        ->modalHidden(fn (Collection $records): bool => static::resolveDirectAssignContentProjectId(
-                            static::resolveBulkArticlesSiteId($records),
-                        ) !== null)
+                        ->requiresConfirmation(false)
                         ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
                         ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
@@ -514,7 +511,7 @@ class ArticleResource extends SeoPanelResource
                             $siteId = static::resolveBulkArticlesSiteId($records);
                             $projectId = static::resolveDirectAssignContentProjectId($siteId)
                                 ?? (int) ($data['project_id'] ?? 0);
-                            $summary = static::assignArticlesToContentProject($records, $projectId);
+                            $summary = static::assignArticlesFromFormData($records, $projectId, $data);
 
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.article_list.assign_completed'))
@@ -745,36 +742,38 @@ class ArticleResource extends SeoPanelResource
                 ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
                 ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
                     ? __('seo-content-ai::filament.article_list.already_reviewed')
-                    : (SeoAccessControl::isContentManager() ? 'Đánh dấu project đã duyệt' : __('seo-content-ai::filament.article_list.mark_reviewed')))
-                ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canAccessPlannerFeatures()
-                    || (SeoAccessControl::isContentManager()
-                        && ! (bool) $record->is_reviewed
-                        && static::articleIsInContentProject($record)))
+                    : (SeoAccessControl::isContentManager()
+                        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
+                        : __('seo-content-ai::filament.article_list.mark_reviewed')))
+                ->visible(function (SeoArticle $record): bool {
+                    if (SeoAccessControl::canAccessPlannerFeatures()) {
+                        return true;
+                    }
+
+                    if (! SeoAccessControl::isContentManager() || ! static::articleIsInContentProject($record)) {
+                        return false;
+                    }
+
+                    $user = auth()->user();
+
+                    return $user instanceof User
+                        && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($record, $user);
+                })
                 ->requiresConfirmation()
+                ->modalDescription(fn (SeoArticle $record): string => SeoAccessControl::isContentManager()
+                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
+                    : __('seo-content-ai::filament.article_list.review_article_description'))
                 ->action(function (SeoArticle $record): void {
                     if (SeoAccessControl::isContentManager()) {
-                        try {
-                            app(SeoProjectApprovalService::class)->approveLinkedProject(
-                                $record,
-                                auth()->user(),
-                            );
-                        } catch (\Illuminate\Validation\ValidationException $exception) {
-                            Notification::make()
-                                ->title('Không thể duyệt project')
-                                ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
-                                ->danger()
-                                ->send();
+                        static::submitStaffEditingComplete($record);
 
-                            return;
-                        }
+                        return;
                     }
 
                     $deletedCount = static::markArticleReviewed($record);
 
                     Notification::make()
-                        ->title(SeoAccessControl::isContentManager()
-                            ? 'Project đã được đánh dấu Đã duyệt'
-                            : __('seo-content-ai::filament.article_list.article_reviewed'))
+                        ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
                         ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
                         ->success()
                         ->send();
@@ -809,7 +808,7 @@ class ArticleResource extends SeoPanelResource
                     $siteId = static::resolveArticleSiteId($record);
 
                     if (static::resolveDirectAssignContentProjectId($siteId) !== null) {
-                        return static::assignRewriteModeFormFields();
+                        return static::assignArticleTaskFormFields();
                     }
 
                     return static::assignContentProjectFormFields(
@@ -824,11 +823,10 @@ class ArticleResource extends SeoPanelResource
                     $siteId = static::resolveArticleSiteId($record);
                     $projectId = static::resolveDirectAssignContentProjectId($siteId)
                         ?? (int) ($data['project_id'] ?? 0);
-                    $summary = static::assignArticlesToContentProject(
+                    $summary = static::assignArticlesFromFormData(
                         Collection::make([$record]),
                         $projectId,
-                        is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
-                        is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
+                        $data,
                     );
 
                     Notification::make()
@@ -854,6 +852,47 @@ class ArticleResource extends SeoPanelResource
         ])->save();
 
         return $deletedCount;
+    }
+
+    public static function submitStaffEditingComplete(SeoArticle $article, ?User $user = null): void
+    {
+        $user ??= auth()->user();
+        if (! $user instanceof User) {
+            return;
+        }
+
+        $service = app(SeoProjectApprovalService::class);
+        $alreadySubmitted = $service->contentManagerHasSubmitted($article, $user);
+
+        try {
+            $project = $service->approveLinkedProject($article, $user);
+        } catch (\Illuminate\Validation\ValidationException $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.staff_submit_failed'))
+                ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($alreadySubmitted) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.staff_mark_editing_done_already'))
+                ->info()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.staff_mark_editing_done_success'))
+            ->body(__('seo-content-ai::filament.article_list.staff_mark_editing_done_success_body', [
+                'title' => (string) $article->title,
+                'project' => (string) $project->name,
+            ]))
+            ->success()
+            ->send();
     }
 
     public static function markArticleUnreviewed(SeoArticle $article): void
@@ -1018,6 +1057,20 @@ class ArticleResource extends SeoPanelResource
     /**
      * @return list<Forms\Components\Component>
      */
+    public static function assignTaskTypeSelectField(): Forms\Components\Select
+    {
+        return Forms\Components\Select::make('type')
+            ->label(__('seo-content-ai::filament.projects.article_type'))
+            ->options(SeoProjectTask::typeOptions())
+            ->default(SeoProjectTask::TYPE_REWRITE)
+            ->required()
+            ->native(false)
+            ->live();
+    }
+
+    /**
+     * @return list<Forms\Components\Component>
+     */
     public static function assignRewriteModeFormFields(): array
     {
         return [
@@ -1027,14 +1080,27 @@ class ArticleResource extends SeoPanelResource
                 ->default(SeoProjectTask::REWRITE_MODE_KEYWORD)
                 ->required()
                 ->native(false)
-                ->live(),
+                ->live()
+                ->visible(fn (Get $get): bool => static::normalizeAssignTaskType($get('type')) === SeoProjectTask::TYPE_REWRITE),
             Forms\Components\Textarea::make('rewrite_notes')
                 ->label(__('seo-content-ai::filament.projects.rewrite_notes'))
                 ->placeholder(__('seo-content-ai::filament.projects.rewrite_notes_placeholder'))
                 ->rows(3)
-                ->visible(fn (Get $get): bool => SeoProjectTask::normalizeRewriteMode($get('rewrite_mode')) === SeoProjectTask::REWRITE_MODE_CONTENT)
+                ->visible(fn (Get $get): bool => static::normalizeAssignTaskType($get('type')) === SeoProjectTask::TYPE_REWRITE
+                    && SeoProjectTask::normalizeRewriteMode($get('rewrite_mode')) === SeoProjectTask::REWRITE_MODE_CONTENT)
                 ->columnSpanFull(),
         ];
+    }
+
+    /**
+     * @return list<Forms\Components\Component>
+     */
+    public static function assignArticleTaskFormFields(): array
+    {
+        return array_merge(
+            [static::assignTaskTypeSelectField()],
+            static::assignRewriteModeFormFields(),
+        );
     }
 
     /**
@@ -1048,7 +1114,39 @@ class ArticleResource extends SeoPanelResource
     ): array {
         return array_merge(
             [static::assignContentProjectSelectField($resolveSiteId, $resolveHelperText)],
-            static::assignRewriteModeFormFields(),
+            static::assignArticleTaskFormFields(),
+        );
+    }
+
+    public static function normalizeAssignTaskType(mixed $value): string
+    {
+        $type = trim((string) $value);
+
+        return in_array($type, [
+            SeoProjectTask::TYPE_REWRITE,
+            SeoProjectTask::TYPE_NEW_KEYWORD,
+            SeoProjectTask::TYPE_IMPROVE,
+        ], true)
+            ? $type
+            : SeoProjectTask::TYPE_REWRITE;
+    }
+
+    /**
+     * @param  SupportCollection<int, SeoArticle>|Collection<int, SeoArticle>  $records
+     * @param  array<string, mixed>  $data
+     * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}
+     */
+    public static function assignArticlesFromFormData(
+        SupportCollection $records,
+        int $projectId,
+        array $data,
+    ): array {
+        return static::assignArticlesToContentProject(
+            $records,
+            $projectId,
+            static::normalizeAssignTaskType($data['type'] ?? null),
+            is_string($data['rewrite_mode'] ?? null) ? $data['rewrite_mode'] : null,
+            is_string($data['rewrite_notes'] ?? null) ? $data['rewrite_notes'] : null,
         );
     }
 
@@ -1129,15 +1227,9 @@ class ArticleResource extends SeoPanelResource
 
         return $query
             ->get()
-            ->filter(function (SeoProject $project): bool {
-                return in_array((string) $project->status, [
-                    SeoProject::STATUS_PENDING,
-                    SeoProject::STATUS_MANUAL,
-                    SeoProject::STATUS_RUNNING,
-                ], true) && $project->maxTasksAllowed() > (int) ($project->total_tasks ?? 0);
-            })
+            ->filter(fn (SeoProject $project): bool => $project->canRegisterMoreTasks())
             ->mapWithKeys(function (SeoProject $project): array {
-                $remaining = max(0, $project->maxTasksAllowed() - (int) ($project->total_tasks ?? 0));
+                $remaining = $project->remainingTaskCapacity();
                 $domain = trim((string) ($project->site?->domain ?? ''));
 
                 return [
@@ -1163,6 +1255,18 @@ class ArticleResource extends SeoPanelResource
         return $sourceContent;
     }
 
+    public static function resolveAssignSourceContent(SeoArticle $article, string $taskType): string
+    {
+        if (static::normalizeAssignTaskType($taskType) === SeoProjectTask::TYPE_NEW_KEYWORD) {
+            $keyword = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
+            if ($keyword !== '') {
+                return $keyword;
+            }
+        }
+
+        return static::resolveArticleProjectSourceContent($article);
+    }
+
     public static function articleAssignedContentProjectId(SeoArticle $article): ?int
     {
         $directProjectId = SeoProjectTask::query()
@@ -1176,7 +1280,7 @@ class ArticleResource extends SeoPanelResource
         $articleSiteId = static::resolveArticleSiteId($article) ?? 0;
 
         $query = SeoProjectTask::query()
-            ->where('type', SeoProjectTask::TYPE_REWRITE)
+            ->whereIn('type', [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_IMPROVE])
             ->whereRaw('LOWER(TRIM(source_content)) = ?', [$needle]);
 
         if ($articleSiteId > 0) {
@@ -1204,6 +1308,7 @@ class ArticleResource extends SeoPanelResource
     public static function assignArticlesToContentProject(
         SupportCollection $records,
         int $projectId,
+        string $taskType = SeoProjectTask::TYPE_REWRITE,
         ?string $rewriteMode = null,
         ?string $rewriteNotes = null,
     ): array {
@@ -1218,11 +1323,7 @@ class ArticleResource extends SeoPanelResource
             ];
         }
 
-        if (! in_array((string) $project->status, [
-            SeoProject::STATUS_PENDING,
-            SeoProject::STATUS_MANUAL,
-            SeoProject::STATUS_RUNNING,
-        ], true)) {
+        if (! $project->isExecutionMonthOpen()) {
             return [
                 'added' => 0,
                 'duplicate' => 0,
@@ -1243,20 +1344,21 @@ class ArticleResource extends SeoPanelResource
         $alreadyInProject = 0;
         $projectSiteId = (int) ($project->site_id ?? 0);
         $targetProjectId = (int) $project->id;
+        $normalizedTaskType = static::normalizeAssignTaskType($taskType);
         $normalizedRewriteMode = SeoProjectTask::normalizeRewriteMode($rewriteMode);
         $normalizedRewriteNotes = $normalizedRewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT
             ? (trim((string) ($rewriteNotes ?? '')) !== '' ? trim((string) $rewriteNotes) : null)
             : null;
 
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, $normalizedRewriteMode, $normalizedRewriteNotes, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, $normalizedTaskType, $normalizedRewriteMode, $normalizedRewriteNotes, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
             $project->refresh();
             $max = $project->maxTasksAllowed();
-            $currentTotal = (int) ($project->total_tasks ?? 0);
+            $currentTotal = $project->registeredTaskCount();
 
             $existingKeys = SeoProjectTask::query()
                 ->where('project_id', (int) $project->id)
                 ->get(['site_id', 'type', 'source_content'])
-                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id.'|'.SeoProjectTask::TYPE_REWRITE.'|'.mb_strtolower(trim((string) $task->source_content)))
+                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id.'|'.(string) $task->type.'|'.mb_strtolower(trim((string) $task->source_content)))
                 ->all();
             $existingMap = array_fill_keys($existingKeys, true);
 
@@ -1285,36 +1387,53 @@ class ArticleResource extends SeoPanelResource
                     continue;
                 }
 
-                $sourceContent = static::resolveArticleProjectSourceContent($record);
+                $sourceContent = static::resolveAssignSourceContent($record, $normalizedTaskType);
 
                 $siteId = $projectSiteId > 0 ? $projectSiteId : $articleSiteId;
-                $key = $siteId.'|'.SeoProjectTask::TYPE_REWRITE.'|'.mb_strtolower($sourceContent);
+                $key = $siteId.'|'.$normalizedTaskType.'|'.mb_strtolower($sourceContent);
                 if (isset($existingMap[$key])) {
                     $duplicate++;
 
                     continue;
                 }
 
-                SeoProjectTask::query()->create([
+                $payload = [
                     'project_id' => (int) $project->id,
                     'site_id' => $siteId > 0 ? $siteId : null,
-                    'article_id' => (int) $record->id,
-                    'type' => SeoProjectTask::TYPE_REWRITE,
+                    'type' => $normalizedTaskType,
                     'source_content' => $sourceContent,
                     'description' => null,
-                    'rewrite_mode' => $normalizedRewriteMode,
-                    'rewrite_notes' => $normalizedRewriteNotes,
                     'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
                     'status' => SeoProjectTask::STATUS_PENDING,
-                ]);
+                ];
+
+                if ($normalizedTaskType === SeoProjectTask::TYPE_NEW_KEYWORD) {
+                    $payload['post_type'] = SeoProjectTask::POST_TYPE_ARTICLE;
+                    $payload['article_id'] = null;
+                } else {
+                    $payload['article_id'] = (int) $record->id;
+                }
+
+                if ($normalizedTaskType === SeoProjectTask::TYPE_REWRITE) {
+                    $payload['rewrite_mode'] = $normalizedRewriteMode;
+                    $payload['rewrite_notes'] = $normalizedRewriteNotes;
+                }
+
+                SeoProjectTask::query()->create($payload);
 
                 $existingMap[$key] = true;
                 $currentTotal++;
                 $added++;
             }
 
-            $project->update(['total_tasks' => $currentTotal]);
+            $project->syncTotalTasksCounter();
         });
+
+        if ($added > 0) {
+            $project = $project->fresh();
+            app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($project);
+            app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($project, $added);
+        }
 
         return [
             'added' => $added,

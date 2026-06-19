@@ -125,6 +125,15 @@ class SeoMediaBuilder extends Builder
         return $this->whereMetaIn($column, Arr::wrap($values), (string) $boolean);
     }
 
+    /**
+     * @param  \Illuminate\Contracts\Database\Query\Expression|model-property<TModel>|string  $column
+     * @param  mixed  $values
+     */
+    public function orWhereIn($column, $values, $not = false): static
+    {
+        return $this->whereIn($column, $values, 'or', $not);
+    }
+
     public function whereMeta(string $key, mixed $operator, mixed $value = null, string $boolean = 'and'): static
     {
         if (func_num_args() === 2) {

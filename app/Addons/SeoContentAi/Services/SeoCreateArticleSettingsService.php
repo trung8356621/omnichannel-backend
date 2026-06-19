@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
 use App\Models\WpOption;
 
 final class SeoCreateArticleSettingsService
@@ -34,6 +35,9 @@ final class SeoCreateArticleSettingsService
 
     /** Prompt dịch bài viết (nút Dịch nhanh trên bản dịch liên kết). */
     public const KEY_TRANSLATE_ARTICLE_PROMPT_ID = 'translate_article_prompt_id';
+
+    /** Thứ tự ưu tiên model sinh ảnh (slug API, vd. gemini-2.5-flash-image). */
+    public const KEY_IMAGE_MODEL_PRIORITY = 'image_model_priority';
 
     /** @deprecated Dùng publish_article_task_id; vẫn đọc/ghi để tương thích wp_options cũ */
     public const KEY_LEGACY_TASK_ID = 'task_id';
@@ -75,7 +79,78 @@ final class SeoCreateArticleSettingsService
             self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $this->positiveIntOrNull(
                 $data[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
             ),
+            self::KEY_IMAGE_MODEL_PRIORITY => $this->normalizeImageModelPriorityForForm(
+                $data[self::KEY_IMAGE_MODEL_PRIORITY] ?? null,
+            ),
         ];
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getImageModelPriority(): array
+    {
+        $raw = WpOption::get(self::OPTION_KEY, []);
+        if (! is_array($raw)) {
+            return self::defaultImageModelPriority();
+        }
+
+        return $this->normalizeImageModelPriorityList($raw[self::KEY_IMAGE_MODEL_PRIORITY] ?? null);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function defaultImageModelPriority(): array
+    {
+        return [
+            'gemini-2.5-flash-image',
+            'gemini-2.5-pro-image',
+            'imagen-4.0-generate-001',
+        ];
+    }
+
+    /**
+     * @return list<array{slug: string}>
+     */
+    public function normalizeImageModelPriorityForForm(mixed $stored): array
+    {
+        $slugs = is_array($stored)
+            ? $this->normalizeImageModelPriorityList($stored)
+            : self::defaultImageModelPriority();
+
+        return array_map(
+            static fn (string $slug): array => ['slug' => $slug],
+            $slugs,
+        );
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function normalizeImageModelPriorityList(mixed $list): array
+    {
+        if (! is_array($list) || $list === []) {
+            return self::defaultImageModelPriority();
+        }
+
+        $normalized = [];
+
+        foreach ($list as $item) {
+            $slug = is_string($item)
+                ? trim($item)
+                : trim((string) (is_array($item) ? ($item['slug'] ?? '') : ''));
+
+            if ($slug === '') {
+                continue;
+            }
+
+            $normalized[] = GoogleAiModelRegistry::normalizeSlug($slug);
+        }
+
+        $normalized = array_values(array_unique(array_filter($normalized)));
+
+        return $normalized !== [] ? $normalized : self::defaultImageModelPriority();
     }
 
     public function getFeaturedSnippetPromptId(): ?int
@@ -191,6 +266,9 @@ final class SeoCreateArticleSettingsService
             self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $this->positiveIntOrNull(
                 $settings[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
             ),
+            self::KEY_IMAGE_MODEL_PRIORITY => $this->normalizeImageModelPriorityList(
+                $settings[self::KEY_IMAGE_MODEL_PRIORITY] ?? null,
+            ),
             self::KEY_LEGACY_TASK_ID => $publish,
         ], 'no');
     }
@@ -217,6 +295,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_FEATURED_SNIPPET_PROMPT_ID => null,
             self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => null,
             self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => null,
+            self::KEY_IMAGE_MODEL_PRIORITY => self::defaultImageModelPriority(),
         ];
     }
 

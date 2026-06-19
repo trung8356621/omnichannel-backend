@@ -56,16 +56,75 @@ final class SeoProjectWorkflowRunService
             ? min($pendingCount, $limit)
             : $pendingCount;
 
+        $project->loadMissing('site');
+        $projectSiteId = (int) ($project->site_id ?? 0);
+        $improveItems = $this->seedImproveManualItems($project, $projectSiteId, $limit);
+
         $run->update([
             'status' => SeoProjectRun::STATUS_RUNNING,
             'total' => $plannedTotal,
             'succeeded' => 0,
             'failed' => 0,
-            'items' => [],
+            'items' => $improveItems,
             'finished_at' => null,
         ]);
 
-        return $run->fresh(['project']);
+        $run = $run->fresh(['project']);
+
+        if ($this->pendingAiTasksInBatch($project, $limit) === 0) {
+            return $this->completeRunQueue($run);
+        }
+
+        return $run;
+    }
+
+    private function pendingAiTasksInBatch(SeoProject $project, ?int $limit): int
+    {
+        $query = $project->tasks()
+            ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->where('type', '!=', SeoProjectTask::TYPE_IMPROVE)
+            ->orderBy('target_date')
+            ->orderBy('id');
+
+        if ($limit !== null && $limit > 0) {
+            $query->limit($limit);
+        }
+
+        return (int) $query->count();
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function seedImproveManualItems(SeoProject $project, int $projectSiteId, ?int $limit = null): array
+    {
+        $query = $project->tasks()
+            ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->where('type', SeoProjectTask::TYPE_IMPROVE)
+            ->orderBy('target_date')
+            ->orderBy('id');
+
+        if ($limit !== null && $limit > 0) {
+            $batchTaskIds = $project->tasks()
+                ->where('status', SeoProjectTask::STATUS_PENDING)
+                ->orderBy('target_date')
+                ->orderBy('id')
+                ->limit($limit)
+                ->pluck('id')
+                ->all();
+
+            if ($batchTaskIds === []) {
+                return [];
+            }
+
+            $query->whereIn('id', $batchTaskIds);
+        }
+
+        return $query
+            ->get()
+            ->map(fn (SeoProjectTask $task): array => $this->buildImproveManualItemRow($task, $projectSiteId))
+            ->values()
+            ->all();
     }
 
     public function completeRunQueue(SeoProjectRun $run): SeoProjectRun
@@ -323,6 +382,10 @@ final class SeoProjectWorkflowRunService
      */
     private function runOneTask(SeoProject $project, SeoProjectRun $run, SeoProjectTask $task, int $projectSiteId): array
     {
+        if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
+            return $this->buildImproveManualItemRow($task, $projectSiteId);
+        }
+
         $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
         if ($taskSiteId <= 0) {
             $this->markTaskFailed($task);
@@ -543,6 +606,61 @@ final class SeoProjectWorkflowRunService
                 $builder->where('site_id', $projectSiteId);
             }
         };
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildImproveManualItemRow(SeoProjectTask $task, int $projectSiteId): array
+    {
+        $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
+        $articleId = $this->resolveArticleIdForTask($task, $taskSiteId > 0 ? $taskSiteId : $projectSiteId);
+        $message = $articleId > 0
+            ? __('seo-content-ai::filament.projects.run_item_manual_hint')
+            : __('seo-content-ai::filament.projects.run_item_manual_no_article');
+
+        return [
+            'task_id' => (int) $task->id,
+            'type' => SeoProjectTask::TYPE_IMPROVE,
+            'source_content' => (string) $task->source_content,
+            'post_type' => null,
+            'loai_san_pham' => null,
+            'gallery_description' => null,
+            'target_date' => $task->target_date?->format('Y-m-d'),
+            'status' => 'manual',
+            'article_id' => $articleId > 0 ? $articleId : null,
+            'article_edit_url' => $articleId > 0
+                ? ArticleResource::panelUrl('edit', ['record' => $articleId])
+                : null,
+            'message' => $message,
+            'steps' => [],
+        ];
+    }
+
+    private function resolveArticleIdForTask(SeoProjectTask $task, int $siteId): int
+    {
+        $articleId = (int) ($task->article_id ?? 0);
+        if ($articleId > 0) {
+            return $articleId;
+        }
+
+        $title = trim((string) $task->source_content);
+        if ($title === '') {
+            return 0;
+        }
+
+        $scope = $this->articleScopeForProject($siteId);
+        $query = SeoArticle::query();
+        if (is_callable($scope)) {
+            $scope($query);
+        }
+
+        $resolved = (int) ($query
+            ->where('title', $title)
+            ->orderByDesc('id')
+            ->value('id') ?? 0);
+
+        return $resolved > 0 ? $resolved : 0;
     }
 
     /**

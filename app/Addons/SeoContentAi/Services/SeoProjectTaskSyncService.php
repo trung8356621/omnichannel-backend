@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -30,8 +31,16 @@ final class SeoProjectTaskSyncService
     public function assertWithinMonthlyLimit(Carbon|string $month, array $tasksData): void
     {
         $carbonMonth = $this->normalizeMonth($month);
-        $count = count(array_filter($tasksData, static fn (mixed $row): bool => is_array($row)
-            && trim((string) ($row['source_content'] ?? '')) !== ''));
+
+        if (now()->gt($carbonMonth->copy()->endOfMonth()->endOfDay())) {
+            throw ValidationException::withMessages([
+                'tasks_data' => __('seo-content-ai::filament.projects.execution_month_closed', [
+                    'month' => $carbonMonth->format('m/Y'),
+                ]),
+            ]);
+        }
+
+        $count = $this->countEffectiveTasks($tasksData);
         $max = $carbonMonth->daysInMonth;
 
         if ($count > $max) {
@@ -40,6 +49,15 @@ final class SeoProjectTaskSyncService
                     ."Bạn không thể đăng ký {$count} bài viết/từ khóa.",
             ]);
         }
+    }
+
+    /**
+     * @param  list<mixed>  $tasksData
+     */
+    public function countEffectiveTasks(array $tasksData): int
+    {
+        return count(array_filter($tasksData, static fn (mixed $row): bool => is_array($row)
+            && trim((string) ($row['source_content'] ?? '')) !== ''));
     }
 
     /**
@@ -54,15 +72,27 @@ final class SeoProjectTaskSyncService
 
         $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
 
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $sanitized, $carbonMonth): void {
-            $existing = $project->tasks()
-                ->get()
-                ->keyBy(static fn (SeoProjectTask $task): string => self::taskMatchKey(
-                    (int) $task->site_id,
-                    (string) $task->type,
-                    (string) $task->source_content,
-                ));
+        $existing = $project->tasks()
+            ->get()
+            ->keyBy(static fn (SeoProjectTask $task): string => self::taskMatchKey(
+                (int) $task->site_id,
+                (string) $task->type,
+                (string) $task->source_content,
+            ));
 
+        $newTaskCount = collect($sanitized)
+            ->filter(function (array $task) use ($existing): bool {
+                $key = self::taskMatchKey(
+                    (int) $task['site_id'],
+                    (string) $task['type'],
+                    (string) $task['source_content'],
+                );
+
+                return ! $existing->has($key);
+            })
+            ->count();
+
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $sanitized, $carbonMonth, $existing): void {
             $project->tasks()->delete();
 
             $usedArticleIds = [];
@@ -75,6 +105,14 @@ final class SeoProjectTaskSyncService
                 );
                 $previous = $existing->get($key);
                 $articleId = self::resolveArticleIdForRecreate($previous?->article_id, $usedArticleIds);
+
+                if ($articleId === null && in_array((string) $task['type'], SeoProjectTask::articlePickerTypes(), true)) {
+                    $articleId = self::resolveArticleIdByTitle(
+                        (string) $task['source_content'],
+                        (int) $task['site_id'],
+                        $usedArticleIds,
+                    );
+                }
 
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
@@ -96,7 +134,12 @@ final class SeoProjectTaskSyncService
             ]);
         });
 
-        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($project->fresh());
+        $project = $project->fresh();
+        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($project);
+
+        if ($newTaskCount > 0) {
+            app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($project, $newTaskCount);
+        }
     }
 
     /**
@@ -132,7 +175,7 @@ final class SeoProjectTaskSyncService
             }
 
             $type = (string) ($row['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
-            if (! in_array($type, [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_NEW_KEYWORD], true)) {
+            if (! in_array($type, [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_NEW_KEYWORD, SeoProjectTask::TYPE_IMPROVE], true)) {
                 $type = SeoProjectTask::TYPE_NEW_KEYWORD;
             }
 
@@ -221,6 +264,37 @@ final class SeoProjectTaskSyncService
         $usedArticleIds[$normalized] = true;
 
         return $normalized;
+    }
+
+    /**
+     * @param  array<int, true>  $usedArticleIds
+     */
+    private static function resolveArticleIdByTitle(string $title, int $siteId, array &$usedArticleIds): ?int
+    {
+        $title = trim($title);
+        if ($title === '') {
+            return null;
+        }
+
+        $query = SeoArticle::query()
+            ->where('title', $title);
+
+        if ($siteId > 0) {
+            $query->where('site_id', $siteId);
+        }
+
+        $articleId = (int) ($query->orderByDesc('id')->value('id') ?? 0);
+        if ($articleId <= 0 || isset($usedArticleIds[$articleId])) {
+            return null;
+        }
+
+        SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->update(['article_id' => null]);
+
+        $usedArticleIds[$articleId] = true;
+
+        return $articleId;
     }
 
     /**

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
@@ -29,6 +30,9 @@ class ArticleMediaPickerController extends Controller
         $tab = $request->string('tab')->toString() === 'local' ? 'local' : 'original';
         $page = max(1, $request->integer('page', 1));
         $search = trim($request->string('search')->toString());
+        $accessScope = app(MediaLibraryAccessScope::class);
+        $restrictArticleIds = $accessScope->restrictedArticleIdsForSite((int) $site->id);
+        $restrictWpAttachmentIds = $accessScope->pickerWordPressAttachmentRestrictions((int) $site->id, $search);
 
         if ($tab === 'local') {
             $localLibrary->assignRecentOrphanMediaToArticle($site, (int) $record->id);
@@ -38,7 +42,7 @@ class ArticleMediaPickerController extends Controller
                 $page,
                 $search !== '' ? $search : null,
                 24,
-                (int) $record->id,
+                restrictToArticleIds: $restrictArticleIds,
             );
             $images = $articleResolver->enrichImages(
                 (int) $site->id,
@@ -62,6 +66,7 @@ class ArticleMediaPickerController extends Controller
                 $page,
                 24,
                 $search !== '' ? $search : null,
+                includeAttachmentIds: $restrictWpAttachmentIds,
             );
             $images = is_array($result['images'] ?? null) ? $result['images'] : [];
         }
@@ -89,7 +94,7 @@ class ArticleMediaPickerController extends Controller
             $thumbUrl = trim((string) ($image['thumb_url'] ?? $url));
 
             return [
-                'picker_key' => $tab . '-' . ($seoId > 0 ? 'seo-' . $seoId : 'wp-' . $wpId) . '-' . md5($url),
+                'picker_key' => $tab.'-'.($seoId > 0 ? 'seo-'.$seoId : 'wp-'.$wpId).'-'.md5($url),
                 'id' => (int) ($image['id'] ?? ($wpId > 0 ? $wpId : $seoId)),
                 'wp_attachment_id' => $wpId,
                 'seo_media_id' => $seoId,

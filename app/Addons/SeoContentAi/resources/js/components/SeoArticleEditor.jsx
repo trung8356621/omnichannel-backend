@@ -65,6 +65,7 @@ import { dispatchWordPressAttachmentMetaUpdate } from '../utils/imageAttachmentM
 import {
     AI_PLACEHOLDER_LOADING_URL,
     createClipboardPasteHandler,
+    fetchArticleAiMediaJobs,
     fetchSeoMediaStatus,
     renameSeoMedia,
     renameSeoMediaByUrl,
@@ -2351,6 +2352,7 @@ export default function SeoArticleEditor({
     const globalEditorRef = useRef(null);
     const blockEditorsRef = useRef(new Map());
     const pendingAiMediaRef = useRef(new Map());
+    const resumedArticleAiJobsRef = useRef(null);
     const mediaPollTimersRef = useRef(new Map());
 
     useEffect(() => {
@@ -4587,9 +4589,23 @@ export default function SeoArticleEditor({
 
         pendingAiMediaRef.current.delete(mediaId);
         window.dispatchEvent(new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }));
+        if (mediaType === 'image') {
+            window.dispatchEvent(
+                new CustomEvent('article-ai-image-generated', {
+                    detail: {
+                        status: 'completed',
+                        url: finalUrl,
+                        seoMediaId: mediaId,
+                        mediaType: 'image',
+                        target: 'editor',
+                    },
+                }),
+            );
+        }
         setImagesReloadKey((k) => k + 1);
+        scheduleAutosave();
         return true;
-    }, [patchImageInBlocks, updateBlocksWithoutHistory]);
+    }, [patchImageInBlocks, scheduleAutosave, updateBlocksWithoutHistory]);
 
     const applyCompletedMediaToProductGallery = useCallback((mediaId, finalUrl, galleryItems = null) => {
         if (!articleId) {
@@ -4639,8 +4655,8 @@ export default function SeoArticleEditor({
         mediaPollTimersRef.current.delete(mediaId);
     }, []);
 
-    const AI_JOBS_POLL_MS = 60_000;
-    const AI_JOBS_INITIAL_POLL_MS = 4_000;
+    const AI_JOBS_POLL_MS = 5_000;
+    const AI_JOBS_INITIAL_POLL_MS = 3_000;
 
     const startMediaStatusPolling = useCallback((mediaId, mediaType) => {
         if (!mediaId || mediaPollTimersRef.current.has(mediaId)) {
@@ -4648,7 +4664,7 @@ export default function SeoArticleEditor({
         }
 
         let attempt = 0;
-        const maxAttempts = 12;
+        const maxAttempts = 72;
 
         const poll = async () => {
             attempt += 1;
@@ -4679,6 +4695,15 @@ export default function SeoArticleEditor({
                     pendingAiMediaRef.current.delete(mediaId);
                     window.dispatchEvent(
                         new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
+                    );
+                    window.dispatchEvent(
+                        new CustomEvent('article-ai-media-failed', {
+                            detail: {
+                                type: mediaType,
+                                message: payload?.error_message || t('editor_ai_failed'),
+                                seoMediaId: mediaId,
+                            },
+                        }),
                     );
                     setImagesReloadKey((k) => k + 1);
                     window.dispatchEvent(
@@ -4998,6 +5023,18 @@ export default function SeoArticleEditor({
                     Number.parseInt(String(payload.loaiSanPhamCategoryArticleId ?? 0), 10) || 0,
                     String(payload.loaiSanPhamCustom ?? '').trim(),
                 );
+
+                if (target !== 'product-gallery') {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: t('generate_image'),
+                                body: t('editor_image_queued'),
+                                status: 'success',
+                            },
+                        }),
+                    );
+                }
             } catch (error) {
                 clearAwaitingClientImagePlaceholders();
                 window.dispatchEvent(
@@ -5021,6 +5058,88 @@ export default function SeoArticleEditor({
             resolveAiRefBlockId,
         ],
     );
+
+    useEffect(() => {
+        if (!articleId || resumedArticleAiJobsRef.current === articleId) {
+            return undefined;
+        }
+
+        resumedArticleAiJobsRef.current = articleId;
+        let cancelled = false;
+
+        void (async () => {
+            try {
+                const jobs = await fetchArticleAiMediaJobs(articleId);
+                if (cancelled) {
+                    return;
+                }
+
+                for (const job of jobs) {
+                    const mediaId = Number(job?.id ?? 0);
+                    const status = String(job?.status ?? '').toLowerCase();
+                    const mediaType = String(job?.media_type ?? 'image').toLowerCase();
+
+                    if (mediaId <= 0 || status !== 'processing') {
+                        continue;
+                    }
+
+                    if (pendingAiMediaRef.current.has(mediaId) || mediaPollTimersRef.current.has(mediaId)) {
+                        startMediaStatusPolling(mediaId, mediaType === 'video' ? 'video' : 'image');
+                        continue;
+                    }
+
+                    const existingBlock = findImageBlockByMediaId(mediaId);
+                    if (existingBlock) {
+                        pendingAiMediaRef.current.set(mediaId, {
+                            blockId: existingBlock.id,
+                            mediaType: mediaType === 'video' ? 'video' : 'image',
+                        });
+                        startMediaStatusPolling(mediaId, mediaType === 'video' ? 'video' : 'image');
+                        continue;
+                    }
+
+                    const editorBlockId = String(job?.editor_block_id ?? '').trim();
+                    const refBlockId = resolveAiRefBlockId(editorBlockId);
+                    if (!refBlockId) {
+                        continue;
+                    }
+
+                    const placeholderUrl = String(job?.url ?? '').trim() || AI_PLACEHOLDER_LOADING_URL;
+                    const placeholderId =
+                        mediaType === 'video'
+                            ? insertImageAfterBlock(refBlockId, placeholderUrl, {
+                                  seoMediaId: mediaId,
+                                  isProcessing: true,
+                              })
+                            : placeProcessingImagePlaceholder(refBlockId, placeholderUrl, {
+                                  seoMediaId: mediaId,
+                                  isProcessing: true,
+                              });
+
+                    if (placeholderId) {
+                        pendingAiMediaRef.current.set(mediaId, {
+                            blockId: placeholderId,
+                            mediaType: mediaType === 'video' ? 'video' : 'image',
+                        });
+                        startMediaStatusPolling(mediaId, mediaType === 'video' ? 'video' : 'image');
+                    }
+                }
+            } catch {
+                // Không chặn editor nếu API job tạm lỗi.
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        articleId,
+        findImageBlockByMediaId,
+        insertImageAfterBlock,
+        placeProcessingImagePlaceholder,
+        resolveAiRefBlockId,
+        startMediaStatusPolling,
+    ]);
 
     const insertVideoAfterBlock = useCallback(
         (refBlockId, videoUrl) => {

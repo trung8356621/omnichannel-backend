@@ -432,6 +432,7 @@ class PromptResource extends SeoPanelResource
             'keyword_density' => 'Mật độ từ khóa theo post_type hiện tại',
             'keyword_density_product' => 'Mật độ từ khóa — product',
             'keyword_density_default' => 'Mật độ từ khóa — các loại khác',
+            'language' => 'Ngôn ngữ (Polylang bài viết hoặc mặc định SEO → Tùy chỉnh → Prompt)',
             'loai_san_pham' => 'Product category (product_cat) - default runtime variable from domain -> product_cat',
         ];
     }

@@ -2729,8 +2729,8 @@
 
 .seo-ai-chat-input {
     flex: 1;
-    min-height: 56px;
-    resize: none;
+    min-height: 10rem;
+    resize: vertical;
     padding: 0.5rem;
     font-size: 13px;
     border: 1px solid #c3c4c7;

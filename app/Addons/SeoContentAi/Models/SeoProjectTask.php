@@ -17,6 +17,8 @@ class SeoProjectTask extends Model
 
     public const TYPE_NEW_KEYWORD = 'new_keyword';
 
+    public const TYPE_IMPROVE = 'improve';
+
     public const REWRITE_MODE_KEYWORD = 'keyword';
 
     public const REWRITE_MODE_CONTENT = 'content';
@@ -94,7 +96,21 @@ class SeoProjectTask extends Model
         return [
             self::TYPE_NEW_KEYWORD => 'Viết mới (Từ khóa)',
             self::TYPE_REWRITE => 'Viết lại (Sửa bài lỗi)',
+            self::TYPE_IMPROVE => __('seo-content-ai::filament.projects.type_improve'),
         ];
+    }
+
+    public static function isManualRunType(string $type): bool
+    {
+        return $type === self::TYPE_IMPROVE;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function articlePickerTypes(): array
+    {
+        return [self::TYPE_REWRITE, self::TYPE_IMPROVE];
     }
 
     /**

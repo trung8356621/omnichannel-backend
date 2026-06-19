@@ -381,6 +381,7 @@ class SeoMediaController extends Controller
                 array_values($pieceFiles),
                 $articleId,
                 isset($validated['original_seo_media_id']) ? (int) $validated['original_seo_media_id'] : null,
+                SeoAccessControl::canDeleteSeoMedia(),
             );
         } catch (\InvalidArgumentException $e) {
             return response()->json([
