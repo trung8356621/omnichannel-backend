@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Models\TaskTestResult;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
 use Filament\Actions;
@@ -495,14 +496,7 @@ class TestTask extends Page implements HasForms
 
     private function applyUserScopeToArticles(Builder $query): void
     {
-        if (auth()->user()?->role === 'admin') {
-            return;
-        }
-
-        $query->whereIn(
-            'site_id',
-            Site::query()->where('user_id', auth()->id())->select('id'),
-        );
+        SeoAccessControl::applyAccessibleSiteScope($query);
     }
 
     private function getTask(): SeoTask

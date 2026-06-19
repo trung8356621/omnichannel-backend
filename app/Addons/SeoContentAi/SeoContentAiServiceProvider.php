@@ -11,9 +11,11 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Observers\SeoArticleObserver;
 use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
+use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Routing\Router;
 use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\ServiceProvider;
@@ -57,6 +59,10 @@ class SeoContentAiServiceProvider extends ServiceProvider
         }
 
         $this->app->booted(function (): void {
+            /** @var Router $router */
+            $router = $this->app->make(Router::class);
+            $router->pushMiddlewareToGroup('web', SetDynamicSeoDatabase::class);
+
             $schedule = app(Schedule::class);
             $name = 'seo-content-ai:cleanup-old-notifications';
             $alreadyRegistered = collect($schedule->events())

@@ -594,12 +594,7 @@ final class SeoProjectWorkflowRunService
     {
         return function (Builder $builder) use ($projectSiteId): void {
             if (auth()->user()?->role !== 'admin') {
-                $builder->whereIn(
-                    'site_id',
-                    Site::query()
-                        ->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id())
-                        ->select('id'),
-                );
+                SeoAccessControl::applyAccessibleSiteScope($builder);
             }
 
             if ($projectSiteId > 0) {

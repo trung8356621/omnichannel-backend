@@ -252,6 +252,116 @@ final class PromptRunnerService
     }
 
     /**
+     * Chạy thử với prompt đã ghép/sửa tay (trang test — không compile lại từ biến form).
+     *
+     * @param  array<string, string>  $variables
+     */
+    public function runWithCompiledPrompt(
+        SeoPrompt $prompt,
+        string $compiled,
+        array $variables = [],
+        bool $isTaskMode = true,
+        bool $chainParentStep = false,
+    ): PromptResult {
+        $prompt->loadMissing(['aiConnection']);
+
+        $compiled = Utf8Sanitizer::string(trim($compiled));
+        if ($compiled === '') {
+            throw new PromptRunException('Prompt trống — nhập nội dung trước khi chạy thử.');
+        }
+
+        $variables = Utf8Sanitizer::variablesForAi($variables);
+        $variables = app(PromptLanguageVariableService::class)->mergeInto($variables);
+
+        $connection = $prompt->aiConnection;
+        if ($connection === null) {
+            throw new PromptRunException('Prompt chưa được gắn kết nối AI.');
+        }
+
+        if ($connection->status !== 'active') {
+            throw new PromptRunException('Kết nối AI đang tắt hoặc không khả dụng.');
+        }
+
+        if (blank($connection->api_key)) {
+            throw new PromptRunException('Kết nối AI chưa có API Key.');
+        }
+
+        $this->aiModelsReadiness->assertConnectionReady($connection);
+
+        $toolType = $this->normalizeToolType($prompt);
+
+        if ($toolType === 'image' && $connection->provider !== 'gemini') {
+            throw new PromptRunException(
+                'Prompt công cụ Hình ảnh yêu cầu kết nối Gemini (Imagen / Nano Banana), không dùng Claude.',
+            );
+        }
+
+        $category = $this->aiModelRouter->resolveCategoryForPrompt($prompt, $toolType);
+
+        $snapshot = [
+            'variables' => $variables,
+            'compiled_prompt' => $compiled,
+            'model_category' => $category,
+            'is_task_mode' => $isTaskMode,
+            'tools' => $toolType,
+            'manual_compiled' => true,
+        ];
+
+        if ($chainParentStep && $this->hasDependentSubTasks($prompt)) {
+            $snapshot['chain_mode'] = true;
+            $snapshot['chain_step'] = 'task';
+            $snapshot['chain_step_index'] = 0;
+        }
+
+        $result = PromptResult::query()->create([
+            'prompt_id' => $prompt->id,
+            'entity_id' => null,
+            'user_id' => (int) auth()->id(),
+            'site_id' => 0,
+            'status' => 'running',
+            'input_snapshot' => $this->sanitizeInputSnapshot($snapshot),
+            'started_at' => now(),
+        ]);
+
+        try {
+            [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+                $connection,
+                $prompt,
+                $compiled,
+                $variables,
+                $isTaskMode,
+                $toolType,
+                $category,
+            );
+            $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $toolType, $rawModel);
+            $output = $this->enforceMediaOnlyOutput($output, $toolType);
+
+            $result->update([
+                'status' => 'completed',
+                'output_text' => $output,
+                'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
+                'finished_at' => now(),
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    ['raw_model_used' => $rawModel],
+                )),
+            ]);
+        } catch (\Throwable $exception) {
+            $result->update([
+                'status' => 'failed',
+                'error_message' => $this->sanitizeErrorMessage($exception->getMessage()),
+                'finished_at' => now(),
+            ]);
+
+            throw $exception instanceof PromptRunException
+                ? $exception
+                : new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $result->fresh();
+    }
+
+    /**
      * @param  array<string, string>  $variables
      * @return array{0: string, 1: array<string, mixed>|null, 2: string}
      */
@@ -765,6 +875,23 @@ final class PromptRunnerService
     public function compilePrompt(SeoPrompt $prompt, array $variables): string
     {
         $variables = app(PromptLanguageVariableService::class)->mergeInto($variables);
+
+        return $this->assemblePromptBlocks($prompt, $variables);
+    }
+
+    /**
+     * Ghép các part thành prompt đầy đủ, giữ nguyên placeholder {{biến}}.
+     */
+    public function compileRawPrompt(SeoPrompt $prompt): string
+    {
+        return $this->assemblePromptBlocks($prompt, []);
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function assemblePromptBlocks(SeoPrompt $prompt, array $variables): string
+    {
         $parts = $this->promptParts($prompt);
         $blocks = [];
 

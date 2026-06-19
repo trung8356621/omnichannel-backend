@@ -4113,14 +4113,7 @@ class EditArticle extends SeoEditRecord
 
         $focusKeyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? $currentTitle;
         $scope = function (\Illuminate\Database\Eloquent\Builder $query): void {
-            if (auth()->user()?->role === 'admin') {
-                return;
-            }
-
-            $query->whereIn(
-                'site_id',
-                \App\Models\Site::query()->where('user_id', auth()->id())->select('id'),
-            );
+            SeoAccessControl::applyAccessibleSiteScope($query);
         };
 
         try {

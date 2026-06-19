@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Models\Concerns\UsesCoreDatabaseConnection;
 use Filament\Models\Contracts\FilamentUser;
 use Filament\Panel;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -13,6 +14,7 @@ class User extends Authenticatable implements FilamentUser
 {
     use Notifiable;
     use SoftDeletes;
+    use UsesCoreDatabaseConnection;
 
     const ROLE_ADMIN = 'admin';
 
@@ -33,14 +35,6 @@ class User extends Authenticatable implements FilamentUser
     const STATUS_PENDING = 'pending';
 
     protected $fillable = ['parent_id', 'role', 'seo_role', 'status', 'name', 'email', 'password'];
-
-    /**
-     * Luôn dùng DB chính — tránh bị gán connection addon khi eager-load từ model `omi_seo_ai`.
-     */
-    public function getConnectionName(): ?string
-    {
-        return (string) config('database.default');
-    }
 
     public function isStaff()
     {

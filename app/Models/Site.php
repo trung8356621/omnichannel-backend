@@ -1,24 +1,19 @@
 <?php
+
 namespace App\Models;
 
+use App\Models\Concerns\UsesCoreDatabaseConnection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Site extends Model
 {
     use SoftDeletes;
+    use UsesCoreDatabaseConnection;
 
     protected $fillable = ['user_id', 'subscription_id', 'domain', 'status', 'ssl'];
 
     protected $casts = ['ssl' => 'boolean'];
-
-    /**
-     * Luôn dùng DB chính — tránh bị gán connection addon khi eager-load từ model `omi_seo_ai`.
-     */
-    public function getConnectionName(): ?string
-    {
-        return (string) config('database.default');
-    }
 
     public function siteServices()
     {

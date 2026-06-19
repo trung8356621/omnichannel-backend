@@ -106,6 +106,15 @@ final class SeoAccessControl
             && filled($user->seo_role);
     }
 
+    public static function canManageWordPressPlugin(): bool
+    {
+        /** @var User|null $user */
+        $user = auth()->user();
+
+        return $user instanceof User
+            && in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true);
+    }
+
     public static function isContentManager(): bool
     {
         return self::effectiveRole() === self::ROLE_CONTENT_MANAGER;
@@ -148,6 +157,35 @@ final class SeoAccessControl
     public static function canSyncArticlesToWordPress(): bool
     {
         return ! self::isContentManager();
+    }
+
+    /**
+     * @return list<int>
+     */
+    public static function accessibleSiteIds(): array
+    {
+        return self::accessibleSitesQuery()
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Lọc theo site_id bằng danh sách đã resolve trên DB core — tránh subquery cross-database trên hosting.
+     */
+    public static function applyAccessibleSiteScope(Builder $query, string $column = 'site_id'): Builder
+    {
+        if (auth()->user()?->role === User::ROLE_ADMIN) {
+            return $query;
+        }
+
+        $siteIds = self::accessibleSiteIds();
+        if ($siteIds === []) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        return $query->whereIn($column, $siteIds);
     }
 
     public static function accountSiteOwnerId(): int

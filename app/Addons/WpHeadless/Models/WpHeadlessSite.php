@@ -30,7 +30,7 @@ class WpHeadlessSite extends Model
      */
     public function getMainSite(): ?Site
     {
-        return Site::on(config('database.default'))->find($this->id);
+        return Site::on((string) config('database.core_connection', 'mysql'))->find($this->id);
     }
 
     /**

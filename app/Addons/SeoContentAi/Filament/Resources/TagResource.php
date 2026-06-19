@@ -22,9 +22,13 @@ class TagResource extends SeoPanelResource
 
     protected static ?string $slug = 'tags';
 
+    protected static ?string $navigationLabel = 'Tags';
+
     protected static ?string $navigationIcon = 'heroicon-o-tag';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
+
+    protected static ?string $navigationParentItem = 'Keywords';
 
     protected static ?int $navigationSort = 13;
 

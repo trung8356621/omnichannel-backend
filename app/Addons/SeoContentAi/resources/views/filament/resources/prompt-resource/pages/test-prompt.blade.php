@@ -1,273 +1,75 @@
 <x-filament-panels::page>
     @vite('app/Addons/SeoContentAi/resources/css/media-library.css')
+
     <div class="seo-prompt-test-layout">
-        <div class="seo-prompt-test-main">
-            <x-filament::section heading="Biến đầu vào">
-                <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        {{-- Cột 1: Prompt raw (chưa thay biến) --}}
+        <div class="seo-prompt-test-col seo-prompt-test-col--prompt">
+            <x-filament::section heading="Prompt">
+                <p class="seo-prompt-test-col__hint">
                     @if ($this->usesStepByStepChain())
-                        Prompt có <strong>prompt con</strong>: bấm «Chạy thử» để chạy prompt cha trước, sau đó chạy từng prompt con bằng nút bên dưới kết quả.
-                        Biến <code>@verbatim{{PARENT_RESULT}}@endverbatim</code> được hệ thống tự gán — không cần nhập.
-                    @elseif ($this->promptUsesInput)
-                        Biến <code>@verbatim{{input}}@endverbatim</code> nhận kết quả từ edge nối vào khi chạy quy trình — khi test thủ công, điền vào ô bên dưới.
+                        Mẫu prompt cha từ cấu hình đã lưu — giữ nguyên <code>@verbatim{{biến}}@endverbatim</code>, thay bằng tay trước khi chạy.
+                        <code>@verbatim{{PARENT_RESULT}}@endverbatim</code> do hệ thống gán khi chạy prompt con.
                     @else
-                        Điền các biến <code>@verbatim{{tên}}@endverbatim</code> được prompt sử dụng (nếu có).
+                        Mẫu prompt raw từ cấu hình đã lưu. Thay <code>@verbatim{{biến}}@endverbatim</code> bằng tay rồi bấm «Chạy thử».
                     @endif
                 </p>
 
-                @if ($this->promptUsesInput && blank($variableValues['input'] ?? ''))
-                    <div class="seo-prompt-test-input-alert" role="status">
-                        Prompt cần <strong>@verbatim{{input}}@endverbatim</strong> — nhập nội dung mô phỏng từ bước trước trước khi bấm «Chạy thử».
+                <form wire:submit="runTest" class="seo-prompt-test-col__form">
+                    <textarea
+                        wire:model="editablePrompt"
+                        class="seo-prompt-test-editor"
+                        rows="22"
+                        spellcheck="false"
+                        placeholder="Prompt raw — còn placeholder @verbatim{{biến}}@endverbatim…"
+                    ></textarea>
+
+                    <div class="seo-prompt-test-col__actions">
+                        <x-filament::button
+                            type="submit"
+                            icon="heroicon-o-play"
+                            wire:loading.attr="disabled"
+                            wire:target="runTest"
+                        >
+                            <span wire:loading.remove wire:target="runTest">
+                                {{ $this->usesStepByStepChain() ? 'Chạy prompt cha' : 'Chạy thử' }}
+                            </span>
+                            <span wire:loading wire:target="runTest">Đang gọi AI…</span>
+                        </x-filament::button>
                     </div>
-                @endif
-
-                <form wire:submit="runTest" class="space-y-4">
-                    {{ $this->form }}
-
-                    <x-filament::button
-                        type="submit"
-                        icon="heroicon-o-play"
-                        wire:loading.attr="disabled"
-                        wire:target="runTest"
-                    >
-                        <span wire:loading.remove wire:target="runTest">
-                            {{ $this->usesStepByStepChain() ? 'Chạy prompt cha' : 'Chạy thử' }}
-                        </span>
-                        <span wire:loading wire:target="runTest">Đang gọi AI…</span>
-                    </x-filament::button>
                 </form>
             </x-filament::section>
-
-            @if ($this->shouldShowCompiledPreview())
-                <x-filament::section heading="Prompt đã ghép (xem trước)">
-                    <x-slot name="description">
-                        Ghép từ cấu hình prompt hiện tại trên database (sau khi bạn lưu ở trang Sửa). Kết quả AI bên dưới có thể từ lần chạy cũ trong sidebar.
-                    </x-slot>
-                    @if (filled($compiledPreview))
-                        <x-seo-content-ai::ai-result
-                            label="Prompt đã ghép"
-                        >{{ $compiledPreview }}</x-seo-content-ai::ai-result>
-                    @else
-                        <p class="text-sm text-gray-500 dark:text-gray-400">
-                            Chưa có nội dung xem trước. Nhấn «Làm mới xem trước» hoặc «Chạy thử».
-                        </p>
-                    @endif
-                </x-filament::section>
-            @endif
-
-            @if (filled($errorMessage))
-                <x-filament::section heading="Lỗi">
-                    <p class="text-sm text-danger-600 dark:text-danger-400">{{ $errorMessage }}</p>
-                </x-filament::section>
-            @endif
-
-            @if (filled($outputText))
-                <x-filament::section :heading="$this->aiResultSectionHeading()">
-                    @if ($this->usesStepByStepChain() && $chainParentCompleted)
-                        <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                            @if ($chainSubTasksCompleted === 0)
-                                Kết quả <strong>prompt cha</strong>.
-                            @else
-                                Kết quả <strong>prompt con {{ $chainSubTasksCompleted }}</strong>
-                                @if ($chainSubTasksCompleted < count($this->dependentSubTaskSteps))
-                                    — còn {{ count($this->dependentSubTaskSteps) - $chainSubTasksCompleted }} bước.
-                                @else
-                                    — đã xong chuỗi.
-                                @endif
-                            @endif
-                        </p>
-                    @endif
-                    @if ($this->isImageToolPrompt() && $this->currentMediaOutputUrl())
-                        <div class="seo-prompt-test-media-wrap @if (count($this->testResultMediaUrls()) > 1) is-grid @endif">
-                            @foreach ($this->testResultMediaUrls() as $mediaUrl)
-                                <img src="{{ $mediaUrl }}" alt="AI generated image" class="seo-prompt-test-image" />
-                            @endforeach
-                        </div>
-                        <div class="seo-media-preview-modal__actions seo-prompt-test-media-actions">
-                            @if ($this->testResultCanOpenImageEditor())
-                                <button
-                                    type="button"
-                                    class="seo-media-preview-btn is-edit"
-                                    wire:click="openResultImageEditor"
-                                    wire:loading.attr="disabled"
-                                    wire:target="openResultImageEditor"
-                                >
-                                    <span wire:loading.remove wire:target="openResultImageEditor">Chỉnh sửa hình ảnh</span>
-                                    <span wire:loading wire:target="openResultImageEditor">Đang chuẩn bị…</span>
-                                </button>
-                            @endif
-                            <button
-                                type="button"
-                                class="seo-media-preview-btn is-primary"
-                                wire:click="applyResultWatermark"
-                                wire:loading.attr="disabled"
-                                wire:target="applyResultWatermark"
-                                @if ($this->testResultNeedsSiteForMediaActions() || $this->testResultIsGeneratedMedia()) disabled @endif
-                            >
-                                <span wire:loading.remove wire:target="applyResultWatermark">Áp dụng đóng dấu</span>
-                                <span wire:loading wire:target="applyResultWatermark">Đang xử lý…</span>
-                            </button>
-                            @if ($splitterUrl = $this->testResultImageSplitterUrl())
-                                <a
-                                    href="{{ $splitterUrl }}"
-                                    class="seo-media-preview-btn"
-                                    target="_blank"
-                                    rel="noopener"
-                                >
-                                    Tách theo lưới
-                                </a>
-                            @endif
-                            @if ($this->canReapplyPostProcessing())
-                                <button
-                                    type="button"
-                                    class="seo-media-preview-btn"
-                                    wire:click="reapplyPostProcessing"
-                                    wire:loading.attr="disabled"
-                                    wire:target="reapplyPostProcessing"
-                                >
-                                    <span wire:loading.remove wire:target="reapplyPostProcessing">Chạy lại hậu kỳ</span>
-                                    <span wire:loading wire:target="reapplyPostProcessing">Đang xử lý…</span>
-                                </button>
-                            @endif
-                        </div>
-                        @if ($this->testResultIsGeneratedMedia())
-                            <div class="seo-prompt-test-media-extra">
-                                <button
-                                    type="button"
-                                    class="seo-media-preview-btn"
-                                    wire:click="assignResultToSiteLibrary"
-                                    wire:loading.attr="disabled"
-                                    wire:target="assignResultToSiteLibrary"
-                                    @if ($this->testResultNeedsSiteForMediaActions()) disabled @endif
-                                >
-                                    <span wire:loading.remove wire:target="assignResultToSiteLibrary">Gán vào thư viện</span>
-                                    <span wire:loading wire:target="assignResultToSiteLibrary">Đang gán…</span>
-                                </button>
-                            </div>
-                        @endif
-                        @if ($this->testResultNeedsSiteForMediaActions())
-                            <p class="seo-prompt-test-media-hint">
-                                Chọn <strong>tên miền</strong> (biến loại sản phẩm) hoặc <strong>bài viết đích</strong> bên dưới để chỉnh sửa / đóng dấu. «Tách theo lưới» vẫn dùng được ngay.
-                            </p>
-                        @elseif ($this->testResultIsGeneratedMedia())
-                            <p class="seo-prompt-test-media-hint">
-                                Ảnh Gen AI: bấm <strong>Gán vào thư viện</strong> trước khi đóng dấu hoặc chỉnh sửa (giống thư viện ảnh).
-                            </p>
-                        @endif
-                    @elseif ($this->isVideoToolPrompt() && $this->currentMediaOutputUrl())
-                        <div class="seo-prompt-test-media-wrap">
-                            <video controls preload="metadata" class="seo-prompt-test-video">
-                                <source src="{{ $this->currentMediaOutputUrl() }}">
-                            </video>
-                        </div>
-                    @else
-                        <x-seo-content-ai::ai-result>{{ $outputText }}</x-seo-content-ai::ai-result>
-                    @endif
-
-                    @if ($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun())
-                        <div class="mt-4">
-                            <x-filament::button
-                                type="button"
-                                icon="heroicon-o-forward"
-                                color="primary"
-                                wire:click="runNextSubTask"
-                                wire:loading.attr="disabled"
-                                wire:target="runNextSubTask"
-                            >
-                                <span wire:loading.remove wire:target="runNextSubTask">{{ $this->nextSubTaskButtonLabel() }}</span>
-                                <span wire:loading wire:target="runNextSubTask">Đang gọi AI…</span>
-                            </x-filament::button>
-                        </div>
-                    @endif
-
-                </x-filament::section>
-
-                <x-filament::section heading="Test">
-                    <x-slot name="description">
-                        Áp dụng kết quả AI lên bài đã đồng bộ WordPress. Chọn bài đích rồi chọn loại đăng.
-                    </x-slot>
-
-                    <div class="space-y-4">
-                        <div>
-                                <label class="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">Bài viết / sản phẩm đích</label>
-                                <select
-                                    wire:model="publishArticleId"
-                                    class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 px-3 py-2"
-                                >
-                                    <option value="">— Chọn bài đã đồng bộ WP —</option>
-                                    @foreach ($this->articlesForCommentPublish as $article)
-                                        <option value="{{ $article->id }}">
-                                            [WP #{{ $article->wp_post_id }}] {{ $article->title }}
-                                            ({{ $article->type === 'product' ? 'product' : 'post' }})
-                                        </option>
-                                    @endforeach
-                                </select>
-                            </div>
-                        <div
-                            class="seo-prompt-test-publish"
-                            x-data="{ open: false }"
-                            @keydown.escape.window="open = false"
-                        >
-                            <div class="flex flex-wrap items-center gap-2">
-                                <x-filament::button
-                                    type="button"
-                                    icon="heroicon-o-arrow-up-tray"
-                                    color="success"
-                                    wire:loading.attr="disabled"
-                                    wire:target="publishTest"
-                                    @click="open = !open"
-                                >
-                                    <span wire:loading.remove wire:target="publishTest">Đăng…</span>
-                                    <span wire:loading wire:target="publishTest">Đang xử lý…</span>
-                                </x-filament::button>
-                                <span class="text-xs text-gray-500 dark:text-gray-400">Chọn một trong ba tùy chọn</span>
-                            </div>
-
-                            <div
-                                x-show="open"
-                                x-cloak
-                                @click.outside="open = false"
-                                class="seo-prompt-test-publish-menu"
-                            >
-                                <button
-                                    type="button"
-                                    class="seo-prompt-test-publish-menu__item"
-                                    wire:click="publishTest('skeleton')"
-                                    wire:loading.attr="disabled"
-                                    wire:target="publishTest"
-                                    @click="open = false"
-                                >
-                                    <span class="seo-prompt-test-publish-menu__title">1. Đăng sườn bài viết</span>
-                                    <span class="seo-prompt-test-publish-menu__desc">Dàn ý Markdown + từ khóa ngữ nghĩa → meta (outline, keywords).</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    class="seo-prompt-test-publish-menu__item"
-                                    wire:click="publishTest('article')"
-                                    wire:loading.attr="disabled"
-                                    wire:target="publishTest"
-                                    @click="open = false"
-                                >
-                                    <span class="seo-prompt-test-publish-menu__title">2. Đăng bài viết</span>
-                                    <span class="seo-prompt-test-publish-menu__desc">Từ dàn ý tạo HTML + tiêu đề (biến hoặc H1/H2 đầu).</span>
-                                </button>
-                                <button
-                                    type="button"
-                                    class="seo-prompt-test-publish-menu__item"
-                                    wire:click="publishTest('reviews')"
-                                    wire:loading.attr="disabled"
-                                    wire:target="publishTest"
-                                    @click="open = false"
-                                >
-                                    <span class="seo-prompt-test-publish-menu__title">3. Đăng review / bình luận</span>
-                                    <span class="seo-prompt-test-publish-menu__desc">JSON kết quả AI → comment/review trên WordPress (sao WC nếu thiếu <code>star_ranking</code>).</span>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </x-filament::section>
-            @endif
         </div>
 
+        {{-- Cột 2: Prompt đã ghép (biến đã thay) --}}
+        <div class="seo-prompt-test-col seo-prompt-test-col--merged">
+            <x-filament::section heading="Prompt đã ghép">
+                <x-slot name="description">
+                    Tự động ghép biến site mặc định. Chọn lịch sử sẽ hiển thị prompt đã gửi AI ở đây — cột Prompt raw không đổi.
+                </x-slot>
+
+                <div class="seo-prompt-test-col__actions seo-prompt-test-col__actions--top">
+                    <x-filament::button
+                        type="button"
+                        size="sm"
+                        color="gray"
+                        icon="heroicon-o-arrow-left"
+                        wire:click="copyMergedPreviewToEditable"
+                    >
+                        Dùng bản ghép để chạy
+                    </x-filament::button>
+                </div>
+
+                @if (filled($compiledPreview))
+                    <div class="seo-prompt-test-readonly">{{ $compiledPreview }}</div>
+                @else
+                    <p class="seo-prompt-test-col__empty">
+                        Chưa có nội dung. Bấm «Làm mới xem trước» trên header hoặc «Chạy thử».
+                    </p>
+                @endif
+            </x-filament::section>
+        </div>
+
+        {{-- Cột 3: Lịch sử (giữ width cũ) --}}
         <aside class="seo-prompt-test-sidebar">
             <div class="seo-prompt-test-sidebar__head">
                 <h2 class="seo-prompt-test-sidebar__title">Lịch sử chạy thử</h2>
@@ -346,36 +148,310 @@
         </aside>
     </div>
 
+    {{-- Kết quả AI + đăng thử — full width bên dưới --}}
+    <div class="seo-prompt-test-output">
+        @if (filled($errorMessage))
+            <x-filament::section heading="Lỗi">
+                <p class="text-sm text-danger-600 dark:text-danger-400">{{ $errorMessage }}</p>
+            </x-filament::section>
+        @endif
+
+        @if (filled($outputText))
+            <x-filament::section :heading="$this->aiResultSectionHeading()">
+                @if ($this->usesStepByStepChain() && $chainParentCompleted)
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                        @if ($chainSubTasksCompleted === 0)
+                            Kết quả <strong>prompt cha</strong>.
+                        @else
+                            Kết quả <strong>prompt con {{ $chainSubTasksCompleted }}</strong>
+                            @if ($chainSubTasksCompleted < count($this->dependentSubTaskSteps))
+                                — còn {{ count($this->dependentSubTaskSteps) - $chainSubTasksCompleted }} bước.
+                            @else
+                                — đã xong chuỗi.
+                            @endif
+                        @endif
+                    </p>
+                @endif
+                @if ($this->isImageToolPrompt() && $this->currentMediaOutputUrl())
+                    <div class="seo-prompt-test-media-wrap @if (count($this->testResultMediaUrls()) > 1) is-grid @endif">
+                        @foreach ($this->testResultMediaUrls() as $mediaUrl)
+                            <img src="{{ $mediaUrl }}" alt="AI generated image" class="seo-prompt-test-image" />
+                        @endforeach
+                    </div>
+                    <div class="seo-media-preview-modal__actions seo-prompt-test-media-actions">
+                        @if ($this->testResultCanOpenImageEditor())
+                            <button
+                                type="button"
+                                class="seo-media-preview-btn is-edit"
+                                wire:click="openResultImageEditor"
+                                wire:loading.attr="disabled"
+                                wire:target="openResultImageEditor"
+                            >
+                                <span wire:loading.remove wire:target="openResultImageEditor">Chỉnh sửa hình ảnh</span>
+                                <span wire:loading wire:target="openResultImageEditor">Đang chuẩn bị…</span>
+                            </button>
+                        @endif
+                        <button
+                            type="button"
+                            class="seo-media-preview-btn is-primary"
+                            wire:click="applyResultWatermark"
+                            wire:loading.attr="disabled"
+                            wire:target="applyResultWatermark"
+                            @if ($this->testResultNeedsSiteForMediaActions() || $this->testResultIsGeneratedMedia()) disabled @endif
+                        >
+                            <span wire:loading.remove wire:target="applyResultWatermark">Áp dụng đóng dấu</span>
+                            <span wire:loading wire:target="applyResultWatermark">Đang xử lý…</span>
+                        </button>
+                        @if ($splitterUrl = $this->testResultImageSplitterUrl())
+                            <a
+                                href="{{ $splitterUrl }}"
+                                class="seo-media-preview-btn"
+                                target="_blank"
+                                rel="noopener"
+                            >
+                                Tách theo lưới
+                            </a>
+                        @endif
+                        @if ($this->canReapplyPostProcessing())
+                            <button
+                                type="button"
+                                class="seo-media-preview-btn"
+                                wire:click="reapplyPostProcessing"
+                                wire:loading.attr="disabled"
+                                wire:target="reapplyPostProcessing"
+                            >
+                                <span wire:loading.remove wire:target="reapplyPostProcessing">Chạy lại hậu kỳ</span>
+                                <span wire:loading wire:target="reapplyPostProcessing">Đang xử lý…</span>
+                            </button>
+                        @endif
+                    </div>
+                    @if ($this->testResultIsGeneratedMedia())
+                        <div class="seo-prompt-test-media-extra">
+                            <button
+                                type="button"
+                                class="seo-media-preview-btn"
+                                wire:click="assignResultToSiteLibrary"
+                                wire:loading.attr="disabled"
+                                wire:target="assignResultToSiteLibrary"
+                                @if ($this->testResultNeedsSiteForMediaActions()) disabled @endif
+                            >
+                                <span wire:loading.remove wire:target="assignResultToSiteLibrary">Gán vào thư viện</span>
+                                <span wire:loading wire:target="assignResultToSiteLibrary">Đang gán…</span>
+                            </button>
+                        </div>
+                    @endif
+                    @if ($this->testResultNeedsSiteForMediaActions())
+                        <p class="seo-prompt-test-media-hint">
+                            Chọn bài viết đích bên dưới để chỉnh sửa / đóng dấu.
+                        </p>
+                    @elseif ($this->testResultIsGeneratedMedia())
+                        <p class="seo-prompt-test-media-hint">
+                            Ảnh Gen AI: bấm <strong>Gán vào thư viện</strong> trước khi đóng dấu hoặc chỉnh sửa.
+                        </p>
+                    @endif
+                @elseif ($this->isVideoToolPrompt() && $this->currentMediaOutputUrl())
+                    <div class="seo-prompt-test-media-wrap">
+                        <video controls preload="metadata" class="seo-prompt-test-video">
+                            <source src="{{ $this->currentMediaOutputUrl() }}">
+                        </video>
+                    </div>
+                @else
+                    <x-seo-content-ai::ai-result>{{ $outputText }}</x-seo-content-ai::ai-result>
+                @endif
+
+                @if ($this->usesStepByStepChain() && $this->hasMoreSubTasksToRun())
+                    <div class="mt-4">
+                        <x-filament::button
+                            type="button"
+                            icon="heroicon-o-forward"
+                            color="primary"
+                            wire:click="runNextSubTask"
+                            wire:loading.attr="disabled"
+                            wire:target="runNextSubTask"
+                        >
+                            <span wire:loading.remove wire:target="runNextSubTask">{{ $this->nextSubTaskButtonLabel() }}</span>
+                            <span wire:loading wire:target="runNextSubTask">Đang gọi AI…</span>
+                        </x-filament::button>
+                    </div>
+                @endif
+            </x-filament::section>
+
+            <x-filament::section heading="Test">
+                <x-slot name="description">
+                    Áp dụng kết quả AI lên bài đã đồng bộ WordPress.
+                </x-slot>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">Bài viết / sản phẩm đích</label>
+                        <select
+                            wire:model="publishArticleId"
+                            class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 px-3 py-2"
+                        >
+                            <option value="">— Chọn bài đã đồng bộ WP —</option>
+                            @foreach ($this->articlesForCommentPublish as $article)
+                                <option value="{{ $article->id }}">
+                                    [WP #{{ $article->wp_post_id }}] {{ $article->title }}
+                                    ({{ $article->type === 'product' ? 'product' : 'post' }})
+                                </option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div
+                        class="seo-prompt-test-publish"
+                        x-data="{ open: false }"
+                        @keydown.escape.window="open = false"
+                    >
+                        <div class="flex flex-wrap items-center gap-2">
+                            <x-filament::button
+                                type="button"
+                                icon="heroicon-o-arrow-up-tray"
+                                color="success"
+                                wire:loading.attr="disabled"
+                                wire:target="publishTest"
+                                @click="open = !open"
+                            >
+                                <span wire:loading.remove wire:target="publishTest">Đăng…</span>
+                                <span wire:loading wire:target="publishTest">Đang xử lý…</span>
+                            </x-filament::button>
+                        </div>
+
+                        <div
+                            x-show="open"
+                            x-cloak
+                            @click.outside="open = false"
+                            class="seo-prompt-test-publish-menu"
+                        >
+                            <button
+                                type="button"
+                                class="seo-prompt-test-publish-menu__item"
+                                wire:click="publishTest('skeleton')"
+                                wire:loading.attr="disabled"
+                                wire:target="publishTest"
+                                @click="open = false"
+                            >
+                                <span class="seo-prompt-test-publish-menu__title">1. Đăng sườn bài viết</span>
+                            </button>
+                            <button
+                                type="button"
+                                class="seo-prompt-test-publish-menu__item"
+                                wire:click="publishTest('article')"
+                                wire:loading.attr="disabled"
+                                wire:target="publishTest"
+                                @click="open = false"
+                            >
+                                <span class="seo-prompt-test-publish-menu__title">2. Đăng bài viết</span>
+                            </button>
+                            <button
+                                type="button"
+                                class="seo-prompt-test-publish-menu__item"
+                                wire:click="publishTest('reviews')"
+                                wire:loading.attr="disabled"
+                                wire:target="publishTest"
+                                @click="open = false"
+                            >
+                                <span class="seo-prompt-test-publish-menu__title">3. Đăng review / bình luận</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </x-filament::section>
+        @endif
+    </div>
+
     <style>
-        .seo-prompt-test-input-alert {
-            margin: 0 0 1rem;
-            padding: 0.75rem 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #fcd34d;
-            background: #fffbeb;
-            font-size: 0.8125rem;
-            line-height: 1.45;
-            color: #92400e;
-        }
-
-        .dark .seo-prompt-test-input-alert {
-            border-color: #b45309;
-            background: rgba(180, 83, 9, 0.15);
-            color: #fcd34d;
-        }
-
         .seo-prompt-test-layout {
             display: grid;
             grid-template-columns: minmax(0, 1fr);
-            gap: 1.5rem;
+            gap: 1rem;
             max-width: 100%;
+            align-items: start;
         }
 
-        @media (min-width: 1024px) {
+        @media (min-width: 1100px) {
             .seo-prompt-test-layout {
-                grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
-                align-items: start;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(260px, 300px);
             }
+        }
+
+        .seo-prompt-test-col {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .seo-prompt-test-col__hint,
+        .seo-prompt-test-col__empty {
+            margin: 0 0 0.75rem;
+            font-size: 0.8125rem;
+            line-height: 1.45;
+            color: rgb(75 85 99);
+        }
+
+        .dark .seo-prompt-test-col__hint,
+        .dark .seo-prompt-test-col__empty {
+            color: rgb(156 163 175);
+        }
+
+        .seo-prompt-test-col__form {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            min-height: 0;
+        }
+
+        .seo-prompt-test-col__actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .seo-prompt-test-col__actions--top {
+            margin-bottom: 0.75rem;
+        }
+
+        .seo-prompt-test-editor,
+        .seo-prompt-test-readonly {
+            width: 100%;
+            min-height: min(520px, 62vh);
+            max-height: min(680px, 72vh);
+            padding: 0.75rem 0.875rem;
+            border-radius: 0.5rem;
+            border: 1px solid rgb(209 213 219);
+            background: rgb(255 255 255);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.8125rem;
+            line-height: 1.55;
+            resize: vertical;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow: auto;
+        }
+
+        .seo-prompt-test-readonly {
+            resize: none;
+            color: rgb(17 24 39);
+            background: rgb(249 250 251);
+        }
+
+        .dark .seo-prompt-test-editor {
+            border-color: rgb(75 85 99);
+            background: rgb(17 24 39);
+            color: rgb(243 244 246);
+        }
+
+        .dark .seo-prompt-test-readonly {
+            border-color: rgb(75 85 99);
+            background: rgb(31 41 55);
+            color: rgb(243 244 246);
+        }
+
+        .seo-prompt-test-output {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            min-width: 0;
         }
 
         .seo-history-row {
@@ -527,17 +603,9 @@
             background: #374151;
         }
 
-        .seo-history-card--completed {
-            border-left: 3px solid #16a34a;
-        }
-
-        .seo-history-card--failed {
-            border-left: 3px solid #dc2626;
-        }
-
-        .seo-history-card--pending {
-            border-left: 3px solid #9ca3af;
-        }
+        .seo-history-card--completed { border-left: 3px solid #16a34a; }
+        .seo-history-card--failed { border-left: 3px solid #dc2626; }
+        .seo-history-card--pending { border-left: 3px solid #9ca3af; }
 
         .seo-history-card.is-active.seo-history-card--completed {
             background: #f0fdf4;
@@ -579,9 +647,7 @@
             word-break: break-word;
         }
 
-        .dark .seo-history-card__summary {
-            color: #f3f4f6;
-        }
+        .dark .seo-history-card__summary { color: #f3f4f6; }
 
         .seo-history-card__meta {
             display: flex;
@@ -599,15 +665,7 @@
             flex-shrink: 0;
         }
 
-        .dark .seo-history-card__time {
-            color: #9ca3af;
-        }
-
-        .seo-history-card__tokens {
-            font-weight: 500;
-            color: #6b7280;
-            white-space: nowrap;
-        }
+        .seo-history-card__tokens { font-weight: 500; color: #6b7280; }
 
         .seo-history-card__model {
             display: block;
@@ -617,14 +675,6 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
-        }
-
-        .dark .seo-history-card__tokens {
-            color: #9ca3af;
-        }
-
-        .dark .seo-history-card__model {
-            color: #9ca3af;
         }
 
         .seo-history-card__badge {
@@ -640,7 +690,6 @@
             line-height: 1.2;
             white-space: nowrap;
             text-transform: uppercase;
-            letter-spacing: 0.02em;
         }
 
         .seo-history-card__tool {
@@ -656,62 +705,15 @@
             border: 1px solid transparent;
         }
 
-        .seo-history-card__tool--image {
-            background: #dbeafe;
-            color: #1d4ed8;
-            border-color: #93c5fd;
-        }
+        .seo-history-card__tool--image { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+        .seo-history-card__tool--video { background: #f3e8ff; color: #7e22ce; border-color: #d8b4fe; }
+        .seo-history-card__tool--text { background: #ecfccb; color: #3f6212; border-color: #bef264; }
 
-        .seo-history-card__tool--video {
-            background: #f3e8ff;
-            color: #7e22ce;
-            border-color: #d8b4fe;
-        }
+        .seo-history-card__badge--completed { background: #dcfce7; color: #15803d; }
+        .seo-history-card__badge--failed { background: #fee2e2; color: #b91c1c; }
+        .seo-history-card__badge--pending { background: #f3f4f6; color: #6b7280; }
 
-        .seo-history-card__tool--text {
-            background: #ecfccb;
-            color: #3f6212;
-            border-color: #bef264;
-        }
-
-        .seo-history-card__badge--completed {
-            background: #dcfce7;
-            color: #15803d;
-        }
-
-        .seo-history-card__badge--failed {
-            background: #fee2e2;
-            color: #b91c1c;
-        }
-
-        .seo-history-card__badge--pending {
-            background: #f3f4f6;
-            color: #6b7280;
-        }
-
-        .dark .seo-history-card__badge--completed {
-            background: rgba(22, 163, 74, 0.25);
-            color: #86efac;
-        }
-
-        .dark .seo-history-card__badge--failed {
-            background: rgba(220, 38, 38, 0.25);
-            color: #fca5a5;
-        }
-
-        .seo-history-card__icon {
-            width: 0.875rem;
-            height: 0.875rem;
-            flex-shrink: 0;
-        }
-
-        .seo-prompt-test-main {
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-            overflow: hidden;
-        }
+        .seo-history-card__icon { width: 0.875rem; height: 0.875rem; flex-shrink: 0; }
 
         .seo-prompt-test-media-wrap {
             border-radius: 0.5rem;
@@ -732,17 +734,6 @@
             padding: 0.5rem;
         }
 
-        .seo-prompt-test-media-wrap.is-grid .seo-prompt-test-image {
-            width: 100%;
-            max-height: 12rem;
-            border-radius: 0.375rem;
-            border: 1px solid #e5e7eb;
-        }
-
-        .dark .seo-prompt-test-media-wrap.is-grid .seo-prompt-test-image {
-            border-color: #374151;
-        }
-
         .seo-prompt-test-image,
         .seo-prompt-test-video {
             width: 100%;
@@ -752,79 +743,8 @@
             background: #fff;
         }
 
-        .seo-prompt-test-media-actions {
-            margin-top: 0.75rem;
-        }
-
-        .seo-prompt-test-media-extra {
-            margin-top: 0.5rem;
-        }
-
-        .seo-prompt-test-media-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            padding: 0.5rem 1rem;
-            font-size: 0.8125rem;
-            font-weight: 600;
-            border-radius: 6px;
-            border: 1px solid #d1d5db;
-            background: #fff;
-            color: #111827;
-            text-decoration: none;
-            cursor: pointer;
-            transition: background 0.15s ease, border-color 0.15s ease;
-        }
-
-        .seo-prompt-test-media-btn:hover:not(:disabled) {
-            background: #f3f4f6;
-            border-color: #9ca3af;
-        }
-
-        .seo-prompt-test-media-btn.is-primary {
-            background: #2271b1;
-            border-color: #2271b1;
-            color: #fff;
-        }
-
-        .seo-prompt-test-media-btn.is-primary:hover:not(:disabled) {
-            background: #135e96;
-            border-color: #135e96;
-        }
-
-        .seo-prompt-test-media-btn.is-assign {
-            background: #0d9488;
-            border-color: #0d9488;
-            color: #fff;
-        }
-
-        .seo-prompt-test-media-btn.is-assign:hover:not(:disabled) {
-            background: #0f766e;
-            border-color: #0f766e;
-        }
-
-        .seo-prompt-test-media-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .dark .seo-prompt-test-media-btn {
-            background: #1f2937;
-            border-color: #4b5563;
-            color: #f3f4f6;
-        }
-
-        .dark .seo-prompt-test-media-btn.is-primary {
-            background: #2271b1;
-            border-color: #2271b1;
-            color: #fff;
-        }
-
-        .dark .seo-prompt-test-media-btn.is-assign {
-            background: #0d9488;
-            border-color: #0d9488;
-            color: #fff;
-        }
+        .seo-prompt-test-media-actions { margin-top: 0.75rem; }
+        .seo-prompt-test-media-extra { margin-top: 0.5rem; }
 
         .seo-prompt-test-media-hint {
             margin: 0.5rem 0 0;
@@ -833,18 +753,7 @@
             color: #6b7280;
         }
 
-        .dark .seo-prompt-test-media-hint {
-            color: #9ca3af;
-        }
-
-        .dark .seo-prompt-test-image,
-        .dark .seo-prompt-test-video {
-            background: #111827;
-        }
-
-        .seo-prompt-test-publish {
-            position: relative;
-        }
+        .seo-prompt-test-publish { position: relative; }
 
         .seo-prompt-test-publish-menu {
             margin-top: 0.5rem;
@@ -867,7 +776,6 @@
             display: flex;
             flex-direction: column;
             align-items: flex-start;
-            gap: 0.125rem;
             width: 100%;
             text-align: left;
             padding: 0.625rem 0.75rem;
@@ -877,34 +785,11 @@
             transition: background-color 0.15s;
         }
 
-        .seo-prompt-test-publish-menu__item:hover {
-            background-color: #f3f4f6;
-        }
+        .seo-prompt-test-publish-menu__item:hover { background-color: #f3f4f6; }
 
-        .dark .seo-prompt-test-publish-menu__item {
-            color: #f3f4f6;
-        }
+        .dark .seo-prompt-test-publish-menu__item { color: #f3f4f6; }
+        .dark .seo-prompt-test-publish-menu__item:hover { background-color: #1f2937; }
 
-        .dark .seo-prompt-test-publish-menu__item:hover {
-            background-color: #1f2937;
-        }
-
-        .seo-prompt-test-publish-menu__title {
-            font-weight: 600;
-        }
-
-        .seo-prompt-test-publish-menu__desc {
-            font-size: 0.75rem;
-            line-height: 1.35;
-            color: #6b7280;
-        }
-
-        .dark .seo-prompt-test-publish-menu__desc {
-            color: #9ca3af;
-        }
-
-        .seo-prompt-test-publish-menu__desc code {
-            font-size: 0.7em;
-        }
+        .seo-prompt-test-publish-menu__title { font-weight: 600; }
     </style>
 </x-filament-panels::page>

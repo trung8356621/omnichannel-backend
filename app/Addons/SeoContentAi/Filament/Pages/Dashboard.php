@@ -58,6 +58,7 @@ class Dashboard extends BaseDashboard
                 AllDomainsProjectsWidget::class,
                 AllDomainsTeamWidget::class,
                 AllDomainsListWidget::class,
+                WpPluginReleaseWidget::class,
             ];
         }
 
@@ -65,7 +66,6 @@ class Dashboard extends BaseDashboard
             SeoOverviewStats::class,
             SeoScoreChart::class,
             WpSyncStatusTable::class,
-            WpPluginReleaseWidget::class,
         ];
     }
 }

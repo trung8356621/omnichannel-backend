@@ -5,10 +5,14 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Filament\Resources\SeoDatabaseConnectionResource;
+use App\Models\Site;
 use App\Models\SiteService;
+use App\Services\SiteServiceBindingService;
 use Filament\Forms;
 use Filament\Forms\Get;
 use Filament\Notifications\Notification;
+use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 use Throwable;
@@ -28,40 +32,29 @@ final class SeoSiteServiceDatabaseConfigurator
             return $data;
         }
 
-        $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
-        $type = (string) ($settings['db_config_type'] ?? 'auto');
+        $defaults = (new \App\Addons\SeoContentAi\Settings)->getDefaults();
+        $settings = array_merge(
+            $defaults,
+            is_array($data['settings'] ?? null) ? $data['settings'] : [],
+        );
 
-        if ($type === 'manual') {
-            $plainPassword = trim((string) ($settings['db_password'] ?? ''));
-            $existingEncrypted = is_array($existing?->settings)
-                ? (string) ($existing->settings['db_password'] ?? '')
-                : '';
+        unset(
+            $settings['db_host'],
+            $settings['db_port'],
+            $settings['db_name'],
+            $settings['db_username'],
+            $settings['db_password'],
+        );
 
-            if ($plainPassword !== '') {
-                $settings['db_password'] = $db->encryptPassword($plainPassword);
-            } elseif ($existingEncrypted !== '') {
-                $settings['db_password'] = $existingEncrypted;
-            } else {
-                unset($settings['db_password']);
-            }
-        } else {
-            unset(
-                $settings['db_host'],
-                $settings['db_port'],
-                $settings['db_name'],
-                $settings['db_username'],
-                $settings['db_password'],
-            );
-        }
+        $settings['db_config_type'] = in_array(
+            (string) ($settings['db_config_type'] ?? 'auto'),
+            ['auto', 'manual'],
+            true,
+        ) ? (string) $settings['db_config_type'] : 'auto';
 
         $data['settings'] = $settings;
 
         return $data;
-    }
-
-    public static function validateAndMigrate(SiteService $record): void
-    {
-        self::runMigrations($record);
     }
 
     /**
@@ -77,33 +70,26 @@ final class SeoSiteServiceDatabaseConfigurator
         }
 
         $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
-        $siteId = (int) ($data['site_id'] ?? $existing?->site_id ?? 0);
+        $ownerId = self::resolveOwnerIdFromFormData($data, $existing);
 
-        if ($siteId <= 0) {
+        if ($ownerId <= 0) {
             throw ValidationException::withMessages([
-                'site_id' => 'Site là bắt buộc để cấu hình database SEO.',
+                'bound_type' => 'Phải chọn site hoặc owner hợp lệ để cấu hình database SEO.',
             ]);
         }
 
+        $siteId = (int) ($data['site_id'] ?? $existing?->site_id ?? 0);
         $type = (string) ($settings['db_config_type'] ?? 'auto');
-        if ($type === 'manual' && blank($settings['db_password'] ?? null)) {
-            $existingEncrypted = is_array($existing?->settings)
-                ? (string) ($existing->settings['db_password'] ?? '')
-                : '';
-            if ($existingEncrypted === '' && $existing === null) {
-                throw ValidationException::withMessages([
-                    'settings.db_password' => 'Mật khẩu database là bắt buộc khi tạo cấu hình thủ công.',
-                ]);
-            }
+
+        if ($type === 'manual') {
+            self::assertManualConnectionExistsForOwner($ownerId);
+
+            return;
         }
 
         try {
-            $attributes = self::mapSettingsToConnectionAttributes($settings, $siteId);
-            $plainPassword = trim((string) ($settings['db_password'] ?? ''));
-            $db->testConnectionFromAttributes(
-                $attributes,
-                $plainPassword !== '' ? $plainPassword : null,
-            );
+            $attributes = $db->mapSiteServiceSettingsToConnectionAttributes($settings, max(0, $siteId));
+            $db->testConnectionFromAttributes($attributes);
         } catch (RuntimeException $exception) {
             throw ValidationException::withMessages([
                 'settings.db_config_type' => $exception->getMessage(),
@@ -119,36 +105,44 @@ final class SeoSiteServiceDatabaseConfigurator
             return;
         }
 
-        $siteId = (int) $record->site_id;
-
-        $connection = $db->bootstrapBySiteId($siteId);
-        if ($connection === null) {
-            throw ValidationException::withMessages([
-                'settings.db_config_type' => 'Không tìm thấy SEO database connection cho site này.',
-            ]);
-        }
-
         try {
+            $connection = $db->syncConnectionFromSiteService($record);
             $result = $db->runMigrationsForConnection($connection);
         } catch (Throwable $exception) {
             Notification::make()
-                ->title('Lỗi migration database SEO')
+                ->title('Lỗi cấu hình database SEO')
                 ->body($exception->getMessage())
                 ->danger()
+                ->persistent()
                 ->send();
 
-            throw ValidationException::withMessages([
-                'settings.db_config_type' => 'Migration thất bại: '.$exception->getMessage(),
-            ]);
+            return;
         }
 
         if (! ($result['executed'] ?? false)) {
+            $reconciled = (int) ($result['reconciled'] ?? 0);
+            $body = $reconciled > 0
+                ? sprintf('Database SEO đã kết nối. Đã đồng bộ %d migration CREATE có sẵn trên DB.', $reconciled)
+                : 'Database SEO đã kết nối. Không có migration còn thiếu.';
+
+            Notification::make()
+                ->title('Đã kích hoạt SEO Content AI')
+                ->body($body)
+                ->success()
+                ->send();
+
             return;
+        }
+
+        $reconciled = (int) ($result['reconciled'] ?? 0);
+        $body = sprintf('Đã áp dụng %d migration còn thiếu.', (int) ($result['pending'] ?? 0));
+        if ($reconciled > 0) {
+            $body .= sprintf(' Đồng bộ thêm %d migration CREATE đã có bảng trên DB.', $reconciled);
         }
 
         Notification::make()
             ->title('Database SEO đã sẵn sàng')
-            ->body(sprintf('Đã áp dụng %d migration còn thiếu.', (int) ($result['pending'] ?? 0)))
+            ->body($body)
             ->success()
             ->send();
     }
@@ -158,9 +152,11 @@ final class SeoSiteServiceDatabaseConfigurator
      */
     public static function formSchema(): array
     {
+        $connectionsUrl = SeoDatabaseConnectionResource::getUrl('index');
+
         return [
             Forms\Components\Section::make('Cấu hình Database SEO Content AI')
-                ->description('Mỗi site có thể dùng database riêng. Chế độ Tự động dùng credentials từ .env core.')
+                ->description('Site service chỉ chọn chế độ DB. Tạo kết nối cụ thể (host, user, password) tại SEO Database Connections.')
                 ->visible(fn (Get $get): bool => self::isSeoServiceSelected($get('service_id')))
                 ->schema([
                     Forms\Components\Select::make('settings.db_config_type')
@@ -185,45 +181,67 @@ final class SeoSiteServiceDatabaseConfigurator
                             if ($perSite && $siteId > 0) {
                                 $prefix = (string) config('seo-content-ai.auto_database_prefix', 'omi_seo_ai');
 
-                                return "Sử dụng MySQL credentials từ .env, database: {$prefix}_{$siteId}";
+                                return "Dùng MySQL credentials từ .env core, database: {$prefix}_{$siteId}. Hệ thống tự đồng bộ bản ghi SEO Database Connection khi lưu.";
                             }
 
-                            return "Sử dụng MySQL credentials từ .env, database dùng chung: {$legacy}";
+                            return "Dùng MySQL credentials từ .env core, database dùng chung: {$legacy}. Hệ thống tự đồng bộ bản ghi SEO Database Connection khi lưu.";
                         }),
 
-                    Forms\Components\TextInput::make('settings.db_host')
-                        ->label('DB Host')
-                        ->default('127.0.0.1')
+                    Forms\Components\Placeholder::make('db_manual_hint')
+                        ->label('Chế độ thủ công')
                         ->visible(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual')
-                        ->required(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual'),
-
-                    Forms\Components\TextInput::make('settings.db_port')
-                        ->label('DB Port')
-                        ->default('3306')
-                        ->numeric()
-                        ->visible(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual')
-                        ->required(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual'),
-
-                    Forms\Components\TextInput::make('settings.db_name')
-                        ->label('Database Name')
-                        ->visible(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual')
-                        ->required(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual'),
-
-                    Forms\Components\TextInput::make('settings.db_username')
-                        ->label('DB Username')
-                        ->visible(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual')
-                        ->required(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual'),
-
-                    Forms\Components\TextInput::make('settings.db_password')
-                        ->label('DB Password')
-                        ->password()
-                        ->revealable()
-                        ->dehydrated(fn (?string $state): bool => filled($state))
-                        ->helperText('Để trống nếu không đổi mật khẩu (chỉ khi sửa).')
-                        ->visible(fn (Get $get): bool => ($get('settings.db_config_type') ?? '') === 'manual'),
+                        ->content(fn (): HtmlString => new HtmlString(
+                            'Trước khi lưu, tạo kết nối DB cho owner của site tại '
+                            .'<a href="'.e($connectionsUrl).'" class="text-primary-600 underline font-medium" target="_blank" rel="noopener">SEO Database Connections</a>. '
+                            .'Site service chỉ ghi nhận chế độ <strong>manual</strong>; host, port, database, user và password cấu hình riêng ở trang đó.'
+                        )),
                 ])
-                ->columns(2),
+                ->columns(1),
         ];
+    }
+
+    private static function assertManualConnectionExistsForOwner(int $ownerId): void
+    {
+        if ($ownerId <= 0) {
+            throw ValidationException::withMessages([
+                'bound_type' => 'Owner không hợp lệ để dùng chế độ DB thủ công.',
+            ]);
+        }
+
+        $connection = app(SeoDatabaseConnectionService::class)->resolveActiveConnectionForOwner($ownerId);
+
+        if ($connection === null) {
+            throw ValidationException::withMessages([
+                'settings.db_config_type' => 'Chưa có SEO Database Connection cho owner này. Tạo tại SEO Database Connections trước khi lưu.',
+            ]);
+        }
+
+        try {
+            app(SeoDatabaseConnectionService::class)->testConnectionForModel($connection);
+        } catch (RuntimeException $exception) {
+            throw ValidationException::withMessages([
+                'settings.db_config_type' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private static function resolveOwnerIdFromFormData(array $data, ?SiteService $existing): int
+    {
+        $boundType = (string) ($data['bound_type'] ?? $existing?->bound_type ?? SiteServiceBindingService::BOUND_SITE);
+
+        if ($boundType === SiteServiceBindingService::BOUND_USER) {
+            return (int) ($data['user_id'] ?? $existing?->user_id ?? 0);
+        }
+
+        $siteId = (int) ($data['site_id'] ?? $existing?->site_id ?? 0);
+        if ($siteId <= 0) {
+            return 0;
+        }
+
+        return (int) (Site::query()->whereKey($siteId)->value('user_id') ?? 0);
     }
 
     private static function isSeoServiceSelected(mixed $serviceId): bool
@@ -233,35 +251,5 @@ final class SeoSiteServiceDatabaseConfigurator
         }
 
         return app(SeoDatabaseConnectionService::class)->isSeoContentAiService((int) $serviceId);
-    }
-
-    /**
-     * @param  array<string, mixed>  $settings
-     * @return array<string, mixed>
-     */
-    private static function mapSettingsToConnectionAttributes(array $settings, int $siteId): array
-    {
-        $type = (string) ($settings['db_config_type'] ?? 'auto');
-
-        if ($type === 'manual') {
-            return [
-                'type' => 'manual',
-                'host' => $settings['db_host'] ?? '127.0.0.1',
-                'port' => $settings['db_port'] ?? '3306',
-                'database' => $settings['db_name'] ?? '',
-                'username' => $settings['db_username'] ?? '',
-            ];
-        }
-
-        $legacy = (string) config('seo-content-ai.legacy_shared_database', 'omi_seo_ai');
-        $perSite = (bool) config('seo-content-ai.auto_per_site_database', false);
-        $database = $perSite && $siteId > 0
-            ? config('seo-content-ai.auto_database_prefix', 'omi_seo_ai').'_'.$siteId
-            : $legacy;
-
-        return [
-            'type' => 'auto',
-            'database' => $database,
-        ];
     }
 }

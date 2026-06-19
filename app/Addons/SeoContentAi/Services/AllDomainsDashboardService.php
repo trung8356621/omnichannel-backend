@@ -106,8 +106,6 @@ final class AllDomainsDashboardService
      *     id: int,
      *     name: string,
      *     email: string,
-     *     role: string,
-     *     role_label: string,
      *     optimized_articles: int,
      * }>
      */
@@ -133,18 +131,13 @@ final class AllDomainsDashboardService
                 ->all();
         }
 
-        $roleLabels = $this->seoRoleLabels();
         $rows = [];
 
         foreach ($members as $member) {
-            $role = SeoAccessControl::normalizeRole((string) ($member->seo_role ?: $member->role));
-
             $rows[] = [
                 'id' => (int) $member->getKey(),
                 'name' => (string) $member->name,
                 'email' => (string) $member->email,
-                'role' => $role,
-                'role_label' => $roleLabels[$role] ?? $role,
                 'optimized_articles' => (int) ($articleCounts[$member->getKey()] ?? 0),
             ];
         }
@@ -260,25 +253,8 @@ final class AllDomainsDashboardService
         $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
 
         return User::query()
-            ->where(function (Builder $query) use ($ownerId): void {
-                $query->whereKey($ownerId)
-                    ->orWhere(function (Builder $staffQuery) use ($ownerId): void {
-                        $staffQuery
-                            ->where('parent_id', $ownerId)
-                            ->where('role', User::ROLE_STAFF);
-                    });
-            });
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    private function seoRoleLabels(): array
-    {
-        return [
-            SeoAccessControl::ROLE_MANAGER => __('seo-content-ai::filament.team.role_manager'),
-            SeoAccessControl::ROLE_PLANNER => __('seo-content-ai::filament.team.role_planner'),
-            SeoAccessControl::ROLE_CONTENT_MANAGER => __('seo-content-ai::filament.team.role_content_manager'),
-        ];
+            ->where('parent_id', $ownerId)
+            ->where('role', User::ROLE_STAFF)
+            ->where('seo_role', SeoAccessControl::ROLE_CONTENT_MANAGER);
     }
 }

@@ -7,7 +7,9 @@ namespace App\Filament\Resources\SeoDatabaseConnectionResource\Pages;
 use App\Addons\SeoContentAi\Services\SeoDatabaseBackupService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Filament\Resources\SeoDatabaseConnectionResource;
+use App\Filament\Support\SeoDatabaseConnectionAccess;
 use App\Filament\Support\SeoDatabaseConnectionBackupActions;
+use App\Filament\Support\SeoDatabaseConnectionOwnerSync;
 use App\Models\SeoDatabaseConnection;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -28,13 +30,14 @@ class EditSeoDatabaseConnection extends EditRecord
                 ->label('Export SQL')
                 ->icon('heroicon-o-arrow-down-tray')
                 ->color('success')
-                ->visible(fn (): bool => (bool) $this->record?->is_active)
+                ->visible(fn (): bool => SeoDatabaseConnectionAccess::isAdmin() && (bool) $this->record?->is_active)
                 ->action(fn (): BinaryFileResponse => app(SeoDatabaseBackupService::class)->downloadResponse($this->record)),
 
             Actions\Action::make('importSql')
                 ->label('Import SQL')
                 ->icon('heroicon-o-arrow-up-tray')
                 ->color('danger')
+                ->visible(fn (): bool => SeoDatabaseConnectionAccess::isAdmin())
                 ->modalHeading('Khôi phục database từ SQL')
                 ->modalSubmitActionLabel('Bắt đầu khôi phục')
                 ->requiresConfirmation()
@@ -55,24 +58,57 @@ class EditSeoDatabaseConnection extends EditRecord
                 ->color('gray')
                 ->action(fn (): mixed => $this->runConnectionTest()),
 
-            Actions\DeleteAction::make(),
+            Actions\DeleteAction::make()
+                ->visible(fn (): bool => SeoDatabaseConnectionAccess::canDeleteConnection()),
         ];
     }
 
     protected function mutateFormDataBeforeSave(array $data): array
     {
-        $userIds = array_values(array_filter(
-            array_map(static fn (mixed $id): int => (int) $id, is_array($data['users'] ?? null) ? $data['users'] : []),
-            static fn (int $id): bool => $id > 0,
-        ));
-
-        if ($userIds === []) {
-            throw ValidationException::withMessages([
-                'users' => 'Phải chọn ít nhất một owner/admin được phép truy cập workspace SEO này.',
-            ]);
+        if (! SeoDatabaseConnectionAccess::isAdmin()) {
+            $data['owner_id'] = auth()->id();
         }
 
+        /** @var SeoDatabaseConnection $record */
+        $record = $this->record;
+
+        $ownerId = SeoDatabaseConnectionOwnerSync::resolveOwnerId(
+            $data,
+            $record,
+            data_get($this->form->getRawState(), 'owner_id'),
+        );
+
+        SeoDatabaseConnectionOwnerSync::assertOwnerEligible($ownerId);
+        SeoDatabaseConnectionOwnerSync::assertOwnerSingleConnection($ownerId, (int) $record->getKey());
+
         $this->assertConnectionTest($data);
+
+        unset($data['owner_id']);
+
+        return $data;
+    }
+
+    protected function afterSave(): void
+    {
+        /** @var SeoDatabaseConnection $record */
+        $record = $this->record;
+
+        $ownerId = SeoDatabaseConnectionOwnerSync::resolveOwnerId(
+            $this->form->getState(),
+            $record,
+            data_get($this->form->getRawState(), 'owner_id'),
+        );
+
+        if ($ownerId > 0) {
+            SeoDatabaseConnectionOwnerSync::syncOwner($record, $ownerId);
+        }
+    }
+
+    protected function mutateFormDataBeforeFill(array $data): array
+    {
+        /** @var SeoDatabaseConnection $record */
+        $record = $this->record;
+        $data['owner_id'] = (int) ($record->users()->value('users.id') ?? 0);
 
         return $data;
     }
@@ -98,8 +134,10 @@ class EditSeoDatabaseConnection extends EditRecord
                 $service->testConnectionForModel($merged);
             }
         } catch (RuntimeException $exception) {
+            $field = ($data['type'] ?? '') === 'manual' ? 'database' : 'type';
+
             throw ValidationException::withMessages([
-                'type' => $exception->getMessage(),
+                $field => $exception->getMessage(),
             ]);
         }
     }

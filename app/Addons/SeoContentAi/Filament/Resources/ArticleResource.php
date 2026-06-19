@@ -572,11 +572,7 @@ class ArticleResource extends SeoPanelResource
         bool $includeContentManagerOwnershipScope = true,
     ): Builder {
         if (auth()->user()?->role !== 'admin' && ! SeoAccessControl::isContentManager()) {
-            $siteOwnerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
-            $query->whereIn(
-                'site_id',
-                Site::query()->where('user_id', $siteOwnerId)->select('id')
-            );
+            SeoAccessControl::applyAccessibleSiteScope($query);
         }
 
         if ($includeGlobalSiteScope && SeoAccessControl::shouldApplyGlobalSiteScope()) {

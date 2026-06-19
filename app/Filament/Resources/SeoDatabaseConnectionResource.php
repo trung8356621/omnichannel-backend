@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Filament\Resources;
 
 use App\Filament\Resources\SeoDatabaseConnectionResource\Pages;
+use App\Filament\Support\SeoDatabaseConnectionAccess;
 use App\Filament\Support\SeoDatabaseConnectionBackupActions;
 use App\Models\SeoDatabaseConnection;
 use App\Models\User;
+use App\Services\SiteServiceBindingService;
 use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Forms\Get;
@@ -15,6 +17,7 @@ use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 
 class SeoDatabaseConnectionResource extends Resource
 {
@@ -40,7 +43,45 @@ class SeoDatabaseConnectionResource extends Resource
 
     public static function canAccess(): bool
     {
-        return auth()->user()?->role === User::ROLE_ADMIN;
+        return SeoDatabaseConnectionAccess::canAccessResource();
+    }
+
+    public static function canCreate(): bool
+    {
+        return SeoDatabaseConnectionAccess::canCreateConnection();
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        if (! $record instanceof SeoDatabaseConnection) {
+            return false;
+        }
+
+        return SeoDatabaseConnectionAccess::canEditConnection($record);
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return SeoDatabaseConnectionAccess::canDeleteConnection();
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $query = parent::getEloquentQuery();
+
+        if (SeoDatabaseConnectionAccess::isAdmin()) {
+            return $query;
+        }
+
+        $user = auth()->user();
+        if ($user?->role === User::ROLE_OWNER) {
+            return $query->whereHas(
+                'users',
+                fn (Builder $builder): Builder => $builder->whereKey($user->id),
+            );
+        }
+
+        return $query->whereRaw('1 = 0');
     }
 
     public static function form(Form $form): Form
@@ -117,31 +158,21 @@ class SeoDatabaseConnectionResource extends Resource
                     ])
                     ->columns(2),
 
-                Forms\Components\Section::make('Phân quyền User')
-                    ->description('Chọn tài khoản owner/admin sở hữu site dùng workspace này. Staff kế thừa qua parent_id của owner.')
+                Forms\Components\Section::make('Owner')
+                    ->description('Mỗi connection gắn với một owner đã kích hoạt Site Service SEO Content AI.')
+                    ->visible(fn (): bool => SeoDatabaseConnectionAccess::isAdmin())
                     ->schema([
-                        Forms\Components\Select::make('users')
-                            ->label('Users được phép')
-                            ->relationship(
-                                name: 'users',
-                                titleAttribute: 'email',
-                                modifyQueryUsing: fn (Builder $query, ?SeoDatabaseConnection $record): Builder => static::modifyAllowedUsersQuery(
-                                    $query,
-                                    $record,
-                                ),
-                            )
-                            ->getOptionLabelFromRecordUsing(
-                                fn (User $user): string => sprintf(
-                                    '%s — %s',
-                                    (string) $user->email,
-                                    (string) $user->role,
-                                ),
-                            )
-                            ->multiple()
-                            ->preload()
+                        Forms\Components\Select::make('owner_id')
+                            ->label('Owner')
+                            ->options(fn (?SeoDatabaseConnection $record): array => app(SiteServiceBindingService::class)
+                                ->eligibleOwnerSelectOptions(
+                                    $record !== null
+                                        ? [(int) ($record->users()->value('users.id') ?? 0)]
+                                        : [],
+                                ))
                             ->searchable()
                             ->required()
-                            ->helperText('Bao gồm owner/admin của site (sites.user_id). Không chọn staff.'),
+                            ->native(false),
                     ]),
             ]);
     }
@@ -164,16 +195,18 @@ class SeoDatabaseConnectionResource extends Resource
                     ->label('Database'),
                 Tables\Columns\IconColumn::make('is_active')
                     ->boolean(),
-                Tables\Columns\TextColumn::make('users_count')
-                    ->counts('users')
-                    ->label('Users'),
+                Tables\Columns\TextColumn::make('owner_email')
+                    ->label('Owner')
+                    ->getStateUsing(fn (SeoDatabaseConnection $record): string => (string) ($record->users()->value('email') ?? '—')),
                 Tables\Columns\TextColumn::make('updated_at')
                     ->dateTime()
                     ->sortable(),
             ])
             ->actions([
-                SeoDatabaseConnectionBackupActions::exportTableAction(),
-                SeoDatabaseConnectionBackupActions::importTableAction(),
+                SeoDatabaseConnectionBackupActions::exportTableAction()
+                    ->visible(fn (): bool => SeoDatabaseConnectionAccess::isAdmin()),
+                SeoDatabaseConnectionBackupActions::importTableAction()
+                    ->visible(fn (): bool => SeoDatabaseConnectionAccess::isAdmin()),
                 Tables\Actions\Action::make('open_panel')
                     ->label('Mở panel SEO')
                     ->icon('heroicon-o-arrow-top-right-on-square')
@@ -181,7 +214,8 @@ class SeoDatabaseConnectionResource extends Resource
                     ->openUrlInNewTab()
                     ->visible(fn (SeoDatabaseConnection $record): bool => (bool) $record->is_active),
                 Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\DeleteAction::make()
+                    ->visible(fn (): bool => SeoDatabaseConnectionAccess::canDeleteConnection()),
             ]);
     }
 
@@ -192,27 +226,5 @@ class SeoDatabaseConnectionResource extends Resource
             'create' => Pages\CreateSeoDatabaseConnection::route('/create'),
             'edit' => Pages\EditSeoDatabaseConnection::route('/{record}/edit'),
         ];
-    }
-
-    /**
-     * Owner/admin được gán workspace SEO. Giữ user đã gán dù đổi role (tránh mất pivot khi sửa form).
-     *
-     * @param  Builder<User>  $query
-     * @return Builder<User>
-     */
-    public static function modifyAllowedUsersQuery(Builder $query, ?SeoDatabaseConnection $record = null): Builder
-    {
-        return $query
-            ->where(function (Builder $builder) use ($record): void {
-                $builder->whereIn('role', [User::ROLE_OWNER, User::ROLE_ADMIN]);
-
-                if ($record !== null) {
-                    $attachedIds = $record->users()->pluck('users.id')->all();
-                    if ($attachedIds !== []) {
-                        $builder->orWhereIn('users.id', $attachedIds);
-                    }
-                }
-            })
-            ->orderBy('email');
     }
 }

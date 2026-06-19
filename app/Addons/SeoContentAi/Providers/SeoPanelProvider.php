@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Providers;
 
+use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
+use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
@@ -20,6 +22,7 @@ use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
@@ -27,6 +30,7 @@ use Filament\Facades\Filament;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
 use Filament\Http\Middleware\DispatchServingFilamentEvent;
+use Filament\Navigation\MenuItem;
 use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
@@ -73,6 +77,20 @@ class SeoPanelProvider extends PanelProvider
         Filament::serving(function (): void {
             if (filament()->getCurrentPanel()?->getId() !== 'seo') {
                 return;
+            }
+
+            $hash = SeoConnectionContext::hash();
+            if ($hash !== null) {
+                try {
+                    app(SeoDatabaseConnectionService::class)->bootstrapByHash($hash);
+                } catch (\RuntimeException) {
+                    $siteId = SeoAccessControl::globalSiteId();
+                    if ($siteId !== null && $siteId > 0) {
+                        app(SeoDatabaseConnectionService::class)->bootstrapBySiteId($siteId);
+                    }
+                }
+            } elseif (($siteId = SeoAccessControl::globalSiteId()) !== null && $siteId > 0) {
+                app(SeoDatabaseConnectionService::class)->bootstrapBySiteId($siteId);
             }
 
             $routeHash = request()->route('connection_hash');
@@ -322,6 +340,13 @@ class SeoPanelProvider extends PanelProvider
             ->id('seo')
             ->path('seo/{connection_hash}')
             ->login(\App\Addons\SeoContentAi\Filament\Pages\Auth\SeoLogin::class)
+            ->profile(SeoEditProfile::class, isSimple: false)
+            ->userMenuItems([
+                'profile' => MenuItem::make()
+                    ->label(fn (): string => filament()->getUserName(Filament::auth()->user()))
+                    ->url(fn (): string => SeoEditProfile::getUrl())
+                    ->icon('heroicon-m-user-circle'),
+            ])
             ->databaseNotifications()
             ->databaseNotificationsPolling('30s')
             ->colors([
@@ -336,6 +361,9 @@ class SeoPanelProvider extends PanelProvider
                 in: __DIR__.'/../Filament/Pages',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Pages'
             )
+            ->pages([
+                SeoChangePassword::class,
+            ])
             ->discoverWidgets(
                 in: __DIR__.'/../Filament/Widgets',
                 for: 'App\\Addons\\SeoContentAi\\Filament\\Widgets'

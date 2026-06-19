@@ -6,6 +6,7 @@ namespace App\Filament\Resources\SiteServiceResource\Pages;
 
 use App\Addons\SeoContentAi\Support\SeoSiteServiceDatabaseConfigurator;
 use App\Filament\Resources\SiteServiceResource;
+use App\Services\SiteServiceBindingService;
 use Filament\Resources\Pages\CreateRecord;
 
 class CreateSiteService extends CreateRecord
@@ -18,6 +19,10 @@ class CreateSiteService extends CreateRecord
      */
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        $binding = app(SiteServiceBindingService::class);
+        $data = $binding->normalizeBoundPayload($data);
+        $binding->assertBoundPayload($data);
+
         SeoSiteServiceDatabaseConfigurator::assertConnectionFromFormData($data, null);
 
         return SeoSiteServiceDatabaseConfigurator::mutateBeforeSave($data, null);

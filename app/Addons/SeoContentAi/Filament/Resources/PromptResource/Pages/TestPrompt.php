@@ -58,6 +58,9 @@ class TestPrompt extends Page implements HasForms
     /** @var array<string, string> */
     public array $variableValues = [];
 
+    /** Prompt raw (chưa thay biến) — cột trái, sửa tay trước khi gọi AI. */
+    public string $editablePrompt = '';
+
     public ?string $compiledPreview = null;
 
     public ?string $outputText = null;
@@ -101,14 +104,12 @@ class TestPrompt extends Page implements HasForms
 
         $this->syncVariableValueKeys();
         $this->applySiteContextDefaults(true);
-
-        $this->form->fill($this->variableValues);
+        $this->refreshRawPrompt();
+        $this->refreshCompiledPreview();
 
         $latest = $this->promptResults->first();
         if ($latest !== null) {
             $this->selectResult((int) $latest->id);
-        } else {
-            $this->refreshCompiledPreview();
         }
     }
 
@@ -253,7 +254,7 @@ class TestPrompt extends Page implements HasForms
      */
     private function normalizedVariableValues(): array
     {
-        $values = $this->form->getState();
+        $values = $this->variableValues;
         $normalized = [];
         foreach ($values as $key => $value) {
             $normalized[(string) $key] = is_string($value) ? $value : (string) $value;
@@ -267,6 +268,21 @@ class TestPrompt extends Page implements HasForms
         $normalized = PromptSiteContextVariable::mergeInto($normalized);
 
         return Utf8Sanitizer::variables($normalized);
+    }
+
+    public function copyMergedPreviewToEditable(): void
+    {
+        if (blank($this->compiledPreview)) {
+            $this->refreshCompiledPreview();
+        }
+
+        $this->editablePrompt = (string) ($this->compiledPreview ?? '');
+
+        Notification::make()
+            ->title('Đã đưa bản ghép sang cột Prompt')
+            ->body('Cột Prompt không còn raw — dùng khi muốn chạy thử nhanh không thay biến tay.')
+            ->success()
+            ->send();
     }
 
     private function resolvePublishTargetArticle(): ?SeoArticle
@@ -284,10 +300,7 @@ class TestPrompt extends Page implements HasForms
         $query = SeoArticle::query()->with('site')->whereKey($this->publishArticleId);
 
         if (auth()->user()?->role !== 'admin') {
-            $query->whereIn(
-                'site_id',
-                \App\Models\Site::query()->where('user_id', auth()->id())->select('id'),
-            );
+            SeoAccessControl::applyAccessibleSiteScope($query);
         }
 
         $article = $query->first();
@@ -348,7 +361,7 @@ class TestPrompt extends Page implements HasForms
     protected function clearResultView(): void
     {
         $this->selectedResultId = null;
-        $this->compiledPreview = null;
+        $this->refreshCompiledPreview();
         $this->outputText = null;
         $this->errorMessage = null;
         $this->tokenUsageLabel = null;
@@ -366,7 +379,7 @@ class TestPrompt extends Page implements HasForms
     public function form(Form $form): Form
     {
         return $form
-            ->schema($this->getVariableFormSchema())
+            ->schema([])
             ->statePath('variableValues');
     }
 
@@ -398,7 +411,10 @@ class TestPrompt extends Page implements HasForms
             Actions\Action::make('refresh_preview')
                 ->label('Refresh preview')
                 ->icon('heroicon-o-arrow-path')
-                ->action(fn () => $this->refreshCompiledPreview()),
+                ->action(function (): void {
+                    $this->refreshRawPrompt();
+                    $this->refreshCompiledPreview();
+                }),
         ];
     }
 
@@ -447,37 +463,16 @@ class TestPrompt extends Page implements HasForms
         $this->isRunning = true;
         $this->errorMessage = null;
         $this->outputText = null;
-        $this->compiledPreview = null;
         $this->resetChainProgress();
 
         $normalized = $this->normalizedVariableValues();
 
-        if ($this->promptUsesLoaiSanPham) {
-            $validation = app(PromptLoaiSanPhamOptionsService::class)->validateTestInputs(
-                (int) ($normalized[PromptLoaiSanPhamVariable::SITE_FIELD] ?? 0),
-                (int) ($normalized[PromptLoaiSanPhamVariable::CATEGORY_FIELD] ?? 0),
-                trim((string) ($normalized[PromptLoaiSanPhamVariable::CUSTOM_FIELD] ?? '')),
-            );
-
-            if (! ($validation['valid'] ?? false)) {
-                $this->isRunning = false;
-
-                Notification::make()
-                    ->title('Missing product category info')
-                    ->body((string) ($validation['message'] ?? ''))
-                    ->warning()
-                    ->send();
-
-                return;
-            }
-        }
-
-        if ($this->promptUsesInput && trim((string) ($normalized['input'] ?? '')) === '') {
+        if (trim($this->editablePrompt) === '') {
             $this->isRunning = false;
 
             Notification::make()
-                ->title('Missing input variable')
-                ->body('Prompt uses {{input}} - enter simulated input from connected edge before testing.')
+                ->title('Prompt trống')
+                ->body('Nhập nội dung prompt ở cột trái trước khi chạy thử.')
                 ->warning()
                 ->send();
 
@@ -487,11 +482,18 @@ class TestPrompt extends Page implements HasForms
         try {
             $runFullChain = ! $this->hasDependentSubTasks;
             $persistContext = $this->resolvePromptMediaPersistContext($normalized);
+            $compiled = trim($this->editablePrompt);
+            $useLegacyImageChain = $this->isImageToolPrompt() && $this->usesStepByStepChain();
+
             $result = PromptMediaPersistContext::using(
                 $persistContext['site_id'],
                 $persistContext['article_id'],
                 $persistContext['prompt_id'],
-                fn () => $runner->run($this->getPrompt(), $normalized, null, false, $runFullChain),
+                fn () => $useLegacyImageChain
+                    ? $runner->run($this->getPrompt(), $normalized, null, false, $runFullChain)
+                    : ($this->usesStepByStepChain()
+                        ? $runner->runWithCompiledPrompt($this->getPrompt(), $compiled, $normalized, false, true)
+                        : $runner->runWithCompiledPrompt($this->getPrompt(), $compiled, $normalized, false)),
             );
 
             if ($this->usesStepByStepChain()) {
@@ -752,6 +754,19 @@ class TestPrompt extends Page implements HasForms
         }
     }
 
+    public function refreshRawPrompt(): void
+    {
+        $this->getRecord()->refresh();
+
+        try {
+            $this->editablePrompt = app(PromptRunnerService::class)->compileRawPrompt(
+                $this->getPrompt(),
+            );
+        } catch (\Throwable) {
+            $this->editablePrompt = '';
+        }
+    }
+
     public function refreshCompiledPreview(): void
     {
         $this->getRecord()->refresh();
@@ -822,7 +837,12 @@ class TestPrompt extends Page implements HasForms
 
         $this->syncVariableValueKeys();
         $this->applySiteContextDefaults(true);
-        $this->form->fill($this->variableValues);
+
+        if (filled($snapshot['compiled_prompt'] ?? null)) {
+            $this->compiledPreview = (string) $snapshot['compiled_prompt'];
+        } else {
+            $this->refreshCompiledPreview();
+        }
 
         $usage = is_array($result->token_usage) ? $result->token_usage : null;
         $this->tokenUsageLabel = PromptTokenUsage::formatLabel($usage);
@@ -840,9 +860,6 @@ class TestPrompt extends Page implements HasForms
             $this->outputText = null;
             $this->errorMessage = null;
         }
-
-        // Luôn ghép lại từ prompt/parts mới nhất — không dùng snapshot compiled_prompt (có thể là bản cũ).
-        $this->refreshCompiledPreview();
     }
 
     public function tokenUsageLabelFor(PromptResult $result): ?string
@@ -884,7 +901,7 @@ class TestPrompt extends Page implements HasForms
 
     public function shouldShowCompiledPreview(): bool
     {
-        return ! $this->hasDependentSubTasks;
+        return true;
     }
 
     public function currentMediaOutputUrl(): ?string

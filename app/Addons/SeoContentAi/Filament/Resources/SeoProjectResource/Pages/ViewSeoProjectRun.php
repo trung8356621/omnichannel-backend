@@ -321,12 +321,7 @@ class ViewSeoProjectRun extends Page
             $query = SeoArticle::query();
 
             if (auth()->user()?->role !== 'admin') {
-                $query->whereIn(
-                    'site_id',
-                    Site::query()
-                        ->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id())
-                        ->select('id'),
-                );
+                SeoAccessControl::applyAccessibleSiteScope($query);
             }
 
             if ($projectSiteId > 0) {

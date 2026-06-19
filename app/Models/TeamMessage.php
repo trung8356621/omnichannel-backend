@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Models\Concerns\UsesCoreDatabaseConnection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class TeamMessage extends Model
 {
+    use UsesCoreDatabaseConnection;
+
     protected $fillable = [
         'owner_id',
         'user_id',
@@ -24,11 +27,6 @@ class TeamMessage extends Model
         'user_id' => 'integer',
         'attachment_size' => 'integer',
     ];
-
-    public function getConnectionName(): ?string
-    {
-        return (string) config('database.default');
-    }
 
     public function user(): BelongsTo
     {

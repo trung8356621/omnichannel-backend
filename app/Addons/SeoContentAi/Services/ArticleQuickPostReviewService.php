@@ -8,7 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CommentReviewPayloadParser;
-use App\Models\Site;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Database\Eloquent\Builder;
 
 final class ArticleQuickPostReviewService
@@ -289,14 +289,7 @@ final class ArticleQuickPostReviewService
     private function siteAccessScope(): callable
     {
         return function (Builder $query): void {
-            if (auth()->user()?->role === 'admin') {
-                return;
-            }
-
-            $query->whereIn(
-                'site_id',
-                Site::query()->where('user_id', auth()->id())->select('id'),
-            );
+            SeoAccessControl::applyAccessibleSiteScope($query);
         };
     }
 }

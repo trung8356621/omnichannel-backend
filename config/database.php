@@ -20,6 +20,18 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Core Application Connection
+    |--------------------------------------------------------------------------
+    |
+    | Bảng core (users, sites, site_services, …) luôn dùng connection này,
+    | tách khỏi database.default khi addon SEO/WP Headless được bootstrap runtime.
+    |
+    */
+
+    'core_connection' => env('DB_CORE_CONNECTION', 'mysql'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Database Connections
     |--------------------------------------------------------------------------
     |

@@ -20,7 +20,7 @@ trait BelongsToOnDefaultConnection
     ): BelongsTo {
         /** @var Model $instance */
         $instance = new $related;
-        $instance->setConnection((string) config('database.default'));
+        $instance->setConnection((string) config('database.core_connection', 'mysql'));
 
         return $this->newBelongsTo(
             $instance->newQuery(),

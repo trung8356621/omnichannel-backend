@@ -6,6 +6,8 @@ namespace App\Filament\Resources\SeoDatabaseConnectionResource\Pages;
 
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Filament\Resources\SeoDatabaseConnectionResource;
+use App\Filament\Support\SeoDatabaseConnectionAccess;
+use App\Filament\Support\SeoDatabaseConnectionOwnerSync;
 use App\Models\SeoDatabaseConnection;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -32,13 +34,53 @@ class CreateSeoDatabaseConnection extends CreateRecord
 
     /**
      * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    protected function mutateFormDataBeforeCreate(array $data): array
+    {
+        if (! SeoDatabaseConnectionAccess::isAdmin()) {
+            if (SeoDatabaseConnectionAccess::ownerHasConnection()) {
+                throw ValidationException::withMessages([
+                    'name' => 'Mỗi owner chỉ được tạo một SEO Database Connection. Hãy chỉnh sửa connection hiện có.',
+                ]);
+            }
+
+            $data['owner_id'] = auth()->id();
+        }
+
+        $ownerId = SeoDatabaseConnectionOwnerSync::resolveOwnerId(
+            $data,
+            null,
+            data_get($this->form->getRawState(), 'owner_id'),
+        );
+
+        SeoDatabaseConnectionOwnerSync::assertOwnerEligible($ownerId);
+        SeoDatabaseConnectionOwnerSync::assertOwnerSingleConnection($ownerId);
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
      */
     protected function handleRecordCreation(array $data): Model
     {
         $this->assertConnectionTest($data);
 
+        $ownerId = SeoDatabaseConnectionOwnerSync::resolveOwnerId(
+            $data,
+            null,
+            data_get($this->form->getRawState(), 'owner_id'),
+        );
+
+        unset($data['owner_id']);
+
         /** @var SeoDatabaseConnection $record */
         $record = parent::handleRecordCreation($data);
+
+        if ($ownerId > 0) {
+            SeoDatabaseConnectionOwnerSync::syncOwner($record, $ownerId);
+        }
 
         $this->runPendingMigrationsIfAny($record);
 

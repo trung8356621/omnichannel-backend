@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
+use App\Addons\SeoContentAi\Support\SeoMigrationReconciler;
 use App\Models\SeoDatabaseConnection;
 use App\Models\Service;
 use App\Models\Site;
 use App\Models\SiteService;
 use App\Models\User;
+use App\Services\SiteServiceBindingService;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Migrations\Migrator;
 use Illuminate\Support\Facades\Artisan;
@@ -102,6 +104,16 @@ final class SeoDatabaseConnectionService
             ->first();
 
         if ($connection === null) {
+            $siteService = $this->findSiteService($siteId);
+            if ($siteService !== null) {
+                $fromService = $this->connectionFromSiteService($siteService);
+                if ($fromService !== null) {
+                    $this->bootstrapFromConnection($fromService);
+
+                    return $fromService;
+                }
+            }
+
             $this->bootstrapLegacySharedConnection();
 
             return null;
@@ -193,7 +205,7 @@ final class SeoDatabaseConnectionService
     }
 
     /**
-     * @return array{pending: int, executed: bool}
+     * @return array{pending: int, executed: bool, reconciled: int}
      */
     public function runMigrationsForConnection(SeoDatabaseConnection $connection): array
     {
@@ -207,10 +219,16 @@ final class SeoDatabaseConnectionService
         $migrator->setConnection($this->connectionName());
 
         $files = $migrator->getMigrationFiles($absolutePath);
+        $reconciled = app(SeoMigrationReconciler::class)->reconcileExistingCreateTables(
+            $migrator,
+            $this->connectionName(),
+            $files,
+        );
+
         $pending = array_values(array_diff(array_keys($files), $migrator->getRepository()->getRan()));
 
         if ($pending === []) {
-            return ['pending' => 0, 'executed' => false];
+            return ['pending' => 0, 'executed' => false, 'reconciled' => $reconciled];
         }
 
         Artisan::call('migrate', [
@@ -219,7 +237,7 @@ final class SeoDatabaseConnectionService
             '--force' => true,
         ]);
 
-        return ['pending' => count($pending), 'executed' => true];
+        return ['pending' => count($pending), 'executed' => true, 'reconciled' => $reconciled];
     }
 
     public function countPendingMigrations(SeoDatabaseConnection $connection): int
@@ -313,15 +331,6 @@ final class SeoDatabaseConnectionService
             ->all();
     }
 
-    public function encryptPassword(?string $password): ?string
-    {
-        if ($password === null || trim($password) === '') {
-            return null;
-        }
-
-        return Crypt::encryptString(trim($password));
-    }
-
     public function findSiteService(int $siteId): ?SiteService
     {
         if ($siteId <= 0) {
@@ -347,6 +356,163 @@ final class SeoDatabaseConnectionService
             ->whereKey($serviceId)
             ->where('slug', $this->serviceSlug())
             ->exists();
+    }
+
+    public function syncConnectionFromSiteService(SiteService $record): SeoDatabaseConnection
+    {
+        if (! $this->isSeoContentAiService((int) $record->service_id)) {
+            throw new RuntimeException('Dịch vụ không phải SEO Content AI.');
+        }
+
+        $site = Site::query()->find((int) $record->site_id);
+        $ownerId = app(SiteServiceBindingService::class)->resolveOwnerId($record);
+        if ($ownerId <= 0) {
+            throw new RuntimeException('Site service chưa gán owner hợp lệ.');
+        }
+
+        $settings = is_array($record->settings) ? $record->settings : [];
+        $type = (string) ($settings['db_config_type'] ?? 'auto');
+
+        if ($type === 'manual') {
+            $connection = $this->resolveActiveConnectionForOwner($ownerId);
+            if ($connection === null) {
+                throw new RuntimeException(
+                    'Chưa có SEO Database Connection cho owner của site này. Tạo tại SEO Database Connections.',
+                );
+            }
+
+            return $connection;
+        }
+
+        $attributes = $this->mapSiteServiceSettingsToConnectionRecord(
+            $settings,
+            (int) ($site?->id ?? 0),
+            (string) ($site?->domain ?? ('Owner #'.$ownerId)),
+        );
+
+        $connection = SeoDatabaseConnection::query()
+            ->whereHas('users', fn (Builder $query): Builder => $query->where('users.id', $ownerId))
+            ->orderBy('id')
+            ->first();
+
+        if ($connection === null) {
+            $connection = new SeoDatabaseConnection($attributes);
+            $connection->save();
+            $connection->users()->sync([$ownerId]);
+
+            return $connection->fresh() ?? $connection;
+        }
+
+        $connection->fill($attributes);
+        $connection->save();
+
+        if (! $connection->users()->where('users.id', $ownerId)->exists()) {
+            $connection->users()->attach($ownerId);
+        }
+
+        return $connection->fresh() ?? $connection;
+    }
+
+    public function resolveActiveConnectionForOwner(int $ownerId): ?SeoDatabaseConnection
+    {
+        if ($ownerId <= 0) {
+            return null;
+        }
+
+        return SeoDatabaseConnection::query()
+            ->where('is_active', true)
+            ->whereHas('users', fn (Builder $query): Builder => $query->where('users.id', $ownerId))
+            ->orderBy('id')
+            ->first();
+    }
+
+    public function connectionFromSiteService(SiteService $siteService): ?SeoDatabaseConnection
+    {
+        $settings = is_array($siteService->settings) ? $siteService->settings : [];
+        if ($settings === []) {
+            return null;
+        }
+
+        $siteId = (int) $siteService->site_id;
+        $site = $siteId > 0 ? Site::query()->find($siteId) : null;
+        if ($site === null && ! $siteService->isBoundToUser()) {
+            return null;
+        }
+
+        $type = (string) ($settings['db_config_type'] ?? 'auto');
+
+        if ($type === 'manual') {
+            return $this->resolveActiveConnectionForOwner(app(SiteServiceBindingService::class)->resolveOwnerId($siteService));
+        }
+
+        $domain = $site !== null ? (string) $site->domain : ('Owner #'.(int) $siteService->user_id);
+        $attributes = $this->mapSiteServiceSettingsToConnectionRecord($settings, $siteId, $domain);
+        $connection = new SeoDatabaseConnection($attributes);
+        $connection->id = 0;
+        if (blank($connection->hash_id)) {
+            $connection->hash_id = hash('sha256', 'site_service_auto:'.$siteId);
+        }
+
+        return $connection;
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     * @return array<string, mixed>
+     */
+    public function mapSiteServiceSettingsToConnectionRecord(array $settings, int $siteId, string $domainLabel = ''): array
+    {
+        $type = (string) ($settings['db_config_type'] ?? 'auto');
+        $name = $domainLabel !== '' ? 'SEO DB — '.$domainLabel : 'SEO DB site #'.$siteId;
+
+        if ($type === 'manual') {
+            throw new RuntimeException(
+                'Chế độ manual không cấu hình DB trên Site Service. Dùng SEO Database Connections.',
+            );
+        }
+
+        $legacy = (string) config('seo-content-ai.legacy_shared_database', 'omi_seo_ai');
+        $perSite = (bool) config('seo-content-ai.auto_per_site_database', false);
+        $database = $perSite && $siteId > 0
+            ? config('seo-content-ai.auto_database_prefix', 'omi_seo_ai').'_'.$siteId
+            : $legacy;
+
+        return [
+            'name' => $name,
+            'type' => 'auto',
+            'host' => null,
+            'port' => null,
+            'database' => $database,
+            'username' => null,
+            'password' => null,
+            'is_active' => true,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     * @return array<string, mixed>
+     */
+    public function mapSiteServiceSettingsToConnectionAttributes(array $settings, int $siteId): array
+    {
+        $record = $this->mapSiteServiceSettingsToConnectionRecord($settings, $siteId);
+
+        return [
+            'type' => $record['type'],
+            'host' => $record['host'],
+            'port' => $record['port'],
+            'database' => $record['database'],
+            'username' => $record['username'],
+        ];
+    }
+
+    public function encryptPassword(?string $password): ?string
+    {
+        if ($password === null || trim($password) === '') {
+            return null;
+        }
+
+        return Crypt::encryptString(trim($password));
     }
 
     /**

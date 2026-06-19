@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Filament\Resources\SiteServiceResource\Pages;
 
 use App\Filament\Resources\SiteServiceResource;
@@ -13,7 +15,8 @@ class ListSiteServices extends ListRecords
     protected function getHeaderActions(): array
     {
         return [
-            Actions\CreateAction::make(),
+            Actions\CreateAction::make()
+                ->visible(fn (): bool => SiteServiceResource::canCreate()),
         ];
     }
 }

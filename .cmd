@@ -1,7 +1,7 @@
 php artisan queue:work --queue=media_generation,default --timeout=360
 
 
-powershell -ExecutionPolicy Bypass -File C:\work\omnichannel-backend\compress_plugin.ps1
+powershell -ExecutionPolicy Bypass -File D:\work\omnichannel-backend\compress_plugin.ps1
 
 #CMD HOST
 cd domains/seo.teamviahe.com/public_html
