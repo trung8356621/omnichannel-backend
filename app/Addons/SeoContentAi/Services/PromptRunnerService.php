@@ -131,7 +131,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
@@ -200,7 +199,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
@@ -315,7 +313,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
@@ -430,7 +427,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
@@ -513,7 +509,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',
@@ -592,7 +587,6 @@ final class PromptRunnerService
 
         $result = PromptResult::query()->create([
             'prompt_id' => $prompt->id,
-            'entity_id' => null,
             'user_id' => (int) auth()->id(),
             'site_id' => 0,
             'status' => 'running',

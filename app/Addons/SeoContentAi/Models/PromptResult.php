@@ -8,7 +8,6 @@ use App\Models\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class PromptResult extends Model
 {
@@ -28,11 +27,6 @@ class PromptResult extends Model
         return $this->belongsTo(Prompt::class);
     }
 
-    public function entity(): BelongsTo
-    {
-        return $this->belongsTo(Entity::class);
-    }
-
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
@@ -41,10 +35,5 @@ class PromptResult extends Model
     public function site(): BelongsTo
     {
         return $this->belongsTo(Site::class);
-    }
-
-    public function entityResults(): HasMany
-    {
-        return $this->hasMany(EntityResult::class);
     }
 }

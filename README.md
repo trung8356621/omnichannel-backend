@@ -27,11 +27,14 @@ Các bảng dưới đây lấy từ migrations trong `database/migrations/` (t�
 
 | Bảng | Mô tả ngắn |
 |------|------------|
-| **users** | `name`, `email`, `password`, `role` (`admin` \| `owner` \| `staff`), `status`, `parent_id` (staff thuộc owner), `google_id`, `avatar`, soft delete. |
+| **users** | `name`, `email`, `password`, `role` (`admin` \| `owner` \| `staff`), `seo_role` (SEO workspace: `manager` \| `planner` \| `content_manager` — dùng cho staff), `status`, `parent_id` (staff thuộc owner), `google_id`, `avatar`, soft delete. |
 | **sites** | `user_id`, `subscription_id`, `domain` (unique), `ssl`, `status`, soft delete. (Cột `url` đã bỏ.) |
 | **site_meta** | Meta kỹ thuật theo site: `meta_key`, `meta_value`. |
 | **services** | Danh mục addon: `name`, `slug`, `addon_namespace`, `db_connection` (legacy/default), `is_active`, `config` (JSON metadata từ `addon.json`). |
-| **site_services** | Gán dịch vụ cho site: `site_id`, `service_id`, `status`, `settings` (JSON). |
+| **site_services** | Gán dịch vụ cho site hoặc user: `bound_type` (`site` \| `user`), `site_id`, `user_id` (khi `bound_type=user`), `service_id`, `status`, `settings` (JSON). Dùng cho kích hoạt addon theo site hoặc gắn SEO workspace trực tiếp cho owner. |
+| **seo_database_connections** | Kết nối DB riêng cho SEO Content AI (multi-tenant): `hash_id`, `type` (`manual` \| `auto`), host/port/database/username/password, `is_active`. |
+| **seo_connection_users** | Pivot user ↔ connection SEO (owner/staff được phép vào workspace). |
+| **team_messages** | Tin nhắn nội bộ team (core DB): owner/staff, nội dung, attachment tùy chọn — dùng bởi widget chat SEO. |
 | **service_plans** | Gói bán kèm service: `name`, `price`, `duration_days`, `limits` (JSON), … |
 | **subscriptions** | User đăng ký plan: `user_id`, `plan_id`, `starts_at`, `ends_at`, `status`, soft delete. |
 | **usage_logs** | Hạn mức theo subscription: `metric_key`, `current_usage`, `limit_value`. |
@@ -99,7 +102,8 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 |---------------|----------|---------|
 | *(mặc định / không nhóm)* | **Dashboard** | Trang chủ Filament. |
 | *(không nhóm)* | **Site Management** | Thực tế là resource **Site** (`SiteResource` — CRUD site; nhãn navigation custom). |
-| **Site Management** | **Activated Services** | `SiteServiceResource` — gán dịch vụ & settings cho từng site. |
+| **Site Management** | **Activated Services** | `SiteServiceResource` — gán dịch vụ & settings; hỗ trợ `bound_type` site/user. |
+| **Site Management** | **SEO Database Connections** | `SeoDatabaseConnectionResource` — tạo/quản lý workspace DB SEO (`hash_id`, migrate, backup); admin gán owner; owner tự quản connection của mình (tối đa 1). |
 | **Site Management** | **WP Headless** | Chỉ khi addon `wp-headless` **active**; URL: `/admin/wp-headless/manage`. Chỉ role **`admin`**. |
 | **Hệ thống** | **Quản lý Service** | `ManageServices` — bật/tắt addon, sync `addon.json`; chỉ **`admin`**. |
 | *(mặc định)* | **Users** | `UserResource` (hoặc nhãn plural của model) — query scoped theo role. |
@@ -109,7 +113,15 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 - `/admin/wp-headless/connect` — flow kết nối WP (`WpHeadlessConnect`, CSRF có exception trong `bootstrap/app.php`).
 - `/admin/wp-headless/site` — chi tiết/sync site headless (`WpHeadlessSitePage`, cần đăng nhập).
 
-**Panel tách riêng:** SEO Content AI chạy panel riêng tại `/seo` (provider: `App\Addons\SeoContentAi\Providers\SeoPanelProvider`), không nằm trong navigation `/admin`.
+**Panel tách riêng:** SEO Content AI chạy panel Filament riêng tại **`/seo/{connection_hash}`** (id panel: `seo`, provider: `SeoPanelProvider`). Entry **`GET /seo`** redirect user tới workspace phù hợp hoặc trang login/no-workspace. Không nằm trong navigation `/admin` (trừ quản lý connection ở admin).
+
+**Luồng SEO workspace (tóm tắt):**
+
+1. Admin bật addon `seo-content-ai` và (tuỳ chọn) tạo **SEO Database Connection** trên `/admin`.
+2. Gán **Activated Service** SEO cho site (`bound_type=site`) hoặc owner (`bound_type=user`) — owner phải có service SEO active mới được gán connection.
+3. User mở `/seo` → bootstrap connection theo `hash_id` → Filament panel với articles, prompts, media, …
+
+Chi tiết addon: `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md`.
 
 ---
 
@@ -120,7 +132,9 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 - `app/Providers/AppServiceProvider.php` — `register()` provider theo `is_active`
 - `app/Providers/Filament/AdminPanelProvider.php` — discover Filament + views theo addon active
 - `app/Filament/Pages/ManageServices.php` — UI kích hoạt addon
-- `app/Addons/WpHeadless/WpHeadlessServiceProvider.php` — ví dụ đầy đủ: DB, routes web/API, commands, observers
+- `app/Filament/Resources/SeoDatabaseConnectionResource.php` — quản lý workspace DB SEO (core admin)
+- `app/Services/SiteServiceBindingService.php` — resolve owner/site cho `site_services.bound_type`
+- `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md` — tài liệu đầy đủ addon SEO
 
 ---
 

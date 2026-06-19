@@ -5,10 +5,11 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 | Thuộc tính | Giá trị |
 |------------|---------|
 | Slug addon | `seo-content-ai` |
-| Panel Filament | `/seo` (id: `seo`) |
-| Database connection | `omi_seo_ai` (tên DB trong `addon.json`: `omi_seo_ai`) |
+| Panel Filament | `/seo/{connection_hash}` (id: `seo`); entry redirect `GET /seo` |
+| Database | Mỗi **SEO Database Connection** có schema MySQL riêng; runtime connection động (bootstrap qua `SeoDatabaseConnectionService`) |
 | Provider | `App\Addons\SeoContentAi\SeoContentAiServiceProvider` |
 | Panel provider | `App\Addons\SeoContentAi\Providers\SeoPanelProvider` |
+| Quản lý connection (admin) | `/admin` → **Site Management → SEO Database Connections** |
 
 ---
 
@@ -16,23 +17,25 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 
 - **Bài viết / sản phẩm / danh mục** — Editor block (TipTap/React), FAQ, SEO meta, preview Google SERP, điểm SEO, review ảo.
 - **Đồng bộ WordPress** — Lưu local, đồng bộ full (`WordPressArticleSyncService`), sửa slug trực tiếp lên WP + refresh permalink, lấy nội dung từ WP, redirect sửa bài từ frontend WP.
-- **Prompt, Task & Content Projects** — Quản lý prompt, workflow builder, chạy thử, project theo tháng, chạy workflow và theo dõi run/task.
+- **Prompt, Task & Content Projects** — Quản lý prompt, workflow builder, **test prompt** (3 cột: raw / đã ghép / lịch sử), project theo tháng, chạy workflow và theo dõi run/task.
 - **Trợ lý AI toàn cục** — Sidebar chat Gemini/Claude trên các trang SEO, hỗ trợ ảnh và dùng model active từ AI settings; không render trong `/admin` hoặc trang sửa bài viết vì editor có panel AI riêng.
-- **Phân quyền SEO workspace** — Tách quyền `manager` / `planner` / `content_manager`, hỗ trợ scope domain toàn cục và role simulation qua `GlobalSeoBar`.
+- **Phân quyền SEO workspace** — Staff có `users.seo_role`: `manager` / `planner` / `content_manager`; owner/admin vào panel không cần `seo_role`. **GlobalSeoBar**: chọn domain, content project (planner), mô phỏng role.
+- **Dashboard 2 chế độ** — **Một domain** (global site đã chọn): thống kê SEO, biểu đồ điểm, trạng thái sync WP. **Tất cả domain**: tiến độ content project, hiệu suất biên tập viên (chỉ `content_manager`), sức khỏe domain, **Plugin WordPress** theo từng domain (owner/admin).
 - **Domain** — Cấu hình site, từ khóa (cụm/cluster), internal link list, CTA, tone, prompt theo domain.
-- **Keywords** — Quản lý từ khóa global (`keywords`) + liên kết đích theo domain (`seo_links` / `keyword_link`), phân loại `focus` / `internal` / `suggest` / `free`, cụm parent–child, lọc nâng cao, cào lại từ bài viết, phát hiện lệch domain khi xem từ khóa con.
+- **Keywords & Tags** — Từ khóa global + liên kết theo domain; **Tags** (submenu Keywords) gắn phrase.
 - **Thư viện media** — Upload local, sync WP, watermark, split ảnh, tối ưu ảnh, job AI generate.
+- **Team** — Trang quản lý thành viên (`SeoTeam`), chat team (`/api/seo/team/messages`), profile / đổi mật khẩu trên panel SEO.
 - **Editor nâng cao** — Lưu nháp local cho featured image + product album, bridge event Livewire↔React, autosave lock, FAQ extract debug.
-- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain; widget tải plugin WP trên dashboard.
+- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain; **Phát hành WP Plugin** (`/seo/settings/wp-plugin-release`) trên server Laravel.
 
 ---
 
 ## Yêu cầu
 
 - PHP 8.2+, Laravel 12, Filament 3
-- MySQL (connection `omi_seo_ai` kế thừa cấu hình `mysql`, database name từ `addon.json`)
+- MySQL — schema SEO **theo từng connection** (bảng `seo_database_connections` trên DB core); credential trong admin hoặc `database.local.php` (legacy single-DB dev)
 - Node.js — build frontend (`npm run build` / `npm run dev`)
-- WordPress site có cài plugin **omi-seo-ai-bridge** (repo nội bộ: `wp-seo-ai`) với token đọc/ghi trên domain
+- WordPress site có plugin **omi-seo-ai-bridge** (repo: `wp-seo-ai`) với token đọc/ghi trên domain
 
 ---
 
@@ -40,18 +43,26 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 
 ```text
 ┌─────────────────────┐     REST (read/write token)      ┌──────────────────────┐
-│  Filament /seo      │ ◄──────────────────────────────► │  WordPress + plugin  │
-│  Livewire + React   │   editor-sync, fetch, webhook   │  omi-seo-ai-bridge   │
-└─────────┬───────────┘                                  └──────────────────────┘
-          │
+│  Filament           │ ◄──────────────────────────────► │  WordPress + plugin  │
+│  /seo/{hash}        │   editor-sync, fetch, webhook   │  omi-seo-ai-bridge   │
+│  Livewire + React   │                                  └──────────────────────┘
+└─────────┬───────────┘
+          │  SeoDatabaseConnectionService (bootstrap theo hash_id)
           ▼
-   MySQL (omi_seo_ai)
-   articles, prompts, seo_media, keywords, seo_links, keyword_link, …
+   MySQL workspace (per connection)
+   articles, prompts, prompt_results, seo_media, keywords, seo_links, …
+          ▲
+          │  site_id, user_id (scalar — không FK sang DB core)
+┌─────────┴───────────┐
+│  DB core (mysql)    │  sites, users, seo_database_connections, site_services
+└─────────────────────┘
 ```
 
+- **Multi-tenant SEO DB** — Mỗi workspace = một bản ghi `seo_database_connections` + pivot `seo_connection_users`. URL panel luôn có `{connection_hash}`. Middleware `SetDynamicSeoDatabaseByHash` / `SetDynamicSeoDatabase` đặt connection runtime trước query Eloquent addon.
+- **Site service binding** — `site_services.bound_type`: `site` (theo domain) hoặc `user` (SEO gắn trực tiếp owner). Owner cần service SEO active mới được admin gán connection hoặc tự tạo connection (tối đa 1).
 - **Laravel** — Business logic trong `Services/`, model `Models/`, Filament UI `Filament/`.
 - **React (Vite)** — Editor bài viết, media library, watermark, task builder; entry trong `vite.config.js`.
-- **WP plugin** — REST namespace `omi-seo-ai/v1` (posts/terms editor-sync, media, FAQ shortcode, virtual comments, v.v.).
+- **WP plugin** — REST namespace `omi-seo-ai/v1` (posts/terms editor-sync, media, FAQ shortcode, virtual comments, site-info, …).
 
 ---
 
@@ -66,8 +77,9 @@ SeoContentAi/
 ├── Filament/                  # Resources, Pages, Widgets
 ├── Models/                    # Eloquent (connection omi_seo_ai): Keyword, SeoLink, SeoArticle, …
 ├── Services/                  # Logic nghiệp vụ (sync WP, SEO, media, FAQ, keywords, …)
-├── Support/                   # SeoAccessControl, filters (CTA blacklist, internal anchor), …
-├── Http/Controllers/          # Preview, media API, WP redirect, plugin download
+├── Support/                   # SeoAccessControl, SeoConnectionContext, filters, …
+├── Http/Controllers/          # Preview, media API, WP redirect, plugin download, team chat
+├── Http/Middleware/             # SetDynamicSeoDatabase, CheckMainRole
 ├── Livewire/                  # GlobalSeoBar (domain + role simulator)
 ├── database/migrations/       # Migration addon DB
 ├── lang/                      # en, vi (seo-content-ai::filament.*)
@@ -85,38 +97,27 @@ SeoContentAi/
 
 ## Cài đặt & vận hành
 
-### 1. Database
+### 1. Database & workspace
 
-Connection runtime: `omi_seo_ai` (khai báo trong `addon.json` → `database.connection`).
+**Production (khuyến nghị):**
+
+1. Bật addon `seo-content-ai` trên `/admin` → **Quản lý Service**.
+2. **Site Management → SEO Database Connections** — tạo connection (`manual` hoặc `auto`), chạy migrate, gán **Owner** (admin) hoặc owner tự tạo nếu đã có Activated Service SEO (`bound_type=user`).
+3. Mở workspace: **`/seo/{hash_id}`** hoặc **`/seo`** (redirect).
+
+**Local dev (legacy single DB):** vẫn có thể dùng connection tên `omi_seo_ai` qua `database.local.php` / config mặc định nếu chưa tách connection — xem `SeoDatabaseConnectionService` và migration reconciler (`SeoMigrationReconciler`) khi hosting đã có bảng nhưng thiếu dòng `migrations`.
 
 | Nguồn | Vai trò |
 |--------|---------|
-| `addon.json` → `"database"` | Host, port, username, tên DB mặc định |
-| `database.local.php` | Override credential hosting (password, host, user…) — **gitignore** |
-| Connection `mysql` core | Fallback password/user khi chưa có `database.local.php` (local dev) |
-
-**Local (cùng user/pass với core):** tạo DB `omi_seo_ai`, giữ `addon.json` mặc định — không cần `database.local.php`.
-
-**Hosting (user/pass khác core):**
+| Bảng core `seo_database_connections` | Host, port, database, user, password (encrypted), `hash_id` |
+| `database.local.php` (gitignore) | Override credential cho dev / fallback connection tĩnh |
+| `SeoDatabaseConnectionService` | Bootstrap runtime connection, migrate, backup |
 
 ```bash
-cp app/Addons/SeoContentAi/database.local.php.example app/Addons/SeoContentAi/database.local.php
+php artisan migrate   # core + migrations addon đã load
 ```
 
-Sửa `database.local.php`:
-
-```php
-return [
-    'host' => 'mysql.hosting.vn',
-    'name' => 'u123_omi_seo_ai',
-    'username' => 'u123_seo',
-    'password' => 'mat_khau_seo',
-];
-```
-
-```bash
-php artisan migrate
-```
+Sau khi tạo connection mới trên admin, dùng action **Run migrations** trên form edit connection.
 
 ### 2. Frontend
 
@@ -145,14 +146,13 @@ Trên từng **Domain** (Filament):
 - `seo_read_token` — đọc nội dung WP
 - `seo_migration_token` — ghi / editor-sync
 
-Cài plugin từ dashboard SEO (widget **WordPress Plugin**) hoặc upload bản mới tại **Settings → WP Plugin release** (`/seo/settings/wp-plugin-release`).
+**Plugin bridge:**
 
-Metadata update (`info.json`) lưu trong bảng `wp_options` → `wp_plugin_bridge_info`. API tương thích:
+- Phát hành ZIP trên Laravel: **Settings → WP Plugin release** (`/seo/{hash}/settings/wp-plugin-release`).
+- Dashboard **Tất cả domain** (owner/admin): bảng phiên bản plugin từng site (site-info `bridge_version`); nút mở `{domain}/wp-admin/admin.php?page=omi-seo-ai&view=settings` để kiểm tra/cập nhật thủ công trên WP.
+- Auto-update WP: `GET /api/seo/plugin/update-check` (kèm `download_url` signed); metadata `GET /api/seo/plugin/info.json` hoặc `/storage/plugins/omi-seo-ai-bridge/info.json` từ `wp_options`.
 
-- `GET /api/seo/plugin/update-check` — WordPress auto-update (kèm `download_url` signed)
-- `GET /api/seo/plugin/info.json` hoặc `/storage/plugins/omi-seo-ai-bridge/info.json` — JSON metadata từ DB
-
-File ZIP lưu tại `storage/app/public/plugins/omi-seo-ai-bridge/omi-seo-ai-bridge-{version}.zip`.
+File ZIP: `storage/app/public/plugins/omi-seo-ai-bridge/omi-seo-ai-bridge-{version}.zip`.
 
 Repo plugin nguồn: `wp-seo-ai` → package `omi-seo-ai-bridge`. REST `editor-sync` hỗ trợ `category_ids` khi đồng bộ bài viết.
 
@@ -166,25 +166,41 @@ Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên fronten
 
 | Nhóm | Prefix | Mô tả |
 |------|--------|--------|
-| Panel | `/seo` | Filament (articles, content-projects, domains, prompts, tasks, keywords, media, settings) |
+| Panel | `/seo/{connection_hash}` | Filament: articles, domains, prompts, tasks, keywords, tags, media, settings, profile |
+| Redirect | `GET /seo` | Vào workspace hoặc login / no-workspace |
 | Media API | `/api/seo/media` | Upload, watermark, rename, AI jobs |
 | Watermark API | `/api/seo/watermark` | Cấu hình & batch watermark |
+| Team API | `/api/seo/team` | Tin nhắn team (`messages`, `config`) |
 | Article | `/seo/articles/{id}/preview`, `seo-preview`, `wp-edit-redirect` | Preview & redirect WP |
-| Global AI chat | `GET /api/ai/chat/models`, `POST /api/ai/chat` | Danh sách model được phép và chat text/image có session auth |
+| Global AI chat | `GET /api/ai/chat/models`, `POST /api/ai/chat` | Model được phép + chat (session auth) |
 | WP bridge | `/api/seo-wp-bridge/*` | Webhook push content từ WP |
 | Plugin | `/api/seo/plugin/*` | Update check / download bridge |
-| Plugin metadata | `/api/seo/plugin/info.json`, `/storage/plugins/omi-seo-ai-bridge/info.json` | Metadata JSON từ `wp_options` |
-| Plugin (panel) | `/seo/wp-plugin/download/{version}`, `/seo/settings/wp-plugin-release` | Download & upload release |
+| Plugin (panel) | `/seo/wp-plugin/download/{version}`, settings wp-plugin-release | Download & upload release |
 
 ---
 
 ## Global site scope
 
-Thanh **GlobalSeoBar** (Livewire) trên panel `/seo` chọn domain làm scope toàn cục:
+Thanh **GlobalSeoBar** (Livewire) trên panel SEO:
 
-- Lưu trong session `seo_global_site_id` + cookie (đồng bộ qua `SeoAccessControl`).
-- Hầu hết resource (articles, keywords, tags, content projects, media, …) lọc theo domain đang chọn.
-- Đổi domain → reload trang hiện tại để query áp dụng scope mới.
+| Giá trị domain | Dashboard & scope |
+|----------------|-------------------|
+| **Tất cả domain** (`globalSiteId = null`) | Dashboard workspace: content projects, team, sức khỏe domain, plugin WP (owner/admin). Một số query không lọc theo site. |
+| **Một domain cụ thể** | Dashboard domain: stats, biểu đồ SEO, sync WP. Articles, keywords links, media, content projects, … lọc theo site. |
+
+- Lưu trong session `seo_global_site_id` + cookie (`SeoAccessControl`).
+- Staff `content_manager` không chọn domain — scope theo quyền bài viết.
+- Đổi domain → event `seoGlobalSiteChanged` + reload trang.
+
+**Phân quyền (tóm tắt):**
+
+| Vai trò | Panel | Ghi chú |
+|---------|-------|---------|
+| `admin`, `owner` | Có | Owner qua connection pivot; admin mọi connection |
+| Staff + `seo_role` | Có | `manager` > `planner` > `content_manager` |
+| GlobalSeoBar «Góc nhìn» | manager/planner | Mô phỏng role thấp hơn để test UX |
+
+Helper: `SeoAccessControl::globalSiteId()`, `setGlobalSiteId()`, `hasGlobalSiteScope()`, `applyAccessibleSiteScope()` (tránh subquery cross-DB trên hosting).
 
 **Lệch domain (domain mismatch):**
 
@@ -192,8 +208,6 @@ Thanh **GlobalSeoBar** (Livewire) trên panel `/seo` chọn domain làm scope to
 |-------|---------|
 | `/seo/articles/{id}/edit` | Nếu bài thuộc domain khác global site → redirect `ArticleDomainMismatch`, nút chuyển domain rồi mở editor |
 | `/seo/keywords?parent_id={id}` | Nếu từ khóa con chỉ có liên kết trên domain khác → empty state cảnh báo + nút **Chuyển sang {domain}** |
-
-Helper: `SeoAccessControl::globalSiteId()`, `setGlobalSiteId()`, `hasGlobalSiteScope()`.
 
 ---
 
@@ -280,6 +294,20 @@ HTML gửi WP được làm sạch qua `ArticleEditorHtmlSanitizeService` (gỡ 
 
 ---
 
+## Test prompt (`/prompts/{id}/test`)
+
+Layout 3 cột:
+
+| Cột | Nội dung |
+|-----|----------|
+| **Prompt** | Raw từ parts — giữ placeholder `{{biến}}`, sửa tay trước khi chạy |
+| **Prompt đã ghép** | Biến site mặc định đã thay; chọn lịch sử chỉ cập nhật cột này |
+| **Lịch sử** | Các lần chạy thử gần đây |
+
+Chạy thử gửi nội dung cột Prompt (đã sửa) qua `PromptRunnerService::runWithCompiledPrompt()`. Compile: `compileRawPrompt()` vs `compilePrompt()`.
+
+---
+
 ## Services quan trọng
 
 | Service | Vai trò |
@@ -297,7 +325,13 @@ HTML gửi WP được làm sạch qua `ArticleEditorHtmlSanitizeService` (gỡ 
 | `SeoProjectTaskSyncService` | Đồng bộ task theo project, kiểm soát limit và dữ liệu đầu vào |
 | `SeoProjectApprovalService` | Duyệt bài và cập nhật trạng thái content project liên kết |
 | `DomainOverviewService` | Tổng hợp trạng thái kết nối/token WordPress theo domain |
-| `WordPressPluginReleaseService` | Quản lý metadata + package plugin để update/download |
+| `AllDomainsDashboardService` | Dashboard tất cả domain: projects, team, sức khỏe domain |
+| `WordPressPluginDomainsOverviewService` | Bảng plugin WP theo domain trên dashboard |
+| `WordPressPluginReleaseService` | Quản lý metadata + package plugin trên Laravel |
+| `WordPressSiteInfoService` | Fetch/lưu `site-info` (gồm `bridge_version`) từ WP |
+| `SeoDatabaseConnectionService` | Bootstrap connection theo hash/site, migrate workspace |
+| `SeoMigrationReconciler` | Reconcile migration khi DB đã có bảng (hosting) |
+| `PromptRunnerService` | Compile/chạy prompt, lưu `prompt_results` |
 | `VirtualCommentService` | Review ảo ↔ meta `_omi_seo_virtual_comments` |
 | `ArticleWpEditRedirectController` | Redirect từ WP frontend sang editor Laravel |
 
@@ -314,12 +348,12 @@ HTML gửi WP được làm sạch qua `ArticleEditorHtmlSanitizeService` (gỡ 
 ## Kiểm thử
 
 ```bash
-php artisan test --filter=SeoContentAi
-# hoặc
 php artisan test app/Addons/SeoContentAi/tests
+# hoặc
+php artisan test --filter=SeoAccessControl
 ```
 
-Một số test có sẵn: `WorkflowParserServiceTest`, `WorkflowKeywordResearchServiceTest`, `KeywordPhraseMatcherTest`, `KeywordPersistenceServiceTest`, `KeywordPhraseDecodeTest`, `CtaKeywordBlacklistFilterTest`, `DomainLinkListKeywordSyncServiceTest`, `WordPressArticleContentServiceCategoryTest`, `ArticleEditorHtmlSanitizeServiceTest`, `SeoWatermarkSettingTest`, `SeoProjectMergeServiceTest`, `SeoProjectRunPreflightServiceTest`, `SeoMediaStorageServiceTest`, `GlobalAiChatServiceTest`.
+Nhóm test gồm: access control & site scope, keyword persistence/resync, workflow parser, SEO analyzer/sanitize, media storage, project run, migration reconciler, database bootstrap, …
 
 ---
 
@@ -328,9 +362,10 @@ Một số test có sẵn: `WorkflowParserServiceTest`, `WorkflowKeywordResearch
 - Filament resource mới → `php artisan make:filament-resource …` trong namespace addon hoặc thêm tay dưới `Filament/Resources/`.
 - CSS/JS addon → sửa file trong `resources/`, thêm entry vào `vite.config.js` nếu cần, chạy `npm run build`.
 - Blade view → namespace `seo-content-ai::` (đăng ký trong `SeoPanelProvider::boot`).
-- Model mới → `protected $connection = 'omi_seo_ai';` và migration trong `database/migrations/`.
+- Model mới → connection qua base model addon / `$connection` runtime sau bootstrap; migration trong `database/migrations/` (chạy trên workspace connection).
 - Keyword theo domain → luôn ghi qua `KeywordPersistenceService::upsert()` / `upsertMeta()`, không gán `site_id` trực tiếp lên `keywords`.
-- Cross-database (Site ↔ keyword/link) → scalar `site_id` trên `seo_links`, không FK sang DB core.
+- Cross-database (Site ↔ SEO workspace) → scalar `site_id` / `user_id`, **không FK** sang DB core; query core dùng `whereIn` qua `SeoAccessControl::accessibleSiteIds()` khi cần.
+- Bảng **`entities` / `entity_results`** đã gỡ (legacy); lịch sử prompt nằm ở `prompt_results` + `input_snapshot`.
 
 **Lưu ý layout trang Edit Article:** CSS header/sidebar tách entry `article-edit-page.css` (Vite), không `@vite` trực tiếp `article-editor.css` (chỉ bundle qua JS).
 
@@ -340,12 +375,13 @@ Một số test có sẵn: `WorkflowParserServiceTest`, `WorkflowKeywordResearch
 
 | Thành phần | Vị trí |
 |------------|--------|
-| Omnichannel Backend | Repo hiện tại, addon này |
+| Omnichannel Backend | Repo hiện tại, README gốc `README.md` |
 | WP Bridge Plugin | `wp-seo-ai` → `omi-seo-ai-bridge` |
 | Site model | `App\Models\Site` (domain, metas token) |
+| SEO connection (core) | `App\Models\SeoDatabaseConnection` |
 
 ---
 
 ## Phiên bản
 
-Theo `addon.json` (hiện tại `1.0.0`). Plugin WP có version riêng trong `storage/app/public/plugins/omi-seo-ai-bridge/` và widget dashboard SEO.
+Theo `addon.json` (hiện tại `1.0.0`). Plugin WP có version riêng trên từng site (`bridge_version` trong site-info) và bản phát hành trên Laravel (`storage/app/public/plugins/omi-seo-ai-bridge/`).
