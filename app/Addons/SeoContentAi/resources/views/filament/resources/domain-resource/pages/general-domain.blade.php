@@ -39,7 +39,7 @@
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
-<div @if($incrementalSyncRunning) wire:poll.5s="refreshIncrementalSyncProgress" @endif>
+<div @if($incrementalSyncRunning || $keywordResyncRunning) wire:poll.5s="refreshSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif
@@ -130,7 +130,8 @@
                     {{ __('Website chưa có dữ liệu trong kho SEO. Chạy đồng bộ từ WordPress.') }}
                 </x-slot>
                 @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
-                    'showTest' => auth()->user()?->role === 'admin',
+                    'showTest' => auth()->user()?->role === 'admin'
+                        && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isSeoPanelReadOnly(),
                 ])
             </x-filament::section>
         @else
@@ -203,7 +204,8 @@
                     </div>
 
                     @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
-                        'showTest' => auth()->user()?->role === 'admin',
+                        'showTest' => auth()->user()?->role === 'admin'
+                        && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isSeoPanelReadOnly(),
                     ])
                 </x-filament::section>
             </div>

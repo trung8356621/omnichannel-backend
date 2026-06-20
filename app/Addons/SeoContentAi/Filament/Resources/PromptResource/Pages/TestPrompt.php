@@ -299,7 +299,7 @@ class TestPrompt extends Page implements HasForms
 
         $query = SeoArticle::query()->with('site')->whereKey($this->publishArticleId);
 
-        if (auth()->user()?->role !== 'admin') {
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
             SeoAccessControl::applyAccessibleSiteScope($query);
         }
 

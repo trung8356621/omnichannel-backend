@@ -8,8 +8,8 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoWatermarkSetting;
 use App\Addons\SeoContentAi\Services\SeoWatermarkOverlayRatioCatalog;
 use App\Addons\SeoContentAi\Services\SeoWatermarkService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
-use App\Models\Site;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -55,7 +55,7 @@ class SeoWatermarkController extends Controller
         ];
 
         foreach (SeoWatermarkOverlayRatioCatalog::keys() as $ratioKey) {
-            $rules['overlay_' . $ratioKey] = 'nullable|image|mimes:png|max:8192';
+            $rules['overlay_'.$ratioKey] = 'nullable|image|mimes:png|max:8192';
         }
 
         $validated = $request->validate($rules);
@@ -72,7 +72,7 @@ class SeoWatermarkController extends Controller
 
         $overlayVariants = [];
         foreach (SeoWatermarkOverlayRatioCatalog::keys() as $ratioKey) {
-            $file = $request->file('overlay_' . $ratioKey);
+            $file = $request->file('overlay_'.$ratioKey);
             if ($file !== null) {
                 $overlayVariants[$ratioKey] = $file;
             }
@@ -124,7 +124,7 @@ class SeoWatermarkController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => "Đã xử lý {$total} ảnh (tối ưu" . ($applyWatermark ? ' + watermark' : '') . ") trên {$siteCount} website.",
+            'message' => "Đã xử lý {$total} ảnh (tối ưu".($applyWatermark ? ' + watermark' : '').") trên {$siteCount} website.",
             'count' => $total,
             'sites' => $siteCount,
         ]);
@@ -204,18 +204,6 @@ class SeoWatermarkController extends Controller
 
     private function canAccessSite(int $siteId): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($siteId)
-            ->where('user_id', $user->id)
-            ->exists();
+        return SeoAccessControl::canAccessSite($siteId);
     }
 }

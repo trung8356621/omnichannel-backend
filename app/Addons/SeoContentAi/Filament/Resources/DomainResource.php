@@ -169,7 +169,8 @@ class DomainResource extends SeoPanelResource
                     ->label(__('seo-content-ai::filament.domain.set_as_main'))
                     ->icon('heroicon-o-star')
                     ->color('warning')
-                    ->visible(fn (Site $record): bool => ! app(SeoMainDomainService::class)->isMain($record))
+                    ->visible(fn (Site $record): bool => static::allowsSeoPanelMutation()
+                        && ! app(SeoMainDomainService::class)->isMain($record))
                     ->requiresConfirmation()
                     ->modalDescription(__('seo-content-ai::filament.domain.set_as_main_confirm'))
                     ->action(function (Site $record): void {
@@ -199,8 +200,8 @@ class DomainResource extends SeoPanelResource
     {
         $query = parent::getEloquentQuery()->with('metas');
 
-        if (auth()->user()?->role !== 'admin') {
-            return $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            return $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;
@@ -208,17 +209,20 @@ class DomainResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function getNavigationLabel(): string

@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Support;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
+use App\Models\SeoDatabaseConnection;
 use App\Models\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -130,9 +131,70 @@ final class SeoAccessControl
         return ! self::isContentManager();
     }
 
+    public static function isSeoPanelAdminViewer(): bool
+    {
+        $user = auth()->user();
+        if (! $user instanceof User || (string) $user->role !== User::ROLE_ADMIN) {
+            return false;
+        }
+
+        return SeoConnectionContext::current() instanceof SeoDatabaseConnection
+            || SeoConnectionContext::hash() !== null;
+    }
+
+    public static function isSeoPanelReadOnly(): bool
+    {
+        return self::isSeoPanelAdminViewer();
+    }
+
+    public static function canMutateInSeoPanel(): bool
+    {
+        return ! self::isSeoPanelReadOnly();
+    }
+
+    public static function shouldScopeToAccountOwner(): bool
+    {
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            return true;
+        }
+
+        if ((string) $user->role !== User::ROLE_ADMIN) {
+            return true;
+        }
+
+        return self::isSeoPanelAdminViewer();
+    }
+
+    public static function panelOwnerId(): ?int
+    {
+        $connection = SeoConnectionContext::current();
+        if (! $connection instanceof SeoDatabaseConnection) {
+            return null;
+        }
+
+        $owner = $connection->users()
+            ->where('role', User::ROLE_OWNER)
+            ->orderBy('users.id')
+            ->first();
+
+        if ($owner instanceof User) {
+            return (int) $owner->id;
+        }
+
+        $fallback = $connection->users()->orderBy('users.id')->first();
+
+        return $fallback instanceof User ? (int) $fallback->id : null;
+    }
+
+    public static function guardSeoPanelMutation(): void
+    {
+        abort_if(self::isSeoPanelReadOnly(), 403);
+    }
+
     public static function canMutateContentProjects(): bool
     {
-        return self::canAccessPlannerFeatures();
+        return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();
     }
 
     public static function canAccessContentProjectRun(?SeoProject $project): bool
@@ -151,12 +213,12 @@ final class SeoAccessControl
 
     public static function canDeleteSeoMedia(): bool
     {
-        return ! self::isContentManager();
+        return self::canMutateInSeoPanel() && ! self::isContentManager();
     }
 
     public static function canSyncArticlesToWordPress(): bool
     {
-        return ! self::isContentManager();
+        return self::canMutateInSeoPanel() && ! self::isContentManager();
     }
 
     /**
@@ -176,7 +238,7 @@ final class SeoAccessControl
      */
     public static function applyAccessibleSiteScope(Builder $query, string $column = 'site_id'): Builder
     {
-        if (auth()->user()?->role === User::ROLE_ADMIN) {
+        if (! self::shouldScopeToAccountOwner()) {
             return $query;
         }
 
@@ -200,7 +262,7 @@ final class SeoAccessControl
     {
         $query = Site::query();
 
-        if (auth()->user()?->role === User::ROLE_ADMIN) {
+        if (! self::shouldScopeToAccountOwner()) {
             return $query;
         }
 
@@ -227,7 +289,11 @@ final class SeoAccessControl
             return false;
         }
 
-        if (in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
+        if ((string) $user->role === User::ROLE_OWNER) {
+            return true;
+        }
+
+        if ((string) $user->role === User::ROLE_ADMIN && ! self::isSeoPanelAdminViewer()) {
             return true;
         }
 
@@ -247,6 +313,10 @@ final class SeoAccessControl
 
     public static function accountOwnerId(): ?int
     {
+        if (self::isSeoPanelAdminViewer()) {
+            return self::panelOwnerId();
+        }
+
         /** @var User|null $user */
         $user = auth()->user();
         if (! $user instanceof User) {

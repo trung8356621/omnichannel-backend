@@ -38,10 +38,14 @@ class SeoTeam extends SeoPanelPage implements HasTable
 
     public function table(Table $table): Table
     {
+        $readOnly = $this->isPanelReadOnly();
+
         return $table
             ->query(fn (): Builder => $this->teamMembersQuery())
             ->heading(__('seo-content-ai::filament.team.team_list'))
-            ->description(__('seo-content-ai::filament.team.add_team_member_hint'))
+            ->description($readOnly
+                ? __('seo-content-ai::filament.global_bar.admin_view_only')
+                : __('seo-content-ai::filament.team.add_team_member_hint'))
             ->emptyStateHeading(__('seo-content-ai::filament.team.no_members'))
             ->emptyStateIcon('heroicon-o-users')
             ->columns([
@@ -62,6 +66,7 @@ class SeoTeam extends SeoPanelPage implements HasTable
                     ->options($this->seoRoleOptions())
                     ->selectablePlaceholder(false)
                     ->sortable()
+                    ->disabled($readOnly)
                     ->beforeStateUpdated(function (mixed $state, User $record): void {
                         $this->assertCanManageMember($record);
                     }),
@@ -84,6 +89,7 @@ class SeoTeam extends SeoPanelPage implements HasTable
                     ->label(__('seo-content-ai::filament.team.ban_toggle'))
                     ->onColor('danger')
                     ->offColor('success')
+                    ->disabled($readOnly)
                     ->getStateUsing(fn (User $record): bool => $record->status === User::STATUS_BLOCK)
                     ->updateStateUsing(function (User $record, bool $state): void {
                         $this->assertCanManageMember($record);
@@ -103,10 +109,10 @@ class SeoTeam extends SeoPanelPage implements HasTable
             ])
             ->defaultSort('name')
             ->paginated([10, 25, 50])
-            ->headerActions([
+            ->headerActions($readOnly ? [] : [
                 $this->addMemberAction(),
             ])
-            ->actions([
+            ->actions($readOnly ? [] : [
                 Tables\Actions\Action::make('removeFromTeam')
                     ->label(__('seo-content-ai::filament.team.remove_member'))
                     ->icon('heroicon-o-user-minus')
@@ -255,6 +261,8 @@ class SeoTeam extends SeoPanelPage implements HasTable
      */
     private function persistTeamMember(array $data): void
     {
+        SeoAccessControl::guardSeoPanelMutation();
+
         /** @var User|null $owner */
         $owner = auth()->user();
         if (! $owner instanceof User) {
@@ -404,11 +412,18 @@ class SeoTeam extends SeoPanelPage implements HasTable
 
     private function assertCanManageMember(User $member): void
     {
+        SeoAccessControl::guardSeoPanelMutation();
+
         $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
 
         if ((int) $member->parent_id !== $ownerId || $member->role !== User::ROLE_STAFF) {
             abort(403);
         }
+    }
+
+    private function isPanelReadOnly(): bool
+    {
+        return SeoAccessControl::isSeoPanelReadOnly();
     }
 
     public static function canAccess(): bool

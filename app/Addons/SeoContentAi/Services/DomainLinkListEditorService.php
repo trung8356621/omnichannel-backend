@@ -56,11 +56,12 @@ final class DomainLinkListEditorService
             ->forSite($siteId)
             ->where('type', Keyword::TYPE_NORMAL)
             ->whereIn('phrase', $phrases)
-            ->with(['links' => static fn ($query) => $query->where('seo_links.site_id', $siteId)])
             ->withCount([
-                'links as linked_articles_count' => static fn ($linkQuery) => $linkQuery
-                    ->where('seo_links.site_id', $siteId)
-                    ->whereNotNull('seo_links.source_article_id'),
+                'linkMaps as linked_articles_count' => static fn ($mapQuery) => $mapQuery
+                    ->whereHas(
+                        'sourceArticle',
+                        static fn ($articleQuery) => $articleQuery->where('site_id', $siteId),
+                    ),
             ])
             ->get(['id', 'phrase'])
             ->keyBy(fn (Keyword $keyword): string => mb_strtolower(trim((string) $keyword->phrase)));

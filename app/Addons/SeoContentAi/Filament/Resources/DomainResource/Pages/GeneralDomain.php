@@ -6,12 +6,16 @@ namespace App\Addons\SeoContentAi\Filament\Resources\DomainResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\DomainResource;
 use App\Addons\SeoContentAi\Jobs\RunIncrementalDomainSyncJob;
+use App\Addons\SeoContentAi\Jobs\RunKeywordDomainResyncJob;
 use App\Addons\SeoContentAi\Services\ClearDomainArticlesService;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
-use App\Addons\SeoContentAi\Services\KeywordDomainResyncService;
+use App\Addons\SeoContentAi\Services\LinkMapStatusAuditService;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
+use App\Addons\SeoContentAi\Support\KeywordDomainResyncCache;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
@@ -53,6 +57,8 @@ class GeneralDomain extends Page
 
     public bool $incrementalSyncResumable = false;
 
+    public bool $keywordResyncRunning = false;
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -69,6 +75,23 @@ class GeneralDomain extends Page
         }
 
         $this->restoreIncrementalSyncProgressFromCache();
+        $this->refreshKeywordResyncProgress();
+    }
+
+    public function refreshKeywordResyncProgress(): void
+    {
+        $userId = (int) auth()->id();
+        $siteId = (int) $this->getRecord()->getKey();
+        $progress = KeywordDomainResyncCache::progressFromState(
+            KeywordDomainResyncCache::read($userId, $siteId),
+        );
+
+        $wasRunning = $this->keywordResyncRunning;
+        $this->keywordResyncRunning = (bool) $progress['running'];
+
+        if ($wasRunning && ! $this->keywordResyncRunning && ($progress['status'] ?? '') === KeywordDomainResyncCache::STATUS_COMPLETED) {
+            $this->dispatch('domain-sync-completed');
+        }
     }
 
     public function refreshIncrementalSyncProgress(): void
@@ -85,6 +108,12 @@ class GeneralDomain extends Page
         if ($wasRunning && ! $this->incrementalSyncRunning && $this->incrementalSyncTotal > 0) {
             $this->dispatch('domain-sync-completed');
         }
+    }
+
+    public function refreshSyncProgress(): void
+    {
+        $this->refreshIncrementalSyncProgress();
+        $this->refreshKeywordResyncProgress();
     }
 
     private function restoreIncrementalSyncProgressFromCache(): void
@@ -364,6 +393,7 @@ class GeneralDomain extends Page
             ->label(__('seo-content-ai::filament.keyword.resync_linked'))
             ->icon('heroicon-o-arrow-path')
             ->color('danger')
+            ->visible(fn (): bool => SeoAccessControl::canMutateInSeoPanel())
             ->requiresConfirmation()
             ->modalHeading(__('seo-content-ai::filament.keyword.resync_linked'))
             ->modalDescription(__('seo-content-ai::filament.keyword.resync_linked_confirm'))
@@ -379,7 +409,8 @@ class GeneralDomain extends Page
             ->label(__('seo-content-ai::filament.domain.test_sync_debug'))
             ->icon('heroicon-o-bug-ant')
             ->color('gray')
-            ->visible(fn (): bool => auth()->user()?->role === 'admin')
+            ->visible(fn (): bool => auth()->user()?->role === 'admin'
+                && ! SeoAccessControl::isSeoPanelReadOnly())
             ->requiresConfirmation()
             ->modalDescription(__('seo-content-ai::filament.domain.test_sync_debug_description'))
             ->action(function (): void {
@@ -501,15 +532,100 @@ class GeneralDomain extends Page
 
     public function runRescrapeKeywordsAction(): void
     {
-        @set_time_limit(120);
-
         $siteId = (int) $this->getRecord()->getKey();
-        $result = app(KeywordDomainResyncService::class)->resetAndResync($siteId);
+        $userId = (int) auth()->id();
+
+        if ($siteId <= 0 || $userId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.resync_linked_failed'))
+                ->body(__('seo-content-ai::filament.keyword.resync_linked_no_domain'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        KeywordDomainResyncCache::clearIfStale($userId, $siteId);
+
+        if (
+            KeywordDomainResyncCache::isRunning($userId, $siteId)
+            || $this->keywordResyncRunning
+        ) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.resync_linked_running'))
+                ->body(__('seo-content-ai::filament.keyword.resync_linked_running_hint'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        try {
+            RunKeywordDomainResyncJob::dispatch($siteId, $userId);
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.resync_linked_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        KeywordDomainResyncCache::markRunning($userId, $siteId);
+        $this->keywordResyncRunning = true;
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.keyword.resync_linked_completed'))
-            ->body(__('seo-content-ai::filament.keyword.resync_linked_body', $result))
-            ->success()
+            ->title(__('seo-content-ai::filament.keyword.resync_linked_started'))
+            ->body(__('seo-content-ai::filament.keyword.resync_linked_started_hint'))
+            ->info()
+            ->send();
+    }
+
+    public function runAuditLinkStatusAction(): void
+    {
+        $siteId = (int) $this->getRecord()->getKey();
+
+        if ($siteId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.audit_link_status_failed'))
+                ->body(__('seo-content-ai::filament.keyword.resync_linked_no_domain'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        try {
+            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
+            $queued = app(LinkMapStatusAuditService::class)->queueDomainAudit($siteId);
+        } catch (\Throwable $exception) {
+            report($exception);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.audit_link_status_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($queued === 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.audit_link_status_empty'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.domain.audit_link_status_started', ['count' => $queued]))
+            ->body(__('seo-content-ai::filament.domain.audit_link_status_started_hint'))
+            ->info()
             ->send();
     }
 

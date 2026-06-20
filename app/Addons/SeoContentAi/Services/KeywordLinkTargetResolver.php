@@ -6,7 +6,9 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
 use App\Models\Site;
 use Illuminate\Support\Collection;
 
@@ -38,7 +40,10 @@ final class KeywordLinkTargetResolver
             ->forSite($siteId)
             ->whereNotNull('phrase')
             ->where('phrase', '!=', '')
-            ->with(['links' => static fn ($query) => $query->where('seo_links.site_id', $siteId)])
+            ->with(['linkMaps' => static fn ($query) => $query->whereHas(
+                'sourceArticle',
+                static fn ($articleQuery) => $articleQuery->where('site_id', $siteId),
+            )])
             ->get()
             ->filter(fn (Keyword $keyword): bool => mb_strtolower(trim((string) $keyword->phrase)) === $normalized)
             ->sortBy(fn (Keyword $keyword): int => Keyword::isNormalType($keyword->type) ? 0 : 1)
@@ -126,6 +131,111 @@ final class KeywordLinkTargetResolver
         return rtrim($base, '/').'/'.ltrim($slug, '/');
     }
 
+    public function resolveArticleFromUrl(int $siteId, string $url, ?SeoArticle $exclude = null): ?SeoArticle
+    {
+        $article = $this->findArticleByPublicUrl($siteId, $url);
+        if (! $article instanceof SeoArticle) {
+            return null;
+        }
+
+        if ($exclude !== null && (int) $article->id === (int) $exclude->id) {
+            return null;
+        }
+
+        return $article;
+    }
+
+    /**
+     * Resolve a scraped href to a managed article on the source site, then on peer SaaS domains.
+     */
+    public function resolveTargetArticleForLinkMap(int $sourceSiteId, string $url, ?SeoArticle $exclude = null): ?SeoArticle
+    {
+        if ($sourceSiteId > 0) {
+            $onSourceSite = $this->resolveArticleFromUrl($sourceSiteId, $url, $exclude);
+            if ($onSourceSite instanceof SeoArticle) {
+                return $onSourceSite;
+            }
+        }
+
+        $host = $this->resolveHostFromUrl($url);
+        if ($host === '') {
+            return null;
+        }
+
+        $targetSiteId = $this->resolveSiteIdByHost($host);
+        if ($targetSiteId === null || $targetSiteId === $sourceSiteId) {
+            return null;
+        }
+
+        return $this->resolveArticleFromUrl($targetSiteId, $url, $exclude);
+    }
+
+    public function resolveSiteIdByHost(string $host): ?int
+    {
+        $host = SeoLinkMapLinkTypeClassifier::normalizeDomainHost($host);
+        if ($host === '') {
+            return null;
+        }
+
+        $siteId = $this->domainSiteIdMap()->get($host);
+
+        return is_numeric($siteId) && (int) $siteId > 0 ? (int) $siteId : null;
+    }
+
+    /**
+     * @return Collection<string, int>
+     */
+    private function domainSiteIdMap(): Collection
+    {
+        if ($this->domainSiteIdMap instanceof Collection) {
+            return $this->domainSiteIdMap;
+        }
+
+        $query = Site::query()->select(['id', 'domain']);
+
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $accessible = SeoAccessControl::accessibleSiteIds();
+            if ($accessible !== []) {
+                $query->whereIn('id', $accessible);
+            }
+        }
+
+        $this->domainSiteIdMap = $query
+            ->get()
+            ->mapWithKeys(function (Site $site): array {
+                $normalized = SeoLinkMapLinkTypeClassifier::normalizeDomainHost((string) $site->domain);
+                if ($normalized === '') {
+                    return [];
+                }
+
+                return [$normalized => (int) $site->id];
+            });
+
+        return $this->domainSiteIdMap;
+    }
+
+    private ?Collection $domainSiteIdMap = null;
+
+    private function resolveHostFromUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+
+        if (str_starts_with($url, '//')) {
+            $url = 'https:'.$url;
+        }
+
+        if (str_starts_with($url, '/')) {
+            return '';
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+
+        return is_string($host) ? SeoLinkMapLinkTypeClassifier::normalizeDomainHost($host) : '';
+    }
+
     private function resolveFromInternalKeywordLinks(
         Keyword $keyword,
         SeoArticle $currentArticle,
@@ -137,14 +247,16 @@ final class KeywordLinkTargetResolver
             $this->resolveArticlePublicUrl($currentArticle) ?? '',
         );
 
-        $urls = $keyword->links()
-            ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
-            ->where('seo_links.site_id', $siteId)
-            ->orderBy('seo_links.id')
-            ->pluck('seo_links.url');
+        $urls = $keyword->linkMaps()
+            ->whereHas('sourceArticle', static fn ($query) => $query->where('site_id', $siteId))
+            ->with(['targetArticle:id,site_id,title,slug', 'sourceArticle:id,site_id'])
+            ->orderBy('seo_link_maps.id')
+            ->get()
+            ->map(fn (SeoLinkMap $map): string => $this->resolveLinkMapDestinationUrl($map, $siteId))
+            ->filter(static fn (string $url): bool => trim($url) !== '');
 
         foreach ($urls as $url) {
-            $trimmed = trim((string) $url);
+            $trimmed = trim($url);
             if ($trimmed === '') {
                 continue;
             }
@@ -166,11 +278,9 @@ final class KeywordLinkTargetResolver
             ->when($sameLanguageOnly, static fn ($query) => $query->where('language', $currentLang))
             ->whereIn('id', function ($query) use ($keyword): void {
                 $query->select('source_article_id')
-                    ->from('seo_links')
-                    ->join('keyword_link', 'keyword_link.link_id', '=', 'seo_links.id')
-                    ->where('keyword_link.keyword_id', $keyword->id)
-                    ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
-                    ->whereNotNull('seo_links.source_article_id');
+                    ->from('seo_link_maps')
+                    ->where('keyword_id', $keyword->id)
+                    ->whereNotNull('source_article_id');
             })
             ->orderBy('id')
             ->first();
@@ -318,5 +428,25 @@ final class KeywordLinkTargetResolver
         }
 
         return rtrim(strtolower($trimmed), '/');
+    }
+
+    private function resolveLinkMapDestinationUrl(SeoLinkMap $map, int $siteId): string
+    {
+        if ((int) ($map->target_article_id ?? 0) > 0) {
+            $target = $map->relationLoaded('targetArticle')
+                ? $map->targetArticle
+                : $map->targetArticle()->first(['id', 'site_id', 'title', 'slug']);
+
+            if ($target instanceof SeoArticle) {
+                $url = $this->resolveArticlePublicUrl($target);
+                if (is_string($url) && trim($url) !== '') {
+                    return trim($url);
+                }
+            }
+        }
+
+        $external = trim((string) ($map->target_external_url ?? ''));
+
+        return $external;
     }
 }

@@ -136,6 +136,7 @@ class GlobalSeoBar extends Component
             'roleOptions' => $roleOptions,
             'showContentProjectPicker' => $showContentProjectPicker,
             'contentProjectOptions' => $contentProjectOptions,
+            'isAdminViewer' => SeoAccessControl::isSeoPanelReadOnly(),
         ]);
     }
 
@@ -143,8 +144,8 @@ class GlobalSeoBar extends Component
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;

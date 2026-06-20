@@ -46,17 +46,20 @@ class PromptResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function getNavigationLabel(): string
@@ -242,13 +245,12 @@ class PromptResource extends SeoPanelResource
      */
     private static function aiConnectionOptions(): array
     {
-        $userId = auth()->id();
-
         return ApiConnection::query()
             ->where('status', 'active')
             ->when(
-                auth()->user()?->role !== 'admin',
-                fn ($query) => $query->where(function ($q) use ($userId): void {
+                SeoAccessControl::shouldScopeToAccountOwner(),
+                fn ($query) => $query->where(function ($q): void {
+                    $userId = SeoAccessControl::accountSiteOwnerId();
                     $q->where('user_id', $userId)->orWhere('is_global', true);
                 })
             )
@@ -499,11 +501,11 @@ class PromptResource extends SeoPanelResource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
-            ]);
+            ]));
     }
 
     public static function getEloquentQuery(): Builder
@@ -511,8 +513,8 @@ class PromptResource extends SeoPanelResource
         $query = parent::getEloquentQuery()
             ->with('aiConnection');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query->withoutGlobalScopes([

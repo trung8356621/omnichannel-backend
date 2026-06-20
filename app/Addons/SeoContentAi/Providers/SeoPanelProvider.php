@@ -152,6 +152,19 @@ class SeoPanelProvider extends PanelProvider
         );
 
         FilamentView::registerRenderHook(
+            PanelsRenderHook::SIDEBAR_FOOTER,
+            function (): HtmlString {
+                if (filament()->getCurrentPanel()?->getId() !== 'seo') {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.seo-sidebar-footer')->render()
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
             PanelsRenderHook::HEAD_END,
             function (): HtmlString {
                 if (! request()->is('seo', 'seo/*')) {
@@ -352,6 +365,9 @@ class SeoPanelProvider extends PanelProvider
             ->colors([
                 'primary' => Color::Emerald,
             ])
+            ->sidebarCollapsibleOnDesktop()
+            ->sidebarWidth('16rem')
+            ->collapsedSidebarWidth('4rem')
             ->maxContentWidth(MaxWidth::Full)
             ->discoverResources(
                 in: __DIR__.'/../Filament/Resources',

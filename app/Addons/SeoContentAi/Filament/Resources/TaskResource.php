@@ -38,17 +38,20 @@ class TaskResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function getNavigationLabel(): string
@@ -124,19 +127,19 @@ class TaskResource extends SeoPanelResource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
-            ]);
+            ]));
     }
 
     public static function getEloquentQuery(): Builder
     {
         $query = parent::getEloquentQuery();
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;

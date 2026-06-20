@@ -20,7 +20,7 @@ final class ArticleEditorSeoPayloadService
      */
     public function forArticle(SeoArticle $article): array
     {
-        $article->loadMissing(['articleMetas', 'keywords', 'site', 'links', 'faqs']);
+        $article->loadMissing(['articleMetas', 'keywords', 'site', 'linkMaps', 'faqs']);
 
         $analysis = $this->decodeArticleMetaJson($article, 'seo_rank_math_score');
         $extractedLinks = $article->resolveExtractedLinks();

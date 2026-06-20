@@ -92,6 +92,27 @@ class WordPressArticleContentService
             : $this->permalinkBuilder->resolve($article, $remotePermalink, $this->resolveSlug($article));
     }
 
+    public function resolveWordPressAdminEditUrl(SeoArticle $article): ?string
+    {
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return null;
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if ($site === null) {
+            return null;
+        }
+
+        $base = $this->getPermalinkBase($site);
+        if ($base === '') {
+            return null;
+        }
+
+        return $base.'/wp-admin/post.php?post='.$wpPostId.'&action=edit';
+    }
+
     public function resolveStoredWordPressPermalink(SeoArticle $article): string
     {
         return trim((string) $this->getMeta($article, 'wp_permalink', ''));

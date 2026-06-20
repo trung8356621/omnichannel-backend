@@ -7,8 +7,8 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
-use App\Models\Site;
 use Illuminate\Http\JsonResponse;
 
 class ArticleSeoPreviewController extends Controller
@@ -34,18 +34,6 @@ class ArticleSeoPreviewController extends Controller
 
     private function canViewArticle(SeoArticle $article): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
+        return SeoAccessControl::canAccessArticle($article);
     }
 }

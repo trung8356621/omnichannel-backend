@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
@@ -31,18 +32,18 @@ class ListArticlesTrash extends ListRecords
     {
         return ArticleResource::table($table)
             ->recordAction(null)
-            ->actions([
+            ->actions(SeoAccessControl::canMutateInSeoPanel() ? [
                 Tables\Actions\RestoreAction::make()
                     ->iconButton(),
                 Tables\Actions\ForceDeleteAction::make()
                     ->iconButton(),
-            ])
-            ->bulkActions([
+            ] : [])
+            ->bulkActions(SeoAccessControl::canMutateInSeoPanel() ? [
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\RestoreBulkAction::make(),
                     Tables\Actions\ForceDeleteBulkAction::make(),
                 ]),
-            ]);
+            ] : []);
     }
 
     protected function getHeaderActions(): array
@@ -52,6 +53,7 @@ class ListArticlesTrash extends ListRecords
                 ->label('Empty')
                 ->icon('heroicon-o-trash')
                 ->color('danger')
+                ->visible(fn (): bool => SeoAccessControl::canMutateInSeoPanel())
                 ->requiresConfirmation()
                 ->modalHeading('Empty trash')
                 ->modalDescription('Permanently delete all articles in trash. This cannot be undone.')

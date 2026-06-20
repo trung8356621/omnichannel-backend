@@ -94,7 +94,10 @@ class UserResource extends Resource
                 Tables\Columns\TextColumn::make('email')
                     ->label('Email')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->copyable()
+                    ->copyMessage(__('Đã copy email'))
+                    ->copyMessageDuration(2000),
 
                 Tables\Columns\TextColumn::make('role')
                     ->label(__('Rule'))

@@ -12,7 +12,6 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
-use App\Models\Site;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
@@ -320,7 +319,7 @@ class ViewSeoProjectRun extends Page
         $baseQuery = function () use ($projectSiteId): Builder {
             $query = SeoArticle::query();
 
-            if (auth()->user()?->role !== 'admin') {
+            if (SeoAccessControl::shouldScopeToAccountOwner()) {
                 SeoAccessControl::applyAccessibleSiteScope($query);
             }
 

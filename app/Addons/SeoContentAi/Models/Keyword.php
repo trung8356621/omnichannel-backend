@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
@@ -11,6 +12,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Schema;
 
 class Keyword extends Model
 {
@@ -129,6 +131,19 @@ class Keyword extends Model
             ->withTimestamps();
     }
 
+    public function linkMaps(): HasMany
+    {
+        return $this->hasMany(SeoLinkMap::class, 'keyword_id');
+    }
+
+    public function linkMapsForSite(int $siteId): HasMany
+    {
+        return $this->linkMaps()->whereHas(
+            'sourceArticle',
+            static fn (Builder $query): Builder => $query->where('site_id', $siteId),
+        );
+    }
+
     public function linksForSite(int $siteId): BelongsToMany
     {
         return $this->links()->where('seo_links.site_id', $siteId);
@@ -173,6 +188,26 @@ class Keyword extends Model
             return $globalSiteId;
         }
 
+        if ($this->relationLoaded('linkMaps') && $this->linkMaps->isNotEmpty()) {
+            $first = $this->linkMaps->first();
+            $siteId = $first?->sourceArticle?->site_id ?? null;
+
+            return is_numeric($siteId) ? (int) $siteId : null;
+        }
+
+        $siteId = $this->linkMaps()
+            ->join('articles', 'articles.id', '=', 'seo_link_maps.source_article_id')
+            ->orderBy('seo_link_maps.id')
+            ->value('articles.site_id');
+
+        if (is_numeric($siteId)) {
+            return (int) $siteId;
+        }
+
+        if (! $this->legacyKeywordLinkTableExists()) {
+            return null;
+        }
+
         if ($this->relationLoaded('links') && $this->links->isNotEmpty()) {
             return (int) $this->links->first()->site_id;
         }
@@ -184,6 +219,10 @@ class Keyword extends Model
 
     public function resolvePivotForSite(?int $siteId = null): ?KeywordLink
     {
+        if (! $this->legacyKeywordLinkTableExists()) {
+            return null;
+        }
+
         $siteId ??= $this->resolveSiteId();
         if ($siteId === null || $siteId <= 0) {
             return null;
@@ -207,6 +246,10 @@ class Keyword extends Model
 
     public function resolvePrimaryLink(?int $siteId = null): ?SeoLink
     {
+        if (! $this->legacyKeywordLinkTableExists()) {
+            return null;
+        }
+
         $siteId ??= $this->resolveSiteId();
 
         if ($this->relationLoaded('links')) {
@@ -269,9 +312,52 @@ class Keyword extends Model
             return null;
         }
 
-        $url = trim((string) ($this->resolvePrimaryLink($siteId)?->url ?? ''));
+        if ($this->legacyKeywordLinkTableExists()) {
+            $url = trim((string) ($this->resolvePrimaryLink($siteId)?->url ?? ''));
+            if ($url !== '') {
+                return $url;
+            }
+        }
+
+        return $this->targetUrlFromLinkMaps($siteId);
+    }
+
+    private function targetUrlFromLinkMaps(int $siteId): ?string
+    {
+        $map = $this->linkMapsForSite($siteId)
+            ->with('targetArticle:id,site_id,title,slug')
+            ->orderBy('seo_link_maps.id')
+            ->first();
+
+        if (! $map instanceof SeoLinkMap) {
+            return null;
+        }
+
+        $external = trim((string) ($map->target_external_url ?? ''));
+        if ($external !== '') {
+            return $external;
+        }
+
+        if ((int) ($map->target_article_id ?? 0) <= 0) {
+            return null;
+        }
+
+        $target = $map->relationLoaded('targetArticle')
+            ? $map->targetArticle
+            : $map->targetArticle()->first(['id', 'site_id', 'title', 'slug']);
+
+        if (! $target instanceof SeoArticle) {
+            return null;
+        }
+
+        $url = trim(app(WordPressArticleContentService::class)->resolvePermalink($target));
 
         return $url !== '' ? $url : null;
+    }
+
+    private function legacyKeywordLinkTableExists(): bool
+    {
+        return Schema::connection($this->getConnectionName())->hasTable('keyword_link');
     }
 
     public function hasSiteContext(int $siteId): bool
@@ -280,11 +366,13 @@ class Keyword extends Model
             return false;
         }
 
-        if ($this->relationLoaded('links')) {
-            if ($this->links->contains(static fn (SeoLink $link): bool => (int) $link->site_id === $siteId)) {
+        if ($this->relationLoaded('linkMaps')) {
+            if ($this->linkMaps->contains(
+                static fn (SeoLinkMap $map): bool => (int) ($map->sourceArticle?->site_id ?? 0) === $siteId,
+            )) {
                 return true;
             }
-        } elseif ($this->links()->where('seo_links.site_id', $siteId)->exists()) {
+        } elseif ($this->linkMapsForSite($siteId)->exists()) {
             return true;
         }
 
@@ -305,8 +393,11 @@ class Keyword extends Model
         return $query->where(function (Builder $scopeQuery) use ($siteId): void {
             $scopeQuery
                 ->whereHas(
-                    'links',
-                    static fn (Builder $linkQuery): Builder => $linkQuery->where('seo_links.site_id', $siteId),
+                    'linkMaps',
+                    static fn (Builder $mapQuery): Builder => $mapQuery->whereHas(
+                        'sourceArticle',
+                        static fn (Builder $articleQuery): Builder => $articleQuery->where('site_id', $siteId),
+                    ),
                 )
                 ->orWhereHas(
                     'articles',
@@ -334,8 +425,11 @@ class Keyword extends Model
         return $query->where(function (Builder $scopeQuery) use ($siteIds): void {
             $scopeQuery
                 ->whereHas(
-                    'links',
-                    static fn (Builder $linkQuery): Builder => $linkQuery->whereIn('seo_links.site_id', $siteIds),
+                    'linkMaps',
+                    static fn (Builder $mapQuery): Builder => $mapQuery->whereHas(
+                        'sourceArticle',
+                        static fn (Builder $articleQuery): Builder => $articleQuery->whereIn('site_id', $siteIds),
+                    ),
                 )
                 ->orWhereHas(
                     'articles',

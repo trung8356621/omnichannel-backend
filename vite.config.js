@@ -15,6 +15,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js',
                 'app/Addons/SeoContentAi/resources/css/article-edit-page.css',
                 'app/Addons/SeoContentAi/resources/js/article-seo-preview.jsx',
+                'app/Addons/SeoContentAi/resources/js/keyword-detail-panel.jsx',
                 'app/Addons/SeoContentAi/resources/js/keyword-destinations-modal.jsx',
                 'app/Addons/SeoContentAi/resources/css/media-library.css',
                 'app/Addons/SeoContentAi/resources/css/image-splitter.css',

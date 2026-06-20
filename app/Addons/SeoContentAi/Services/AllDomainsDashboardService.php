@@ -237,7 +237,7 @@ final class AllDomainsDashboardService
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
             $query->where('user_id', $ownerId);
         }

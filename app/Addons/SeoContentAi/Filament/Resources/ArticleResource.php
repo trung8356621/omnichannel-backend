@@ -234,8 +234,8 @@ class ArticleResource extends SeoPanelResource
                     ->options(function (): array {
                         $query = Site::query()->orderBy('domain');
 
-                        if (auth()->user()?->role !== 'admin') {
-                            $query->where('user_id', auth()->id());
+                        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+                            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
                         }
 
                         return $query->pluck('domain', 'id')->all();
@@ -450,7 +450,7 @@ class ArticleResource extends SeoPanelResource
             ->persistFiltersInSession()
             ->actionsAlignment('start')
             ->actions(static::getArticleTableRowActions())
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\BulkAction::make('approve_articles')
                         ->label(__('seo-content-ai::filament.article_list.review_articles'))
@@ -488,6 +488,7 @@ class ArticleResource extends SeoPanelResource
                         ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                         ->icon('heroicon-o-folder-plus')
                         ->color('warning')
+                        ->visible(fn (): bool => SeoAccessControl::canMutateInSeoPanel())
                         ->deselectRecordsAfterCompletion()
                         ->form(function (Collection $records): array {
                             $siteId = static::resolveBulkArticlesSiteId($records);
@@ -521,7 +522,7 @@ class ArticleResource extends SeoPanelResource
                         }),
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
-            ]);
+            ]));
     }
 
     public static function getEloquentQuery(): Builder
@@ -571,7 +572,7 @@ class ArticleResource extends SeoPanelResource
         bool $includeReviewScope = true,
         bool $includeContentManagerOwnershipScope = true,
     ): Builder {
-        if (auth()->user()?->role !== 'admin' && ! SeoAccessControl::isContentManager()) {
+        if (SeoAccessControl::shouldScopeToAccountOwner() && ! SeoAccessControl::isContentManager()) {
             SeoAccessControl::applyAccessibleSiteScope($query);
         }
 
@@ -799,7 +800,8 @@ class ArticleResource extends SeoPanelResource
                 ->iconButton()
                 ->color('warning')
                 ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                ->visible(fn (SeoArticle $record): bool => ! static::articleIsInContentProject($record))
+                ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canMutateInSeoPanel()
+                    && ! static::articleIsInContentProject($record))
                 ->form(function (SeoArticle $record): array {
                     $siteId = static::resolveArticleSiteId($record);
 
@@ -1212,7 +1214,7 @@ class ArticleResource extends SeoPanelResource
             ->orderBy('id');
 
         if (SeoAccessControl::isContentManager()) {
-            $query->where('user_id', auth()->id());
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         if ($siteId === null || $siteId <= 0) {
@@ -1461,12 +1463,14 @@ class ArticleResource extends SeoPanelResource
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessContentFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessContentFeatures();
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessContentFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessContentFeatures();
     }
 
     public static function getNavigationLabel(): string

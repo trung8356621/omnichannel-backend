@@ -96,8 +96,8 @@ class ArticleDomainMismatch extends Page
     {
         $query = Site::query();
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;

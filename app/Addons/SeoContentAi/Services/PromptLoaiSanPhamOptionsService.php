@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
-use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Models\Site;
 
 final class PromptLoaiSanPhamOptionsService
@@ -18,8 +18,8 @@ final class PromptLoaiSanPhamOptionsService
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query
@@ -27,7 +27,7 @@ final class PromptLoaiSanPhamOptionsService
             ->mapWithKeys(static function (Site $site): array {
                 $domain = trim((string) $site->domain);
 
-                return [(int) $site->id => $domain !== '' ? $domain : 'Site #' . $site->id];
+                return [(int) $site->id => $domain !== '' ? $domain : 'Site #'.$site->id];
             })
             ->all();
     }
@@ -51,9 +51,9 @@ final class PromptLoaiSanPhamOptionsService
             ->mapWithKeys(static function (SeoArticle $article): array {
                 $title = trim((string) ($article->title ?? ''));
                 $wpId = (int) ($article->wp_post_id ?? 0);
-                $label = $title !== '' ? $title : 'Danh mục #' . $article->id;
+                $label = $title !== '' ? $title : 'Danh mục #'.$article->id;
                 if ($wpId > 0) {
-                    $label .= ' (WP #' . $wpId . ')';
+                    $label .= ' (WP #'.$wpId.')';
                 }
 
                 return [(int) $article->id => $label];

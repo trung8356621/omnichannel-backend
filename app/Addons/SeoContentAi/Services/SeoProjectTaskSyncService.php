@@ -338,7 +338,7 @@ final class SeoProjectTaskSyncService
     {
         $query = Site::query();
 
-        if (auth()->user()?->role !== 'admin') {
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
         }
 

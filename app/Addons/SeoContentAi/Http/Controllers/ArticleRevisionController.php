@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
-use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleRevision;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
@@ -55,19 +54,6 @@ class ArticleRevisionController extends Controller
 
     private function canAccessArticle(SeoArticle $article): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            return ArticleResource::canContentManagerAccessArticle($article);
-        }
-
-        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
+        return SeoAccessControl::canAccessArticle($article);
     }
 }

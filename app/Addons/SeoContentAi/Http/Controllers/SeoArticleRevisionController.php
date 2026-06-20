@@ -12,8 +12,8 @@ use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use Illuminate\Contracts\View\View;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
 
 final class SeoArticleRevisionController extends Controller
 {
@@ -47,7 +47,7 @@ final class SeoArticleRevisionController extends Controller
         SeoArticleRevisionRestoreRequest $request,
         SeoArticle $article,
     ): RedirectResponse {
-        abort_unless($this->canAccessArticle($article), 403);
+        abort_unless(ArticleResource::canEdit($article), 403);
 
         $revisionId = (int) $request->validated('revision_id');
         $revision = $this->revisionService->findForArticle((int) $article->id, $revisionId);
@@ -88,28 +88,15 @@ final class SeoArticleRevisionController extends Controller
             'label' => ($createdAt !== null
                 ? $createdAt->timezone(config('app.timezone'))->format('d/m/Y H:i')
                 : '—').' - bởi '.(
-                trim((string) ($revision->user?->name ?? '')) !== ''
-                    ? trim((string) $revision->user->name)
-                    : 'Hệ thống'
-            ),
+                    trim((string) ($revision->user?->name ?? '')) !== ''
+                        ? trim((string) $revision->user->name)
+                        : 'Hệ thống'
+                ),
         ];
     }
 
     private function canAccessArticle(SeoArticle $article): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        if (SeoAccessControl::isContentManager()) {
-            return ArticleResource::canContentManagerAccessArticle($article);
-        }
-
-        return SeoAccessControl::canAccessSite((int) ($article->site_id ?? 0));
+        return SeoAccessControl::canAccessArticle($article);
     }
 }

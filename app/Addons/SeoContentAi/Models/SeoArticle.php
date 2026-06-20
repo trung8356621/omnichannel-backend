@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Models\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
@@ -12,6 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Bản ghi nội dung SEO trên DB addon (bảng `articles`, connection `omi_seo_ai`).
@@ -92,6 +95,11 @@ class SeoArticle extends Model
     public function links(): HasMany
     {
         return $this->hasMany(SeoLink::class, 'source_article_id');
+    }
+
+    public function linkMaps(): HasMany
+    {
+        return $this->hasMany(SeoLinkMap::class, 'source_article_id');
     }
 
     public function headings(): HasMany
@@ -189,17 +197,90 @@ class SeoArticle extends Model
      */
     public function resolveExtractedLinks(): array
     {
+        if ($this->relationLoaded('linkMaps')) {
+            return $this->linkMapsToExtractedArray($this->linkMaps);
+        }
+
+        if (SeoLinkMap::query()->where('source_article_id', $this->id)->exists()) {
+            return $this->linkMapsToExtractedArray(
+                $this->linkMaps()->with('targetArticle:id,site_id,title,slug')->orderBy('id')->get(),
+            );
+        }
+
         if ($this->relationLoaded('links')) {
             return $this->linksToExtractedArray($this->links);
         }
 
-        if (SeoLink::query()->where('source_article_id', $this->id)->exists()) {
+        if (
+            SeoLink::query()->where('source_article_id', $this->id)->exists()
+            && $this->legacyKeywordLinkTableExists()
+        ) {
             return $this->linksToExtractedArray(
-                $this->links()->with('keywords')->orderBy('id')->get()
+                $this->links()->with('keywords')->orderBy('id')->get(),
             );
         }
 
         return $this->resolveExtractedLinksFromLegacyMeta();
+    }
+
+    /**
+     * @param  \Illuminate\Database\Eloquent\Collection<int, SeoLinkMap>|\Illuminate\Support\Collection<int, SeoLinkMap>  $maps
+     * @return array{
+     *   internal: array<int, array{href:string,text:string,is_nofollow:bool}>,
+     *   external: array<int, array{href:string,text:string,is_nofollow:bool}>
+     * }
+     */
+    private function linkMapsToExtractedArray($maps): array
+    {
+        $internal = [];
+        $external = [];
+        $wpContent = app(WordPressArticleContentService::class);
+
+        foreach ($maps as $map) {
+            if (! $map instanceof SeoLinkMap) {
+                continue;
+            }
+
+            $href = trim((string) ($map->target_external_url ?? ''));
+            if ($href === '' && (int) ($map->target_article_id ?? 0) > 0) {
+                $target = $map->relationLoaded('targetArticle')
+                    ? $map->targetArticle
+                    : $map->targetArticle()->first(['id', 'site_id', 'title', 'slug']);
+
+                if ($target instanceof SeoArticle) {
+                    $href = trim($wpContent->resolvePermalink($target));
+                }
+            }
+
+            if ($href === '') {
+                continue;
+            }
+
+            $row = [
+                'href' => $href,
+                'text' => (string) ($map->anchor_text ?? ''),
+                'is_nofollow' => false,
+            ];
+
+            $linkType = $map->link_type;
+            if (
+                $linkType === SeoLinkMapType::External
+                || $linkType === SeoLinkMapType::WikiTrust
+            ) {
+                $external[] = $row;
+
+                continue;
+            }
+
+            $internal[] = $row;
+        }
+
+        return ['internal' => $internal, 'external' => $external];
+    }
+
+    private function legacyKeywordLinkTableExists(): bool
+    {
+        return Schema::connection($this->getConnectionName())->hasTable('keyword_link');
     }
 
     /**

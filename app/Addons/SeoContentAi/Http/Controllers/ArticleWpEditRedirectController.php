@@ -58,18 +58,6 @@ final class ArticleWpEditRedirectController extends Controller
 
     private function canEditArticle(SeoArticle $article): bool
     {
-        $user = auth()->user();
-        if ($user === null) {
-            return false;
-        }
-
-        if ($user->role === 'admin') {
-            return true;
-        }
-
-        return Site::query()
-            ->whereKey($article->site_id)
-            ->where('user_id', $user->id)
-            ->exists();
+        return ArticleResource::canEdit($article);
     }
 }

@@ -171,8 +171,8 @@ class WatermarkEditor extends SeoPanelPage
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;

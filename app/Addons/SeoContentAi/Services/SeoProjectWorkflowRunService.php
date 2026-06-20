@@ -11,7 +11,6 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
-use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
@@ -593,7 +592,7 @@ final class SeoProjectWorkflowRunService
     private function articleScopeForProject(int $projectSiteId): ?callable
     {
         return function (Builder $builder) use ($projectSiteId): void {
-            if (auth()->user()?->role !== 'admin') {
+            if (SeoAccessControl::shouldScopeToAccountOwner()) {
                 SeoAccessControl::applyAccessibleSiteScope($builder);
             }
 

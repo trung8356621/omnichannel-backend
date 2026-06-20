@@ -20,6 +20,10 @@ final class ArticleKeywordLinkReconcileService
         ?string $contentOverride = null,
         array $excludeAnchorPhrases = [],
     ): void {
+        if (! \App\Addons\SeoContentAi\Support\KeywordSyncIsolation::allowsAutomaticContentSync()) {
+            return;
+        }
+
         $article->loadMissing(['site', 'articleMetas']);
 
         if ($this->isTaxonomyArticle($article)) {

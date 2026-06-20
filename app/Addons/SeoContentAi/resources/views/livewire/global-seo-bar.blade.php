@@ -1,4 +1,9 @@
 <div class="flex items-center gap-3 mr-4">
+    @if ($isAdminViewer ?? false)
+        <div class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+            {{ __('seo-content-ai::filament.global_bar.admin_view_only') }}
+        </div>
+    @endif
     <div class="flex items-center gap-1.5">
         <span class="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">{{ __('seo-content-ai::filament.global_bar.domain') }}</span>
         <select

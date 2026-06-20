@@ -225,17 +225,21 @@ final class DomainOverviewService
      */
     public function getTopKeywords(int $siteId, int $limit = 8): Collection
     {
-        return Keyword::query()
-            ->whereHas('articles', static fn ($query) => $query->where('articles.site_id', $siteId))
-            ->join('article_keyword', 'article_keyword.keyword_id', '=', 'keywords.id')
+        $query = Keyword::query()
+            ->forSite($siteId)
+            ->join('seo_link_maps', 'seo_link_maps.keyword_id', '=', 'keywords.id')
             ->join('articles', function ($join) use ($siteId): void {
-                $join->on('articles.id', '=', 'article_keyword.article_id')
+                $join->on('articles.id', '=', 'seo_link_maps.source_article_id')
                     ->where('articles.site_id', '=', $siteId)
                     ->whereNull('articles.deleted_at');
             })
             ->select('keywords.id', 'keywords.phrase')
             ->selectRaw('COUNT(DISTINCT articles.id) as articles_count')
-            ->groupBy('keywords.id', 'keywords.phrase')
+            ->groupBy('keywords.id', 'keywords.phrase');
+
+        InternalAnchorKeywordFilter::applyExcludeLinkLikePhrases($query);
+
+        return $query
             ->orderByDesc('articles_count')
             ->limit($limit)
             ->get();
@@ -268,9 +272,13 @@ final class DomainOverviewService
         return $query
             ->withCount([
                 'mainArticles as main_articles_count',
-                'links as linked_articles_count' => static fn ($linkQuery) => $linkQuery
-                    ->where('seo_links.site_id', $siteId)
-                    ->whereNotNull('seo_links.source_article_id'),
+                'linkMaps as linked_articles_count' => static fn ($mapQuery) => $mapQuery
+                    ->whereHas(
+                        'sourceArticle',
+                        static fn ($articleQuery) => $articleQuery
+                            ->where('site_id', $siteId)
+                            ->whereNull('deleted_at'),
+                    ),
             ])
             ->orderByDesc('linked_articles_count')
             ->orderByDesc('main_articles_count')

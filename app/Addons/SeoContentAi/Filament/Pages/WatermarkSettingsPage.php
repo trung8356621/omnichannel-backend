@@ -361,8 +361,8 @@ class WatermarkSettingsPage extends SeoPanelPage implements HasForms
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query;

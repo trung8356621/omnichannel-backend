@@ -36,11 +36,15 @@
     ></p>
 
     <p
-        x-show="running"
+        x-show="running || @js($keywordResyncRunning)"
         x-cloak
         class="text-xs text-gray-500 dark:text-gray-400"
     >
-        {{ __('seo-content-ai::filament.domain.sync_incremental_background_hint') }}
+        @if ($keywordResyncRunning)
+            {{ __('seo-content-ai::filament.keyword.resync_linked_running_hint') }}
+        @else
+            {{ __('seo-content-ai::filament.domain.sync_incremental_background_hint') }}
+        @endif
     </p>
 
     <div class="flex flex-wrap gap-2">
@@ -51,7 +55,7 @@
             wire:click="runIncrementalSyncAction"
             wire:loading.attr="disabled"
             wire:target="runIncrementalSyncAction"
-            :disabled="$incrementalSyncRunning"
+            :disabled="$incrementalSyncRunning || $keywordResyncRunning"
         >
             <span wire:loading.remove wire:target="runIncrementalSyncAction">
                 @if ($incrementalSyncRunning)
@@ -71,12 +75,39 @@
             type="button"
             color="danger"
             icon="heroicon-o-arrow-path"
-            wire:click="mountAction('resync_keywords')"
+            wire:click="runRescrapeKeywordsAction"
+            wire:confirm="{{ __('seo-content-ai::filament.keyword.resync_linked_confirm') }}"
             wire:loading.attr="disabled"
-            wire:target="mountAction('resync_keywords')"
-            :disabled="$incrementalSyncRunning"
+            wire:target="runRescrapeKeywordsAction"
+            :disabled="$incrementalSyncRunning || $keywordResyncRunning"
         >
-            {{ __('seo-content-ai::filament.keyword.resync_linked') }}
+            <span wire:loading.remove wire:target="runRescrapeKeywordsAction">
+                @if ($keywordResyncRunning)
+                    {{ __('seo-content-ai::filament.keyword.resync_linked_running') }}
+                @else
+                    {{ __('seo-content-ai::filament.keyword.resync_linked') }}
+                @endif
+            </span>
+            <span wire:loading wire:target="runRescrapeKeywordsAction">
+                {{ __('seo-content-ai::filament.keyword.resync_linked_dispatching') }}
+            </span>
+        </x-filament::button>
+
+        <x-filament::button
+            type="button"
+            color="warning"
+            icon="heroicon-o-link-slash"
+            wire:click="runAuditLinkStatusAction"
+            wire:loading.attr="disabled"
+            wire:target="runAuditLinkStatusAction"
+            :disabled="$incrementalSyncRunning || $keywordResyncRunning"
+        >
+            <span wire:loading.remove wire:target="runAuditLinkStatusAction">
+                {{ __('seo-content-ai::filament.domain.audit_link_status') }}
+            </span>
+            <span wire:loading wire:target="runAuditLinkStatusAction">
+                {{ __('seo-content-ai::filament.domain.audit_link_status_dispatching') }}
+            </span>
         </x-filament::button>
 
         @if ($showTest)

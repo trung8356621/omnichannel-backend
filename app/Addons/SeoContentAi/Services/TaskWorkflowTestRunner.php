@@ -1807,8 +1807,8 @@ final class TaskWorkflowTestRunner
 
         $query = Site::query()->orderBy('id');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         $siteId = $query->value('id');

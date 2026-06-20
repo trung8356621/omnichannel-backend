@@ -69,7 +69,7 @@ final class CreateArticlesFromTaskService
         }
 
         $scope = function (Builder $builder): void {
-            if (auth()->user()?->role === 'admin') {
+            if (! SeoAccessControl::shouldScopeToAccountOwner()) {
                 return;
             }
 
@@ -427,8 +427,8 @@ final class CreateArticlesFromTaskService
     {
         $query = SeoTask::query()->where('is_active', true)->orderBy('name');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query->pluck('name', 'id')->all();

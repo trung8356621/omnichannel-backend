@@ -51,7 +51,6 @@ final class ArticleInternalLinkSuggestionService
             ->where('type', Keyword::TYPE_NORMAL)
             ->whereNotNull('phrase')
             ->where('phrase', '!=', '')
-            ->with(['links' => static fn ($query) => $query->where('seo_links.site_id', $siteId)])
             ->orderByRaw('CHAR_LENGTH(phrase) DESC');
 
         if ($excludeKeywordIds->isNotEmpty()) {

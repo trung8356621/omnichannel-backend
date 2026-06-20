@@ -6,7 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use Illuminate\Support\Facades\DB;
 
 final class KeywordDebugRescrapeService
@@ -90,11 +90,8 @@ final class KeywordDebugRescrapeService
     {
         $fromArticles = $keyword->articles()->pluck('articles.id');
 
-        $fromOutboundLinks = SeoLink::query()
-            ->whereHas(
-                'keywords',
-                static fn ($query) => $query->where('keywords.id', $keyword->id),
-            )
+        $fromOutboundLinks = SeoLinkMap::query()
+            ->where('keyword_id', $keyword->id)
             ->whereNotNull('source_article_id')
             ->pluck('source_article_id');
 

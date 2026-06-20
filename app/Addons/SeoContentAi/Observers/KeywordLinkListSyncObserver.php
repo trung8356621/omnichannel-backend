@@ -22,6 +22,12 @@ final class KeywordLinkListSyncObserver
 
     public function saved(Keyword $keyword): void
     {
+        if (! \App\Addons\SeoContentAi\Support\KeywordSyncIsolation::allowsKeywordObserverSync()) {
+            $this->previousPhrase = null;
+
+            return;
+        }
+
         if ($this->previousPhrase !== null && $this->previousPhrase !== '') {
             app(KeywordPhraseUpdateService::class)->propagate($keyword, $this->previousPhrase);
         }
@@ -58,6 +64,10 @@ final class KeywordLinkListSyncObserver
 
     public function deleted(Keyword $keyword): void
     {
+        if (! \App\Addons\SeoContentAi\Support\KeywordSyncIsolation::allowsKeywordObserverSync()) {
+            return;
+        }
+
         if ($keyword->type !== Keyword::TYPE_NORMAL) {
             return;
         }

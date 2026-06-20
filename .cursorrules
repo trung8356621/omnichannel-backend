@@ -110,3 +110,23 @@ Dọn các file generated trong `bootstrap/cache/` (không xóa `.gitignore`).
 Chạy lệnh: composer dump-autoload -o.
 
 Chạy lệnh: php artisan optimize:clear.
+
+10. FRONTEND UI & LIVEWIRE OPTIMIZATION (MODAL, DRAWER & LOADING STATES)
+
+Do NOT send Livewire server requests just to toggle layout visibility or trigger frontend animations. All interactive elements must provide instant visual feedback.
+
+UI State & Animation Controls (Client-Side Only):
+- Modals, drop-downs, popovers, and side drawers must have their opening/closing states handled strictly on the client-side using JavaScript or Alpine.js (e.g., avoid `wire:click="$set('open', true)"` for pure layout toggles).
+- Use smooth Tailwind CSS transitions and translation utilities (e.g., `transform transition-transform duration-300`) for slide-ins or fade-ins to prevent abrupt layout shifts.
+
+Deferred Data Loading & Skeleton Placeholders:
+- When a UI panel (like a Right Detail Bar/Drawer) is activated, open the container instantly on the client side.
+- Fetch the server-side data asynchronously via Livewire's deferred loading (`wire:init`) or explicit Javascript/Alpine listeners (`$wire.loadData()`).
+- Always render an animated Skeleton Placeholder (using Tailwind's `animate-pulse` with matching row/block shapes) inside the empty container while waiting for the server response.
+
+Mandatory Interactivity Loading States:
+- Any element triggering a Livewire server action (`wire:click`, submit, form processing) MUST have an explicit loading indicator. Never leave the interface looking unresponsive or frozen.
+- Use Livewire's `wire:loading` and `wire:target` directives precisely to:
+  * Apply `opacity-50 pointer-events-none` to the clicked button to prevent double-submissions.
+  * Swap or append text/icons with a revolving SVG spinner indicator.
+  * Target only the specific method being executed to avoid global, accidental UI locking.

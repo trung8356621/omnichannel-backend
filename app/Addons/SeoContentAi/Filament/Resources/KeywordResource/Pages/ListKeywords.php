@@ -4,23 +4,36 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 
+use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
+use App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages\Concerns\HasKeywordWorkspaceNavigation;
 use App\Addons\SeoContentAi\Filament\Resources\TagResource;
 use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
+use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
+use Filament\Actions\Action;
 use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
+use Filament\Tables;
+use Filament\Tables\Enums\FiltersLayout;
+use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\HtmlString;
 use Livewire\Attributes\Renderless;
 use Livewire\Attributes\Url;
 
 class ListKeywords extends ListRecords
 {
+    use HasKeywordWorkspaceNavigation;
+
     protected static string $resource = KeywordResource::class;
 
     protected static string $view = 'seo-content-ai::filament.resources.keywords.pages.list-keywords';
@@ -28,23 +41,106 @@ class ListKeywords extends ListRecords
     #[Url(as: 'parent_id')]
     public ?int $parentId = null;
 
+    #[Url(as: 'stat')]
+    public ?string $dictionaryStatFilter = null;
+
+    /** @var list<int> */
+    public array $expandedParentIds = [];
+
+    public ?int $selectedKeywordId = null;
+
     public function mount(): void
     {
         SeoAccessControl::setGlobalSiteId(null);
     }
 
+    protected function getActiveKeywordWorkspaceKey(): string
+    {
+        return 'index';
+    }
+
+    public function toggleParentExpand(int $parentId): void
+    {
+        if ($parentId <= 0) {
+            return;
+        }
+
+        if (in_array($parentId, $this->expandedParentIds, true)) {
+            $this->expandedParentIds = array_values(array_filter(
+                $this->expandedParentIds,
+                static fn (int $id): bool => $id !== $parentId,
+            ));
+        } else {
+            $this->expandedParentIds[] = $parentId;
+        }
+    }
+
+    public function selectKeyword(string $recordKey): void
+    {
+        $keywordId = (int) $recordKey;
+        if ($keywordId <= 0) {
+            return;
+        }
+
+        $this->selectedKeywordId = $keywordId;
+        $this->dispatch('keyword-detail-open', keywordId: $keywordId);
+        $this->skipRender();
+    }
+
+    public function selectKeywordForDetail(Keyword $record): void
+    {
+        $this->selectKeyword((string) $record->getKey());
+    }
+
+    public function closeSidebar(): void
+    {
+        $this->selectedKeywordId = null;
+        $this->dispatch('keyword-detail-close');
+        $this->skipRender();
+    }
+
     /**
-     * @return array{phrase: string, html: string, error: string|null}
+     * @return array{
+     *     phrase: string,
+     *     html: string,
+     *     canEdit: bool,
+     *     canDelete: bool,
+     *     canMove: bool,
+     *     error: string|null,
+     * }
      */
     #[Renderless]
-    public function loadKeywordDestinationsModal(int $keywordId): array
+    public function loadKeywordDetailPanel(int $keywordId): array
     {
+        if ($keywordId <= 0) {
+            return [
+                'phrase' => '',
+                'html' => '',
+                'canEdit' => false,
+                'canDelete' => false,
+                'canMove' => false,
+                'error' => __('seo-content-ai::filament.keyword.destinations_modal_not_found'),
+            ];
+        }
+
         $keyword = Keyword::query()
+            ->withCount([
+                'mainArticles as main_articles_count',
+                'linkMaps as site_links_count',
+                'linkMaps as linked_articles_count',
+                'children as children_count',
+            ])
             ->with([
-                'links' => static fn ($linkQuery): mixed => $linkQuery
-                    ->orderBy('seo_links.id')
-                    ->with(['sourceArticle:id,site_id,title,slug']),
-                'mainArticles.site',
+                'parent:id,phrase',
+                'tags',
+                'linkMaps' => static fn ($linkQuery): mixed => $linkQuery
+                    ->orderBy('seo_link_maps.id')
+                    ->with([
+                        'sourceArticle:id,site_id,title,slug',
+                        'sourceArticle.site:id,domain',
+                        'targetArticle:id,site_id,title,slug',
+                    ]),
+                'mainArticles.site:id,domain',
             ])
             ->find($keywordId);
 
@@ -52,17 +148,288 @@ class ListKeywords extends ListRecords
             return [
                 'phrase' => '',
                 'html' => '',
+                'canEdit' => false,
+                'canDelete' => false,
+                'canMove' => false,
                 'error' => __('seo-content-ai::filament.keyword.destinations_modal_not_found'),
             ];
         }
 
+        $siteId = (int) (KeywordResource::resolveKeywordSiteId($keyword) ?? 0);
+        $contentAnalysisUrl = $siteId > 0 && (int) ($keyword->linked_articles_count ?? 0) > 0
+            ? app(DomainOverviewService::class)->buildArticlesFilterUrlForInternalAnchorKeyword($siteId, (int) $keyword->id)
+            : null;
+
         return [
             'phrase' => (string) $keyword->phrase,
-            'html' => view('seo-content-ai::filament.resources.keywords.columns.destinations-modal-content', [
+            'html' => view('seo-content-ai::filament.resources.keywords.pages.partials.keyword-dictionary-drawer-content', [
                 'record' => $keyword,
             ])->render(),
+            'contentAnalysisUrl' => $contentAnalysisUrl,
+            'canEdit' => KeywordResource::canEdit($keyword),
+            'canDelete' => KeywordResource::canDelete($keyword),
+            'canMove' => SeoAccessControl::canMutateInSeoPanel()
+                && SeoAccessControl::canAccessPlannerFeatures(),
             'error' => null,
         ];
+    }
+
+    public function assignToContentProjectAction(): Action
+    {
+        return Action::make('assignToContentProject')
+            ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+            ->icon('heroicon-o-folder-plus')
+            ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+            ->modalDescription(__('seo-content-ai::filament.keyword.workspace_assign_description'))
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+            ->form(function (array $arguments): array {
+                $keyword = $this->resolveKeywordForMapId((int) ($arguments['mapId'] ?? 0));
+                if (! $keyword instanceof Keyword) {
+                    return [];
+                }
+
+                $siteId = $this->resolveMapSiteId((int) ($arguments['mapId'] ?? 0));
+
+                if (KeywordResource::resolveKeywordDirectAssignData($siteId) !== null) {
+                    return [];
+                }
+
+                return KeywordResource::assignKeywordContentProjectFormSchema(
+                    $siteId !== null && $siteId > 0 ? [$siteId] : [],
+                );
+            })
+            ->requiresConfirmation(function (array $arguments): bool {
+                $siteId = $this->resolveMapSiteId((int) ($arguments['mapId'] ?? 0));
+
+                return KeywordResource::resolveKeywordDirectAssignData($siteId) === null;
+            })
+            ->modalHidden(function (array $arguments): bool {
+                $siteId = $this->resolveMapSiteId((int) ($arguments['mapId'] ?? 0));
+
+                return KeywordResource::resolveKeywordDirectAssignData($siteId) !== null;
+            })
+            ->action(function (array $arguments, array $data): void {
+                $mapId = (int) ($arguments['mapId'] ?? 0);
+                $keyword = $this->resolveKeywordForMapId($mapId);
+                if (! $keyword instanceof Keyword) {
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.keyword.workspace_map_not_found'))
+                        ->danger()
+                        ->send();
+
+                    return;
+                }
+
+                if (! KeywordResource::canAssignKeywordToContentProject($keyword)) {
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.keyword.workspace_assign_denied'))
+                        ->warning()
+                        ->send();
+
+                    return;
+                }
+
+                $siteId = $this->resolveMapSiteId($mapId);
+                $assignData = KeywordResource::resolveKeywordDirectAssignData($siteId) ?? $data;
+                $summary = KeywordResource::executeAssignKeywordsToContentProjects(
+                    Collection::make([$keyword]),
+                    $assignData,
+                );
+
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.keyword.assign_completed'))
+                    ->body(ArticleResource::buildAssignContentProjectBody($summary))
+                    ->success()
+                    ->send();
+            });
+    }
+
+    private function resolveKeywordForMapId(int $mapId): ?Keyword
+    {
+        if ($mapId <= 0) {
+            return null;
+        }
+
+        $map = SeoLinkMap::query()->with('keyword')->find($mapId);
+        $keyword = $map?->keyword;
+
+        return $keyword instanceof Keyword ? $keyword : null;
+    }
+
+    private function resolveMapSiteId(int $mapId): ?int
+    {
+        if ($mapId <= 0) {
+            return null;
+        }
+
+        $siteId = SeoLinkMap::query()
+            ->whereKey($mapId)
+            ->join('articles', 'articles.id', '=', 'seo_link_maps.source_article_id')
+            ->value('articles.site_id');
+
+        return is_numeric($siteId) ? (int) $siteId : null;
+    }
+
+    public function editSelectedKeyword(): void
+    {
+        if ($this->selectedKeywordId === null || $this->selectedKeywordId <= 0) {
+            return;
+        }
+
+        $this->mountTableAction('edit', (string) $this->selectedKeywordId);
+    }
+
+    public function deleteSelectedKeyword(): void
+    {
+        if ($this->selectedKeywordId === null || $this->selectedKeywordId <= 0) {
+            return;
+        }
+
+        $this->mountTableAction('delete', (string) $this->selectedKeywordId);
+    }
+
+    public function moveSelectedKeyword(): void
+    {
+        if ($this->selectedKeywordId === null || $this->selectedKeywordId <= 0) {
+            return;
+        }
+
+        $this->mountTableAction('move_parent', (string) $this->selectedKeywordId);
+    }
+
+    public function table(Table $table): Table
+    {
+        $table = KeywordResource::table($table);
+
+        if ($this->parentId === null) {
+            $table
+                ->filtersLayout(FiltersLayout::AboveContentCollapsible)
+                ->modifyQueryUsing(fn (Builder $query): Builder => $this->applyDictionaryStatScope($query));
+        }
+
+        return $table
+            ->recordAction('selectKeyword')
+            ->actions($this->listPageTableActions());
+    }
+
+    public function filterTagsAction(): Action
+    {
+        return Action::make('filterTags')
+            ->label(__('seo-content-ai::filament.keyword.tags_filter_heading'))
+            ->modalHeading(__('seo-content-ai::filament.keyword.tags_filter_heading'))
+            ->modalDescription(__('seo-content-ai::filament.keyword.tags_filter_description'))
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.keyword.tags_filter_apply'))
+            ->modalWidth('lg')
+            ->form([
+                Forms\Components\Select::make('include_tag_ids')
+                    ->label(__('seo-content-ai::filament.keyword.include_tags'))
+                    ->options(fn (): array => KeywordResource::tagFilterOptions())
+                    ->multiple()
+                    ->searchable()
+                    ->preload()
+                    ->native(false),
+                Forms\Components\Select::make('exclude_tag_ids')
+                    ->label(__('seo-content-ai::filament.keyword.exclude_tags'))
+                    ->options(fn (): array => KeywordResource::tagFilterOptions())
+                    ->multiple()
+                    ->searchable()
+                    ->preload()
+                    ->native(false),
+            ])
+            ->fillForm(function (): array {
+                $scope = is_array($this->tableFilters['tags_scope'] ?? null)
+                    ? $this->tableFilters['tags_scope']
+                    : [];
+
+                return [
+                    'include_tag_ids' => $scope['include_tag_ids'] ?? [],
+                    'exclude_tag_ids' => $scope['exclude_tag_ids'] ?? [],
+                ];
+            })
+            ->action(function (array $data): void {
+                $includeIds = collect($data['include_tag_ids'] ?? [])
+                    ->filter(static fn (mixed $id): bool => is_numeric($id))
+                    ->map(static fn (mixed $id): int => (int) $id)
+                    ->filter(static fn (int $id): bool => $id > 0)
+                    ->values()
+                    ->all();
+
+                $excludeIds = collect($data['exclude_tag_ids'] ?? [])
+                    ->filter(static fn (mixed $id): bool => is_numeric($id))
+                    ->map(static fn (mixed $id): int => (int) $id)
+                    ->filter(static fn (int $id): bool => $id > 0)
+                    ->values()
+                    ->all();
+
+                $this->tableFilters['tags_scope'] = [
+                    'include_tag_ids' => $includeIds,
+                    'exclude_tag_ids' => $excludeIds,
+                    'tags_filter_display' => null,
+                ];
+
+                $this->updatedTableFilters();
+            });
+    }
+
+    public function getHeading(): string|\Illuminate\Contracts\Support\Htmlable
+    {
+        if ($this->parentId !== null && $this->parentId > 0) {
+            return __('seo-content-ai::filament.nav.keywords');
+        }
+
+        return new HtmlString('');
+    }
+
+    /**
+     * @return array{total: int, active: int, needs_optimization: int, errors: int}
+     */
+    public function getDictionaryStats(): array
+    {
+        $query = $this->buildDictionaryListingQuery();
+
+        if (! $query instanceof Builder) {
+            return [
+                'total' => 0,
+                'active' => 0,
+                'needs_optimization' => 0,
+                'errors' => 0,
+            ];
+        }
+
+        return [
+            'total' => (clone $query)->count(),
+            'active' => (clone $query)->where(function (Builder $builder): void {
+                $builder
+                    ->whereHas('mainArticles')
+                    ->orWhereHas(
+                        'linkMaps',
+                        static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
+                    );
+            })->count(),
+            'needs_optimization' => (clone $query)
+                ->whereDoesntHave('mainArticles')
+                ->whereDoesntHave(
+                    'linkMaps',
+                    static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
+                )
+                ->count(),
+            'errors' => (clone $query)->whereHas(
+                'linkMaps',
+                static fn (Builder $mapQuery): Builder => $mapQuery->where('status', SeoLinkMapStatus::Broken),
+            )->count(),
+        ];
+    }
+
+    public function applyDictionaryStatFilter(string $statKey): void
+    {
+        $allowed = ['total', 'active', 'needs_optimization', 'errors'];
+        if (! in_array($statKey, $allowed, true)) {
+            return;
+        }
+
+        $this->dictionaryStatFilter = $this->dictionaryStatFilter === $statKey ? null : $statKey;
+        $this->resetPage();
+        $this->flushCachedTableRecords();
     }
 
     public function getSubheading(): ?string
@@ -85,9 +452,105 @@ class ListKeywords extends ListRecords
     }
 
     /**
+     * @return list<Tables\Actions\Action|Tables\Actions\EditAction|Tables\Actions\DeleteAction>
+     */
+    protected function listPageTableActions(): array
+    {
+        return [
+            KeywordResource::quickCopyTableAction(),
+            Tables\Actions\EditAction::make()
+                ->modalHeading(__('seo-content-ai::filament.keyword.edit'))
+                ->form(fn (Keyword $record): array => KeywordResource::editKeywordFormSchema($record))
+                ->extraAttributes(['class' => 'keyword-ta-sr-action'])
+                ->authorize(fn (Keyword $record): bool => KeywordResource::canEdit($record)),
+            Tables\Actions\DeleteAction::make()
+                ->extraAttributes(['class' => 'keyword-ta-sr-action'])
+                ->authorize(fn (Keyword $record): bool => KeywordResource::canDelete($record))
+                ->after(function (): void {
+                    $this->selectedKeywordId = null;
+                    $this->dispatch('keyword-detail-close');
+                }),
+            Tables\Actions\Action::make('move_parent')
+                ->label(__('seo-content-ai::filament.keyword.drawer_move'))
+                ->modalHeading(__('seo-content-ai::filament.keyword.bulk_quick_parent'))
+                ->extraAttributes(['class' => 'keyword-ta-sr-action'])
+                ->form(fn (Keyword $record): array => [
+                    Forms\Components\Select::make('parent_id')
+                        ->label(__('seo-content-ai::filament.keyword.parent_keyword'))
+                        ->options(fn (): array => KeywordResource::bulkParentOptions(Collection::make([$record])))
+                        ->getSearchResultsUsing(
+                            fn (string $search, Keyword $record): array => KeywordResource::bulkParentOptions(
+                                Collection::make([$record]),
+                                $search,
+                            ),
+                        )
+                        ->getOptionLabelUsing(
+                            fn (mixed $value): ?string => KeywordResource::parentKeywordOptionLabel($value),
+                        )
+                        ->required()
+                        ->searchable()
+                        ->preload()
+                        ->native(false)
+                        ->helperText(__('seo-content-ai::filament.keyword.bulk_quick_parent_hint')),
+                ])
+                ->action(function (Keyword $record, array $data): void {
+                    $parentId = (int) ($data['parent_id'] ?? 0);
+                    if ($parentId <= 0) {
+                        return;
+                    }
+
+                    $parent = Keyword::query()->find($parentId);
+                    if (! $parent instanceof Keyword || $parent->parent_id !== null) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.keyword.bulk_quick_parent_failed'))
+                            ->body(__('seo-content-ai::filament.keyword.bulk_quick_parent_invalid_parent'))
+                            ->danger()
+                            ->send();
+
+                        return;
+                    }
+
+                    if (
+                        (int) $record->id === $parentId
+                        || KeywordResource::resolveKeywordSiteId($record) !== KeywordResource::resolveKeywordSiteId($parent)
+                    ) {
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.keyword.bulk_quick_parent_failed'))
+                            ->body(__('seo-content-ai::filament.keyword.bulk_quick_parent_body', [
+                                'updated' => 0,
+                                'skipped' => 1,
+                            ]))
+                            ->warning()
+                            ->send();
+
+                        return;
+                    }
+
+                    if ((int) $record->parent_id !== $parentId) {
+                        $record->update(['parent_id' => $parentId]);
+                    }
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.keyword.bulk_quick_parent_completed'))
+                        ->body(__('seo-content-ai::filament.keyword.bulk_quick_parent_body', [
+                            'updated' => 1,
+                            'skipped' => 0,
+                        ]))
+                        ->success()
+                        ->send();
+                }),
+        ];
+    }
+
+    /**
      * Global keyword dictionary: GlobalSeoBar domain must not filter this listing.
      */
     protected function getTableQuery(): ?Builder
+    {
+        return $this->buildDictionaryListingQuery();
+    }
+
+    protected function buildDictionaryListingQuery(): ?Builder
     {
         $query = parent::getTableQuery();
 
@@ -95,7 +558,59 @@ class ListKeywords extends ListRecords
             return $query;
         }
 
-        return KeywordResource::applyParentScopeToQuery($query, $this->parentId);
+        if ($this->parentId !== null && $this->parentId > 0) {
+            return KeywordResource::applyParentScopeToQuery($query, $this->parentId);
+        }
+
+        $expanded = array_values(array_filter(
+            $this->expandedParentIds,
+            static fn (mixed $id): bool => is_numeric($id) && (int) $id > 0,
+        ));
+
+        if ($expanded === []) {
+            return $query->whereNull('parent_id');
+        }
+
+        return $query
+            ->where(function (Builder $builder) use ($expanded): void {
+                $builder
+                    ->whereNull('parent_id')
+                    ->orWhereIn('parent_id', $expanded);
+            })
+            ->orderByRaw('COALESCE(parent_id, id) ASC')
+            ->orderByRaw('CASE WHEN parent_id IS NULL THEN 0 ELSE 1 END ASC')
+            ->orderBy('phrase');
+    }
+
+    protected function applyDictionaryStatScope(Builder $query): Builder
+    {
+        $statKey = $this->dictionaryStatFilter;
+
+        if ($statKey === null || $statKey === '' || $statKey === 'total') {
+            return $query;
+        }
+
+        return match ($statKey) {
+            'active' => $query->where(function (Builder $builder): void {
+                $builder
+                    ->whereHas('mainArticles')
+                    ->orWhereHas(
+                        'linkMaps',
+                        static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
+                    );
+            }),
+            'needs_optimization' => $query
+                ->whereDoesntHave('mainArticles')
+                ->whereDoesntHave(
+                    'linkMaps',
+                    static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
+                ),
+            'errors' => $query->whereHas(
+                'linkMaps',
+                static fn (Builder $mapQuery): Builder => $mapQuery->where('status', SeoLinkMapStatus::Broken),
+            ),
+            default => $query,
+        };
     }
 
     protected function getHeaderActions(): array
@@ -117,7 +632,7 @@ class ListKeywords extends ListRecords
             ->url(TagResource::getUrl('index'));
 
         $actions[] = Actions\Action::make('add_keywords')
-            ->label('Add keyword')
+            ->label(__('seo-content-ai::filament.keyword.add_keyword'))
             ->icon('heroicon-o-plus')
             ->form([
                 Forms\Components\Select::make('site_id')

@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
+use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -504,6 +505,15 @@ class SeoAnalyzerService
         array $extractedLinks,
         array $excludeAnchorPhrases = [],
     ): void {
+        if (! KeywordSyncIsolation::allowsContentKeywordPersistence()) {
+            return;
+        }
+
+        $connection = (new Keyword)->getConnectionName();
+        if (! Schema::connection($connection)->hasTable('keyword_link')) {
+            return;
+        }
+
         $previousKeywordIds = SeoLink::query()
             ->where('source_article_id', $article->id)
             ->with('keywords')

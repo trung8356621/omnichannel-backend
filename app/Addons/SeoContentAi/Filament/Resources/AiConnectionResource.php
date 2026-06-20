@@ -35,17 +35,20 @@ class AiConnectionResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessManagerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessManagerFeatures();
     }
 
     protected static ?string $modelLabel = 'AI connection';
@@ -126,11 +129,11 @@ class AiConnectionResource extends SeoPanelResource
                 Tables\Actions\EditAction::make(),
                 Tables\Actions\DeleteAction::make(),
             ])
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
-            ]);
+            ]));
     }
 
     public static function getEloquentQuery(): Builder

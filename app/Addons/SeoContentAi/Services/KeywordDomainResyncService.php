@@ -8,23 +8,34 @@ use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
+use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use Illuminate\Support\Facades\DB;
 
 final class KeywordDomainResyncService
 {
     public function __construct(
-        private readonly SeoAnalyzerService $analyzer,
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordPersistenceService $keywordPersistence,
+        private readonly ArticleLinkContextMapService $linkContextMap,
     ) {}
 
     /**
-     * @return array{deleted:int, kept:int, cta_deleted:int, articles:int, rescanned:int, skipped_articles:int}
+     * @return array{
+     *     deleted:int,
+     *     kept:int,
+     *     cta_deleted:int,
+     *     articles:int,
+     *     rescanned:int,
+     *     skipped_articles:int,
+     *     link_maps_created:int,
+     *     keywords_total:int,
+     * }
      */
     public function resetAndResync(int $siteId): array
     {
-        if ($siteId <= 0) {
+        if ($siteId <= 0 || ! KeywordSyncIsolation::allowsDomainResync()) {
             return [
                 'deleted' => 0,
                 'kept' => 0,
@@ -32,14 +43,22 @@ final class KeywordDomainResyncService
                 'articles' => 0,
                 'rescanned' => 0,
                 'skipped_articles' => 0,
+                'link_maps_created' => 0,
+                'keywords_total' => 0,
             ];
         }
 
-        $ctaDeleteStats = $this->deleteCtaBlacklistedKeywordsForSite($siteId);
-        $deleteStats = $this->deleteLinkedKeywordsForSite($siteId);
-        $resyncStats = $this->resyncKeywordsFromArticles($siteId);
+        return KeywordSyncIsolation::runWithinDomainResync(function () use ($siteId): array {
+            $ctaDeleteStats = $this->deleteCtaBlacklistedKeywordsForSite($siteId);
+            $deleteStats = $this->deleteLinkedKeywordsForSite($siteId);
+            $resyncStats = $this->resyncKeywordsFromArticles($siteId);
 
-        return array_merge($deleteStats, $ctaDeleteStats, $resyncStats);
+            $keywordsTotal = Keyword::query()->forSite($siteId)->count();
+
+            return array_merge($deleteStats, $ctaDeleteStats, $resyncStats, [
+                'keywords_total' => $keywordsTotal,
+            ]);
+        });
     }
 
     /**
@@ -90,9 +109,8 @@ final class KeywordDomainResyncService
                 ->withCount([
                     'articles as articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
                     'mainArticles as main_articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
-                    'links as inbound_links_on_site_count' => static fn ($query) => $query
-                        ->where('seo_links.site_id', $siteId)
-                        ->whereNotNull('seo_links.source_article_id'),
+                    'linkMaps as inbound_link_maps_on_site_count' => static fn ($query) => $query
+                        ->whereHas('sourceArticle', static fn ($articleQuery) => $articleQuery->where('site_id', $siteId)),
                     'children',
                 ])
                 ->orderBy('id')
@@ -121,18 +139,19 @@ final class KeywordDomainResyncService
     }
 
     /**
-     * @return array{articles:int, rescanned:int, skipped_articles:int}
+     * @return array{articles:int, rescanned:int, skipped_articles:int, link_maps_created:int}
      */
     public function resyncKeywordsFromArticles(int $siteId): array
     {
         $articles = 0;
         $rescanned = 0;
         $skipped = 0;
+        $linkMapsCreated = 0;
 
         SeoArticle::query()
             ->where('site_id', $siteId)
             ->orderBy('id')
-            ->chunkById(50, function ($chunk) use (&$articles, &$rescanned, &$skipped): void {
+            ->chunkById(50, function ($chunk) use (&$articles, &$rescanned, &$skipped, &$linkMapsCreated): void {
                 foreach ($chunk as $article) {
                     if (! $article instanceof SeoArticle) {
                         continue;
@@ -146,7 +165,7 @@ final class KeywordDomainResyncService
                         continue;
                     }
 
-                    $this->analyzer->analyzeSubmittedContent($article, $content);
+                    $linkMapsCreated += $this->linkContextMap->resyncArticle($article);
                     $rescanned++;
                 }
             });
@@ -155,6 +174,7 @@ final class KeywordDomainResyncService
             'articles' => $articles,
             'rescanned' => $rescanned,
             'skipped_articles' => $skipped,
+            'link_maps_created' => $linkMapsCreated,
         ];
     }
 
@@ -182,8 +202,13 @@ final class KeywordDomainResyncService
             ->where('parent_id', $keyword->id)
             ->update(['parent_id' => null]);
 
-        $linkIds = $keyword->links()->pluck('seo_links.id')->all();
-        $keyword->links()->detach();
+        $linkIds = [];
+        if (\Illuminate\Support\Facades\Schema::connection((new Keyword)->getConnectionName())->hasTable('keyword_link')) {
+            $linkIds = $keyword->links()->pluck('seo_links.id')->all();
+            $keyword->links()->detach();
+        }
+
+        SeoLinkMap::query()->where('keyword_id', $keyword->id)->delete();
         $keyword->articles()->detach();
         $keyword->tags()->detach();
         $keyword->delete();
@@ -206,7 +231,7 @@ final class KeywordDomainResyncService
             return true;
         }
 
-        if ((int) ($keyword->inbound_links_on_site_count ?? 0) > 0) {
+        if ((int) ($keyword->inbound_link_maps_on_site_count ?? 0) > 0) {
             return true;
         }
 

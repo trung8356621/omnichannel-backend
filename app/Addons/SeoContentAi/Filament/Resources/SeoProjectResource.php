@@ -56,7 +56,8 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
@@ -89,7 +90,8 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function getNavigationLabel(): string
@@ -565,12 +567,12 @@ class SeoProjectResource extends SeoPanelResource
                 Tables\Actions\EditAction::make()
                     ->visible(fn (SeoProject $record): bool => static::canEdit($record)),
             ])
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
                         ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects()),
                 ]),
-            ]);
+            ]));
     }
 
     public static function getEloquentQuery(): Builder
@@ -838,8 +840,8 @@ class SeoProjectResource extends SeoPanelResource
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query->pluck('domain', 'id')->all();

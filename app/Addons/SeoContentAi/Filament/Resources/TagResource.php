@@ -39,7 +39,8 @@ class TagResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canEdit(Model $record): bool
@@ -49,7 +50,8 @@ class TagResource extends SeoPanelResource
 
     public static function canDelete(Model $record): bool
     {
-        return $record instanceof Tag
+        return static::allowsSeoPanelMutation()
+            && $record instanceof Tag
             && SeoAccessControl::canAccessPlannerFeatures()
             && ! $record->keywords()->exists();
     }

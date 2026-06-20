@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Facades\Schema;
 
 class SeoLink extends Model
 {
@@ -82,6 +83,10 @@ class SeoLink extends Model
 
     public function primaryKeyword(): ?Keyword
     {
+        if (! Schema::connection($this->getConnectionName())->hasTable('keyword_link')) {
+            return null;
+        }
+
         if ($this->relationLoaded('keywords')) {
             return $this->keywords->first();
         }

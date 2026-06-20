@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 
 final class SitePolylangService
@@ -166,8 +167,8 @@ final class SitePolylangService
                 ->where('meta_value', 'like', '%"active":true%');
         });
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query->exists();

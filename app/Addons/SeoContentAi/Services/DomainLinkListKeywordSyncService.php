@@ -42,6 +42,10 @@ final class DomainLinkListKeywordSyncService
     public function syncLinks(Site $site, array $links): int
     {
 
+        if (! \App\Addons\SeoContentAi\Support\KeywordSyncIsolation::allowsDomainLinkListSync()) {
+            return 0;
+        }
+
         $siteId = (int) $site->getKey();
 
         if ($siteId <= 0 || $links === []) {

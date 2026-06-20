@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\Tag;
@@ -63,19 +65,22 @@ class KeywordResource extends SeoPanelResource
 
     public static function canCreate(): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures();
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures();
     }
 
     public static function canEdit(Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures()
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures()
             && $record instanceof Keyword
             && ! static::isKeywordLockedByActiveJobs($record);
     }
 
     public static function canDelete(Model $record): bool
     {
-        return SeoAccessControl::canAccessPlannerFeatures()
+        return static::allowsSeoPanelMutation()
+            && SeoAccessControl::canAccessPlannerFeatures()
             && $record instanceof Keyword
             && ! static::isKeywordLockedByActiveJobs($record)
             && static::isUnused($record);
@@ -186,13 +191,6 @@ class KeywordResource extends SeoPanelResource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('type')
-                    ->label(__('seo-content-ai::filament.keyword.type'))
-                    ->badge()
-                    ->sortable()
-                    ->color(fn (string $state): string => static::keywordTypeBadgeColor($state))
-                    ->formatStateUsing(fn (string $state): string => static::keywordTypeShortLabel($state)),
-
                 Tables\Columns\ViewColumn::make('phrase')
                     ->label(__('seo-content-ai::filament.keyword.phrase_short'))
                     ->view('seo-content-ai::filament.tables.columns.keyword-phrase')
@@ -206,6 +204,40 @@ class KeywordResource extends SeoPanelResource
                     })
                     ->sortable(),
 
+                Tables\Columns\TextColumn::make('type')
+                    ->label(__('seo-content-ai::filament.keyword.type'))
+                    ->badge()
+                    ->sortable()
+                    ->color(fn (string $state): string => static::keywordTypeBadgeColor($state))
+                    ->formatStateUsing(fn (string $state): string => static::keywordTypeShortLabel($state)),
+
+                Tables\Columns\TextColumn::make('cluster_label')
+                    ->label(__('seo-content-ai::filament.keyword.cluster_label'))
+                    ->getStateUsing(function (Keyword $record): string {
+                        if ($record->parent_id !== null && (int) $record->parent_id > 0) {
+                            return (string) ($record->parent?->phrase ?? '—');
+                        }
+
+                        if ((int) ($record->children_count ?? 0) > 0) {
+                            return __('seo-content-ai::filament.keyword.type_pillar_short');
+                        }
+
+                        return '—';
+                    })
+                    ->badge()
+                    ->color(function (Keyword $record): string {
+                        if ((int) ($record->children_count ?? 0) > 0 && $record->parent_id === null) {
+                            return 'warning';
+                        }
+
+                        if ($record->parent_id !== null && (int) $record->parent_id > 0) {
+                            return 'info';
+                        }
+
+                        return 'gray';
+                    })
+                    ->wrap(),
+
                 Tables\Columns\TextColumn::make('tags.name')
                     ->label(__('seo-content-ai::filament.keyword.tags'))
                     ->badge()
@@ -213,27 +245,6 @@ class KeywordResource extends SeoPanelResource
                     ->separator(' ')
                     ->wrap()
                     ->placeholder('—'),
-
-                Tables\Columns\TextColumn::make('word_count')
-                    ->label('Số từ')
-                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
-                        ->orderByRaw(static::wordCountExpression().' '.$direction))
-                    ->alignCenter()
-                    ->badge()
-                    ->color('gray'),
-
-                Tables\Columns\TextColumn::make('site_links_count')
-                    ->label(__('seo-content-ai::filament.keyword.site_domain_link'))
-                    ->sortable()
-                    ->alignCenter()
-                    ->badge()
-                    ->color('info')
-                    ->placeholder('—')
-                    ->url(fn (Keyword $record): ?string => (int) ($record->site_links_count ?? 0) > 0
-                        ? static::resolveKeywordSiteLinkUrl($record)
-                        : null)
-                    ->openUrlInNewTab()
-                    ->tooltip(fn (Keyword $record): ?string => static::resolveKeywordSiteLinkUrl($record)),
 
                 Tables\Columns\TextColumn::make('linked_articles_count')
                     ->label(__('seo-content-ai::filament.keyword.linked_articles'))
@@ -258,11 +269,47 @@ class KeywordResource extends SeoPanelResource
                         );
                     }),
 
+                Tables\Columns\TextColumn::make('site_links_count')
+                    ->label(__('seo-content-ai::filament.keyword.internal_links_short'))
+                    ->sortable()
+                    ->alignCenter()
+                    ->formatStateUsing(fn (mixed $state): string => (int) $state > 0
+                        ? __('seo-content-ai::filament.keyword.internal_links_count', ['count' => (int) $state])
+                        : '—')
+                    ->extraAttributes(fn (Keyword $record): array => (int) ($record->site_links_count ?? 0) > 0
+                        ? ['class' => 'ws-pill ws-pill--info']
+                        : [])
+                    ->url(fn (Keyword $record): ?string => (int) ($record->site_links_count ?? 0) > 0
+                        ? static::resolveKeywordSiteLinkUrl($record)
+                        : null)
+                    ->openUrlInNewTab()
+                    ->tooltip(fn (Keyword $record): ?string => static::resolveKeywordSiteLinkUrl($record)),
+
+                Tables\Columns\TextColumn::make('dictionary_status')
+                    ->label(__('seo-content-ai::filament.keyword.status'))
+                    ->getStateUsing(fn (Keyword $record): string => static::resolveDictionaryStatusLabel(
+                        static::resolveDictionaryStatusKey($record),
+                    ))
+                    ->badge()
+                    ->color(fn (Keyword $record): string => static::resolveDictionaryStatusBadgeColor(
+                        static::resolveDictionaryStatusKey($record),
+                    )),
+
+                Tables\Columns\TextColumn::make('word_count')
+                    ->label(__('seo-content-ai::filament.keyword.word_count'))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query
+                        ->orderByRaw(static::wordCountExpression().' '.$direction))
+                    ->alignCenter()
+                    ->badge()
+                    ->color('gray')
+                    ->toggleable(isToggledHiddenByDefault: true),
+
                 Tables\Columns\ViewColumn::make('destinations')
                     ->label(__('seo-content-ai::filament.keyword.target_destinations'))
                     ->view('seo-content-ai::filament.resources.keywords.columns.destinations')
                     ->disabledClick()
-                    ->extraCellAttributes(['class' => 'py-2 whitespace-normal']),
+                    ->extraCellAttributes(['class' => 'py-2 whitespace-normal'])
+                    ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->defaultSort('phrase')
             ->filters([
@@ -309,144 +356,106 @@ class KeywordResource extends SeoPanelResource
                             ? null
                             : __('seo-content-ai::filament.keyword.type').': '.implode(', ', $labels);
                     }),
-                Tables\Filters\Filter::make('has_child')
-                    ->label(__('seo-content-ai::filament.keyword.has_child'))
+                Tables\Filters\Filter::make('article_presence')
+                    ->label(__('seo-content-ai::filament.keyword.article_presence'))
                     ->form([
-                        Forms\Components\Checkbox::make('enabled')
-                            ->label(__('seo-content-ai::filament.keyword.has_child'))
-                            ->inline(false),
-                    ])
-                    ->query(function (Builder $query, array $data): Builder {
-                        if (! ($data['enabled'] ?? false)) {
-                            return $query;
-                        }
-
-                        return $query->whereHas('children');
-                    })
-                    ->indicateUsing(function (array $data): ?string {
-                        return ($data['enabled'] ?? false)
-                            ? __('seo-content-ai::filament.keyword.has_child')
-                            : null;
-                    }),
-                Tables\Filters\Filter::make('has_main_article')
-                    ->label(__('seo-content-ai::filament.keyword.has_main_article'))
-                    ->form([
-                        Forms\Components\Checkbox::make('enabled')
-                            ->label(__('seo-content-ai::filament.keyword.has_main_article'))
-                            ->inline(false),
-                    ])
-                    ->query(function (Builder $query, array $data): Builder {
-                        if (! ($data['enabled'] ?? false)) {
-                            return $query;
-                        }
-
-                        return $query->whereHas('mainArticles');
-                    })
-                    ->indicateUsing(function (array $data): ?string {
-                        return ($data['enabled'] ?? false)
-                            ? __('seo-content-ai::filament.keyword.has_main_article')
-                            : null;
-                    }),
-                Tables\Filters\Filter::make('has_linked_article')
-                    ->label(__('seo-content-ai::filament.keyword.has_linked_article'))
-                    ->form([
-                        Forms\Components\Checkbox::make('enabled')
-                            ->label(__('seo-content-ai::filament.keyword.has_linked_article'))
-                            ->inline(false),
-                    ])
-                    ->query(function (Builder $query, array $data): Builder {
-                        if (! ($data['enabled'] ?? false)) {
-                            return $query;
-                        }
-
-                        return $query->whereHas(
-                            'links',
-                            static fn (Builder $linkQuery): Builder => $linkQuery->whereNotNull('seo_links.source_article_id'),
-                        );
-                    })
-                    ->indicateUsing(function (array $data): ?string {
-                        return ($data['enabled'] ?? false)
-                            ? __('seo-content-ai::filament.keyword.has_linked_article')
-                            : null;
-                    }),
-                Tables\Filters\Filter::make('include_tags')
-                    ->label(__('seo-content-ai::filament.keyword.include_tags'))
-                    ->form([
-                        Forms\Components\Select::make('tag_ids')
-                            ->label(__('seo-content-ai::filament.keyword.include_tags'))
-                            ->options(fn (): array => static::tagFilterOptions())
-                            ->multiple()
-                            ->searchable()
-                            ->preload()
+                        Forms\Components\Select::make('value')
+                            ->label(__('seo-content-ai::filament.keyword.article_presence'))
+                            ->options([
+                                '' => __('seo-content-ai::filament.keyword.article_presence_all'),
+                                'main' => __('seo-content-ai::filament.keyword.has_main_article'),
+                                'linked' => __('seo-content-ai::filament.keyword.has_linked_article'),
+                            ])
                             ->native(false),
                     ])
                     ->query(function (Builder $query, array $data): Builder {
-                        $tagIds = collect($data['tag_ids'] ?? [])
+                        return match ($data['value'] ?? '') {
+                            'main' => $query->whereHas('mainArticles'),
+                            'linked' => $query->whereHas(
+                                'linkMaps',
+                                static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
+                            ),
+                            default => $query,
+                        };
+                    })
+                    ->indicateUsing(function (array $data): ?string {
+                        return match ($data['value'] ?? '') {
+                            'main' => __('seo-content-ai::filament.keyword.has_main_article'),
+                            'linked' => __('seo-content-ai::filament.keyword.has_linked_article'),
+                            default => null,
+                        };
+                    }),
+                Tables\Filters\Filter::make('tags_scope')
+                    ->label(__('seo-content-ai::filament.keyword.tags'))
+                    ->form([
+                        Forms\Components\ViewField::make('tags_filter_display')
+                            ->view('seo-content-ai::filament.resources.keywords.pages.partials.keyword-tags-filter-field')
+                            ->viewData(fn (Get $get): array => [
+                                'includeLabels' => static::resolveTagFilterLabels($get('include_tag_ids') ?? []),
+                                'excludeLabels' => static::resolveTagFilterLabels($get('exclude_tag_ids') ?? []),
+                            ])
+                            ->columnSpanFull(),
+                        Forms\Components\Hidden::make('include_tag_ids')
+                            ->default([]),
+                        Forms\Components\Hidden::make('exclude_tag_ids')
+                            ->default([]),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $includeIds = collect($data['include_tag_ids'] ?? [])
                             ->filter(static fn (mixed $id): bool => is_numeric($id))
                             ->map(static fn (mixed $id): int => (int) $id)
                             ->filter(static fn (int $id): bool => $id > 0)
                             ->values()
                             ->all();
 
-                        if ($tagIds === []) {
-                            return $query;
+                        if ($includeIds !== []) {
+                            $query->whereHas(
+                                'tags',
+                                static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $includeIds),
+                            );
                         }
 
-                        return $query->whereHas(
-                            'tags',
-                            static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $tagIds),
-                        );
-                    })
-                    ->indicateUsing(function (array $data): ?string {
-                        $labels = static::resolveTagFilterLabels($data['tag_ids'] ?? []);
-
-                        return $labels === []
-                            ? null
-                            : __('seo-content-ai::filament.keyword.include_tags').': '.implode(', ', $labels);
-                    }),
-                Tables\Filters\Filter::make('exclude_tags')
-                    ->label(__('seo-content-ai::filament.keyword.exclude_tags'))
-                    ->form([
-                        Forms\Components\Select::make('tag_ids')
-                            ->label(__('seo-content-ai::filament.keyword.exclude_tags'))
-                            ->options(fn (): array => static::tagFilterOptions())
-                            ->multiple()
-                            ->searchable()
-                            ->preload()
-                            ->native(false),
-                    ])
-                    ->query(function (Builder $query, array $data): Builder {
-                        $tagIds = collect($data['tag_ids'] ?? [])
+                        $excludeIds = collect($data['exclude_tag_ids'] ?? [])
                             ->filter(static fn (mixed $id): bool => is_numeric($id))
                             ->map(static fn (mixed $id): int => (int) $id)
                             ->filter(static fn (int $id): bool => $id > 0)
                             ->values()
                             ->all();
 
-                        if ($tagIds === []) {
+                        if ($excludeIds === []) {
                             return $query;
                         }
 
                         return $query->whereDoesntHave(
                             'tags',
-                            static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $tagIds),
+                            static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $excludeIds),
                         );
                     })
                     ->indicateUsing(function (array $data): ?string {
-                        $labels = static::resolveTagFilterLabels($data['tag_ids'] ?? []);
+                        $includeLabels = static::resolveTagFilterLabels($data['include_tag_ids'] ?? []);
+                        $excludeLabels = static::resolveTagFilterLabels($data['exclude_tag_ids'] ?? []);
+                        $parts = [];
 
-                        return $labels === []
-                            ? null
-                            : __('seo-content-ai::filament.keyword.exclude_tags').': '.implode(', ', $labels);
+                        if ($includeLabels !== []) {
+                            $parts[] = __('seo-content-ai::filament.keyword.include_tags').': '.implode(', ', $includeLabels);
+                        }
+
+                        if ($excludeLabels !== []) {
+                            $parts[] = __('seo-content-ai::filament.keyword.exclude_tags').': '.implode(', ', $excludeLabels);
+                        }
+
+                        return $parts === [] ? null : implode(' · ', $parts);
                     }),
             ], layout: FiltersLayout::AboveContent)
             ->filtersFormColumns([
                 'default' => 1,
                 'sm' => 2,
                 'lg' => 3,
-                'xl' => 6,
+                'xl' => 4,
             ])
             ->persistFiltersInSession()
+            ->defaultPaginationPageOption(10)
+            ->paginationPageOptions([10, 25, 50, 100])
             ->actions([
                 Tables\Actions\EditAction::make()
                     ->iconButton()
@@ -594,7 +603,7 @@ class KeywordResource extends SeoPanelResource
                         : __('seo-content-ai::filament.keyword.delete'))
                     ->visible(fn (Keyword $record): bool => static::canDelete($record)),
             ])
-            ->bulkActions([
+            ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\BulkAction::make('bulk_tag')
                         ->label(__('seo-content-ai::filament.keyword.bulk_tag'))
@@ -821,7 +830,70 @@ class KeywordResource extends SeoPanelResource
                                 ->send();
                         }),
                 ]),
-            ]);
+            ]));
+    }
+
+    public static function quickCopyTableAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('quick_copy')
+            ->label(__('seo-content-ai::filament.keyword.quick_copy'))
+            ->icon('heroicon-o-clipboard-document')
+            ->iconButton()
+            ->tooltip(__('seo-content-ai::filament.keyword.quick_copy'))
+            ->color('gray')
+            ->alpineClickHandler(function (Keyword $record): string {
+                $phrase = Js::from((string) $record->phrase);
+                $successTitle = Js::from(__('seo-content-ai::filament.keyword.quick_copy_success'));
+                $successBody = Js::from('“'.$record->phrase.'”');
+                $failedTitle = Js::from(__('seo-content-ai::filament.keyword.quick_copy_failed'));
+                $failedBody = Js::from(__('seo-content-ai::filament.keyword.quick_copy_failed_body'));
+
+                return <<<JS
+                    (async () => {
+                        const text = {$phrase};
+                        let copied = false;
+
+                        try {
+                            if (navigator.clipboard?.writeText) {
+                                await navigator.clipboard.writeText(text);
+                                copied = true;
+                            } else {
+                                const ta = document.createElement('textarea');
+                                ta.value = text;
+                                ta.setAttribute('readonly', '');
+                                ta.style.position = 'fixed';
+                                ta.style.top = '-1000px';
+                                document.body.appendChild(ta);
+                                ta.select();
+                                copied = document.execCommand('copy');
+                                document.body.removeChild(ta);
+                            }
+                        } catch (error) {
+                            copied = false;
+                        }
+
+                        if (! window.FilamentNotification) {
+                            return;
+                        }
+
+                        if (copied) {
+                            new FilamentNotification()
+                                .title({$successTitle})
+                                .body({$successBody})
+                                .success()
+                                .send();
+
+                            return;
+                        }
+
+                        new FilamentNotification()
+                            .title({$failedTitle})
+                            .body({$failedBody})
+                            .warning()
+                            .send();
+                    })()
+                JS;
+            });
     }
 
     /**
@@ -831,8 +903,8 @@ class KeywordResource extends SeoPanelResource
     {
         $query = Site::query()->orderBy('domain');
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         return $query->pluck('domain', 'id')->all();
@@ -844,56 +916,71 @@ class KeywordResource extends SeoPanelResource
             return true;
         }
 
-        if ($record->relationLoaded('links')) {
-            return $record->links->contains(
-                static fn (SeoLink $link): bool => trim((string) $link->url) !== '',
-            );
+        if ($record->relationLoaded('linkMaps')) {
+            return $record->linkMaps->isNotEmpty();
         }
 
-        return $record->links()->where('seo_links.url', '!=', '')->exists();
+        return $record->linkMaps()->exists();
     }
 
-    public static function resolvePrimarySiteLink(Keyword $record, ?int $preferredSiteId = null): ?SeoLink
+    public static function resolvePrimarySiteLink(Keyword $record, ?int $preferredSiteId = null): ?SeoLinkMap
     {
         $preferredSiteId ??= SeoAccessControl::globalSiteId();
 
-        $links = $record->relationLoaded('links')
-            ? $record->links
-            : $record->links()->orderBy('seo_links.id')->get();
+        $maps = $record->relationLoaded('linkMaps')
+            ? $record->linkMaps
+            : $record->linkMaps()->with('sourceArticle:id,site_id')->orderBy('id')->get();
 
         if ($preferredSiteId !== null && (int) $preferredSiteId > 0) {
-            $scoped = $links->first(
-                static fn (SeoLink $link): bool => (int) $link->site_id === (int) $preferredSiteId
-                    && trim((string) $link->url) !== '',
+            $scoped = $maps->first(
+                static fn (SeoLinkMap $map): bool => (int) ($map->sourceArticle?->site_id ?? 0) === (int) $preferredSiteId,
             );
 
-            if ($scoped instanceof SeoLink) {
+            if ($scoped instanceof SeoLinkMap) {
                 return $scoped;
             }
         }
 
-        return $links->first(
-            static fn (SeoLink $link): bool => trim((string) $link->url) !== '',
-        );
+        return $maps->first();
     }
 
     public static function resolveKeywordSiteLinkUrl(Keyword $record, ?int $preferredSiteId = null): ?string
     {
-        $link = static::resolvePrimarySiteLink($record, $preferredSiteId);
-        if (! $link instanceof SeoLink) {
+        $map = static::resolvePrimarySiteLink($record, $preferredSiteId);
+        if (! $map instanceof SeoLinkMap) {
             return null;
         }
 
-        $url = trim((string) $link->url);
-        if ($url === '') {
-            return null;
+        $siteId = (int) ($map->sourceArticle?->site_id ?? $preferredSiteId ?? 0);
+
+        return static::resolveLinkMapDestinationUrl($map, $siteId);
+    }
+
+    public static function resolveLinkMapDestinationUrl(SeoLinkMap $map, int $siteId, ?string $domain = null): string
+    {
+        if ((int) ($map->target_article_id ?? 0) > 0) {
+            $target = $map->relationLoaded('targetArticle')
+                ? $map->targetArticle
+                : $map->targetArticle()->first(['id', 'site_id', 'title', 'slug']);
+
+            if ($target instanceof SeoArticle) {
+                $url = app(KeywordLinkTargetResolver::class)->resolveArticlePublicUrl($target);
+                if (is_string($url) && trim($url) !== '') {
+                    return trim($url);
+                }
+            }
         }
 
-        if (preg_match('#^https?://#i', $url) === 1) {
-            return $url;
+        $external = trim((string) ($map->target_external_url ?? ''));
+        if ($external === '') {
+            return '';
         }
 
-        return static::buildAbsoluteLinkUrl($url, (int) $link->site_id);
+        if ($domain === null) {
+            $domain = trim((string) (static::siteSelectOptions()[$siteId] ?? ''));
+        }
+
+        return static::buildAbsoluteLinkUrl($external, $siteId, $domain !== '' ? $domain : null);
     }
 
     /**
@@ -981,12 +1068,8 @@ class KeywordResource extends SeoPanelResource
     {
         $query = Keyword::query()->where('parent_id', $parentId);
 
-        if (auth()->user()?->role !== 'admin') {
-            $siteIds = Site::query()
-                ->where('user_id', auth()->id())
-                ->pluck('id')
-                ->map(static fn (mixed $id): int => (int) $id)
-                ->all();
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $siteIds = SeoAccessControl::accessibleSiteIds();
             $query->forSites($siteIds);
         }
 
@@ -1152,6 +1235,53 @@ class KeywordResource extends SeoPanelResource
         };
     }
 
+    public static function resolveDictionaryStatusKey(Keyword $record): string
+    {
+        $hasBroken = $record->relationLoaded('linkMaps')
+            ? $record->linkMaps->contains(static fn (SeoLinkMap $map): bool => $map->status === SeoLinkMapStatus::Broken)
+            : $record->linkMaps()->where('status', SeoLinkMapStatus::Broken)->exists();
+
+        if ($hasBroken) {
+            return 'error';
+        }
+
+        if ((int) ($record->main_articles_count ?? 0) > 0 || (int) ($record->linked_articles_count ?? 0) > 0) {
+            return 'active';
+        }
+
+        return 'needs_optimization';
+    }
+
+    public static function resolveDictionaryStatusLabel(string $statusKey): string
+    {
+        return match ($statusKey) {
+            'active' => __('seo-content-ai::filament.keyword.stat_active'),
+            'needs_optimization' => __('seo-content-ai::filament.keyword.stat_needs_optimization'),
+            'error' => __('seo-content-ai::filament.keyword.stat_errors'),
+            default => $statusKey,
+        };
+    }
+
+    public static function resolveDictionaryStatusBadgeColor(string $statusKey): string
+    {
+        return match ($statusKey) {
+            'active' => 'success',
+            'needs_optimization' => 'warning',
+            'error' => 'danger',
+            default => 'gray',
+        };
+    }
+
+    public static function resolveDictionaryStatusBadgeClass(string $statusKey): string
+    {
+        return match ($statusKey) {
+            'active' => 'ws-badge--success',
+            'needs_optimization' => 'ws-badge--warning',
+            'error' => 'ws-badge--danger',
+            default => 'ws-badge--gray',
+        };
+    }
+
     public static function isKeywordLockedByActiveJobs(Keyword $keyword): bool
     {
         $needle = mb_strtolower(trim((string) $keyword->phrase));
@@ -1214,24 +1344,33 @@ class KeywordResource extends SeoPanelResource
     public static function resolveLinkDestinationGroups(Keyword $record): array
     {
         $domainMap = static::siteSelectOptions();
-        $links = $record->relationLoaded('links')
-            ? $record->links
-            : $record->links()->orderBy('seo_links.id')->with(['sourceArticle:id,site_id,title,slug'])->get();
+        $maps = $record->relationLoaded('linkMaps')
+            ? $record->linkMaps
+            : $record->linkMaps()
+                ->orderBy('id')
+                ->with([
+                    'sourceArticle:id,site_id,title,slug',
+                    'targetArticle:id,site_id,title,slug',
+                ])
+                ->get();
 
-        /** @var array<int, array{domain: string, site_id: int, main_links: list<array{url: string, role: string, link_id: int}>, internal_links: list<array{url: string, role: string, link_id: int, source_label: string|null}>}> $groups */
+        /** @var array<int, array{domain: string, site_id: int, main_links: list<array<string, mixed>>, internal_links: list<array<string, mixed>>}> $groups */
         $groups = [];
 
-        foreach ($links as $link) {
-            if (! $link instanceof SeoLink) {
+        foreach ($maps as $map) {
+            if (! $map instanceof SeoLinkMap) {
                 continue;
             }
 
-            $rawUrl = trim((string) $link->url);
-            if ($rawUrl === '') {
+            $sourceArticle = $map->relationLoaded('sourceArticle')
+                ? $map->sourceArticle
+                : $map->sourceArticle()->first(['id', 'site_id', 'title', 'slug']);
+
+            $siteId = (int) ($sourceArticle?->site_id ?? 0);
+            if ($siteId <= 0) {
                 continue;
             }
 
-            $siteId = (int) $link->site_id;
             $domain = trim((string) ($domainMap[$siteId] ?? ''));
             if ($domain === '') {
                 $domain = '#'.$siteId;
@@ -1246,46 +1385,76 @@ class KeywordResource extends SeoPanelResource
                 ];
             }
 
-            $role = static::resolveLinkRole($record, $link);
-            $absoluteUrl = static::buildAbsoluteLinkUrl($rawUrl, $siteId, $domain);
+            $destinationUrl = static::resolveLinkMapDestinationUrl($map, $siteId, $domain);
+            if ($destinationUrl === '') {
+                continue;
+            }
+
+            $sourceUrl = $sourceArticle instanceof SeoArticle
+                ? app(KeywordLinkTargetResolver::class)->resolveArticlePublicUrl($sourceArticle)
+                : null;
+
             $linkPayload = [
-                'url' => $absoluteUrl,
-                'role' => $role,
-                'link_id' => (int) $link->id,
+                'url' => $destinationUrl,
+                'role' => static::LINK_ROLE_INTERNAL_ANCHOR,
+                'link_id' => (int) $map->id,
+                'destination_url' => $destinationUrl,
+                'source_url' => is_string($sourceUrl) ? trim($sourceUrl) : null,
+                'source_label' => static::resolveLinkMapSourceLabel($sourceArticle),
+                'source_article_id' => (int) ($map->source_article_id ?? 0),
             ];
 
-            $bucket = $role === static::LINK_ROLE_MAIN ? 'main_links' : 'internal_links';
-
-            $dedupeKey = $bucket === 'internal_links'
-                ? $absoluteUrl.'|'.((int) ($link->source_article_id ?? 0))
-                : $absoluteUrl.'|'.$role;
-
-            $existingKeys = collect($groups[$siteId][$bucket])
-                ->map(static function (array $item) use ($bucket): string {
-                    if ($bucket === 'internal_links') {
-                        return ($item['destination_url'] ?? $item['url'] ?? '').'|'.((int) ($item['source_article_id'] ?? 0));
-                    }
-
-                    return ($item['url'] ?? '').'|'.($item['role'] ?? '');
-                })
+            $dedupeKey = $destinationUrl.'|'.((int) ($map->source_article_id ?? 0));
+            $existingKeys = collect($groups[$siteId]['internal_links'])
+                ->map(static fn (array $item): string => ($item['destination_url'] ?? $item['url'] ?? '').'|'.((int) ($item['source_article_id'] ?? 0)))
                 ->all();
 
             if (in_array($dedupeKey, $existingKeys, true)) {
                 continue;
             }
 
-            if ($bucket === 'internal_links') {
-                $presentation = static::resolveInternalLinkPresentation($link, $siteId, $domain);
-                $linkPayload['destination_url'] = $presentation['destination_url'];
-                $linkPayload['source_url'] = $presentation['source_url'];
-                $linkPayload['source_label'] = $presentation['source_label'];
-                $linkPayload['source_article_id'] = (int) ($link->source_article_id ?? 0);
-                $linkPayload['url'] = $presentation['destination_url'];
-            } else {
-                $linkPayload['target_article_id'] = (int) ($link->article_id ?? 0);
+            $groups[$siteId]['internal_links'][] = $linkPayload;
+        }
+
+        $mainArticles = $record->relationLoaded('mainArticles')
+            ? $record->mainArticles
+            : $record->mainArticles()->with('site')->get();
+
+        foreach ($mainArticles as $article) {
+            if (! $article instanceof SeoArticle) {
+                continue;
             }
 
-            $groups[$siteId][$bucket][] = $linkPayload;
+            $siteId = (int) ($article->site_id ?? 0);
+            if ($siteId <= 0) {
+                continue;
+            }
+
+            $domain = trim((string) ($domainMap[$siteId] ?? ''));
+            if ($domain === '') {
+                $domain = '#'.$siteId;
+            }
+
+            if (! array_key_exists($siteId, $groups)) {
+                $groups[$siteId] = [
+                    'domain' => $domain,
+                    'site_id' => $siteId,
+                    'main_links' => [],
+                    'internal_links' => [],
+                ];
+            }
+
+            $absoluteUrl = trim((string) (app(KeywordLinkTargetResolver::class)->resolveArticlePublicUrl($article) ?? ''));
+            if ($absoluteUrl === '') {
+                continue;
+            }
+
+            $groups[$siteId]['main_links'][] = [
+                'url' => $absoluteUrl,
+                'role' => static::LINK_ROLE_MAIN,
+                'link_id' => (int) $article->id,
+                'target_article_id' => (int) $article->id,
+            ];
         }
 
         return static::enrichLinkDestinationGroups(
@@ -1295,6 +1464,22 @@ class KeywordResource extends SeoPanelResource
                 ->all(),
             $record,
         );
+    }
+
+    public static function resolveLinkMapSourceLabel(?SeoArticle $sourceArticle): ?string
+    {
+        if (! $sourceArticle instanceof SeoArticle) {
+            return null;
+        }
+
+        $title = trim((string) ($sourceArticle->title ?? ''));
+        if ($title !== '') {
+            return $title;
+        }
+
+        $slug = trim((string) ($sourceArticle->slug ?? ''));
+
+        return $slug !== '' ? $slug : null;
     }
 
     /**
@@ -1507,11 +1692,14 @@ class KeywordResource extends SeoPanelResource
         return $records
             ->filter(static fn (mixed $record): bool => $record instanceof Keyword)
             ->flatMap(static function (Keyword $keyword): Collection {
-                if ($keyword->relationLoaded('links')) {
-                    return $keyword->links->pluck('site_id');
+                if ($keyword->relationLoaded('linkMaps')) {
+                    return $keyword->linkMaps
+                        ->map(static fn (SeoLinkMap $map): int => (int) ($map->sourceArticle?->site_id ?? 0));
                 }
 
-                return $keyword->links()->pluck('seo_links.site_id');
+                return $keyword->linkMaps()
+                    ->join('articles', 'articles.id', '=', 'seo_link_maps.source_article_id')
+                    ->pluck('articles.site_id');
             })
             ->map(static fn (mixed $siteId): int => (int) $siteId)
             ->filter(static fn (int $siteId): bool => $siteId > 0)
@@ -1563,30 +1751,29 @@ class KeywordResource extends SeoPanelResource
     {
         $query = parent::getEloquentQuery()
             ->with([
-                'links' => static fn ($linkQuery): mixed => $linkQuery
-                    ->orderBy('seo_links.id')
-                    ->with(['sourceArticle:id,site_id,title,slug']),
+                'linkMaps' => static fn ($mapQuery): mixed => $mapQuery
+                    ->orderBy('id')
+                    ->with([
+                        'sourceArticle:id,site_id,title,slug',
+                        'targetArticle:id,site_id,title,slug',
+                    ]),
                 'mainArticles.site',
                 'tags',
+                'parent:id,phrase',
                 'children' => fn (HasMany $query): HasMany => $query->orderBy('phrase'),
             ])
             ->selectRaw('keywords.*, '.static::wordCountExpression().' as word_count')
             ->withCount([
                 'articles as articles_count',
                 'mainArticles as main_articles_count',
-                'links as site_links_count',
-                'links as linked_articles_count' => static fn (Builder $linkQuery): Builder => $linkQuery
-                    ->whereNotNull('seo_links.source_article_id'),
-                'links as inbound_links_count',
+                'linkMaps as site_links_count',
+                'linkMaps as linked_articles_count',
+                'linkMaps as inbound_links_count',
                 'children as children_count',
             ]);
 
-        if (auth()->user()?->role !== 'admin') {
-            $siteIds = Site::query()
-                ->where('user_id', auth()->id())
-                ->pluck('id')
-                ->map(static fn (mixed $id): int => (int) $id)
-                ->all();
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $siteIds = SeoAccessControl::accessibleSiteIds();
             $query->forSites($siteIds);
         }
 
@@ -1683,7 +1870,7 @@ class KeywordResource extends SeoPanelResource
             $keyword->loadCount([
                 'articles',
                 'mainArticles',
-                'links as inbound_links_count',
+                'linkMaps as inbound_links_count',
                 'children',
             ]);
         }
@@ -1718,7 +1905,8 @@ class KeywordResource extends SeoPanelResource
 
     public static function canAssignKeywordToContentProject(Keyword $keyword): bool
     {
-        return in_array($keyword->type, [Keyword::TYPE_NORMAL, Keyword::TYPE_SUGGEST], true)
+        return SeoAccessControl::canMutateInSeoPanel()
+            && in_array($keyword->type, [Keyword::TYPE_NORMAL, Keyword::TYPE_SUGGEST], true)
             && (int) ($keyword->main_articles_count ?? 0) < 1
             && ! static::keywordIsInContentProject($keyword);
     }
@@ -2183,6 +2371,10 @@ class KeywordResource extends SeoPanelResource
     {
         return [
             'index' => Pages\ListKeywords::route('/'),
+            'anchor-audit' => Pages\AnchorTextAuditWorkspace::route('/anchor-audit'),
+            'workspace-2' => Pages\KeywordWorkspaceTwo::route('/workspace-2'),
+            'workspace-3' => Pages\KeywordWorkspaceThree::route('/workspace-3'),
+            'workspace-4' => Pages\KeywordWorkspaceFour::route('/workspace-4'),
         ];
     }
 }

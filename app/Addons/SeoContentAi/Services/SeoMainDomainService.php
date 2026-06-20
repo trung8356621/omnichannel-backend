@@ -26,8 +26,8 @@ final class SeoMainDomainService
 
         $ownerId = (int) $site->user_id;
 
-        if (auth()->user()?->role !== 'admin') {
-            abort_unless($ownerId === (int) auth()->id(), 403);
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            abort_unless($ownerId === SeoAccessControl::accountSiteOwnerId(), 403);
         }
 
         $this->clearPrimaryForOwner($ownerId);
@@ -47,8 +47,8 @@ final class SeoMainDomainService
     {
         $query = Site::query()->select('user_id')->distinct();
 
-        if (auth()->user()?->role !== 'admin') {
-            $query->where('user_id', auth()->id());
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
         foreach ($query->pluck('user_id') as $ownerId) {
@@ -68,9 +68,11 @@ final class SeoMainDomainService
             }
         }
 
-        $userId = (int) auth()->id();
+        $userId = SeoAccessControl::shouldScopeToAccountOwner()
+            ? SeoAccessControl::accountSiteOwnerId()
+            : (int) auth()->id();
 
-        if (auth()->user()?->role !== 'admin') {
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $primaryId = $this->primarySiteIdForOwner($userId);
             if ($primaryId !== null) {
                 return Site::query()->find($primaryId);

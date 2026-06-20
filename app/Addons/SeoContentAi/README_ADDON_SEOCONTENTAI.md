@@ -215,19 +215,34 @@ Helper: `SeoAccessControl::globalSiteId()`, `setGlobalSiteId()`, `hasGlobalSiteS
 
 Route: **`/seo/keywords`** (`KeywordResource`).
 
-Danh sách keyword là **global dictionary** — domain trên `GlobalSeoBar` **không lọc** query bảng `keywords`. Domain chỉ dùng khi gắn/xem `seo_links` (cột **Link domain**, modal **Gắn link website**).
+Danh sách keyword là **global dictionary** — domain trên `GlobalSeoBar` **không lọc** query bảng `keywords`. Domain chỉ dùng khi lọc theo ngữ cảnh link (`seo_link_maps` → `articles.site_id`) hoặc gắn link thủ công.
 
 ### Mô hình dữ liệu
 
-Một **phrase** là một bản ghi `keywords` (global, unique `phrase`). Ngữ cảnh theo domain nằm ở `seo_links` + pivot `keyword_link`:
+Một **phrase** là một bản ghi `keywords` (global, unique `phrase`). Ngữ cảnh anchor/link theo bài viết nằm ở **`seo_link_maps`** (thay cho pivot legacy `keyword_link` — đã drop từ migration `2026_06_18_100000_reform_keywords_to_seo_link_maps`).
 
 | Bảng | Vai trò |
 |------|---------|
-| `keywords` | `phrase`, `type`, `parent_id` (cụm con → focus cha) — global, không `site_id` |
-| `seo_links` | `site_id`, `url`, `type` (`internal`/`external`), `article_id`, `source_article_id`, `is_nofollow` |
-| `keyword_link` | `keyword_id`, `link_id`, `search_volume`, `difficulty`, `metrics` (JSON) |
+| `keywords` | `phrase`, `type`, `parent_id` (cụm con → pillar cha) — global, không `site_id` |
+| `seo_link_maps` | Một dòng = một anchor trong ngữ cảnh bài: `keyword_id`, `source_article_id`, `target_article_id` / `target_external_url`, `anchor_text`, `context_before`, `context_after`, `link_type`, `status`, `last_http_status`, `last_audited_at` |
+| `article_keyword` | Pivot bài ↔ keyword (`is_main`, `weight`) — bài viết chính / liên kết semantic |
+| `seo_links` | *(Legacy)* Danh sách link domain; vẫn có thể tồn tại cho flow cũ nhưng **Filament Keywords / audit / rescrape mới dùng `seo_link_maps`** |
 
-Scope domain: `Keyword::scopeForSite()` / `scopeForSites()` qua `whereHas('links', …)` hoặc `whereHas('articles', …)`.
+**`seo_link_maps.link_type`:** `internal`, `external`, `wiki_trust` (`SeoLinkMapType`).
+
+**`seo_link_maps.status`:** `active`, `needs_audit`, `ignored`, `broken` (`SeoLinkMapStatus`). Job `AuditLinkStatusJob` cập nhật HTTP audit vào `last_http_status` / `last_audited_at`.
+
+**Quan hệ Eloquent chính:**
+
+| Model | Relationship | Ghi chú |
+|-------|--------------|---------|
+| `Keyword` | `linkMaps()` | HasMany `SeoLinkMap` — **dùng cho UI dictionary, triage, drawer** |
+| `Keyword` | `mainArticles()` | BelongsToMany qua `article_keyword` where `is_main` |
+| `Keyword` | `links()` | BelongsToMany qua `keyword_link` — **legacy**; chỉ gọi khi `Schema::hasTable('keyword_link')` |
+
+Scope domain: `Keyword::scopeForSite()` / `scopeForSites()` qua `whereHas('linkMaps', …)` (theo `sourceArticle.site_id`) hoặc `whereHas('articles', …)`.
+
+> **Không** dùng `whereHas('links')` hay join `keyword_link` trên DB đã migrate — bảng không còn tồn tại.
 
 ### Loại từ khóa (`type`)
 
@@ -258,7 +273,7 @@ Action **Cào lại keywords** (`KeywordDomainResyncService::resetAndResync`):
 
 ### Lệch domain khi xem từ khóa con
 
-Parent focus có thể có liên kết trên nhiều domain, nhưng **từ khóa con** thường chỉ có `seo_links` trên domain đã cào cụm. Khi global site ≠ domain có con:
+Parent focus có thể có liên kết trên nhiều domain, nhưng **từ khóa con** thường chỉ có `seo_link_maps` (ngữ cảnh bài) trên domain đã cào cụm. Khi global site ≠ domain có con:
 
 - Bảng trống, hiển thị empty state (icon cảnh báo, mô tả domain hiện tại vs domain có dữ liệu).
 - Nút chuyển domain gọi `ListKeywords::switchToClusterChildrenSite()` → `SeoAccessControl::setGlobalSiteId()` + reload `?parent_id=…`.
@@ -269,7 +284,8 @@ Logic phát hiện: `KeywordResource::resolveClusterChildrenSiteMismatch()`.
 
 | Service | Vai trò |
 |---------|---------|
-| `KeywordPersistenceService` | Upsert phrase global + `seo_links` / `keyword_link` theo site |
+| `KeywordPersistenceService` | Upsert phrase global; đồng bộ mapping qua `seo_link_maps` / `article_keyword` (fallback `keyword_link` chỉ khi bảng legacy còn tồn tại) |
+| `ArticleLinkContextMapService` | Bóc tách / cập nhật `seo_link_maps` theo ngữ cảnh HTML bài viết |
 | `KeywordDomainResyncService` | Cào lại keyword theo domain |
 | `KeywordPhraseUpdateService` | Đổi phrase, đồng bộ liên kết |
 | `KeywordLinkTargetResolver` | Resolve URL đích anchor |

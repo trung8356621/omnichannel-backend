@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordLink;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 
 final class KeywordPersistenceService
@@ -247,7 +248,10 @@ final class KeywordPersistenceService
         SeoLink::query()
             ->where('source_article_id', $articleId)
             ->each(function (SeoLink $link): void {
-                $link->keywords()->detach();
+                if (\Illuminate\Support\Facades\Schema::connection($link->getConnectionName())->hasTable('keyword_link')) {
+                    $link->keywords()->detach();
+                }
+
                 $link->delete();
             });
     }
@@ -255,6 +259,18 @@ final class KeywordPersistenceService
     public function detachKeywordFromSite(Keyword $keyword, int $siteId): void
     {
         if ($siteId <= 0) {
+            return;
+        }
+
+        SeoLinkMap::query()
+            ->where('keyword_id', $keyword->id)
+            ->whereHas(
+                'sourceArticle',
+                static fn ($query) => $query->where('site_id', $siteId),
+            )
+            ->delete();
+
+        if (! \Illuminate\Support\Facades\Schema::connection((new Keyword)->getConnectionName())->hasTable('keyword_link')) {
             return;
         }
 
