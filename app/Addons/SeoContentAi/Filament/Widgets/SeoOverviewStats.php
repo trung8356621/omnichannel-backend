@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Widgets;
 
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Filament\Concerns\InteractsWithSeoDashboardSite;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoMedia;
@@ -54,10 +55,13 @@ class SeoOverviewStats extends StatsOverviewWidget
         $keywordInternal = Keyword::query()
             ->forSite($siteId)
             ->whereHas(
-                'links',
+                'linkMaps',
                 static fn ($query) => $query
-                    ->where('seo_links.site_id', $siteId)
-                    ->where('seo_links.type', 'internal'),
+                    ->where('link_type', SeoLinkMapType::Internal)
+                    ->whereHas(
+                        'sourceArticle',
+                        static fn ($articleQuery) => $articleQuery->where('site_id', $siteId),
+                    ),
             )
             ->count();
 

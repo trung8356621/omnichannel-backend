@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
+use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
+use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Database\Eloquent\Builder;
@@ -86,6 +89,14 @@ class Keyword extends Model
 
     public function getVolumeAttribute(): ?int
     {
+        $siteId = $this->resolveSiteId();
+        if ($siteId !== null && $siteId > 0) {
+            $volume = app(KeywordMetaRepository::class)->getSiteSearchVolume((int) $this->id, $siteId);
+            if ($volume !== null) {
+                return $volume;
+            }
+        }
+
         $value = $this->resolvePivotForSite()?->search_volume;
 
         return $value !== null ? (int) $value : null;
@@ -108,6 +119,14 @@ class Keyword extends Model
 
     public function getMetricsAttribute(): ?array
     {
+        $siteId = $this->resolveSiteId();
+        if ($siteId !== null && $siteId > 0) {
+            $keep = app(KeywordMetaRepository::class)->keepOnRescrapeForSite($this, $siteId);
+            if ($keep) {
+                return [self::METRIC_RESCRAPE_KEEP => true];
+            }
+        }
+
         $metrics = $this->resolvePivotForSite()?->metrics;
 
         return is_array($metrics) ? $metrics : null;
@@ -144,22 +163,197 @@ class Keyword extends Model
         );
     }
 
+    /**
+     * @return array<string, \Closure(Builder): Builder>
+     */
+    public static function linkMapCountRelations(): array
+    {
+        return [
+            'linkMaps as linked_articles_count' => static function (Builder $query): Builder {
+                return $query
+                    ->whereNotNull('source_article_id')
+                    ->whereHas(
+                        'sourceArticle',
+                        static fn (Builder $articleQuery): Builder => $articleQuery->whereNull('deleted_at'),
+                    );
+            },
+            'linkMaps as site_links_count' => static function (Builder $query): Builder {
+                return $query->where('status', '!=', SeoLinkMapStatus::Ignored->value);
+            },
+        ];
+    }
+
+    public function metas(): HasMany
+    {
+        return $this->hasMany(KeywordMeta::class);
+    }
+
+    public function metaValue(string $metaKey): ?string
+    {
+        if ($this->relationLoaded('metas')) {
+            $match = $this->metas->first(
+                static fn (KeywordMeta $meta): bool => $meta->meta_key === $metaKey,
+            );
+
+            return $match instanceof KeywordMeta ? $match->meta_value : null;
+        }
+
+        $value = $this->metas()->where('meta_key', $metaKey)->value('meta_value');
+
+        return is_string($value) ? $value : null;
+    }
+
+    /**
+     * @return list<int>
+     */
+    public function getTagIdsList(): array
+    {
+        return app(KeywordMetaRepository::class)->getTagIds((int) $this->id);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public function getQualityFlagsList(): array
+    {
+        return app(KeywordMetaRepository::class)->getQualityFlags((int) $this->id);
+    }
+
+    public function mainArticleId(): ?int
+    {
+        return app(KeywordMetaRepository::class)->getMainArticleId((int) $this->id);
+    }
+
     public function linksForSite(int $siteId): BelongsToMany
     {
         return $this->links()->where('seo_links.site_id', $siteId);
     }
 
-    public function articles(): BelongsToMany
-    {
-        return $this->belongsToMany(SeoArticle::class, 'article_keyword', 'keyword_id', 'article_id')
-            ->withPivot('weight', 'is_main')
-            ->withTimestamps();
-    }
-
     public function mainArticles(): BelongsToMany
     {
-        return $this->belongsToMany(SeoArticle::class, 'article_keyword', 'keyword_id', 'article_id')
-            ->wherePivot('is_main', true);
+        return $this->belongsToMany(
+            SeoArticle::class,
+            'keyword_meta',
+            'keyword_id',
+            'meta_value',
+        )
+            ->where('keyword_meta.meta_key', KeywordMetaKey::MainArticleId->value)
+            ->whereColumn('articles.id', 'keyword_meta.meta_value');
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @param  list<int>  $tagIds
+     * @return Builder<Keyword>
+     */
+    public function scopeWhereHasAnyTagId(Builder $query, array $tagIds): Builder
+    {
+        $tagIds = array_values(array_filter(
+            array_map(static fn (mixed $id): int => (int) $id, $tagIds),
+            static fn (int $id): bool => $id > 0,
+        ));
+
+        if ($tagIds === []) {
+            return $query;
+        }
+
+        return $query->whereHas(
+            'metas',
+            static function (Builder $metaQuery) use ($tagIds): void {
+                $metaQuery
+                    ->where('meta_key', KeywordMetaKey::Tags->value)
+                    ->where(function (Builder $containsQuery) use ($tagIds): void {
+                        foreach ($tagIds as $tagId) {
+                            $containsQuery->orWhereRaw(
+                                'JSON_CONTAINS(meta_value, ?, "$")',
+                                [json_encode($tagId, JSON_THROW_ON_ERROR)],
+                            );
+                        }
+                    });
+            },
+        );
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @param  list<int>  $tagIds
+     * @return Builder<Keyword>
+     */
+    public function scopeWhereMissingAnyTagId(Builder $query, array $tagIds): Builder
+    {
+        $tagIds = array_values(array_filter(
+            array_map(static fn (mixed $id): int => (int) $id, $tagIds),
+            static fn (int $id): bool => $id > 0,
+        ));
+
+        if ($tagIds === []) {
+            return $query;
+        }
+
+        return $query->whereDoesntHave(
+            'metas',
+            static function (Builder $metaQuery) use ($tagIds): void {
+                $metaQuery
+                    ->where('meta_key', KeywordMetaKey::Tags->value)
+                    ->where(function (Builder $containsQuery) use ($tagIds): void {
+                        foreach ($tagIds as $tagId) {
+                            $containsQuery->orWhereRaw(
+                                'JSON_CONTAINS(meta_value, ?, "$")',
+                                [json_encode($tagId, JSON_THROW_ON_ERROR)],
+                            );
+                        }
+                    });
+            },
+        );
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @param  list<string>  $flags
+     * @return Builder<Keyword>
+     */
+    public function scopeWhereHasAnyQualityFlag(Builder $query, array $flags): Builder
+    {
+        $flags = array_values(array_filter(
+            array_map(static fn (mixed $flag): string => trim((string) $flag), $flags),
+            static fn (string $flag): bool => in_array($flag, ['danger', 'warning'], true),
+        ));
+
+        if ($flags === []) {
+            return $query;
+        }
+
+        return $query->whereHas(
+            'metas',
+            static function (Builder $metaQuery) use ($flags): void {
+                $metaQuery
+                    ->where('meta_key', KeywordMetaKey::QualityFlags->value)
+                    ->where(function (Builder $containsQuery) use ($flags): void {
+                        foreach ($flags as $flag) {
+                            $containsQuery->orWhereRaw(
+                                'JSON_CONTAINS(meta_value, ?, "$")',
+                                [json_encode($flag, JSON_THROW_ON_ERROR)],
+                            );
+                        }
+                    });
+            },
+        );
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @return Builder<Keyword>
+     */
+    public function scopeWhereHasNoQualityFlags(Builder $query): Builder
+    {
+        return $query->whereDoesntHave(
+            'metas',
+            static fn (Builder $metaQuery): Builder => $metaQuery
+                ->where('meta_key', KeywordMetaKey::QualityFlags->value)
+                ->whereNotNull('meta_value')
+                ->where('meta_value', '!=', '')
+                ->where('meta_value', '!=', '[]'),
+        );
     }
 
     public function inboundLinks(): BelongsToMany
@@ -167,11 +361,9 @@ class Keyword extends Model
         return $this->links();
     }
 
-    public function articleKeywords(): HasMany
-    {
-        return $this->hasMany(ArticleKeyword::class);
-    }
-
+    /**
+     * @deprecated Pivot keyword_tag removed; use getTagIdsList().
+     */
     public function tags(): BelongsToMany
     {
         return $this->belongsToMany(Tag::class, 'keyword_tag', 'keyword_id', 'tag_id');
@@ -202,6 +394,39 @@ class Keyword extends Model
 
         if (is_numeric($siteId)) {
             return (int) $siteId;
+        }
+
+        if ($this->relationLoaded('metas')) {
+            foreach ($this->metas as $meta) {
+                if (! $meta instanceof KeywordMeta) {
+                    continue;
+                }
+
+                $siteIdFromKey = KeywordMetaKey::siteIdFromKey((string) $meta->meta_key);
+                if ($siteIdFromKey !== null) {
+                    return $siteIdFromKey;
+                }
+            }
+        } else {
+            $firstSiteKey = $this->metas()
+                ->where('meta_key', 'like', 'site.%')
+                ->orderBy('id')
+                ->value('meta_key');
+
+            if (is_string($firstSiteKey)) {
+                $siteIdFromKey = KeywordMetaKey::siteIdFromKey($firstSiteKey);
+                if ($siteIdFromKey !== null) {
+                    return $siteIdFromKey;
+                }
+            }
+        }
+
+        $mainArticleId = $this->mainArticleId();
+        if ($mainArticleId !== null) {
+            $mainSiteId = SeoArticle::query()->whereKey($mainArticleId)->value('site_id');
+            if (is_numeric($mainSiteId)) {
+                return (int) $mainSiteId;
+            }
         }
 
         if (! $this->legacyKeywordLinkTableExists()) {
@@ -319,6 +544,11 @@ class Keyword extends Model
             }
         }
 
+        $siteMetaUrl = trim((string) (app(KeywordMetaRepository::class)->getSiteTargetUrl((int) $this->id, $siteId) ?? ''));
+        if ($siteMetaUrl !== '') {
+            return $siteMetaUrl;
+        }
+
         return $this->targetUrlFromLinkMaps($siteId);
     }
 
@@ -357,7 +587,14 @@ class Keyword extends Model
 
     private function legacyKeywordLinkTableExists(): bool
     {
-        return Schema::connection($this->getConnectionName())->hasTable('keyword_link');
+        return $this->legacyKeywordLinkTablesExist();
+    }
+
+    private function legacyKeywordLinkTablesExist(): bool
+    {
+        $schema = Schema::connection($this->getConnectionName());
+
+        return $schema->hasTable('keyword_link') && $schema->hasTable('seo_links');
     }
 
     public function hasSiteContext(int $siteId): bool
@@ -376,8 +613,19 @@ class Keyword extends Model
             return true;
         }
 
-        return $this->articles()->where('articles.site_id', $siteId)->exists()
-            || $this->mainArticles()->where('articles.site_id', $siteId)->exists();
+        if (app(KeywordMetaRepository::class)->keywordHasSiteMeta((int) $this->id, $siteId)) {
+            return true;
+        }
+
+        $mainArticleId = $this->mainArticleId();
+        if ($mainArticleId !== null) {
+            return SeoArticle::query()
+                ->whereKey($mainArticleId)
+                ->where('site_id', $siteId)
+                ->exists();
+        }
+
+        return false;
     }
 
     /**
@@ -400,8 +648,16 @@ class Keyword extends Model
                     ),
                 )
                 ->orWhereHas(
-                    'articles',
-                    static fn (Builder $articleQuery): Builder => $articleQuery->where('articles.site_id', $siteId),
+                    'metas',
+                    static fn (Builder $metaQuery): Builder => $metaQuery->where('meta_key', 'like', "site.{$siteId}.%"),
+                )
+                ->orWhereHas(
+                    'metas',
+                    static fn (Builder $metaQuery): Builder => $metaQuery
+                        ->where('meta_key', KeywordMetaKey::MainArticleId->value)
+                        ->whereIn('meta_value', SeoArticle::query()
+                            ->where('site_id', $siteId)
+                            ->select('id')),
                 );
         });
     }
@@ -432,20 +688,28 @@ class Keyword extends Model
                     ),
                 )
                 ->orWhereHas(
-                    'articles',
-                    static fn (Builder $articleQuery): Builder => $articleQuery->whereIn('articles.site_id', $siteIds),
+                    'metas',
+                    static function (Builder $metaQuery) use ($siteIds): Builder {
+                        return $metaQuery->where(function (Builder $siteMetaQuery) use ($siteIds): void {
+                            foreach ($siteIds as $siteId) {
+                                $siteMetaQuery->orWhere('meta_key', 'like', "site.{$siteId}.%");
+                            }
+                        });
+                    },
+                )
+                ->orWhereHas(
+                    'metas',
+                    static fn (Builder $metaQuery): Builder => $metaQuery
+                        ->where('meta_key', KeywordMetaKey::MainArticleId->value)
+                        ->whereIn('meta_value', SeoArticle::query()
+                            ->whereIn('site_id', $siteIds)
+                            ->select('id')),
                 );
         });
     }
 
     public function keepOnRescrapeForSite(int $siteId): bool
     {
-        if (! in_array($this->type, [self::TYPE_FREE, self::TYPE_SUGGEST], true)) {
-            return false;
-        }
-
-        $metrics = $this->resolvePivotForSite($siteId)?->metrics;
-
-        return is_array($metrics) && ($metrics[self::METRIC_RESCRAPE_KEEP] ?? false) === true;
+        return app(KeywordMetaRepository::class)->keepOnRescrapeForSite($this, $siteId);
     }
 }

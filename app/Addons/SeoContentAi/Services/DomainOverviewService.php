@@ -7,7 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Models\Site;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -287,21 +287,21 @@ final class DomainOverviewService
     }
 
     /**
-     * @return \Illuminate\Database\Eloquent\Builder<SeoLink>
+     * @return \Illuminate\Database\Eloquent\Builder<SeoLinkMap>
      */
     private function linksGroupedQuery(int $siteId)
     {
-        return SeoLink::query()
+        return SeoLinkMap::query()
             ->join('articles', function ($join) use ($siteId): void {
-                $join->on('articles.id', '=', 'seo_links.source_article_id')
+                $join->on('articles.id', '=', 'seo_link_maps.source_article_id')
                     ->where('articles.site_id', '=', $siteId)
                     ->whereNull('articles.deleted_at');
             })
-            ->where('seo_links.site_id', $siteId)
-            ->selectRaw('MIN(seo_links.id) as id')
-            ->addSelect('seo_links.url', 'seo_links.type')
-            ->selectRaw('COUNT(DISTINCT seo_links.source_article_id) as articles_count')
-            ->groupBy('seo_links.url', 'seo_links.type')
+            ->selectRaw('MIN(seo_link_maps.id) as id')
+            ->selectRaw("COALESCE(NULLIF(seo_link_maps.target_external_url, ''), CONCAT('article:', seo_link_maps.target_article_id)) as url")
+            ->addSelect('seo_link_maps.link_type as type')
+            ->selectRaw('COUNT(DISTINCT seo_link_maps.source_article_id) as articles_count')
+            ->groupByRaw("COALESCE(NULLIF(seo_link_maps.target_external_url, ''), CONCAT('article:', seo_link_maps.target_article_id)), seo_link_maps.link_type")
             ->orderByDesc('articles_count');
     }
 

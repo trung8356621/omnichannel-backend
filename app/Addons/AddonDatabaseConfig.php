@@ -34,26 +34,31 @@ final class AddonDatabaseConfig
 
         if ($parsed['legacy_string_only']) {
             $base = Config::get('database.connections.mysql', []);
-
-            return array_merge($base, [
+            $merged = array_merge($base, [
                 'database' => $parsed['name'],
             ]);
-        }
 
-        $base = Config::get('database.connections.mysql', []);
-        $merged = array_merge($base, array_filter([
-            'driver' => 'mysql',
-            'host' => $parsed['host'],
-            'port' => $parsed['port'],
-            'database' => $parsed['name'],
-            'username' => $parsed['username'],
-            'password' => $parsed['password'],
-        ], static fn (mixed $value): bool => $value !== null && $value !== ''));
+            $localPath = self::localConfigPath((string) ($meta['_addon_path'] ?? ''));
+            if ($localPath !== null) {
+                $local = self::loadLocalConfig($localPath);
+                $merged = self::applyLocalOverrides($merged, $local);
+            }
+        } else {
+            $base = Config::get('database.connections.mysql', []);
+            $merged = array_merge($base, array_filter([
+                'driver' => 'mysql',
+                'host' => $parsed['host'],
+                'port' => $parsed['port'],
+                'database' => $parsed['name'],
+                'username' => $parsed['username'],
+                'password' => $parsed['password'],
+            ], static fn (mixed $value): bool => $value !== null && $value !== ''));
 
-        $localPath = self::localConfigPath((string) ($meta['_addon_path'] ?? ''));
-        if ($localPath !== null) {
-            $local = self::loadLocalConfig($localPath);
-            $merged = self::applyLocalOverrides($merged, $local);
+            $localPath = self::localConfigPath((string) ($meta['_addon_path'] ?? ''));
+            if ($localPath !== null) {
+                $local = self::loadLocalConfig($localPath);
+                $merged = self::applyLocalOverrides($merged, $local);
+            }
         }
 
         return $merged;

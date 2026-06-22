@@ -2,15 +2,18 @@
 
 declare(strict_types=1);
 
-namespace App\Addons\SeoContentAi\Filament\Pages;
+namespace App\Filament\PluginReleasePanel\Pages;
 
-use App\Addons\SeoContentAi\Exceptions\InvalidWordPressPluginZipException;
-use App\Addons\SeoContentAi\Exceptions\WordPressPluginVersionExistsException;
-use App\Addons\SeoContentAi\Exceptions\WordPressPluginVersionNotFoundException;
-use App\Addons\SeoContentAi\Services\WordPressPluginReleaseService;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Exceptions\ExternalPlugin\InvalidWordPressPluginZipException;
+use App\Exceptions\ExternalPlugin\WordPressPluginVersionExistsException;
+use App\Exceptions\ExternalPlugin\WordPressPluginVersionNotFoundException;
+use App\Models\User;
+use App\Services\ExternalPlugin\ExternalPluginManifest;
+use App\Services\ExternalPlugin\ExternalPluginRegistry;
+use App\Services\ExternalPlugin\WordPressPluginReleaseService;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Components\Toggle;
@@ -18,27 +21,45 @@ use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
 use Filament\Forms\Form;
 use Filament\Notifications\Notification;
+use Filament\Pages\Page;
 use Illuminate\Support\Facades\Storage;
 
-class ManagePluginRelease extends SeoPanelPage implements HasForms
+class ManageExternalPluginRelease extends Page implements HasForms
 {
     use InteractsWithForms;
 
-    protected static ?string $slug = 'settings/wp-plugin-release';
+    protected static ?string $navigationIcon = 'heroicon-o-arrow-up-tray';
+
+    protected static string $view = 'filament.pages.manage-external-plugin-release';
 
     protected static bool $shouldRegisterNavigation = false;
 
-    protected static string $view = 'seo-content-ai::filament.pages.manage-plugin-release';
+    protected static ?string $slug = '';
+
+    public static function getSlug(): string
+    {
+        return '';
+    }
 
     /** @var array<string, mixed> */
     public array $overview = [];
 
+    public ?string $selectedPluginSlug = null;
+
     /** @var array<string, mixed>|null */
     public ?array $data = [];
 
-    public function mount(WordPressPluginReleaseService $releases): void
+    public function mount(ExternalPluginRegistry $registry): void
     {
-        $this->refreshOverview($releases);
+        $requested = trim((string) request()->query('name', ''));
+        $manifest = $registry->resolve($requested) ?? $registry->defaultManifest();
+
+        if ($manifest === null) {
+            abort(404, 'No external plugins registered.');
+        }
+
+        $this->selectedPluginSlug = $manifest->slug;
+        $this->refreshOverview();
         $this->form->fill([
             'version' => '',
             'changelog' => '',
@@ -54,6 +75,20 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
                 Section::make(__('seo-content-ai::filament.wp_plugin_release.upload_section'))
                     ->description(__('seo-content-ai::filament.wp_plugin_release.upload_section_description'))
                     ->schema([
+                        Select::make('plugin_slug')
+                            ->label(__('seo-content-ai::filament.wp_plugin.name'))
+                            ->options($this->pluginSelectOptions())
+                            ->default($this->selectedPluginSlug)
+                            ->live()
+                            ->afterStateUpdated(function (?string $state): void {
+                                if (! is_string($state) || $state === '') {
+                                    return;
+                                }
+
+                                $this->selectedPluginSlug = $state;
+                                $this->refreshOverview();
+                            })
+                            ->visible(fn (): bool => count($this->pluginSelectOptions()) > 1),
                         FileUpload::make('plugin_zip')
                             ->label(__('seo-content-ai::filament.wp_plugin_release.zip_file'))
                             ->helperText(__('seo-content-ai::filament.wp_plugin_release.zip_file_hint'))
@@ -93,7 +128,7 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
         return ['form'];
     }
 
-    public function publish(WordPressPluginReleaseService $releases): void
+    public function publish(ExternalPluginRegistry $registry): void
     {
         $state = $this->form->getState();
         $uploadedPath = $this->resolveUploadedZipPath($state['plugin_zip'] ?? null);
@@ -106,6 +141,8 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
 
             return;
         }
+
+        $releases = $this->releaseService($registry);
 
         try {
             $result = $releases->publishRelease(
@@ -134,7 +171,7 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
             $this->cleanupUploadedZip($state['plugin_zip'] ?? null);
         }
 
-        $this->refreshOverview($releases);
+        $this->refreshOverview($registry);
         $this->form->fill([
             'version' => '',
             'changelog' => '',
@@ -152,15 +189,16 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
             ->send();
     }
 
-    public function refreshOverview(WordPressPluginReleaseService $releases): void
+    public function refreshOverview(?ExternalPluginRegistry $registry = null): void
     {
-        $this->overview = $releases->overview();
+        $registry ??= app(ExternalPluginRegistry::class);
+        $this->overview = $this->releaseService($registry)->overview();
     }
 
-    public function deleteRelease(string $version, WordPressPluginReleaseService $releases): void
+    public function deleteRelease(string $version, ExternalPluginRegistry $registry): void
     {
         try {
-            $releases->deleteRelease($version);
+            $this->releaseService($registry)->deleteRelease($version);
         } catch (InvalidWordPressPluginZipException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.wp_plugin_release.delete_failed'))
@@ -171,7 +209,7 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
             return;
         }
 
-        $this->refreshOverview($releases);
+        $this->refreshOverview($registry);
 
         Notification::make()
             ->title(__('seo-content-ai::filament.wp_plugin_release.delete_success'))
@@ -180,6 +218,44 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
             ]))
             ->success()
             ->send();
+    }
+
+    public static function canAccess(): bool
+    {
+        $user = auth()->user();
+
+        return $user instanceof User
+            && in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true);
+    }
+
+    public function getTitle(): string
+    {
+        return __('seo-content-ai::filament.wp_plugin_release.title');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function pluginSelectOptions(): array
+    {
+        $options = [];
+        foreach (app(ExternalPluginRegistry::class)->all() as $manifest) {
+            $options[$manifest->slug] = $manifest->label.' ('.$manifest->platform.')';
+        }
+
+        return $options;
+    }
+
+    private function releaseService(ExternalPluginRegistry $registry): WordPressPluginReleaseService
+    {
+        $slug = trim((string) ($this->selectedPluginSlug ?? ''));
+        $manifest = $registry->resolve($slug) ?? $registry->defaultManifest();
+
+        if (! $manifest instanceof ExternalPluginManifest) {
+            abort(404, 'Plugin not found.');
+        }
+
+        return WordPressPluginReleaseService::forManifest($manifest);
     }
 
     private function resolveUploadedZipPath(mixed $uploaded): ?string
@@ -215,20 +291,5 @@ class ManagePluginRelease extends SeoPanelPage implements HasForms
         if (is_string($uploaded) && $uploaded !== '') {
             Storage::disk('local')->delete($uploaded);
         }
-    }
-
-    public static function canAccess(): bool
-    {
-        return SeoAccessControl::canAccessManagerFeatures();
-    }
-
-    public static function getNavigationLabel(): string
-    {
-        return __('seo-content-ai::filament.wp_plugin_release.navigation');
-    }
-
-    public function getTitle(): string
-    {
-        return __('seo-content-ai::filament.wp_plugin_release.title');
     }
 }

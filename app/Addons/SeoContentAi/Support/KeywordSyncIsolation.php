@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Support;
 
 /**
- * Cô lập luồng keywords: chỉ cho phép đồng bộ qua rescrap domain (site),
- * không tự động ghi keyword/link khi save bài, observer, hay link list.
+ * Cô lập luồng keywords legacy: gate `allowsContentKeywordPersistence` vẫn chỉ mở trong domain resync
+ * cho SeoAnalyzerService; save/debug/link list dùng ArticleLinkContextMapService + keyword_meta EAV.
  */
 final class KeywordSyncIsolation
 {
@@ -14,7 +14,7 @@ final class KeywordSyncIsolation
 
     public static function allowsAutomaticContentSync(): bool
     {
-        return false;
+        return true;
     }
 
     public static function allowsKeywordObserverSync(): bool
@@ -24,7 +24,7 @@ final class KeywordSyncIsolation
 
     public static function allowsDomainLinkListSync(): bool
     {
-        return false;
+        return true;
     }
 
     public static function allowsContentKeywordPersistence(): bool

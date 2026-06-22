@@ -7,17 +7,16 @@ namespace App\Addons\SeoContentAi;
 use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
 use App\Addons\SeoContentAi\Console\CleanCtaKeywordsCommand;
 use App\Addons\SeoContentAi\Console\ExtractOldArticleTocsCommand;
+use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Observers\SeoArticleObserver;
 use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
-use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Routing\Router;
 use Illuminate\Notifications\DatabaseNotification;
-use Illuminate\Support\Facades\Config;
+use Illuminate\Routing\Router;
 use Illuminate\Support\ServiceProvider;
 
 class SeoContentAiServiceProvider extends ServiceProvider
@@ -41,8 +40,8 @@ class SeoContentAiServiceProvider extends ServiceProvider
         self::$booted = true;
 
         $this->loadViewsFrom(__DIR__.'/resources/views', 'seo-content-ai');
-        $this->registerLegacyFallbackConnection();
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
+        $this->bootstrapDefaultSeoConnection();
 
         \App\Addons\SeoContentAi\Models\Keyword::observe(
             \App\Addons\SeoContentAi\Observers\KeywordLinkListSyncObserver::class,
@@ -81,23 +80,12 @@ class SeoContentAiServiceProvider extends ServiceProvider
         });
     }
 
-    private function registerLegacyFallbackConnection(): void
+    private function bootstrapDefaultSeoConnection(): void
     {
-        $mysql = Config::get('database.connections.mysql', []);
-        if ($mysql === []) {
-            return;
+        try {
+            app(SeoDatabaseConnectionService::class)->bootstrapLegacySharedConnection();
+        } catch (\Throwable $exception) {
+            report($exception);
         }
-
-        $legacyDatabase = (string) config('seo-content-ai.legacy_shared_database', 'omi_seo_ai');
-
-        Config::set('database.connections.'.self::DB_CONNECTION, array_merge($mysql, [
-            'driver' => 'mysql',
-            'database' => $legacyDatabase,
-            'charset' => $mysql['charset'] ?? 'utf8mb4',
-            'collation' => $mysql['collation'] ?? 'utf8mb4_unicode_ci',
-            'prefix' => $mysql['prefix'] ?? '',
-            'strict' => $mysql['strict'] ?? true,
-            'engine' => $mysql['engine'] ?? null,
-        ]));
     }
 }

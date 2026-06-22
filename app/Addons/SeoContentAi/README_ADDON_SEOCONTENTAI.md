@@ -26,7 +26,8 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 - **Thư viện media** — Upload local, sync WP, watermark, split ảnh, tối ưu ảnh, job AI generate.
 - **Team** — Trang quản lý thành viên (`SeoTeam`), chat team (`/api/seo/team/messages`), profile / đổi mật khẩu trên panel SEO.
 - **Editor nâng cao** — Lưu nháp local cho featured image + product album, bridge event Livewire↔React, autosave lock, FAQ extract debug.
-- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain; **Phát hành WP Plugin** (`/seo/settings/wp-plugin-release`) trên server Laravel.
+- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain.
+- **Tiện ích** — Hub công khai tại `/tools` (MD↔HTML, MD→FAQ); tab **Dịch đoạn** chỉ khi đăng nhập owner có `api_connections` hoặc staff của owner đó.
 
 ---
 
@@ -148,9 +149,9 @@ Trên từng **Domain** (Filament):
 
 **Plugin bridge:**
 
-- Phát hành ZIP trên Laravel: **Settings → WP Plugin release** (`/seo/{hash}/settings/wp-plugin-release`).
+- Phát hành ZIP trên Laravel (core): **`/wp-plugin-release?name=omi-seo-ai-bridge`** (admin/owner, panel core).
 - Dashboard **Tất cả domain** (owner/admin): bảng phiên bản plugin từng site (site-info `bridge_version`); nút mở `{domain}/wp-admin/admin.php?page=omi-seo-ai&view=settings` để kiểm tra/cập nhật thủ công trên WP.
-- Auto-update WP: `GET /api/seo/plugin/update-check` (kèm `download_url` signed); metadata `GET /api/seo/plugin/info.json` hoặc `/storage/plugins/omi-seo-ai-bridge/info.json` từ `wp_options`.
+- Auto-update WP: `GET /api/seo/plugin/update-check` (alias, kèm `download_url` signed); API mới `GET /api/plugins/{slug}/update-check`; metadata `GET /api/plugins/{slug}/info.json` hoặc `/storage/plugins/omi-seo-ai-bridge/info.json` từ `wp_options`.
 
 File ZIP: `storage/app/public/plugins/omi-seo-ai-bridge/omi-seo-ai-bridge-{version}.zip`.
 
@@ -158,7 +159,7 @@ Repo plugin nguồn: `wp-seo-ai` → package `omi-seo-ai-bridge`. REST `editor-s
 
 Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên frontend trỏ về editor):
 
-- API URL Omnichannel + route redirect: `GET /seo/articles/wp-edit-redirect?wp_id=…&type=…&site_url=…`
+- API URL Omnichannel + route redirect: `GET /seo/{connection_hash}/articles/wp-edit-redirect?wp_id=…&type=…&site_url=…` (plugin WP lấy `connection_hash` từ ping `/api/seo-wp-bridge/ping`)
 
 ---
 
@@ -175,7 +176,8 @@ Cấu hình URL Laravel trên WP (để nút **Sửa bài viết** trên fronten
 | Global AI chat | `GET /api/ai/chat/models`, `POST /api/ai/chat` | Model được phép + chat (session auth) |
 | WP bridge | `/api/seo-wp-bridge/*` | Webhook push content từ WP |
 | Plugin | `/api/seo/plugin/*` | Update check / download bridge |
-| Plugin (panel) | `/seo/wp-plugin/download/{version}`, settings wp-plugin-release | Download & upload release |
+| Plugin (core) | `/wp-plugin-release?name=omi-seo-ai-bridge`, `/api/plugins/{slug}/*` | Upload & metadata release |
+| Plugin (compat) | `/seo/wp-plugin/download/{version}`, `/api/seo/plugin/*` | Download & update-check legacy |
 
 ---
 
@@ -224,9 +226,15 @@ Một **phrase** là một bản ghi `keywords` (global, unique `phrase`). Ngữ
 | Bảng | Vai trò |
 |------|---------|
 | `keywords` | `phrase`, `type`, `parent_id` (cụm con → pillar cha) — global, không `site_id` |
+| `keyword_meta` | EAV metadata: `main_article_id`, `tags` (JSON tag ids), `quality_flags` (JSON `danger`/`warning`), và keys theo domain `site.{site_id}.target_url|search_volume|difficulty|rescrape_keep` |
+| `keyword_tags` | Danh mục tag (trước đây `tags`); gắn keyword qua `keyword_meta.tags`, không còn pivot `keyword_tag` |
 | `seo_link_maps` | Một dòng = một anchor trong ngữ cảnh bài: `keyword_id`, `source_article_id`, `target_article_id` / `target_external_url`, `anchor_text`, `context_before`, `context_after`, `link_type`, `status`, `last_http_status`, `last_audited_at` |
-| `article_keyword` | Pivot bài ↔ keyword (`is_main`, `weight`) — bài viết chính / liên kết semantic |
-| `seo_links` | *(Legacy)* Danh sách link domain; vẫn có thể tồn tại cho flow cũ nhưng **Filament Keywords / audit / rescrape mới dùng `seo_link_maps`** |
+| `seo_link_audits` | Cache audit HTTP theo `(site_id, target_url_hash)` — tránh audit lặp URL; denormalize sang `seo_link_maps.status` |
+| `seo_links` | *(Legacy — đã drop)* Reader đã chuyển sang `seo_link_maps` |
+
+**Focus keyword:** `article_meta.seo_focus_keyword` → `KeywordFocusAttach` → `keyword_meta.main_article_id`.
+
+**Topic cluster:** `keywords.parent_id` (con trỏ pillar cha); không còn pivot `article_keyword` (đã drop migration `2026_06_24_100000`).
 
 **`seo_link_maps.link_type`:** `internal`, `external`, `wiki_trust` (`SeoLinkMapType`).
 
@@ -237,10 +245,11 @@ Một **phrase** là một bản ghi `keywords` (global, unique `phrase`). Ngữ
 | Model | Relationship | Ghi chú |
 |-------|--------------|---------|
 | `Keyword` | `linkMaps()` | HasMany `SeoLinkMap` — **dùng cho UI dictionary, triage, drawer** |
-| `Keyword` | `mainArticles()` | BelongsToMany qua `article_keyword` where `is_main` |
+| `Keyword` | `mainArticles()` | BelongsToMany qua `keyword_meta.main_article_id` |
+| `Keyword` | `metas()` | HasMany `KeywordMeta` — EAV store |
 | `Keyword` | `links()` | BelongsToMany qua `keyword_link` — **legacy**; chỉ gọi khi `Schema::hasTable('keyword_link')` |
 
-Scope domain: `Keyword::scopeForSite()` / `scopeForSites()` qua `whereHas('linkMaps', …)` (theo `sourceArticle.site_id`) hoặc `whereHas('articles', …)`.
+Scope domain: `Keyword::scopeForSite()` / `scopeForSites()` qua `linkMaps`, `keyword_meta` (site.* hoặc `main_article_id` thuộc site).
 
 > **Không** dùng `whereHas('links')` hay join `keyword_link` trên DB đã migrate — bảng không còn tồn tại.
 
@@ -268,8 +277,10 @@ Lọc tối thiểu: phrase ≥ 2 từ, loại anchor giống link (`InternalAnc
 Action **Cào lại keywords** (`KeywordDomainResyncService::resetAndResync`):
 
 1. Xóa keyword khớp CTA blacklist trên domain.
-2. Xóa keyword có liên kết (bài/link/cụm) trên domain; **giữ** `free` / `suggest` có `metrics.rescrape_keep`.
-3. Quét lại toàn bộ bài viết domain → bóc tách keyword qua `SeoAnalyzerService`.
+2. Xóa keyword có liên kết (bài/link/cụm) trên domain; **giữ** focus keyword (`keyword_meta.main_article_id` / `seo_focus_keyword`), và `free` / `suggest` có `site.{id}.rescrape_keep`.
+3. Quét lại toàn bộ bài viết domain → bóc tách keyword qua `ArticleLinkContextMapService::resyncArticle`.
+4. Khôi phục focus từ `article_meta.seo_focus_keyword` (`KeywordFocusAttach::syncFocusKeywordsFromArticles`).
+5. Tính lại auto-tag chất lượng `danger` / `warning` (`KeywordQualityFlagService`).
 
 ### Lệch domain khi xem từ khóa con
 
@@ -284,8 +295,12 @@ Logic phát hiện: `KeywordResource::resolveClusterChildrenSiteMismatch()`.
 
 | Service | Vai trò |
 |---------|---------|
-| `KeywordPersistenceService` | Upsert phrase global; đồng bộ mapping qua `seo_link_maps` / `article_keyword` (fallback `keyword_link` chỉ khi bảng legacy còn tồn tại) |
-| `ArticleLinkContextMapService` | Bóc tách / cập nhật `seo_link_maps` theo ngữ cảnh HTML bài viết |
+| `KeywordPersistenceService` | Upsert phrase global; lưu meta theo domain trong `keyword_meta` EAV qua `KeywordMetaRepository` |
+| `KeywordMetaRepository` | CRUD EAV: focus, tags JSON, quality flags, site-scoped target URL / volume / difficulty / rescrape_keep |
+| `KeywordQualityFlagService` | Auto-tag `danger` / `warning` sau rescrape (phrase ngắn, context_before trống, phrase > 7 từ) |
+| `LinkAuditCacheService` | Cache audit URL trong `seo_link_audits`; skip job khi còn fresh (TTL config) |
+| `ArticleLinkContextMapService` | Bóc tách / cập nhật `seo_link_maps` theo ngữ cảnh HTML bài viết (domain rescrape, save bài, debug rescrape) |
+| `ArticleKeywordLinkReconcileService` | Điều phối sync keyword khi save/sync bài → gọi `ArticleLinkContextMapService` |
 | `KeywordDomainResyncService` | Cào lại keyword theo domain |
 | `KeywordPhraseUpdateService` | Đổi phrase, đồng bộ liên kết |
 | `KeywordLinkTargetResolver` | Resolve URL đích anchor |
@@ -343,7 +358,7 @@ Chạy thử gửi nội dung cột Prompt (đã sửa) qua `PromptRunnerService
 | `DomainOverviewService` | Tổng hợp trạng thái kết nối/token WordPress theo domain |
 | `AllDomainsDashboardService` | Dashboard tất cả domain: projects, team, sức khỏe domain |
 | `WordPressPluginDomainsOverviewService` | Bảng plugin WP theo domain trên dashboard |
-| `WordPressPluginReleaseService` | Quản lý metadata + package plugin trên Laravel |
+| `SeoToolsService` / `SeoTextTranslateToolService` | Hub công khai `/tools` (dịch đoạn có phân quyền) |
 | `WordPressSiteInfoService` | Fetch/lưu `site-info` (gồm `bridge_version`) từ WP |
 | `SeoDatabaseConnectionService` | Bootstrap connection theo hash/site, migrate workspace |
 | `SeoMigrationReconciler` | Reconcile migration khi DB đã có bảng (hosting) |

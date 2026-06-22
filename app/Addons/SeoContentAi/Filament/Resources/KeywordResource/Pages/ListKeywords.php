@@ -126,19 +126,20 @@ class ListKeywords extends ListRecords
         $keyword = Keyword::query()
             ->withCount([
                 'mainArticles as main_articles_count',
-                'linkMaps as site_links_count',
-                'linkMaps as linked_articles_count',
+                ...Keyword::linkMapCountRelations(),
                 'children as children_count',
             ])
             ->with([
                 'parent:id,phrase',
-                'tags',
                 'linkMaps' => static fn ($linkQuery): mixed => $linkQuery
                     ->orderBy('seo_link_maps.id')
                     ->with([
-                        'sourceArticle:id,site_id,title,slug',
+                        'sourceArticle' => static fn ($articleQuery): mixed => $articleQuery
+                            ->withTrashed()
+                            ->select('id', 'site_id', 'title', 'slug'),
                         'sourceArticle.site:id,domain',
                         'targetArticle:id,site_id,title,slug',
+                        'targetArticle.site:id,domain',
                     ]),
                 'mainArticles.site:id,domain',
             ])
@@ -461,6 +462,8 @@ class ListKeywords extends ListRecords
             Tables\Actions\EditAction::make()
                 ->modalHeading(__('seo-content-ai::filament.keyword.edit'))
                 ->form(fn (Keyword $record): array => KeywordResource::editKeywordFormSchema($record))
+                ->mutateFormDataUsing(fn (array $data, Keyword $record): array => KeywordResource::mutateKeywordFormDataForFill($data, $record))
+                ->using(fn (Keyword $record, array $data): Keyword => KeywordResource::saveKeywordFromFormData($record, $data))
                 ->extraAttributes(['class' => 'keyword-ta-sr-action'])
                 ->authorize(fn (Keyword $record): bool => KeywordResource::canEdit($record)),
             Tables\Actions\DeleteAction::make()

@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use PDOException;
 use RuntimeException;
 
@@ -146,6 +147,13 @@ final class SeoDatabaseConnectionService
 
     public function bootstrapLegacySharedConnection(): void
     {
+        $record = $this->resolveDefaultSharedConnectionRecord();
+        if ($record !== null) {
+            $this->bootstrapFromConnection($record);
+
+            return;
+        }
+
         $mysql = Config::get('database.connections.mysql', []);
         if ($mysql === []) {
             return;
@@ -162,6 +170,19 @@ final class SeoDatabaseConnectionService
         Config::set('database.connections.'.$this->connectionName(), $config);
         DB::purge($this->connectionName());
         self::$bootstrappedHashes['_legacy'] = $fingerprint;
+    }
+
+    public function resolveDefaultSharedConnectionRecord(): ?SeoDatabaseConnection
+    {
+        if (! Schema::hasTable('seo_database_connections')) {
+            return null;
+        }
+
+        return SeoDatabaseConnection::query()
+            ->where('is_active', true)
+            ->orderByRaw("CASE WHEN type = 'manual' THEN 0 ELSE 1 END")
+            ->orderBy('id')
+            ->first();
     }
 
     /**

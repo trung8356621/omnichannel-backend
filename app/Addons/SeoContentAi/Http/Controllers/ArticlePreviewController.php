@@ -21,7 +21,7 @@ class ArticlePreviewController extends Controller
         ArticleFaqHtmlRenderer $faqRenderer,
         WordPressArticleContentService $wordPressContent,
     ): View|Response|RedirectResponse {
-        $article->loadMissing(['site', 'keywords']);
+        $article->loadMissing(['site']);
 
         if ($article->body === null && (int) ($article->wp_post_id ?? 0) > 0) {
             $permalink = trim($wordPressContent->resolvePermalink($article));

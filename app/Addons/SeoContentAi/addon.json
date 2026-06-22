@@ -4,5 +4,14 @@
   "version": "1.0.0",
   "description": "Quản lý prompt SEO, workflow và tích hợp AI cho nội dung.",
   "icon": "heroicon-o-sparkles",
-  "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider"
+  "provider": "App\\Addons\\SeoContentAi\\SeoContentAiServiceProvider",
+  "external_plugins": [
+    {
+      "slug": "omi-seo-ai-bridge",
+      "label": "TVH SEO AI Bridge",
+      "platform": "wordpress",
+      "package_prefix": "omi-seo-ai-bridge",
+      "metadata_option_key": "wp_plugin_bridge_info"
+    }
+  ]
 }

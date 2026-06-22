@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\Tag;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 
@@ -57,21 +58,20 @@ final class WorkflowKeywordResearchService
             throw new \InvalidArgumentException('Từ khóa chính khớp CTA blacklist, không lưu Topic Cluster.');
         }
 
-        $parentKeyword = $this->keywordPersistence->upsert(
-            $focusPhrase,
-            Keyword::TYPE_NORMAL,
+        KeywordFocusAttach::syncMainKeyword(
+            $article,
             $siteId,
-            null,
-            null,
+            (int) (auth()->id() ?? 0),
+            $focusPhrase,
         );
+
+        $parentKeyword = Keyword::query()
+            ->whereRaw('LOWER(phrase) = ?', [mb_strtolower(Keyword::decodePhrase($focusPhrase))])
+            ->first();
 
         if ($parentKeyword === null) {
             throw new \InvalidArgumentException('Không lưu được từ khóa chính cho cụm chủ đề.');
         }
-
-        $article->keywords()->syncWithoutDetaching([
-            $parentKeyword->id => ['weight' => 1.0, 'is_main' => true],
-        ]);
 
         $tagsCount = $this->syncHolonymyTags($parentKeyword, $holonymyPhrases, $siteId);
 
@@ -107,10 +107,6 @@ final class WorkflowKeywordResearchService
                 if ($childKeyword === null) {
                     continue;
                 }
-
-                $article->keywords()->syncWithoutDetaching([
-                    $childKeyword->id => ['weight' => 0.5],
-                ]);
 
                 $childrenCount++;
             }
@@ -229,7 +225,7 @@ final class WorkflowKeywordResearchService
             return 0;
         }
 
-        $parentKeyword->tags()->syncWithoutDetaching($tagIds);
+        app(KeywordMetaRepository::class)->mergeTagIds((int) $parentKeyword->id, $tagIds);
 
         return count($tagIds);
     }

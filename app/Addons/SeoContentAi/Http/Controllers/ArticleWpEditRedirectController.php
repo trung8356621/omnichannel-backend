@@ -7,7 +7,9 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleByWpIdResolver;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\WordPressSiteUrlMatcher;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
@@ -25,6 +27,7 @@ final class ArticleWpEditRedirectController extends Controller
         Request $request,
         WordPressSiteUrlMatcher $siteMatcher,
         ArticleByWpIdResolver $articleResolver,
+        SeoDatabaseConnectionService $databaseConnection,
     ): RedirectResponse {
         $wpId = (int) $request->query('wp_id', 0);
         $type = (string) $request->query('type', 'article');
@@ -39,6 +42,8 @@ final class ArticleWpEditRedirectController extends Controller
             abort(404);
         }
 
+        $databaseConnection->bootstrapBySiteId((int) $site->id);
+
         $article = $articleResolver->resolve($site, $wpId, $type);
         if (! $article instanceof SeoArticle) {
             abort(404, 'Chưa có bài SEO tương ứng với ID WordPress này. Hãy đồng bộ domain trước.');
@@ -52,7 +57,10 @@ final class ArticleWpEditRedirectController extends Controller
         }
 
         return redirect()->to(
-            ArticleResource::panelUrl('edit', ['record' => $article->id])
+            ArticleResource::panelUrl(
+                'edit',
+                SeoConnectionContext::mergePanelRouteParameters(['record' => $article->id]),
+            ),
         );
     }
 

@@ -31,7 +31,7 @@ final class ArticleListSeoSummary
      */
     public static function for(SeoArticle $article): array
     {
-        $article->loadMissing(['keywords', 'articleMetas', 'faqs']);
+        $article->loadMissing(['articleMetas', 'faqs']);
 
         $keyword = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article);
 

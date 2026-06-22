@@ -1416,18 +1416,6 @@ final class TaskWorkflowTestRunner
 
         $normalized = mb_strtolower($keyword);
 
-        $byKeyword = (clone $baseQuery)
-            ->whereHas('keywords', static function ($query) use ($normalized, $keyword): void {
-                $query->whereRaw('LOWER(phrase) = ?', [$normalized])
-                    ->orWhere('phrase', 'like', '%'.addcslashes($keyword, '%_\\').'%');
-            })
-            ->orderByDesc('id')
-            ->first();
-
-        if ($byKeyword instanceof SeoArticle) {
-            return $byKeyword;
-        }
-
         return (clone $baseQuery)
             ->whereHas('articleMetas', static function ($query) use ($normalized, $keyword): void {
                 $query->where('meta_key', 'seo_focus_keyword')

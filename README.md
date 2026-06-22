@@ -13,6 +13,7 @@ Backend quản lý đa kênh: **site khách hàng**, **gói dịch vụ / subscr
 | **Service (addon)** | Bảng `services` mô tả từng addon: `slug`, `addon_namespace` (class ServiceProvider), `is_active`, `config` (toàn bộ `addon.json`). |
 | **AddonManager** | Quét thư mục `app/Addons/*/addon.json`, đồng bộ/`updateOrCreate` vào bảng `services` theo `slug`. |
 | **AppServiceProvider** | Sau khi app boot (`$this->app->booted(...)`), nếu có bảng `services`, sẽ register mọi addon `is_active = true` bằng `$this->app->register($service->addon_namespace)`. |
+| **PluginReleasePanelProvider (Filament)** | Panel phát hành plugin ngoài tại **`/wp-plugin-release`** (admin/owner). Registry đọc `external_plugins[]` từ `services.config` (addon.json). |
 | **AdminPanelProvider (Filament)** | Đăng ký panel `path('admin')`. Với mỗi service active, map `slug` → PascalCase (vd. `wp-headless` → `WpHeadless`), rồi auto **`discoverPages` / `discoverResources`** và **`loadViewsFrom`** (namespace view = `slug`). Riêng `seo-content-ai` được bỏ qua ở `/admin` vì dùng panel riêng `/seo`. |
 
 **Lưu ý:** Addon có thể dùng **database riêng** (SEO AI: `omi_seo_ai`, WP Headless: `omi_wp_headless`). Cấu hình nằm trong `app/Addons/{Addon}/addon.json` (object `database`) và tùy chọn `database.local.php` (gitignore, chứa password trên hosting) — **không cần** thêm biến `.env` core. Provider gọi `RegistersAddonDatabase::registerAddonDatabase()` khi boot.
@@ -113,7 +114,12 @@ Chi tiết cột sau các migration alter: xem trực tiếp các file trong `da
 - `/admin/wp-headless/connect` — flow kết nối WP (`WpHeadlessConnect`, CSRF có exception trong `bootstrap/app.php`).
 - `/admin/wp-headless/site` — chi tiết/sync site headless (`WpHeadlessSitePage`, cần đăng nhập).
 
-**Panel tách riêng:** SEO Content AI chạy panel Filament riêng tại **`/seo/{connection_hash}`** (id panel: `seo`, provider: `SeoPanelProvider`). Entry **`GET /seo`** redirect user tới workspace phù hợp hoặc trang login/no-workspace. Không nằm trong navigation `/admin` (trừ quản lý connection ở admin).
+**Panel tách riêng:**
+
+- SEO Content AI: **`/seo/{connection_hash}`** (id panel: `seo`, provider: `SeoPanelProvider`).
+- Phát hành plugin WordPress/bridge: **`/wp-plugin-release?name={slug}`** (id panel: `plugin-release`, chỉ `admin`/`owner`). Addon khai báo plugin trong `addon.json` → `external_plugins[]`; core đọc qua `ExternalPluginRegistry`.
+
+Entry **`GET /seo`** redirect user tới workspace phù hợp hoặc trang login/no-workspace. Không nằm trong navigation `/admin` (trừ quản lý connection ở admin).
 
 **Luồng SEO workspace (tóm tắt):**
 
@@ -130,7 +136,9 @@ Chi tiết addon: `app/Addons/SeoContentAi/README_ADDON_SEOCONTENTAI.md`.
 - `app/Services/AddonManager.php` — quét và sync `services`
 - `app/Addons/RegistersAddonDatabase.php` — đăng ký DB addon
 - `app/Providers/AppServiceProvider.php` — `register()` provider theo `is_active`
-- `app/Providers/Filament/AdminPanelProvider.php` — discover Filament + views theo addon active
+- `app/Providers/Filament/PluginReleasePanelProvider.php` — panel `/wp-plugin-release`
+- `app/Services/ExternalPlugin/ExternalPluginRegistry.php` — registry `external_plugins` từ `services.config`
+- `app/Http/Controllers/Api/ExternalPluginUpdateController.php` — API update-check/download plugin
 - `app/Filament/Pages/ManageServices.php` — UI kích hoạt addon
 - `app/Filament/Resources/SeoDatabaseConnectionResource.php` — quản lý workspace DB SEO (core admin)
 - `app/Services/SiteServiceBindingService.php` — resolve owner/site cho `site_services.bound_type`

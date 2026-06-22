@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
@@ -728,7 +729,7 @@ class SeoAnalyzerService
 
     private function resolveFocusKeyword(SeoArticle $article): ?string
     {
-        $article->loadMissing(['keywords', 'articleMetas']);
+        $article->loadMissing(['articleMetas']);
 
         $metaKeyword = $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword');
         if ($metaKeyword && is_string($metaKeyword->meta_value) && trim($metaKeyword->meta_value) !== '') {
@@ -739,22 +740,21 @@ class SeoAnalyzerService
             }
         }
 
-        $main = $article->keywords
-            ->filter(function ($keyword): bool {
-                return ((int) ($keyword->pivot->is_main ?? 0) === 1) || ((int) ($keyword->is_main ?? 0) === 1);
-            })
-            ->sortBy(function ($keyword): int {
-                return Keyword::isNormalType((string) ($keyword->type ?? '')) ? 0 : 1;
-            })
+        $mainKeyword = Keyword::query()
+            ->whereHas(
+                'metas',
+                static fn ($query) => $query
+                    ->where('meta_key', KeywordMetaKey::MainArticleId->value)
+                    ->where('meta_value', (string) $article->id),
+            )
+            ->orderByRaw('CASE WHEN type = ? THEN 0 ELSE 1 END', [Keyword::TYPE_NORMAL])
             ->first();
 
-        if (! $main) {
+        if ($mainKeyword === null) {
             return null;
         }
 
-        $keyword = $this->normalizeFocusKeyword(
-            (string) ($main->phrase ?? $main->keyword ?? $main->name ?? '')
-        );
+        $keyword = $this->normalizeFocusKeyword((string) $mainKeyword->phrase);
 
         return $keyword !== '' ? $keyword : null;
     }

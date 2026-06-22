@@ -6,12 +6,14 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
+use App\Services\ExternalPlugin\ExternalPluginRegistry;
+use App\Services\ExternalPlugin\WordPressPluginReleaseService;
 use Illuminate\Database\Eloquent\Builder;
 
 final class WordPressPluginDomainsOverviewService
 {
     public function __construct(
-        private readonly WordPressPluginReleaseService $releaseService,
+        private readonly ExternalPluginRegistry $pluginRegistry,
         private readonly WordPressSiteInfoService $siteInfoService,
     ) {}
 
@@ -69,26 +71,35 @@ final class WordPressPluginDomainsOverviewService
 
     private function resolveLatestPublishedVersion(): ?string
     {
-        $overview = $this->releaseService->overview();
+        $releaseService = $this->releaseService();
+        $overview = $releaseService->overview();
         $latest = trim((string) ($overview['latest']['version'] ?? ''));
-        if ($latest !== '' && $this->releaseService->isValidVersion($latest)) {
+        if ($latest !== '' && $releaseService->isValidVersion($latest)) {
             return $latest;
         }
 
         $published = trim((string) ($overview['metadata']['version'] ?? ''));
-        if ($published !== '' && $this->releaseService->isValidVersion($published)) {
+        if ($published !== '' && $releaseService->isValidVersion($published)) {
             return $published;
         }
 
         return null;
     }
 
+    private function releaseService(): WordPressPluginReleaseService
+    {
+        $manifest = $this->pluginRegistry->resolveOrFail('omi-seo-ai-bridge');
+
+        return WordPressPluginReleaseService::forManifest($manifest);
+    }
+
     private function resolveInstalledVersion(Site $site): ?string
     {
+        $releaseService = $this->releaseService();
         $siteInfo = $this->siteInfoService->getStoredSiteInfo($site);
         $version = trim((string) ($siteInfo['bridge_version'] ?? ''));
 
-        if ($version === '' || ! $this->releaseService->isValidVersion($version)) {
+        if ($version === '' || ! $releaseService->isValidVersion($version)) {
             return null;
         }
 

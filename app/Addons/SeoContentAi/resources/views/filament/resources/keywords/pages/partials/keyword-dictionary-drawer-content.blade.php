@@ -5,8 +5,8 @@
 
     $presenter = app(KeywordLinkDetailPanelPresenter::class);
     $linkItems = $presenter->buildItems($record);
-    $internalLinks = collect($linkItems)->where('link_type', 'internal')->take(5)->values();
-    $linkedArticles = $record->mainArticles;
+    $linkedArticles = collect($presenter->buildLinkedSourceArticles($record));
+    $internalLinks = collect($linkItems)->values();
     $clusterLabel = $record->parent_id
         ? (string) ($record->parent?->phrase ?? '—')
         : (((int) ($record->children_count ?? 0) > 0)
@@ -47,6 +47,7 @@
             @endif
             {{ $statusLabel }}
         </span>
+
         <span @class(['ws-badge', $typeClass])>{{ $typeLabel }}</span>
     </div>
 
@@ -58,7 +59,10 @@
         <div class="keyword-dictionary-drawer__mini-stat">
             <span class="keyword-dictionary-drawer__mini-stat-label">{{ __('seo-content-ai::filament.keyword.tags') }}</span>
             <span class="keyword-dictionary-drawer__mini-stat-value">
-                {{ $record->tags->isEmpty() ? '—' : $record->tags->pluck('name')->join(', ') }}
+                @php
+                    $tagLabels = KeywordResource::resolveTagLabelsForKeyword($record);
+                @endphp
+                {{ $tagLabels === [] ? '—' : implode(', ', $tagLabels) }}
             </span>
         </div>
         <div class="keyword-dictionary-drawer__mini-stat">
@@ -80,16 +84,33 @@
         @if ($linkedArticles->isEmpty())
             <p class="keyword-dictionary-drawer__empty">—</p>
         @else
-            <ul class="keyword-dictionary-drawer__list">
-                @foreach ($linkedArticles->take(4) as $article)
+            <ul class="keyword-dictionary-drawer__list keyword-dictionary-drawer__list--scrollable">
+                @foreach ($linkedArticles as $article)
                     <li class="keyword-dictionary-drawer__list-item">
                         <div class="keyword-dictionary-drawer__list-body">
-                            <p class="keyword-dictionary-drawer__list-title">{{ $article->title }}</p>
+                            @if (! empty($article['wp_url']))
+                                <a
+                                    href="{{ $article['wp_url'] }}"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="keyword-dictionary-drawer__list-title text-indigo-600 hover:text-indigo-500 dark:text-indigo-300"
+                                >
+                                    {{ $article['title'] }}
+                                </a>
+                            @else
+                                <p class="keyword-dictionary-drawer__list-title">{{ $article['title'] }}</p>
+                            @endif
                         </div>
-                        <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--success ws-badge--status">
-                            <x-filament::icon icon="heroicon-m-check-circle" class="h-3 w-3" />
-                            {{ __('seo-content-ai::filament.keyword.stat_active') }}
-                        </span>
+                        @if (! empty($article['is_focus']))
+                            <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--info ws-badge--status">
+                                {{ __('seo-content-ai::filament.keyword.focus_short') }}
+                            </span>
+                        @else
+                            <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--success ws-badge--status">
+                                <x-filament::icon icon="heroicon-m-check-circle" class="h-3 w-3" />
+                                {{ __('seo-content-ai::filament.keyword.stat_active') }}
+                            </span>
+                        @endif
                     </li>
                 @endforeach
             </ul>
@@ -105,12 +126,23 @@
         @if ($internalLinks->isEmpty())
             <p class="keyword-dictionary-drawer__empty">—</p>
         @else
-            <ul class="keyword-dictionary-drawer__list">
+            <ul class="keyword-dictionary-drawer__list keyword-dictionary-drawer__list--scrollable">
                 @foreach ($internalLinks as $item)
                     <li class="keyword-dictionary-drawer__list-item">
                         <div class="keyword-dictionary-drawer__list-body">
                             <p class="keyword-dictionary-drawer__list-title">{{ $item['source_title'] ?? '—' }}</p>
-                            <p class="keyword-dictionary-drawer__list-meta">{{ $item['target_url'] ?? '—' }}</p>
+                            @if (! empty($item['target_url']))
+                                <a
+                                    href="{{ $item['target_url'] }}"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="keyword-dictionary-drawer__list-meta text-indigo-600 hover:text-indigo-500 dark:text-indigo-300"
+                                >
+                                    {{ $item['target_label'] ?? $item['target_url'] }}
+                                </a>
+                            @else
+                                <p class="keyword-dictionary-drawer__list-meta">—</p>
+                            @endif
                         </div>
                         <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--success ws-badge--status">
                             <x-filament::icon icon="heroicon-m-check-circle" class="h-3 w-3" />

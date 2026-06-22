@@ -25,7 +25,10 @@ final class KeywordLinkDetailPanelPresenter
             ? $keyword->linkMaps
             : $keyword->linkMaps()
                 ->orderBy('id')
-                ->with(['sourceArticle.site', 'targetArticle'])
+                ->with([
+                    'sourceArticle' => static fn ($articleQuery): mixed => $articleQuery->withTrashed()->with('site'),
+                    'targetArticle',
+                ])
                 ->get();
 
         $items = [];
@@ -69,6 +72,84 @@ final class KeywordLinkDetailPanelPresenter
                 'weak_context' => $weakContext,
                 'can_assign_content_project' => KeywordResource::canAssignKeywordToContentProject($keyword),
             ];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @return list<array{id: int, title: string, wp_url: string|null, edit_url: string|null, is_focus: bool}>
+     */
+    public function buildLinkedSourceArticles(Keyword $keyword): array
+    {
+        $resolver = app(KeywordLinkTargetResolver::class);
+        $maps = $keyword->relationLoaded('linkMaps')
+            ? $keyword->linkMaps
+            : $keyword->linkMaps()
+                ->orderBy('id')
+                ->with([
+                    'sourceArticle' => static fn ($articleQuery): mixed => $articleQuery->withTrashed()->with('site'),
+                ])
+                ->get();
+
+        $focusArticleIds = $keyword->relationLoaded('mainArticles')
+            ? $keyword->mainArticles->pluck('id')->map(static fn (mixed $id): int => (int) $id)
+            : collect($keyword->mainArticleId() !== null ? [$keyword->mainArticleId()] : []);
+
+        $items = [];
+        $seen = [];
+
+        foreach ($maps as $map) {
+            if (! $map instanceof SeoLinkMap || $map->status === SeoLinkMapStatus::Ignored) {
+                continue;
+            }
+
+            $sourceArticle = $map->sourceArticle;
+            if (! $sourceArticle instanceof SeoArticle) {
+                continue;
+            }
+
+            $articleId = (int) $sourceArticle->id;
+            if (isset($seen[$articleId])) {
+                continue;
+            }
+
+            $seen[$articleId] = true;
+            $title = trim((string) ($sourceArticle->title ?? ''))
+                ?: KeywordResource::resolveLinkMapSourceLabel($sourceArticle);
+
+            $items[] = [
+                'id' => $articleId,
+                'title' => $title,
+                'wp_url' => $resolver->resolveArticlePublicUrl($sourceArticle),
+                'edit_url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
+                'is_focus' => $focusArticleIds->contains($articleId),
+            ];
+        }
+
+        if ($keyword->relationLoaded('mainArticles')) {
+            foreach ($keyword->mainArticles as $focusArticle) {
+                if (! $focusArticle instanceof SeoArticle) {
+                    continue;
+                }
+
+                $articleId = (int) $focusArticle->id;
+                if (isset($seen[$articleId])) {
+                    continue;
+                }
+
+                $seen[$articleId] = true;
+                $title = trim((string) ($focusArticle->title ?? ''))
+                    ?: KeywordResource::resolveLinkMapSourceLabel($focusArticle);
+
+                $items[] = [
+                    'id' => $articleId,
+                    'title' => $title,
+                    'wp_url' => $resolver->resolveArticlePublicUrl($focusArticle),
+                    'edit_url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
+                    'is_focus' => true,
+                ];
+            }
         }
 
         return $items;

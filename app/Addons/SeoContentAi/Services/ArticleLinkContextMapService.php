@@ -26,16 +26,23 @@ final class ArticleLinkContextMapService
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordLinkTargetResolver $linkTargetResolver,
         private readonly LinkMapStatusAuditService $linkStatusAudit,
+        private readonly KeywordQualityFlagService $qualityFlags,
     ) {}
 
-    public function resyncArticle(SeoArticle $article): int
-    {
+    /**
+     * @param  array<int, string>  $excludeAnchorPhrases
+     */
+    public function resyncArticle(
+        SeoArticle $article,
+        ?string $contentOverride = null,
+        array $excludeAnchorPhrases = [],
+    ): int {
         if (! $article->countsTowardSeoScore()) {
             return 0;
         }
 
         $article->loadMissing('site');
-        $content = $this->resolveArticleContent($article);
+        $content = $contentOverride ?? $this->resolveArticleContent($article);
         if (trim($content) === '') {
             SeoLinkMap::query()->where('source_article_id', $article->id)->delete();
 
@@ -48,12 +55,17 @@ final class ArticleLinkContextMapService
         SeoLinkMap::query()->where('source_article_id', $article->id)->delete();
 
         $saved = 0;
+        $touchedKeywordIds = [];
 
         foreach ($anchors as $anchor) {
             $anchorText = Keyword::decodePhrase((string) ($anchor['anchor_text'] ?? ''));
             $href = trim((string) ($anchor['href'] ?? ''));
 
             if ($anchorText === '' || $href === '') {
+                continue;
+            }
+
+            if ($this->shouldExcludeAnchorPhrase($anchorText, $excludeAnchorPhrases)) {
                 continue;
             }
 
@@ -90,9 +102,25 @@ final class ArticleLinkContextMapService
                 'status' => SeoLinkMapStatus::Active,
             ]);
 
-            $this->linkStatusAudit->queueLinkMap($linkMap, $siteId);
+            $resolvedTargetUrl = trim((string) ($targetExternalUrl ?? ''));
+            if ($resolvedTargetUrl === '' && $targetArticleId !== null) {
+                $target = SeoArticle::query()->find($targetArticleId);
+                if ($target instanceof SeoArticle) {
+                    $resolvedTargetUrl = trim((string) ($this->linkTargetResolver->resolveArticlePublicUrl($target) ?? ''));
+                }
+            }
+            if ($resolvedTargetUrl === '') {
+                $resolvedTargetUrl = trim($this->resolveAbsoluteExternalUrl($href, $siteId));
+            }
 
+            $this->linkStatusAudit->queueLinkMap($linkMap, $siteId, $resolvedTargetUrl !== '' ? $resolvedTargetUrl : null);
+
+            $touchedKeywordIds[(int) $keyword->id] = true;
             $saved++;
+        }
+
+        foreach (array_keys($touchedKeywordIds) as $keywordId) {
+            $this->qualityFlags->recomputeForKeywordFromMaps((int) $keywordId);
         }
 
         return $saved;
@@ -359,5 +387,28 @@ final class ArticleLinkContextMapService
         }
 
         return $unique;
+    }
+
+    /**
+     * @param  array<int, string>  $excludeAnchorPhrases
+     */
+    private function shouldExcludeAnchorPhrase(string $anchorText, array $excludeAnchorPhrases): bool
+    {
+        if ($excludeAnchorPhrases === []) {
+            return false;
+        }
+
+        $anchorNorm = mb_strtolower(Keyword::decodePhrase($anchorText));
+        if ($anchorNorm === '') {
+            return false;
+        }
+
+        foreach ($excludeAnchorPhrases as $phrase) {
+            if ($anchorNorm === mb_strtolower(Keyword::decodePhrase((string) $phrase))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

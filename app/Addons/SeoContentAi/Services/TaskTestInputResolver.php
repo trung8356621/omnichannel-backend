@@ -224,7 +224,7 @@ final class TaskTestInputResolver
 
     private function contextFromArticle(SeoArticle $article, string $matchedBy): TaskTestContext
     {
-        $article->loadMissing(['keywords', 'articleMetas']);
+        $article->loadMissing(['articleMetas']);
 
         $focusKeyword = $this->seoAnalyzer->resolveFocusKeywordForArticle($article) ?? '';
         $postTitle = trim((string) ($article->title ?? ''));
@@ -377,18 +377,6 @@ final class TaskTestInputResolver
     private function findArticleByKeyword(string $keyword): ?SeoArticle
     {
         $normalized = mb_strtolower($keyword);
-
-        $viaRelation = $this->articlesQuery()
-            ->whereHas('keywords', function (Builder $query) use ($normalized, $keyword): void {
-                $query->whereRaw('LOWER(phrase) = ?', [$normalized])
-                    ->orWhere('phrase', 'like', '%'.$this->escapeLike($keyword).'%');
-            })
-            ->orderByDesc('id')
-            ->first();
-
-        if ($viaRelation instanceof SeoArticle) {
-            return $viaRelation;
-        }
 
         return $this->articlesQuery()
             ->whereHas('articleMetas', function (Builder $query) use ($normalized, $keyword): void {

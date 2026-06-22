@@ -206,7 +206,6 @@ body:has(.keyword-dictionary-page) .fi-page-content {
     position: relative;
     overflow: hidden;
     width: 100%;
-    margin: 0;
     border: 1px solid rgb(229 231 235);
     border-radius: 0.875rem;
     background: rgb(255 255 255);
@@ -214,9 +213,6 @@ body:has(.keyword-dictionary-page) .fi-page-content {
     box-shadow: 0 1px 3px rgb(15 23 42 / 0.06);
     text-align: left;
     cursor: pointer;
-    appearance: none;
-    font: inherit;
-    color: inherit;
     transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
@@ -400,16 +396,6 @@ body:has(.keyword-dictionary-page) .fi-page-content {
 
 .keyword-dictionary-page .fi-ta-filters .fi-fo-hidden {
     display: none !important;
-}
-
-.keyword-dictionary-page .fi-ta-filters-above-content-ctn > span.ms-auto {
-    display: none;
-}
-
-.keyword-dictionary-page.keyword-filters-expanded .keyword-dictionary-toolbar__filters-btn {
-    border-color: rgb(var(--ws-violet-600));
-    background: rgb(var(--ws-violet-50));
-    color: rgb(var(--ws-violet-700));
 }
 
 .keyword-tags-filter-field {
@@ -706,7 +692,7 @@ body:has(.keyword-dictionary-page) .fi-page-content {
 
 .keyword-detail-drawer__phrase {
     margin-top: 0.375rem;
-    break-words;
+    word-break: break-word;
     font-size: 1.125rem;
     font-weight: 800;
     line-height: 1.35;
@@ -848,6 +834,12 @@ body:has(.keyword-dictionary-page) .fi-page-content {
 .keyword-dictionary-drawer__list {
     display: grid;
     gap: 0.5rem;
+}
+
+.keyword-dictionary-drawer__list--scrollable {
+    max-height: 18rem;
+    overflow-y: auto;
+    padding-right: 0.125rem;
 }
 
 .keyword-dictionary-drawer__list-item {

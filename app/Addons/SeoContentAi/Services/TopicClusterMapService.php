@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
@@ -237,11 +238,12 @@ final class TopicClusterMapService
             ->map(static fn (mixed $id): int => (int) $id)
             ->filter(static fn (int $id): bool => $id > 0);
 
-        $fromArticles = SeoArticle::query()
+        $fromMainArticles = SeoArticle::query()
             ->whereIn('id', function ($query) use ($keywordIds): void {
-                $query->select('article_id')
-                    ->from('article_keyword')
-                    ->whereIn('keyword_id', $keywordIds);
+                $query->selectRaw('CAST(meta_value AS UNSIGNED)')
+                    ->from('keyword_meta')
+                    ->whereIn('keyword_id', $keywordIds)
+                    ->where('meta_key', KeywordMetaKey::MainArticleId->value);
             })
             ->distinct()
             ->pluck('site_id')
@@ -249,7 +251,7 @@ final class TopicClusterMapService
             ->filter(static fn (int $id): bool => $id > 0);
 
         return $fromLinkMaps
-            ->merge($fromArticles)
+            ->merge($fromMainArticles)
             ->unique()
             ->filter(static fn (int $siteId): bool => $accessible === [] || in_array($siteId, $accessible, true))
             ->sort()
@@ -271,14 +273,6 @@ final class TopicClusterMapService
         $article = $keyword->mainArticles()
             ->where('articles.site_id', $siteId)
             ->first(['articles.id', 'articles.site_id', 'articles.title', 'articles.slug']);
-
-        if (! $article instanceof SeoArticle) {
-            $article = $keyword->articles()
-                ->where('articles.site_id', $siteId)
-                ->orderByPivot('is_main', 'desc')
-                ->orderBy('articles.id')
-                ->first(['articles.id', 'articles.site_id', 'articles.title', 'articles.slug']);
-        }
 
         if (! $article instanceof SeoArticle) {
             return [
@@ -320,17 +314,7 @@ final class TopicClusterMapService
 
         return $keyword->children
             ->map(function (Keyword $child) use ($siteId, $pillarArticleId, $normalizedPillarUrl): array {
-                $sourceArticle = $child->mainArticles()
-                    ->where('articles.site_id', $siteId)
-                    ->first(['articles.id', 'articles.site_id', 'articles.title', 'articles.slug']);
-
-                if (! $sourceArticle instanceof SeoArticle) {
-                    $sourceArticle = $child->articles()
-                        ->where('articles.site_id', $siteId)
-                        ->orderByPivot('is_main', 'desc')
-                        ->orderBy('articles.id')
-                        ->first(['articles.id', 'articles.site_id', 'articles.title', 'articles.slug']);
-                }
+                $sourceArticle = $this->resolveSourceArticleForKeywordOnSite($child, $siteId);
 
                 $linked = false;
                 if (
@@ -355,6 +339,35 @@ final class TopicClusterMapService
             })
             ->values()
             ->all();
+    }
+
+    private function resolveSourceArticleForKeywordOnSite(Keyword $keyword, int $siteId): ?SeoArticle
+    {
+        $article = $keyword->mainArticles()
+            ->where('articles.site_id', $siteId)
+            ->first(['articles.id', 'articles.site_id', 'articles.title', 'articles.slug']);
+
+        if ($article instanceof SeoArticle) {
+            return $article;
+        }
+
+        $sourceArticleId = SeoLinkMap::query()
+            ->where('keyword_id', $keyword->id)
+            ->whereNotNull('source_article_id')
+            ->whereHas(
+                'sourceArticle',
+                static fn ($query) => $query->where('site_id', $siteId),
+            )
+            ->orderBy('id')
+            ->value('source_article_id');
+
+        if (! is_numeric($sourceArticleId)) {
+            return null;
+        }
+
+        $resolved = SeoArticle::query()->find((int) $sourceArticleId, ['id', 'site_id', 'title', 'slug']);
+
+        return $resolved instanceof SeoArticle ? $resolved : null;
     }
 
     private function childLinksToPillar(int $sourceArticleId, int $pillarArticleId, string $normalizedPillarUrl): bool

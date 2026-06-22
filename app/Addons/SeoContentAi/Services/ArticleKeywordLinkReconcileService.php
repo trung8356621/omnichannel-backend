@@ -12,6 +12,10 @@ use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
  */
 final class ArticleKeywordLinkReconcileService
 {
+    public function __construct(
+        private readonly ArticleLinkContextMapService $linkContextMap,
+    ) {}
+
     /**
      * @param  array<int, string>  $excludeAnchorPhrases
      */
@@ -30,14 +34,7 @@ final class ArticleKeywordLinkReconcileService
             return;
         }
 
-        $content = $contentOverride ?? $this->resolveArticleContent($article);
-
-        app(SeoAnalyzerService::class)->reconcileKeywordLinksFromContent(
-            $article,
-            $content,
-            $article->site?->domain,
-            $excludeAnchorPhrases,
-        );
+        $this->linkContextMap->resyncArticle($article, $contentOverride, $excludeAnchorPhrases);
 
         $this->refreshMainKeywordDestinationLink($article);
     }

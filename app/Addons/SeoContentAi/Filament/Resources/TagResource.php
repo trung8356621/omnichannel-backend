@@ -53,7 +53,7 @@ class TagResource extends SeoPanelResource
         return static::allowsSeoPanelMutation()
             && $record instanceof Tag
             && SeoAccessControl::canAccessPlannerFeatures()
-            && ! $record->keywords()->exists();
+            && ! $record->keywordsUsingTagExist();
     }
 
     public static function getNavigationLabel(): string
@@ -106,10 +106,15 @@ class TagResource extends SeoPanelResource
                     ->searchable()
                     ->toggleable(isToggledHiddenByDefault: true),
 
-                Tables\Columns\TextColumn::make('keywords_count')
+                Tables\Columns\TextColumn::make('keywords_usage_count')
                     ->label(__('seo-content-ai::filament.tag.keywords_count'))
-                    ->counts('keywords')
-                    ->sortable()
+                    ->getStateUsing(fn (Tag $record): int => $record->keywordsUsageCount())
+                    ->sortable(query: function (Builder $query, string $direction): Builder {
+                        return $query->orderByRaw(
+                            '(select count(*) from keyword_meta km where km.meta_key = ? and JSON_CONTAINS(km.meta_value, CAST(keyword_tags.id AS JSON), "$")) '.$direction,
+                            [\App\Addons\SeoContentAi\Enums\KeywordMetaKey::Tags->value],
+                        );
+                    })
                     ->alignCenter()
                     ->badge()
                     ->color('info')
@@ -137,8 +142,7 @@ class TagResource extends SeoPanelResource
 
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()
-            ->withCount('keywords');
+        return parent::getEloquentQuery();
     }
 
     public static function getPages(): array

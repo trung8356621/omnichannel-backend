@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\Tag;
+use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
@@ -238,13 +239,33 @@ class KeywordResource extends SeoPanelResource
                     })
                     ->wrap(),
 
-                Tables\Columns\TextColumn::make('tags.name')
+                Tables\Columns\TextColumn::make('tag_labels')
                     ->label(__('seo-content-ai::filament.keyword.tags'))
+                    ->getStateUsing(fn (Keyword $record): array => static::resolveTagLabelsForKeyword($record))
                     ->badge()
                     ->color('gray')
                     ->separator(' ')
                     ->wrap()
                     ->placeholder('—'),
+
+                Tables\Columns\TextColumn::make('quality_flags')
+                    ->label(__('seo-content-ai::filament.keyword.quality_flags'))
+                    ->getStateUsing(fn (Keyword $record): array => $record->getQualityFlagsList())
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'danger' => 'danger',
+                        'warning' => 'warning',
+                        default => 'gray',
+                    })
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'danger' => __('seo-content-ai::filament.keyword.quality_flag_danger'),
+                        'warning' => __('seo-content-ai::filament.keyword.quality_flag_warning'),
+                        default => $state,
+                    })
+                    ->separator(' ')
+                    ->wrap()
+                    ->placeholder('—')
+                    ->toggleable(),
 
                 Tables\Columns\TextColumn::make('linked_articles_count')
                     ->label(__('seo-content-ai::filament.keyword.linked_articles'))
@@ -385,6 +406,56 @@ class KeywordResource extends SeoPanelResource
                             default => null,
                         };
                     }),
+                Tables\Filters\Filter::make('quality_flags')
+                    ->label(__('seo-content-ai::filament.keyword.quality_flags'))
+                    ->form([
+                        Forms\Components\Select::make('flags')
+                            ->label(__('seo-content-ai::filament.keyword.quality_flags'))
+                            ->options(static::qualityFlagFilterOptions())
+                            ->multiple()
+                            ->native(false),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        $flags = collect($data['flags'] ?? [])
+                            ->filter(static fn (mixed $value): bool => is_string($value) && $value !== '')
+                            ->map(static fn (string $value): string => trim($value))
+                            ->filter(static fn (string $value): bool => array_key_exists($value, static::qualityFlagFilterOptions()))
+                            ->values()
+                            ->all();
+
+                        if ($flags === []) {
+                            return $query;
+                        }
+
+                        $wantsClean = in_array('clean', $flags, true);
+                        $issueFlags = array_values(array_filter(
+                            $flags,
+                            static fn (string $flag): bool => in_array($flag, ['danger', 'warning'], true),
+                        ));
+
+                        if ($wantsClean && $issueFlags === []) {
+                            return $query->whereHasNoQualityFlags();
+                        }
+
+                        if ($wantsClean && $issueFlags !== []) {
+                            return $query->where(function (Builder $scopeQuery) use ($issueFlags): void {
+                                $scopeQuery
+                                    ->whereHasNoQualityFlags()
+                                    ->orWhere(function (Builder $flagQuery) use ($issueFlags): void {
+                                        $flagQuery->whereHasAnyQualityFlag($issueFlags);
+                                    });
+                            });
+                        }
+
+                        return $query->whereHasAnyQualityFlag($issueFlags);
+                    })
+                    ->indicateUsing(function (array $data): ?string {
+                        $labels = static::resolveQualityFlagFilterLabels($data['flags'] ?? []);
+
+                        return $labels === []
+                            ? null
+                            : __('seo-content-ai::filament.keyword.quality_flags').': '.implode(', ', $labels);
+                    }),
                 Tables\Filters\Filter::make('tags_scope')
                     ->label(__('seo-content-ai::filament.keyword.tags'))
                     ->form([
@@ -409,10 +480,7 @@ class KeywordResource extends SeoPanelResource
                             ->all();
 
                         if ($includeIds !== []) {
-                            $query->whereHas(
-                                'tags',
-                                static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $includeIds),
-                            );
+                            $query->whereHasAnyTagId($includeIds);
                         }
 
                         $excludeIds = collect($data['exclude_tag_ids'] ?? [])
@@ -426,10 +494,7 @@ class KeywordResource extends SeoPanelResource
                             return $query;
                         }
 
-                        return $query->whereDoesntHave(
-                            'tags',
-                            static fn (Builder $tagQuery): Builder => $tagQuery->whereIn('tags.id', $excludeIds),
-                        );
+                        return $query->whereMissingAnyTagId($excludeIds);
                     })
                     ->indicateUsing(function (array $data): ?string {
                         $includeLabels = static::resolveTagFilterLabels($data['include_tag_ids'] ?? []);
@@ -464,7 +529,9 @@ class KeywordResource extends SeoPanelResource
                         : __('seo-content-ai::filament.keyword.edit'))
                     ->modalHeading(__('seo-content-ai::filament.keyword.edit'))
                     ->form(fn (Keyword $record): array => static::editKeywordFormSchema($record))
-                    ->visible(fn (Keyword $record): bool => static::canEdit($record)),
+                    ->visible(fn (Keyword $record): bool => static::canEdit($record))
+                    ->mutateFormDataUsing(fn (array $data, Keyword $record): array => static::mutateKeywordFormDataForFill($data, $record))
+                    ->using(fn (Keyword $record, array $data): Keyword => static::saveKeywordFromFormData($record, $data)),
                 Tables\Actions\Action::make('quick_copy')
                     ->label(__('seo-content-ai::filament.keyword.quick_copy'))
                     ->icon('heroicon-o-clipboard-document')
@@ -636,14 +703,13 @@ class KeywordResource extends SeoPanelResource
                             }
 
                             $attached = 0;
+                            $metaRepository = app(KeywordMetaRepository::class);
                             foreach ($records as $record) {
                                 if (! $record instanceof Keyword) {
                                     continue;
                                 }
 
-                                $before = $record->tags()->count();
-                                $record->tags()->syncWithoutDetaching($tagIds);
-                                if ($record->tags()->count() > $before) {
+                                if ($metaRepository->mergeTagIds((int) $record->id, $tagIds)) {
                                     $attached++;
                                 }
                             }
@@ -1204,6 +1270,34 @@ class KeywordResource extends SeoPanelResource
     }
 
     /**
+     * @return array<string, string>
+     */
+    public static function qualityFlagFilterOptions(): array
+    {
+        return [
+            'danger' => __('seo-content-ai::filament.keyword.quality_flag_danger'),
+            'warning' => __('seo-content-ai::filament.keyword.quality_flag_warning'),
+            'clean' => __('seo-content-ai::filament.keyword.quality_flag_clean'),
+        ];
+    }
+
+    /**
+     * @param  list<mixed>  $flags
+     * @return list<string>
+     */
+    public static function resolveQualityFlagFilterLabels(array $flags): array
+    {
+        $options = static::qualityFlagFilterOptions();
+
+        return collect($flags)
+            ->filter(static fn (mixed $value): bool => is_string($value) && $value !== '')
+            ->map(static fn (string $value): string => $options[$value] ?? $value)
+            ->filter(static fn (string $label): bool => $label !== '')
+            ->values()
+            ->all();
+    }
+
+    /**
      * @return array<int|string, string>
      */
     public static function keywordTypeSelectOptions(): array
@@ -1498,11 +1592,14 @@ class KeywordResource extends SeoPanelResource
                 $articleId = (int) ($link['target_article_id'] ?? 0);
 
                 if ($articleId <= 0 && $record instanceof Keyword) {
-                    $articleId = (int) ($record->mainArticles()
-                        ->where('articles.site_id', $siteId)
-                        ->orderByDesc('article_keyword.is_main')
-                        ->orderBy('articles.id')
-                        ->value('articles.id') ?? 0);
+                    $articleId = (int) ($record->mainArticleId() ?? 0);
+
+                    if ($articleId <= 0) {
+                        $articleId = (int) ($record->mainArticles()
+                            ->where('articles.site_id', $siteId)
+                            ->orderBy('articles.id')
+                            ->value('articles.id') ?? 0);
+                    }
                 }
 
                 $link['edit_url'] = $articleId > 0
@@ -1758,16 +1855,13 @@ class KeywordResource extends SeoPanelResource
                         'targetArticle:id,site_id,title,slug',
                     ]),
                 'mainArticles.site',
-                'tags',
                 'parent:id,phrase',
                 'children' => fn (HasMany $query): HasMany => $query->orderBy('phrase'),
             ])
             ->selectRaw('keywords.*, '.static::wordCountExpression().' as word_count')
             ->withCount([
-                'articles as articles_count',
                 'mainArticles as main_articles_count',
-                'linkMaps as site_links_count',
-                'linkMaps as linked_articles_count',
+                ...Keyword::linkMapCountRelations(),
                 'linkMaps as inbound_links_count',
                 'children as children_count',
             ]);
@@ -1865,11 +1959,11 @@ class KeywordResource extends SeoPanelResource
             ! array_key_exists('inbound_links_count', $attributes)
             || ! array_key_exists('children_count', $attributes)
             || ! array_key_exists('main_articles_count', $attributes)
-            || ! array_key_exists('articles_count', $attributes)
+            || ! array_key_exists('linked_articles_count', $attributes)
         ) {
             $keyword->loadCount([
-                'articles',
                 'mainArticles',
+                ...Keyword::linkMapCountRelations(),
                 'linkMaps as inbound_links_count',
                 'children',
             ]);
@@ -1885,10 +1979,10 @@ class KeywordResource extends SeoPanelResource
 
         if (Keyword::isNormalType($keyword->type)) {
             return (int) $keyword->main_articles_count === 0
-                && (int) $keyword->articles_count === 0;
+                && (int) $keyword->linked_articles_count === 0;
         }
 
-        return (int) $keyword->articles_count === 0;
+        return (int) $keyword->linked_articles_count === 0;
     }
 
     private static function wordCountExpression(): string
@@ -2227,7 +2321,7 @@ class KeywordResource extends SeoPanelResource
         string $fieldName = 'tags',
         bool $required = false,
         ?callable $helperTextResolver = null,
-        bool $useRelationship = true,
+        bool $useRelationship = false,
     ): Forms\Components\Select {
         $select = Forms\Components\Select::make($fieldName)
             ->label(__('seo-content-ai::filament.keyword.tags'))
@@ -2235,44 +2329,78 @@ class KeywordResource extends SeoPanelResource
             ->searchable()
             ->preload()
             ->native(false)
-            ->required($required);
+            ->required($required)
+            ->options(static fn (): array => Tag::query()
+                ->orderBy('name')
+                ->pluck('name', 'id')
+                ->all())
+            ->createOptionForm([
+                Forms\Components\TextInput::make('name')
+                    ->label(__('seo-content-ai::filament.keyword.tag_name'))
+                    ->required()
+                    ->maxLength(255),
+            ])
+            ->createOptionUsing(function (array $data): int {
+                $name = trim((string) ($data['name'] ?? ''));
+
+                return (int) app(TagPersistenceService::class)
+                    ->findOrCreate($name)
+                    ->getKey();
+            });
 
         if ($helperTextResolver !== null) {
             $select->helperText(fn (): ?string => $helperTextResolver());
         }
 
-        if ($useRelationship) {
-            $select
-                ->relationship(
-                    name: 'tags',
-                    titleAttribute: 'name',
-                    modifyQueryUsing: function (Builder $query): Builder {
-                        return $query->orderBy('name');
-                    },
-                )
-                ->createOptionForm([
-                    Forms\Components\TextInput::make('name')
-                        ->label(__('seo-content-ai::filament.keyword.tag_name'))
-                        ->required()
-                        ->maxLength(255),
-                ])
-                ->createOptionUsing(function (array $data): int {
-                    $name = trim((string) ($data['name'] ?? ''));
+        return $select;
+    }
 
-                    return (int) app(TagPersistenceService::class)
-                        ->findOrCreate($name)
-                        ->getKey();
-                });
-
-            return $select;
+    /**
+     * @return list<string>
+     */
+    public static function resolveTagLabelsForKeyword(Keyword $keyword): array
+    {
+        $tagIds = $keyword->getTagIdsList();
+        if ($tagIds === []) {
+            return [];
         }
 
-        return $select->options(function (): array {
-            return Tag::query()
-                ->orderBy('name')
-                ->pluck('name', 'id')
-                ->all();
-        });
+        return Tag::query()
+            ->whereIn('id', $tagIds)
+            ->orderBy('name')
+            ->pluck('name')
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    public static function mutateKeywordFormDataForFill(array $data, Keyword $record): array
+    {
+        $data['tags'] = $record->getTagIdsList();
+
+        return $data;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function saveKeywordFromFormData(Keyword $record, array $data): Keyword
+    {
+        $tagIds = collect($data['tags'] ?? [])
+            ->filter(static fn (mixed $id): bool => is_numeric($id))
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->values()
+            ->all();
+
+        unset($data['tags']);
+
+        $record->update($data);
+        app(KeywordMetaRepository::class)->setTagIds((int) $record->id, $tagIds);
+
+        return $record->fresh();
     }
 
     public static function resolveUniqueTagSlug(string $name): string

@@ -11,7 +11,6 @@ use App\Models\Site;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Schema;
@@ -75,21 +74,9 @@ class SeoArticle extends Model
         return $this->belongsToOnDefaultConnection(Site::class, 'site_id');
     }
 
-    public function keywords(): BelongsToMany
-    {
-        return $this->belongsToMany(Keyword::class, 'article_keyword', 'article_id', 'keyword_id')
-            ->withPivot('weight')
-            ->withTimestamps();
-    }
-
     public function articleMetas(): HasMany
     {
         return $this->hasMany(ArticleMeta::class, 'article_id');
-    }
-
-    public function articleKeywords(): HasMany
-    {
-        return $this->hasMany(ArticleKeyword::class, 'article_id');
     }
 
     public function links(): HasMany
@@ -212,8 +199,9 @@ class SeoArticle extends Model
         }
 
         if (
-            SeoLink::query()->where('source_article_id', $this->id)->exists()
+            $this->legacySeoLinksTableExists()
             && $this->legacyKeywordLinkTableExists()
+            && SeoLink::query()->where('source_article_id', $this->id)->exists()
         ) {
             return $this->linksToExtractedArray(
                 $this->links()->with('keywords')->orderBy('id')->get(),
@@ -281,6 +269,11 @@ class SeoArticle extends Model
     private function legacyKeywordLinkTableExists(): bool
     {
         return Schema::connection($this->getConnectionName())->hasTable('keyword_link');
+    }
+
+    private function legacySeoLinksTableExists(): bool
+    {
+        return Schema::connection($this->getConnectionName())->hasTable('seo_links');
     }
 
     /**

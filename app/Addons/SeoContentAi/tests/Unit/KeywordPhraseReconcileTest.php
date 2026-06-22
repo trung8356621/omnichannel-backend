@@ -43,11 +43,7 @@ final class KeywordPhraseReconcileTest extends TestCase
         $this->assertNull(Keyword::query()->find($corrupt->id));
         $this->assertSame(
             'https://maytuicanvas.com/mau-sac-tui-canvas-'.$suffix.'/',
-            $canonical->fresh(['links'])?->targetUrlForSite($siteId),
-        );
-        $this->assertSame(
-            1,
-            $canonical->fresh(['links'])?->links()->where('seo_links.site_id', $siteId)->count(),
+            $canonical->fresh()?->targetUrlForSite($siteId),
         );
     }
 }

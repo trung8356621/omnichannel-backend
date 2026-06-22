@@ -82,6 +82,9 @@ class GeneralDomain extends Page
     {
         $userId = (int) auth()->id();
         $siteId = (int) $this->getRecord()->getKey();
+
+        KeywordDomainResyncCache::clearIfStale($userId, $siteId);
+
         $progress = KeywordDomainResyncCache::progressFromState(
             KeywordDomainResyncCache::read($userId, $siteId),
         );
@@ -89,8 +92,16 @@ class GeneralDomain extends Page
         $wasRunning = $this->keywordResyncRunning;
         $this->keywordResyncRunning = (bool) $progress['running'];
 
-        if ($wasRunning && ! $this->keywordResyncRunning && ($progress['status'] ?? '') === KeywordDomainResyncCache::STATUS_COMPLETED) {
-            $this->dispatch('domain-sync-completed');
+        if ($wasRunning && ! $this->keywordResyncRunning) {
+            if (($progress['status'] ?? '') === KeywordDomainResyncCache::STATUS_COMPLETED) {
+                $this->dispatch('domain-sync-completed');
+            } elseif (($progress['status'] ?? '') === KeywordDomainResyncCache::STATUS_FAILED) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.keyword.resync_linked_failed'))
+                    ->body((string) ($progress['message'] ?? ''))
+                    ->danger()
+                    ->send();
+            }
         }
     }
 

@@ -22,8 +22,9 @@
 - Each addon should own its metadata, provider, routes, migrations, models, services, Filament code, views, and frontend assets.
 - Keep addon-specific changes inside the addon unless integration with the core application genuinely requires a root-level change.
 - Do not register an addon statically in `config/app.php`; active addons are registered dynamically from the `services` table.
-- Use `addon.json` as the source of truth for addon slug, provider, version, and database name.
-- Use `App\Addons\RegistersAddonDatabase` for addons with a dedicated database.
+- Use `addon.json` as the source of truth for addon slug, provider, version, and optional static database config.
+- Use `App\Addons\RegistersAddonDatabase` for addons with a dedicated database declared in `addon.json` (not SEO Content AI).
+- Slugs listed in `config/addons.php` → `skip_slugs` (default includes `wp-headless`) are ignored by `AddonManager::discover()` and `AppServiceProvider` even if still active in `services`.
 - Place addon migrations in `app/Addons/{AddonName}/database/migrations/`.
 - Avoid foreign-key constraints across databases. Represent cross-database references as scalar IDs and enforce them at the application layer.
 - Do not edit `bootstrap/app.php` for ordinary addon behavior. Changes there are limited to true application-level middleware or narrowly scoped CSRF exceptions.
@@ -53,10 +54,10 @@
 ## Databases
 
 - Core models use the default `mysql` connection.
-- Never assume every addon uses the same secondary connection; inspect its provider and `addon.json`.
-- SEO Content AI uses the dedicated connection named `omi_seo_ai`, not `mysql_seo`.
-- SEO Content AI models and migrations must consistently target `omi_seo_ai` through the established addon base model, explicit connection, or migration connection pattern.
-- WP Headless uses its own addon connection as documented and registered by its provider.
+- Never assume every addon uses the same secondary connection; inspect its provider and configuration source.
+- SEO Content AI uses runtime connection name `omi_seo_ai`. Credentials come from core table `seo_database_connections` (Filament: SEO Database Connections), bootstrapped by `SeoDatabaseConnectionService` — not from `addon.json` or core `.env` DB vars.
+- SEO Content AI models and migrations must consistently target `omi_seo_ai`.
+- Other addons may use `addon.json` + optional `database.local.php` via `RegistersAddonDatabase`.
 
 ## SEO Content AI
 

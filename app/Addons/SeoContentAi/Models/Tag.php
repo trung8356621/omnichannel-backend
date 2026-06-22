@@ -4,17 +4,32 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Models;
 
+use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class Tag extends Model
 {
     protected $connection = 'omi_seo_ai';
 
+    protected $table = 'keyword_tags';
+
     protected $guarded = [];
 
-    public function keywords(): BelongsToMany
+    public function keywordsUsingTagExist(): bool
     {
-        return $this->belongsToMany(Keyword::class, 'keyword_tag', 'tag_id', 'keyword_id');
+        return $this->keywordsUsageCount() > 0;
+    }
+
+    public function keywordsUsageCount(): int
+    {
+        $tagId = (int) $this->id;
+        if ($tagId <= 0) {
+            return 0;
+        }
+
+        return KeywordMeta::query()
+            ->where('meta_key', KeywordMetaKey::Tags->value)
+            ->whereRaw('JSON_CONTAINS(meta_value, ?, "$")', [json_encode($tagId, JSON_THROW_ON_ERROR)])
+            ->count();
     }
 }

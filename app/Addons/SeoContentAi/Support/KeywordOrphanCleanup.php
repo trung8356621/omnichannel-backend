@@ -32,8 +32,8 @@ final class KeywordOrphanCleanup
                 }
 
                 if (
-                    $keyword->articleKeywords()->exists()
-                    || $keyword->linkMaps()->exists()
+                    $keyword->linkMaps()->exists()
+                    || $keyword->metas()->exists()
                     || $keyword->children()->exists()
                 ) {
                     return;

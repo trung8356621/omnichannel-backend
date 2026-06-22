@@ -7,22 +7,23 @@ namespace App\Addons\SeoContentAi\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-class ArticleKeyword extends Model
+class KeywordMeta extends Model
 {
     protected $connection = 'omi_seo_ai';
 
-    protected $table = 'article_keyword';
+    protected $table = 'keyword_meta';
 
-    protected $guarded = [];
-
-    protected $casts = [
-        'weight' => 'decimal:4',
-        'is_main' => 'boolean',
+    protected $fillable = [
+        'keyword_id',
+        'meta_key',
+        'meta_value',
     ];
 
-    public function article(): BelongsTo
+    protected function casts(): array
     {
-        return $this->belongsTo(SeoArticle::class, 'article_id');
+        return [
+            'keyword_id' => 'integer',
+        ];
     }
 
     public function keyword(): BelongsTo

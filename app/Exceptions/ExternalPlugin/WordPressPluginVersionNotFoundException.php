@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Addons\SeoContentAi\Exceptions;
+namespace App\Exceptions\ExternalPlugin;
 
 use RuntimeException;
 

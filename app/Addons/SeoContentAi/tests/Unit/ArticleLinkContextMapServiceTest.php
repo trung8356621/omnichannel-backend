@@ -27,9 +27,10 @@ final class ArticleLinkContextMapServiceTest extends TestCase
         $this->assertNotNull($anchors[0]['context_after']);
     }
 
-    public function test_automatic_keyword_sync_is_locked_by_default(): void
+    public function test_automatic_keyword_sync_is_enabled_for_content_and_link_list(): void
     {
-        $this->assertFalse(KeywordSyncIsolation::allowsAutomaticContentSync());
+        $this->assertTrue(KeywordSyncIsolation::allowsAutomaticContentSync());
+        $this->assertTrue(KeywordSyncIsolation::allowsDomainLinkListSync());
         $this->assertFalse(KeywordSyncIsolation::allowsContentKeywordPersistence());
         $this->assertTrue(KeywordSyncIsolation::allowsDomainResync());
     }

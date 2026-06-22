@@ -88,15 +88,10 @@ final class KeywordDebugRescrapeService
      */
     private function collectLinkedArticleIds(Keyword $keyword): array
     {
-        $fromArticles = $keyword->articles()->pluck('articles.id');
-
-        $fromOutboundLinks = SeoLinkMap::query()
+        return SeoLinkMap::query()
             ->where('keyword_id', $keyword->id)
             ->whereNotNull('source_article_id')
-            ->pluck('source_article_id');
-
-        return $fromArticles
-            ->merge($fromOutboundLinks)
+            ->pluck('source_article_id')
             ->filter(static fn (mixed $id): bool => is_numeric($id) && (int) $id > 0)
             ->map(static fn (mixed $id): int => (int) $id)
             ->unique()

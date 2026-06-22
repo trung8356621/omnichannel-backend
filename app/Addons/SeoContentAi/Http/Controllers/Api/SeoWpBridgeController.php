@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers\Api;
 
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SyncDomainContentService;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
 use Illuminate\Http\JsonResponse;
@@ -33,7 +34,9 @@ class SeoWpBridgeController extends Controller
             return response()->json(['success' => false, 'message' => 'Token không hợp lệ.'], 401);
         }
 
-        $this->databaseConnection->bootstrapBySiteId((int) $site->id);
+        $connection = $this->databaseConnection->bootstrapBySiteId((int) $site->id);
+        $connectionHash = SeoConnectionContext::hash()
+            ?? ($connection !== null ? (string) $connection->hash_id : null);
 
         $siteUrl = trim((string) $request->input('site_url', ''));
         $hostOk = $siteUrl === '' || $this->siteUrlMatchesSite($site, $siteUrl);
@@ -44,6 +47,7 @@ class SeoWpBridgeController extends Controller
             'site_id' => $site->id,
             'domain' => $site->domain,
             'site_url_match' => $hostOk,
+            'connection_hash' => is_string($connectionHash) && $connectionHash !== '' ? $connectionHash : null,
         ]);
     }
 

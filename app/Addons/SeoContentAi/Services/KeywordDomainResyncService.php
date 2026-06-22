@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use Illuminate\Support\Facades\DB;
 
@@ -19,6 +20,8 @@ final class KeywordDomainResyncService
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordPersistenceService $keywordPersistence,
         private readonly ArticleLinkContextMapService $linkContextMap,
+        private readonly KeywordQualityFlagService $qualityFlags,
+        private readonly KeywordMetaRepository $metaRepository,
     ) {}
 
     /**
@@ -52,11 +55,15 @@ final class KeywordDomainResyncService
             $ctaDeleteStats = $this->deleteCtaBlacklistedKeywordsForSite($siteId);
             $deleteStats = $this->deleteLinkedKeywordsForSite($siteId);
             $resyncStats = $this->resyncKeywordsFromArticles($siteId);
+            $focusSynced = KeywordFocusAttach::syncFocusKeywordsFromArticles($siteId);
+            $qualityRecomputed = $this->qualityFlags->recomputeForSite($siteId);
 
             $keywordsTotal = Keyword::query()->forSite($siteId)->count();
 
             return array_merge($deleteStats, $ctaDeleteStats, $resyncStats, [
                 'keywords_total' => $keywordsTotal,
+                'focus_synced' => $focusSynced,
+                'quality_recomputed' => $qualityRecomputed,
             ]);
         });
     }
@@ -107,7 +114,6 @@ final class KeywordDomainResyncService
             Keyword::query()
                 ->forSite($siteId)
                 ->withCount([
-                    'articles as articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
                     'mainArticles as main_articles_on_site_count' => static fn ($query) => $query->where('articles.site_id', $siteId),
                     'linkMaps as inbound_link_maps_on_site_count' => static fn ($query) => $query
                         ->whereHas('sourceArticle', static fn ($articleQuery) => $articleQuery->where('site_id', $siteId)),
@@ -182,15 +188,6 @@ final class KeywordDomainResyncService
     {
         $this->keywordPersistence->detachKeywordFromSite($keyword, $siteId);
 
-        $articleIds = SeoArticle::query()
-            ->where('site_id', $siteId)
-            ->pluck('id')
-            ->all();
-
-        if ($articleIds !== []) {
-            $keyword->articles()->whereIn('articles.id', $articleIds)->detach();
-        }
-
         if (KeywordResource::isUnused($keyword)) {
             $this->deleteKeywordRecord($keyword);
         }
@@ -203,17 +200,17 @@ final class KeywordDomainResyncService
             ->update(['parent_id' => null]);
 
         $linkIds = [];
-        if (\Illuminate\Support\Facades\Schema::connection((new Keyword)->getConnectionName())->hasTable('keyword_link')) {
+        $schema = \Illuminate\Support\Facades\Schema::connection((new Keyword)->getConnectionName());
+        if ($schema->hasTable('keyword_link') && $schema->hasTable('seo_links')) {
             $linkIds = $keyword->links()->pluck('seo_links.id')->all();
             $keyword->links()->detach();
         }
 
         SeoLinkMap::query()->where('keyword_id', $keyword->id)->delete();
-        $keyword->articles()->detach();
-        $keyword->tags()->detach();
+        $this->metaRepository->deleteAllForKeyword((int) $keyword->id);
         $keyword->delete();
 
-        if ($linkIds !== []) {
+        if ($linkIds !== [] && $schema->hasTable('seo_links')) {
             SeoLink::query()
                 ->whereIn('id', $linkIds)
                 ->whereDoesntHave('keywords')
@@ -227,6 +224,11 @@ final class KeywordDomainResyncService
             return false;
         }
 
+        if (KeywordFocusAttach::isFocusKeywordForSite($keyword, $siteId)
+            || KeywordFocusAttach::phraseMatchesFocusOnSite($keyword, $siteId)) {
+            return false;
+        }
+
         if ((int) ($keyword->children_count ?? 0) > 0) {
             return true;
         }
@@ -235,12 +237,7 @@ final class KeywordDomainResyncService
             return true;
         }
 
-        if (in_array($keyword->type, [Keyword::TYPE_NORMAL, Keyword::TYPE_SUGGEST], true)) {
-            return (int) ($keyword->main_articles_on_site_count ?? 0) > 0
-                || (int) ($keyword->articles_on_site_count ?? 0) > 0;
-        }
-
-        return (int) ($keyword->articles_on_site_count ?? 0) > 0;
+        return (int) ($keyword->main_articles_on_site_count ?? 0) > 0;
     }
 
     private function resolveArticleContent(SeoArticle $article): string

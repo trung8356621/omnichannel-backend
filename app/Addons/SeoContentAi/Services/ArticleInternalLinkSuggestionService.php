@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\KeywordMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 
@@ -44,7 +46,14 @@ final class ArticleInternalLinkSuggestionService
         $maxSuggestions = self::MAX_INTERNAL_LINKS - count($internalLinks);
         $ownArticlePhrases = $this->ownArticlePhraseBlocklist($article);
 
-        $excludeKeywordIds = $article->keywords()->pluck('keywords.id');
+        $excludeKeywordIds = collect();
+        $focusKeywordId = KeywordMeta::query()
+            ->where('meta_key', KeywordMetaKey::MainArticleId->value)
+            ->where('meta_value', (string) $article->id)
+            ->value('keyword_id');
+        if (is_numeric($focusKeywordId) && (int) $focusKeywordId > 0) {
+            $excludeKeywordIds->push((int) $focusKeywordId);
+        }
 
         $keywordsQuery = Keyword::query()
             ->forSite($siteId)
@@ -245,15 +254,6 @@ final class ArticleInternalLinkSuggestionService
     private function ownArticlePhraseBlocklist(SeoArticle $article): array
     {
         $phrases = [];
-
-        $article->loadMissing('keywords');
-
-        foreach ($article->keywords as $keyword) {
-            $normalized = $this->normalizePhrase((string) $keyword->phrase);
-            if ($normalized !== '') {
-                $phrases[] = $normalized;
-            }
-        }
 
         $focus = app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article);
         if ($focus !== null) {

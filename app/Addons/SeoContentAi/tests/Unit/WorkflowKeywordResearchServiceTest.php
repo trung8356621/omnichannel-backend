@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
+use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Services\OutlineSkipListMatcher;
 use App\Addons\SeoContentAi\Services\SeoKeywordSettingsService;
+use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Services\WorkflowKeywordResearchService;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use PHPUnit\Framework\TestCase;
@@ -20,7 +22,8 @@ final class WorkflowKeywordResearchServiceTest extends TestCase
                 SeoKeywordSettingsService::withDefaults(),
                 new OutlineSkipListMatcher,
             ),
-            new KeywordPersistenceService,
+            new KeywordPersistenceService(new KeywordMetaRepository),
+            new TagPersistenceService,
         );
     }
 

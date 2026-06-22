@@ -75,7 +75,7 @@
             <div class="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center lg:flex-col lg:items-end">
                     <x-filament::button
                         tag="a"
-                        :href="\App\Addons\SeoContentAi\Filament\Pages\ManagePluginRelease::getUrl()"
+                        :href="url('/wp-plugin-release?name=omi-seo-ai-bridge')"
                         icon="heroicon-o-arrow-up-tray"
                         color="gray"
                         size="sm"
@@ -195,7 +195,7 @@
                     <x-filament::button
                         tag="a"
                         size="sm"
-                        :href="\App\Addons\SeoContentAi\Filament\Pages\ManagePluginRelease::getUrl()"
+                        :href="url('/wp-plugin-release?name=omi-seo-ai-bridge')"
                         icon="heroicon-o-arrow-up-tray"
                     >
                         {{ __('seo-content-ai::filament.wp_plugin.manage_releases') }}

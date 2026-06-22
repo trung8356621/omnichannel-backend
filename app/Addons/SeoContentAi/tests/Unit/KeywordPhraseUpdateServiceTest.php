@@ -4,9 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
-use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\KeywordPhraseUpdateService;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class KeywordPhraseUpdateServiceTest extends TestCase
 {
@@ -15,7 +14,7 @@ final class KeywordPhraseUpdateServiceTest extends TestCase
         $html = '<p><a href="https://example.com/balo">balo đẹp</a> và '
             .'<a href="https://example.com/khac">balo đẹp</a></p>';
 
-        $updated = (new KeywordPhraseUpdateService(new ArticleWordPressSyncFlagService))->replaceAnchorsInHtml(
+        $updated = app(KeywordPhraseUpdateService::class)->replaceAnchorsInHtml(
             $html,
             ['https://example.com/balo'],
             'balo đẹp',

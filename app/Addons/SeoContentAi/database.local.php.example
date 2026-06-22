@@ -3,15 +3,17 @@
 declare(strict_types=1);
 
 /**
- * Sao chép thành database.local.php và điền credential hosting.
- * File database.local.php bị gitignore — không commit password.
+ * SEO Content AI: credential lấy từ Admin → SEO Database Connections (bảng core).
+ * File này KHÔNG dùng cho SEO addon trên production.
+ *
+ * Chỉ giữ làm mẫu cho addon khác hoặc dev local tách DB bằng addon.json.
  *
  * @return array<string, string|int>
  */
 return [
-    // 'host' => 'mysql.hosting.vn',
+    // 'host' => '127.0.0.1',
     // 'port' => 3306,
-    // 'name' => 'u123_omi_seo_ai',
-    // 'username' => 'u123_seo',
-    // 'password' => 'your-secret-password',
+    // 'name' => 'omi_seo_ai',
+    // 'username' => 'root',
+    // 'password' => '',
 ];

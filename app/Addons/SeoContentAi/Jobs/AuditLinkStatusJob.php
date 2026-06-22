@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
+use App\Addons\SeoContentAi\Services\LinkAuditCacheService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoLinkMapHttpAuditClassifier;
 use Illuminate\Bus\Queueable;
@@ -38,6 +39,7 @@ final class AuditLinkStatusJob implements ShouldQueue
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,
         KeywordLinkTargetResolver $targetResolver,
+        LinkAuditCacheService $auditCache,
     ): void {
         if ($this->siteId > 0) {
             $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
@@ -79,17 +81,32 @@ final class AuditLinkStatusJob implements ShouldQueue
                 ])
                 ->get($targetUrl);
 
+            $status = SeoLinkMapHttpAuditClassifier::classifyResponse($response);
+            $httpStatus = $response->status();
+            $auditedAt = now();
+
             $linkMap->update([
-                'status' => SeoLinkMapHttpAuditClassifier::classifyResponse($response),
-                'last_http_status' => $response->status(),
-                'last_audited_at' => now(),
+                'status' => $status,
+                'last_http_status' => $httpStatus,
+                'last_audited_at' => $auditedAt,
             ]);
+
+            $auditCache->upsertFromLinkMap($this->siteId, $targetUrl, $status, $httpStatus, $auditedAt);
         } catch (\Throwable) {
+            $auditedAt = now();
             $linkMap->update([
                 'status' => SeoLinkMapStatus::Broken,
                 'last_http_status' => null,
-                'last_audited_at' => now(),
+                'last_audited_at' => $auditedAt,
             ]);
+
+            $auditCache->upsertFromLinkMap(
+                $this->siteId,
+                $targetUrl,
+                SeoLinkMapStatus::Broken,
+                null,
+                $auditedAt,
+            );
         }
     }
 

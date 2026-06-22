@@ -86,17 +86,6 @@ final class KeywordLinkTargetResolver
             }
         }
 
-        $targetArticle = $keyword->articles()
-            ->where('articles.id', '!=', (int) $currentArticle->id)
-            ->when($sameLanguageOnly, static fn ($query) => $query->where('articles.language', $currentLang))
-            ->orderByPivot('is_main', 'desc')
-            ->orderBy('articles.id')
-            ->first();
-
-        if ($targetArticle instanceof SeoArticle) {
-            return $this->resolveArticlePublicUrl($targetArticle);
-        }
-
         $mainArticle = $keyword->mainArticles()
             ->where('articles.id', '!=', (int) $currentArticle->id)
             ->when($sameLanguageOnly, static fn ($query) => $query->where('articles.language', $currentLang))

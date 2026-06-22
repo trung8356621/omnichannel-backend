@@ -7,11 +7,14 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\SeoDatabaseConnection;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
 use Tests\TestCase;
 
 final class SeoDatabaseConnectionServiceTest extends TestCase
 {
+    use RefreshDatabase;
+
     public function test_auto_connection_uses_model_database_or_generated_name(): void
     {
         Config::set('database.connections.mysql', [
@@ -67,5 +70,37 @@ final class SeoDatabaseConnectionServiceTest extends TestCase
         $this->assertTrue(SeoConnectionContext::isValidHashFormat(str_repeat('a', 32)));
         $this->assertFalse(SeoConnectionContext::isValidHashFormat('short'));
         $this->assertFalse(SeoConnectionContext::isValidHashFormat('invalid-chars!'));
+    }
+
+    public function test_bootstrap_legacy_shared_connection_uses_manual_record_from_core_table(): void
+    {
+        Config::set('database.connections.mysql', [
+            'driver' => 'mysql',
+            'host' => '127.0.0.1',
+            'port' => '3306',
+            'username' => 'core_user',
+            'password' => 'core-pass',
+        ]);
+
+        $record = SeoDatabaseConnection::query()->create([
+            'name' => 'Hosting SEO',
+            'hash_id' => str_repeat('b', 32),
+            'type' => 'manual',
+            'host' => '127.0.0.1',
+            'port' => '3306',
+            'database' => 'lzxzdusj_omi_seo_ai',
+            'username' => 'lzxzdusj_omi_seo_ai',
+            'password' => 'seo-pass',
+            'is_active' => true,
+        ]);
+
+        $service = new SeoDatabaseConnectionService;
+        $service->bootstrapLegacySharedConnection();
+
+        $resolved = Config::get('database.connections.omi_seo_ai');
+        $this->assertSame('lzxzdusj_omi_seo_ai', $resolved['database']);
+        $this->assertSame('lzxzdusj_omi_seo_ai', $resolved['username']);
+        $this->assertSame('seo-pass', $resolved['password']);
+        $this->assertSame($record->id, $service->resolveDefaultSharedConnectionRecord()?->id);
     }
 }

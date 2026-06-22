@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -360,11 +361,16 @@ class ArticleResource extends SeoPanelResource
 
                         $type = $data['type'] ?? null;
 
-                        $query->whereHas('links', function (Builder $linkQuery) use ($url, $type): void {
-                            $linkQuery->where('url', $url);
+                        $query->whereHas('linkMaps', function (Builder $linkQuery) use ($url, $type): void {
+                            $linkQuery->where('target_external_url', trim($url));
 
-                            if (is_string($type) && $type !== '') {
-                                $linkQuery->where('type', $type);
+                            if ($type === 'internal') {
+                                $linkQuery->where('link_type', SeoLinkMapType::Internal);
+                            } elseif ($type === 'external') {
+                                $linkQuery->whereIn('link_type', [
+                                    SeoLinkMapType::External,
+                                    SeoLinkMapType::WikiTrust,
+                                ]);
                             }
                         });
                     })
@@ -395,27 +401,40 @@ class ArticleResource extends SeoPanelResource
                         $usage = (string) ($data['usage'] ?? '');
 
                         if ($usage === 'main') {
-                            $query->whereHas('keywords', function (Builder $keywordQuery) use ($keywordId): void {
-                                $keywordQuery
-                                    ->where('keywords.id', $keywordId)
-                                    ->where('article_keyword.is_main', true);
+                            $query->whereIn('articles.id', function ($subQuery) use ($keywordId): void {
+                                $subQuery->selectRaw('CAST(meta_value AS UNSIGNED)')
+                                    ->from('keyword_meta')
+                                    ->where('keyword_id', $keywordId)
+                                    ->where('meta_key', \App\Addons\SeoContentAi\Enums\KeywordMetaKey::MainArticleId->value);
                             });
 
                             return;
                         }
 
                         if ($usage === 'internal_link' || ($data['internal_link_only'] ?? '') === '1') {
-                            $query->whereHas('links', function (Builder $linkQuery) use ($keywordId): void {
+                            $query->whereHas('linkMaps', function (Builder $linkQuery) use ($keywordId): void {
                                 $linkQuery
                                     ->where('keyword_id', $keywordId)
-                                    ->where('type', 'internal');
+                                    ->where('link_type', SeoLinkMapType::Internal);
                             });
 
                             return;
                         }
 
-                        $query->whereHas('keywords', function (Builder $keywordQuery) use ($keywordId): void {
-                            $keywordQuery->where('keywords.id', $keywordId);
+                        $query->where(function (Builder $scopeQuery) use ($keywordId): void {
+                            $scopeQuery
+                                ->whereIn('articles.id', function ($subQuery) use ($keywordId): void {
+                                    $subQuery->selectRaw('CAST(meta_value AS UNSIGNED)')
+                                        ->from('keyword_meta')
+                                        ->where('keyword_id', $keywordId)
+                                        ->where('meta_key', \App\Addons\SeoContentAi\Enums\KeywordMetaKey::MainArticleId->value);
+                                })
+                                ->orWhereIn('articles.id', function ($subQuery) use ($keywordId): void {
+                                    $subQuery->select('source_article_id')
+                                        ->from('seo_link_maps')
+                                        ->where('keyword_id', $keywordId)
+                                        ->whereNotNull('source_article_id');
+                                });
                         });
                     })
                     ->indicateUsing(function (array $data): ?string {
@@ -540,7 +559,7 @@ class ArticleResource extends SeoPanelResource
         // Không dùng whitelist articleEagerLoads() ở đây — whitelist đó chỉ dành cho trang list,
         // vì relation đã loaded sẽ khiến mọi loadMissing('articleMetas') sau đó bị bỏ qua.
         return static::applyArticleAccessScopes(
-            parent::getEloquentQuery()->with(['keywords', 'user', 'site', 'articleMetas']),
+            parent::getEloquentQuery()->with(['user', 'site', 'articleMetas']),
             includeGlobalSiteScope: false,
             includeReviewScope: false,
             includeContentManagerOwnershipScope: false,
@@ -553,7 +572,6 @@ class ArticleResource extends SeoPanelResource
     private static function articleEagerLoads(): array
     {
         return [
-            'keywords',
             'user',
             'site',
             'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [

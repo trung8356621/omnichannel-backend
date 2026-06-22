@@ -2,23 +2,28 @@
 
 declare(strict_types=1);
 
-namespace App\Addons\SeoContentAi\Services;
+namespace App\Services\ExternalPlugin;
 
-use App\Addons\SeoContentAi\Exceptions\InvalidWordPressPluginZipException;
-use App\Addons\SeoContentAi\Exceptions\WordPressPluginVersionExistsException;
-use App\Addons\SeoContentAi\Exceptions\WordPressPluginVersionNotFoundException;
+use App\Exceptions\ExternalPlugin\InvalidWordPressPluginZipException;
+use App\Exceptions\ExternalPlugin\WordPressPluginVersionExistsException;
+use App\Exceptions\ExternalPlugin\WordPressPluginVersionNotFoundException;
 use App\Models\WpOption;
 use Illuminate\Support\Facades\Storage;
 
 final class WordPressPluginReleaseService
 {
-    public const PLUGIN_SLUG = 'omi-seo-ai-bridge';
-
-    public const OPTION_KEY = 'wp_plugin_bridge_info';
-
     public function __construct(
-        private readonly WordPressPluginZipInspector $zipInspector = new WordPressPluginZipInspector,
+        private readonly ExternalPluginManifest $manifest,
+        private readonly ?WordPressPluginZipInspector $zipInspector = null,
     ) {}
+
+    public static function forManifest(ExternalPluginManifest $manifest): self
+    {
+        return new self(
+            $manifest,
+            WordPressPluginZipInspector::forManifest($manifest),
+        );
+    }
 
     /**
      * @return array{
@@ -38,7 +43,7 @@ final class WordPressPluginReleaseService
 
         $publishedVersion = trim((string) ($metadata['version'] ?? ''));
         if ($publishedVersion !== '' && $this->isValidVersion($publishedVersion)) {
-            foreach ($releases as $index => $release) {
+            foreach ($releases as $release) {
                 if ($release['version'] !== $publishedVersion) {
                     continue;
                 }
@@ -77,7 +82,7 @@ final class WordPressPluginReleaseService
             return [];
         }
 
-        $pattern = '/^'.preg_quote(self::PLUGIN_SLUG, '/').'-(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)\.zip$/';
+        $pattern = '/^'.preg_quote($this->manifest->packagePrefix, '/').'-(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)\.zip$/';
         $releases = [];
 
         foreach ($disk->files($dir) as $path) {
@@ -112,7 +117,7 @@ final class WordPressPluginReleaseService
      */
     public function loadMetadata(): ?array
     {
-        $stored = WpOption::get(self::OPTION_KEY);
+        $stored = WpOption::get($this->manifest->metadataOptionKey);
         if (is_array($stored) && $stored !== []) {
             return $stored;
         }
@@ -133,7 +138,7 @@ final class WordPressPluginReleaseService
      */
     public function saveMetadata(array $metadata): void
     {
-        WpOption::set(self::OPTION_KEY, $metadata);
+        WpOption::set($this->manifest->metadataOptionKey, $metadata);
     }
 
     /**
@@ -142,8 +147,8 @@ final class WordPressPluginReleaseService
     public function defaultMetadata(): array
     {
         return [
-            'name' => 'TVH SEO AI Bridge',
-            'slug' => self::PLUGIN_SLUG,
+            'name' => $this->manifest->label,
+            'slug' => $this->manifest->slug,
             'version' => '0.0.0',
             'author' => 'TVH',
             'author_profile' => '',
@@ -152,7 +157,7 @@ final class WordPressPluginReleaseService
             'requires_php' => '8.1',
             'last_updated' => '',
             'sections' => [
-                'description' => 'Kết nối WordPress với Laravel Omnichannel Backend để đồng bộ nội dung TVH SEO AI.',
+                'description' => 'Kết nối WordPress với Laravel Omnichannel Backend.',
                 'installation' => 'Upload zip qua WordPress → Plugins → Add New → Upload, hoặc cài qua auto-update từ server Laravel.',
                 'changelog' => '',
             ],
@@ -172,10 +177,12 @@ final class WordPressPluginReleaseService
         string $changelog,
         bool $overwrite = false,
     ): array {
+        $inspector = $this->zipInspector ?? WordPressPluginZipInspector::forManifest($this->manifest);
+
         $manualVersion = trim((string) $manualVersion);
         $version = $manualVersion !== ''
             ? $manualVersion
-            : $this->zipInspector->extractVersion($sourceZipPath);
+            : $inspector->extractVersion($sourceZipPath);
 
         if (! $this->isValidVersion($version)) {
             throw new WordPressPluginVersionNotFoundException(
@@ -200,7 +207,7 @@ final class WordPressPluginReleaseService
 
         $metadata = $this->loadMetadata() ?? $this->defaultMetadata();
         $metadata['version'] = $version;
-        $metadata['slug'] = self::PLUGIN_SLUG;
+        $metadata['slug'] = $this->manifest->slug;
         $metadata['last_updated'] = now()->format('Y-m-d H:i:s');
 
         $sections = is_array($metadata['sections'] ?? null) ? $metadata['sections'] : [];
@@ -229,7 +236,7 @@ final class WordPressPluginReleaseService
 
     public function zipFileName(string $version): string
     {
-        return self::PLUGIN_SLUG.'-'.$version.'.zip';
+        return $this->manifest->packagePrefix.'-'.$version.'.zip';
     }
 
     public function absoluteZipPath(string $version): ?string
@@ -285,6 +292,11 @@ final class WordPressPluginReleaseService
         }
     }
 
+    public function manifest(): ExternalPluginManifest
+    {
+        return $this->manifest;
+    }
+
     /**
      * @return array<string, mixed>|null
      */
@@ -304,7 +316,7 @@ final class WordPressPluginReleaseService
 
     private function pluginDirectory(): string
     {
-        return 'plugins/'.self::PLUGIN_SLUG;
+        return 'plugins/'.$this->manifest->packagePrefix;
     }
 
     private function metadataPath(): string

@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace App\Addons\SeoContentAi\Services;
+namespace App\Services\ExternalPlugin;
 
-use App\Addons\SeoContentAi\Exceptions\InvalidWordPressPluginZipException;
-use App\Addons\SeoContentAi\Exceptions\WordPressPluginVersionNotFoundException;
+use App\Exceptions\ExternalPlugin\InvalidWordPressPluginZipException;
+use App\Exceptions\ExternalPlugin\WordPressPluginVersionNotFoundException;
 use ZipArchive;
 
 final class WordPressPluginZipInspector
@@ -13,8 +13,13 @@ final class WordPressPluginZipInspector
     private const VERSION_PATTERN = '/Version:\s*([0-9\.]+)/i';
 
     public function __construct(
-        private readonly string $pluginSlug = WordPressPluginReleaseService::PLUGIN_SLUG,
+        private readonly string $pluginSlug,
     ) {}
+
+    public static function forManifest(ExternalPluginManifest $manifest): self
+    {
+        return new self($manifest->packagePrefix);
+    }
 
     /**
      * @throws InvalidWordPressPluginZipException

@@ -348,18 +348,6 @@ class ViewSeoProjectRun extends Page
             return (int) $byTitleLike;
         }
 
-        $byKeyword = $baseQuery()
-            ->whereHas('keywords', function (Builder $query) use ($normalized, $like): void {
-                $query->whereRaw('LOWER(phrase) = ?', [$normalized])
-                    ->orWhere('phrase', 'like', '%'.$like.'%');
-            })
-            ->orderByDesc('id')
-            ->value('id');
-
-        if ($byKeyword !== null) {
-            return (int) $byKeyword;
-        }
-
         return (int) ($baseQuery()
             ->whereHas('articleMetas', function (Builder $query) use ($normalized, $like): void {
                 $query->where('meta_key', 'seo_focus_keyword')

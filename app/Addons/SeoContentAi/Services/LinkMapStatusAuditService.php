@@ -9,10 +9,29 @@ use App\Addons\SeoContentAi\Models\SeoLinkMap;
 
 final class LinkMapStatusAuditService
 {
-    public function queueLinkMap(SeoLinkMap $linkMap, int $siteId): void
+    public function __construct(
+        private readonly LinkAuditCacheService $auditCache,
+        private readonly KeywordLinkTargetResolver $targetResolver,
+    ) {}
+
+    public function queueLinkMap(SeoLinkMap $linkMap, int $siteId, ?string $resolvedTargetUrl = null): void
     {
         $linkMapId = (int) ($linkMap->id ?? 0);
         if ($linkMapId <= 0 || $siteId <= 0) {
+            return;
+        }
+
+        $targetUrl = trim((string) ($resolvedTargetUrl ?? ''));
+        if ($targetUrl === '') {
+            AuditLinkStatusJob::dispatch($linkMapId, $siteId);
+
+            return;
+        }
+
+        $cached = $this->auditCache->findFresh($siteId, $targetUrl);
+        if ($cached !== null) {
+            $this->auditCache->applyToLinkMap($linkMap, $cached);
+
             return;
         }
 

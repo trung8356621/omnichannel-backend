@@ -4,16 +4,17 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\ArticleKeyword;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use Illuminate\Support\Facades\DB;
 
 final class KeywordPhraseUpdateService
 {
     public function __construct(
         private readonly ArticleWordPressSyncFlagService $syncFlags,
+        private readonly KeywordMetaRepository $metaRepository,
+        private readonly WordPressArticleContentService $wpContent,
     ) {}
 
     public function propagate(Keyword $keyword, string $previousPhrase): void
@@ -36,10 +37,12 @@ final class KeywordPhraseUpdateService
 
     private function updateMainKeywordMeta(Keyword $keyword, string $newPhrase): void
     {
-        $articleIds = ArticleKeyword::query()
-            ->where('keyword_id', $keyword->id)
-            ->where('is_main', true)
-            ->pluck('article_id');
+        $articleIds = collect();
+
+        $mainArticleId = $this->metaRepository->getMainArticleId((int) $keyword->id);
+        if ($mainArticleId !== null) {
+            $articleIds->push($mainArticleId);
+        }
 
         foreach ($articleIds as $articleId) {
             $article = SeoArticle::query()->find((int) $articleId);
@@ -55,20 +58,33 @@ final class KeywordPhraseUpdateService
         string $previousPhrase,
         string $newPhrase,
     ): void {
-        $links = $keyword->links()
-            ->where('seo_links.type', SeoLink::TYPE_INTERNAL)
-            ->whereNotNull('seo_links.source_article_id')
+        $maps = $keyword->linkMaps()
+            ->whereNotNull('source_article_id')
+            ->with(['sourceArticle', 'targetArticle'])
             ->get();
 
-        foreach ($links->groupBy('source_article_id') as $articleId => $articleLinks) {
+        foreach ($maps->groupBy('source_article_id') as $articleId => $articleMaps) {
             $article = SeoArticle::query()->find((int) $articleId);
             if (! $article instanceof SeoArticle) {
                 continue;
             }
 
-            $urls = $articleLinks
-                ->pluck('url')
-                ->map(static fn (mixed $url): string => trim((string) $url))
+            $urls = $articleMaps
+                ->map(function (SeoLinkMap $map): ?string {
+                    $external = trim((string) ($map->target_external_url ?? ''));
+                    if ($external !== '') {
+                        return $external;
+                    }
+
+                    $target = $map->targetArticle;
+                    if (! $target instanceof SeoArticle) {
+                        return null;
+                    }
+
+                    $url = trim($this->wpContent->resolvePermalink($target));
+
+                    return $url !== '' ? $url : null;
+                })
                 ->filter()
                 ->values()
                 ->all();

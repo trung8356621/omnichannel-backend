@@ -66,10 +66,11 @@ Quyền truy cập: Luôn định nghĩa rõ hàm canAccess() hoặc dùng Polic
 
 5. MULTI-DATABASE (CORE & SEO)
 
-Core dùng DB mặc định `mysql`. Mỗi addon có thể dùng connection riêng theo `addon.json` và provider.
+Core dùng DB mặc định `mysql`. Addon khác (vd. legacy) có thể dùng `addon.json` + `database.local.php` qua `RegistersAddonDatabase`.
 
-SEO Content AI dùng connection `omi_seo_ai` (không dùng `mysql_seo`).
-Bất kỳ Model/Migration thuộc module SEO Content AI phải nhất quán connection `omi_seo_ai` theo base model/provider hiện có.
+SEO Content AI: credential **không** nằm trong addon.json/.env core — lấy từ bảng core `seo_database_connections` (Admin → SEO Database Connections). Runtime connection tên `omi_seo_ai`; bootstrap qua `SeoDatabaseConnectionService::bootstrapLegacySharedConnection()` / `bootstrapFromConnection()`. Migrate addon SEO: nút **Run migrations** trên form connection hoặc CLI sau khi connection đã bootstrap từ bảng core.
+
+Addon slug trong `config/addons.php` → `skip_slugs` (mặc định `wp-headless`) bị bỏ qua khi discover/register dù còn thư mục hoặc `services.is_active=1`.
 
 Các liên kết xuyên Database (Logical Links) không được dùng Foreign Key Constraints trong Migration. Phải xử lý logic quan hệ thông qua Eloquent hoặc cấp ứng dụng.
 

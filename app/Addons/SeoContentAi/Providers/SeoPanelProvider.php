@@ -13,7 +13,6 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
-use App\Addons\SeoContentAi\Http\Controllers\PluginUpdateController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
@@ -185,9 +184,6 @@ class SeoPanelProvider extends PanelProvider
             ->prefix('api')
             ->group(dirname(__DIR__).'/routes/api.php');
 
-        Route::get('storage/plugins/omi-seo-ai-bridge/info.json', [PluginUpdateController::class, 'infoJson'])
-            ->name('seo.plugin.info-json');
-
         $seoWebApiMiddleware = [
             EncryptCookies::class,
             AddQueuedCookiesToResponse::class,
@@ -325,6 +321,14 @@ class SeoPanelProvider extends PanelProvider
             });
 
         Route::middleware($seoWebApiMiddleware)
+            ->prefix('seo/{connection_hash}')
+            ->where(['connection_hash' => '[a-zA-Z0-9]{32,64}'])
+            ->group(function (): void {
+                Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
+                    ->name('seo.articles.wp-edit-redirect');
+            });
+
+        Route::middleware($seoWebApiMiddleware)
             ->prefix('seo')
             ->group(function (): void {
                 Route::get('/articles/{article}/media-picker', ArticleMediaPickerController::class)
@@ -341,9 +345,7 @@ class SeoPanelProvider extends PanelProvider
                     ->whereNumber('article')
                     ->name('seo.articles.revisions.restore');
                 Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
-                    ->name('seo.articles.wp-edit-redirect');
-                Route::get('/wp-plugin/download/{version}', [PluginUpdateController::class, 'downloadForPanel'])
-                    ->name('seo.wp-plugin.download');
+                    ->name('seo.articles.wp-edit-redirect.legacy');
             });
     }
 

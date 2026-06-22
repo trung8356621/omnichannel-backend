@@ -75,6 +75,29 @@ return [
             ]) : [],
         ],
 
+        /*
+        | Fallback SEO addon connection; runtime có thể ghi đè qua SeoDatabaseConnectionService.
+        */
+        'omi_seo_ai' => [
+            'driver' => 'mysql',
+            'url' => env('SEO_DB_URL'),
+            'host' => env('SEO_DB_HOST', env('DB_HOST', '127.0.0.1')),
+            'port' => env('SEO_DB_PORT', env('DB_PORT', '3306')),
+            'database' => env('SEO_DB_DATABASE', env('SEO_TEST_DATABASE', 'omi_seo_ai')),
+            'username' => env('SEO_DB_USERNAME', env('DB_USERNAME', 'root')),
+            'password' => env('SEO_DB_PASSWORD', env('DB_PASSWORD', '')),
+            'unix_socket' => env('SEO_DB_SOCKET', env('DB_SOCKET', '')),
+            'charset' => env('DB_CHARSET', 'utf8mb4'),
+            'collation' => env('DB_COLLATION', 'utf8mb4_unicode_ci'),
+            'prefix' => '',
+            'prefix_indexes' => true,
+            'strict' => true,
+            'engine' => null,
+            'options' => extension_loaded('pdo_mysql') ? array_filter([
+                (PHP_VERSION_ID >= 80500 ? \Pdo\Mysql::ATTR_SSL_CA : \PDO::MYSQL_ATTR_SSL_CA) => env('MYSQL_ATTR_SSL_CA'),
+            ]) : [],
+        ],
+
         'mariadb' => [
             'driver' => 'mariadb',
             'url' => env('DB_URL'),

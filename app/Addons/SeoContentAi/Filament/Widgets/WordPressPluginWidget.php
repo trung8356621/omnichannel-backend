@@ -4,8 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Widgets;
 
-use App\Addons\SeoContentAi\Services\WordPressPluginReleaseService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Services\ExternalPlugin\ExternalPluginRegistry;
+use App\Services\ExternalPlugin\WordPressPluginReleaseService;
 use Filament\Widgets\Widget;
 
 class WordPressPluginWidget extends Widget
@@ -29,6 +30,8 @@ class WordPressPluginWidget extends Widget
      */
     protected function getViewData(): array
     {
-        return app(WordPressPluginReleaseService::class)->overview();
+        $manifest = app(ExternalPluginRegistry::class)->resolveOrFail('omi-seo-ai-bridge');
+
+        return WordPressPluginReleaseService::forManifest($manifest)->overview();
     }
 }

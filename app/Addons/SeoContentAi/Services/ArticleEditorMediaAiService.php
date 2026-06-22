@@ -286,7 +286,7 @@ final class ArticleEditorMediaAiService
         bool $mergeLoaiSanPham = false,
         string $target = 'editor',
     ): array {
-        $article->loadMissing(['site', 'keywords', 'articleMetas']);
+        $article->loadMissing(['site', 'articleMetas']);
 
         $postTitle = trim((string) ($article->title ?? ''));
         $focusKeyword = $this->seoAnalyzer->resolveFocusKeywordForArticle($article) ?? '';

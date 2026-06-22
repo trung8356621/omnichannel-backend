@@ -2945,6 +2945,8 @@ class EditArticle extends SeoEditRecord
             $this->syncVirtualCommentsToWordPressIfLinked();
         }
 
+        app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh(), $html);
+
         return $html;
     }
 

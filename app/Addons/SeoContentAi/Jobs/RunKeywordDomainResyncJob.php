@@ -38,6 +38,8 @@ final class RunKeywordDomainResyncJob implements ShouldQueue
     ): void {
         $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
 
+        KeywordDomainResyncCache::markHandleStarted($this->userId, $this->siteId);
+
         $user = User::query()->find($this->userId);
         if ($user !== null) {
             auth()->setUser($user);
