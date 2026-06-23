@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Services\SeoEngineService;
 
 final class ArticleEditorSeoPayloadService
 {
@@ -85,6 +86,7 @@ final class ArticleEditorSeoPayloadService
             'domain_link_list_catalog' => app(DomainLinkListEditorService::class)->forSite($article->site),
             'domain_link_list' => app(DomainLinkListEditorService::class)->forArticle($article, $bodyHtml),
             'domain_cta_list' => app(DomainCtaEditorService::class)->forSite($article->site),
+            'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
         ];
     }
 

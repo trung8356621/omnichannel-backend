@@ -13,6 +13,12 @@ Route::get('/', function () {
 Route::get('auth/google', [GoogleController::class, 'redirectToGoogle'])->name('google.login');
 Route::get('auth/google/callback', [GoogleController::class, 'handleGoogleCallback']);
 
+Route::get('wp-plugin-release', static function () {
+    $query = request()->getQueryString();
+
+    return redirect('/admin/wp-plugin-release'.($query ? '?'.$query : ''));
+})->name('wp-plugin-release.redirect');
+
 Route::get('storage/plugins/{package_prefix}/info.json', [ExternalPluginUpdateController::class, 'infoJsonByPackagePrefix'])
     ->where('package_prefix', '[a-z0-9\-]+')
     ->name('external-plugin.info-json-file');

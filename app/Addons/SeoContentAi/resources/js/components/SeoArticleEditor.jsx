@@ -38,6 +38,11 @@ import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import {
+    buildSeoAnalysisPayload,
+    computeSeoAnalysis,
+} from '../utils/seoAnalyzer';
+import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
 import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
 import { appendProductAlbumItems, loadProductAlbum } from '../utils/articleProductAlbumStorage';
 import GenerateImageModal from './GenerateImageModal';
@@ -1962,7 +1967,9 @@ export default function SeoArticleEditor({
     const [quickReplaceFind, setQuickReplaceFind] = useState('');
     const [quickReplaceValue, setQuickReplaceValue] = useState('');
     const [editorSearchMatchCount, setEditorSearchMatchCount] = useState(null);
+    const panelFaqsRef = useRef(Array.isArray(initialFaqs) ? initialFaqs : []);
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
+    panelFaqsRef.current = panelFaqs;
     const pendingQuickFixKeywordRef = useRef('');
     const generateImageTargetRef = useRef('editor');
     const [generateImageModalOpen, setGenerateImageModalOpen] = useState(false);
@@ -2036,11 +2043,22 @@ export default function SeoArticleEditor({
     }, [parseGalleryUrlList]);
 
     const [siteDomain] = useState(() => String(initialSeo?.site_domain ?? '').trim());
+    const articleType = String(initialSeo?.article_type ?? initialPostType ?? 'post').trim();
+    const wikiTrustDomains = Array.isArray(editorSettings?.wiki_trust_domains)
+        ? editorSettings.wiki_trust_domains
+        : DEFAULT_WIKI_TRUST_DOMAINS;
+    const scoringMessages =
+        editorSettings?.seo_scoring_messages && typeof editorSettings.seo_scoring_messages === 'object'
+            ? editorSettings.seo_scoring_messages
+            : {};
+    const seoMetaRef = useRef({
+        seoTitle: String(articleTitle ?? initialSeo?.google_serp_preview?.title ?? '').trim(),
+        metaDescription: String(initialSeo?.google_serp_preview?.description ?? '').trim(),
+        slug: String(initialSeo?.article_slug ?? '').trim(),
+    });
+    const lastSeoAnalysisRef = useRef(null);
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
-    const [contentBonus, setContentBonus] = useState(
-        initialSeo?.content_bonus ?? initialSeo?.analysis?.content_bonus ?? null,
-    );
     const [extractedLinks, setExtractedLinks] = useState(
         initialSeo?.extracted_links ?? { internal: [], external: [] },
     );
@@ -2365,13 +2383,66 @@ export default function SeoArticleEditor({
 
     const getExportHtml = useCallback(() => exportBlocksToHtml(blocksRef.current), []);
 
+    const applySeoAnalysisResult = useCallback((result) => {
+        if (!result || typeof result !== 'object') {
+            return;
+        }
+
+        const payload = buildSeoAnalysisPayload(result);
+        lastSeoAnalysisRef.current = payload;
+
+        setAnalysis({
+            score: payload.score,
+            seo_score: payload.seo_score ?? payload.score,
+            reason_keys: payload.reason_keys ?? [],
+            breakdown: payload.breakdown ?? {},
+            good: payload.good,
+            errors: payload.errors,
+            warnings: payload.warnings,
+        });
+
+        if (payload.extracted_links) {
+            setSuggestedInternalLinks((prevSuggested) => {
+                const filteredSuggested = filterSuggestedInternalLinks(
+                    prevSuggested,
+                    payload.extracted_links.internal ?? [],
+                );
+                setExtractedLinks(payload.extracted_links);
+                publishExtractedLinks(payload.extracted_links, filteredSuggested);
+
+                return filteredSuggested;
+            });
+        }
+    }, [publishExtractedLinks]);
+
+    const runLocalSeoAnalysis = useCallback(() => {
+        const meta = seoMetaRef.current;
+        const result = computeSeoAnalysis({
+            html: getExportHtml(),
+            focusKeyword,
+            seoTitle: meta.seoTitle || articleTitle,
+            metaDescription: meta.metaDescription,
+            slug: meta.slug,
+            siteDomain,
+            faqs: panelFaqsRef.current,
+            wikiTrustDomains,
+            scoringMessages,
+        });
+
+        applySeoAnalysisResult(result);
+    }, [
+        applySeoAnalysisResult,
+        articleTitle,
+        focusKeyword,
+        getExportHtml,
+        scoringMessages,
+        siteDomain,
+        wikiTrustDomains,
+    ]);
+
     const requestAnalyze = useCallback(() => {
-        window.dispatchEvent(
-            new CustomEvent('seo-analyze-draft', {
-                detail: { html: getExportHtml() },
-            }),
-        );
-    }, [getExportHtml]);
+        runLocalSeoAnalysis();
+    }, [runLocalSeoAnalysis]);
 
     const { debounced: debouncedLocalSave } = useDebouncedCallback(() => {
         if (!articleId) return;
@@ -2384,9 +2455,8 @@ export default function SeoArticleEditor({
     }, 2000);
 
     const { debounced: debouncedAnalyze } = useDebouncedCallback(() => {
-        setAnalyzing(true);
-        requestAnalyze();
-    }, 2000);
+        runLocalSeoAnalysis();
+    }, 150);
 
     const scheduleAutosave = useCallback(() => {
         setSaveStatus('pending');
@@ -2523,7 +2593,6 @@ export default function SeoArticleEditor({
         if (initialSeo) {
             setFocusKeyword(initialSeo.focus_keyword ?? null);
             setAnalysis(initialSeo.analysis ?? null);
-            setContentBonus(initialSeo.content_bonus ?? initialSeo.analysis?.content_bonus ?? null);
             setExtractedLinks(initialSeo.extracted_links ?? { internal: [], external: [] });
             setSuggestedInternalLinks(
                 filterSuggestedInternalLinks(
@@ -2533,6 +2602,10 @@ export default function SeoArticleEditor({
             );
         }
     }, [initialSeo]);
+
+    useEffect(() => {
+        runLocalSeoAnalysis();
+    }, [runLocalSeoAnalysis]);
 
     const updateBlockContent = useCallback((id, newContent, imageData) => {
         setBlocks((prev) =>
@@ -5715,11 +5788,13 @@ export default function SeoArticleEditor({
                     ? event.detail
                     : {};
             const target = detail.target ?? 'save';
+            runLocalSeoAnalysis();
             window.dispatchEvent(
                 new CustomEvent('editor-html-collected', {
                     detail: {
                         html: getExportHtml(),
                         target,
+                        seoAnalysis: lastSeoAnalysisRef.current,
                     },
                 }),
             );
@@ -5764,47 +5839,58 @@ export default function SeoArticleEditor({
         const syncPanelFaqs = (event) => {
             const fromExtract = event.detail?.faqs;
             if (Array.isArray(fromExtract)) {
+                panelFaqsRef.current = fromExtract;
                 setPanelFaqs(fromExtract);
+                requestAnalyze();
             }
         };
 
         const syncPanelFaqsFromEditor = (event) => {
             const rows = event.detail?.faq;
             if (Array.isArray(rows)) {
+                panelFaqsRef.current = rows;
                 setPanelFaqs(rows);
+                requestAnalyze();
             }
         };
 
         window.addEventListener('article-faqs-extracted', syncPanelFaqs);
         window.addEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
 
-        const handleAnalyzeResult = (e) => {
-            const result = e.detail?.result ?? e.detail;
-            if (!result || typeof result !== 'object') return;
-            setAnalyzing(false);
-            setAnalysis({
-                score: result.score ?? 0,
-                good: result.good ?? [],
-                errors: result.errors ?? [],
-                warnings: result.warnings ?? [],
-                content_bonus: result.content_bonus ?? null,
-            });
-            if (result.content_bonus) {
-                setContentBonus(result.content_bonus);
-            }
-            if (result.extracted_links) {
-                const suggested = Array.isArray(result.suggested_internal_links)
-                    ? result.suggested_internal_links
-                    : [];
-                const filteredSuggested = filterSuggestedInternalLinks(
-                    suggested,
-                    result.extracted_links.internal ?? [],
-                );
-                setExtractedLinks(result.extracted_links);
-                setSuggestedInternalLinks(filteredSuggested);
-                publishExtractedLinks(result.extracted_links, filteredSuggested);
-            }
+        const handleFocusKeywordUpdated = (e) => {
+            const keyword = e.detail?.focus_keyword ?? null;
+            setFocusKeyword(keyword);
+            requestAnalyze();
         };
+
+        const handleGoogleSerpPreviewUpdated = (event) => {
+            const preview = event.detail?.preview ?? event.detail ?? {};
+            seoMetaRef.current = {
+                ...seoMetaRef.current,
+                seoTitle: String(preview?.title ?? seoMetaRef.current.seoTitle ?? articleTitle ?? '').trim(),
+                metaDescription: String(
+                    preview?.description ?? seoMetaRef.current.metaDescription ?? '',
+                ).trim(),
+            };
+            requestAnalyze();
+        };
+
+        const handleEditorSlugUpdated = (event) => {
+            const slug = String(event.detail?.slug ?? event.detail?.article_slug ?? '').trim();
+            if (slug === '') {
+                return;
+            }
+
+            seoMetaRef.current = {
+                ...seoMetaRef.current,
+                slug,
+            };
+            requestAnalyze();
+        };
+
+        window.addEventListener('seo-focus-keyword-updated', handleFocusKeywordUpdated);
+        window.addEventListener('google-serp-preview-updated', handleGoogleSerpPreviewUpdated);
+        window.addEventListener('seo-editor-slug-updated', handleEditorSlugUpdated);
 
         const handleClickOutside = (e) => {
             if (
@@ -5848,15 +5934,6 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
         };
 
-        const handleFocusKeywordUpdated = (e) => {
-            const keyword = e.detail?.focus_keyword ?? null;
-            setFocusKeyword(keyword);
-            setAnalyzing(true);
-            requestAnalyze();
-        };
-
-        window.addEventListener('seo-editor-analyze-result', handleAnalyzeResult);
-        window.addEventListener('seo-focus-keyword-updated', handleFocusKeywordUpdated);
         document.addEventListener('mousedown', handleClickOutside);
 
         const onImageGenerateRequest = (event) => {
@@ -6271,8 +6348,9 @@ export default function SeoArticleEditor({
             window.removeEventListener('seo-request-editor-images-catalog', onRequestEditorImagesCatalog);
             window.removeEventListener('article-faqs-extracted', syncPanelFaqs);
             window.removeEventListener('seo-editor-faqs-updated', syncPanelFaqsFromEditor);
-            window.removeEventListener('seo-editor-analyze-result', handleAnalyzeResult);
             window.removeEventListener('seo-focus-keyword-updated', handleFocusKeywordUpdated);
+            window.removeEventListener('google-serp-preview-updated', handleGoogleSerpPreviewUpdated);
+            window.removeEventListener('seo-editor-slug-updated', handleEditorSlugUpdated);
             document.removeEventListener('mousedown', handleClickOutside);
             for (const timer of mediaPollTimersRef.current.values()) {
                 window.clearTimeout(timer);
@@ -6292,10 +6370,13 @@ export default function SeoArticleEditor({
         updateBlockContent,
         clearTempMerge,
         articleId,
+        articleTitle,
         getExportHtml,
         initialPostImages,
         insertImageAfterBlock,
         insertVideoAfterBlock,
+        requestAnalyze,
+        runLocalSeoAnalysis,
         startMediaStatusPolling,
     ]);
 
@@ -8035,7 +8116,7 @@ export default function SeoArticleEditor({
                     <SeoScorePanel
                         focusKeyword={focusKeyword}
                         analysis={analysis}
-                        contentBonus={contentBonus}
+                        scoringMessages={scoringMessages}
                         loading={!analysis}
                         analyzing={analyzing}
                     />

@@ -41,6 +41,7 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
+use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
@@ -49,6 +50,7 @@ use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Addons\SeoContentAi\Services\VirtualCommentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Services\SeoEngineService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
@@ -211,6 +213,17 @@ class EditArticle extends SeoEditRecord
         if ($this->articleSlug !== $normalized) {
             $this->articleSlug = $normalized;
         }
+
+        $this->dispatchEditorSlugUpdated();
+    }
+
+    private function dispatchEditorSlugUpdated(): void
+    {
+        $slug = trim($this->articleSlug);
+        $this->js(sprintf(
+            'window.dispatchEvent(new CustomEvent("seo-editor-slug-updated", { detail: { slug: %s } }))',
+            json_encode($slug, JSON_THROW_ON_ERROR),
+        ));
     }
 
     public function confirmArticleSlug(?string $slug = null): void
@@ -2728,7 +2741,7 @@ class EditArticle extends SeoEditRecord
     /**
      * Lưu vào Laravel (không đẩy WordPress).
      */
-    public function persistArticleLocal(string $html): void
+    public function persistArticleLocal(string $html, ?array $seoAnalysis = null): void
     {
         try {
             $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
@@ -2782,13 +2795,21 @@ class EditArticle extends SeoEditRecord
 
             $this->captureArticleRevisionAfterSave($html);
 
-            $seoResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
-                $this->record->fresh(),
-                $html,
-                $seoTitle,
-                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-                $seoMetaDescription !== '' ? $seoMetaDescription : null,
-            );
+            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+                $seoResult = app(SeoAnalyzerService::class)->persistClientAnalysis(
+                    $this->record->fresh(),
+                    $html,
+                    $seoAnalysis,
+                );
+            } else {
+                $seoResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                    $this->record->fresh(),
+                    $html,
+                    $seoTitle,
+                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                    $seoMetaDescription !== '' ? $seoMetaDescription : null,
+                );
+            }
             $this->dispatch('seo-analyze-result', result: $seoResult);
 
             $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';
@@ -2817,7 +2838,7 @@ class EditArticle extends SeoEditRecord
     /**
      * Lưu Laravel rồi đẩy lên WordPress.
      */
-    public function syncArticleToWordPress(string $html): void
+    public function syncArticleToWordPress(string $html, ?array $seoAnalysis = null): void
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
@@ -2825,13 +2846,21 @@ class EditArticle extends SeoEditRecord
             $html = $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
 
             $slug = Str::slug($this->articleSlug);
-            app(SeoAnalyzerService::class)->analyzeSubmittedContent(
-                $this->record->fresh(),
-                $html,
-                trim($this->articleTitle),
-                $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
-                trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
-            );
+            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+                app(SeoAnalyzerService::class)->persistClientAnalysis(
+                    $this->record->fresh(),
+                    $html,
+                    $seoAnalysis,
+                );
+            } else {
+                app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                    $this->record->fresh(),
+                    $html,
+                    trim($this->articleTitle),
+                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                    trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+                );
+            }
 
             $syncService = app(WordPressArticleSyncService::class);
             $article = $this->record->fresh();
@@ -3185,18 +3214,16 @@ class EditArticle extends SeoEditRecord
 
     public function analyzeSeoDraft(string $html): void
     {
-        $this->dispatchSeoAnalyzePreview($html);
+        // Preview SEO chấm điểm thuần JS trong editor — giữ method để tương thích Livewire cũ.
     }
 
     public function updatedSeoTitle(): void
     {
-        $this->dispatchSeoAnalyzePreview();
         $this->dispatchGoogleSerpPreviewUpdated();
     }
 
     public function updatedSeoMetaDescription(): void
     {
-        $this->dispatchSeoAnalyzePreview();
         $this->dispatchGoogleSerpPreviewUpdated();
     }
 
@@ -3247,8 +3274,14 @@ class EditArticle extends SeoEditRecord
      */
     public function getEditorSettingsPayload(): array
     {
+        $editorSettings = app(ArticleEditorHistoryService::class)->getSettings();
+        $featuredSnippetThresholds = app(SeoPromptSettingsService::class)->getFeaturedSnippetThresholds();
+
         return [
-            ...app(ArticleEditorHistoryService::class)->getSettings(),
+            ...$editorSettings,
+            'wiki_trust_domains' => $editorSettings['wiki_trust_domains'],
+            'featured_snippet_thresholds' => $featuredSnippetThresholds,
+            'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
             'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),

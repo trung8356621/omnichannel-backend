@@ -1,0 +1,161 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
+use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
+use App\Services\SeoEngineService;
+use Tests\TestCase;
+
+final class SeoEngineServiceTest extends TestCase
+{
+    public function test_additive_score_awards_heading_points_for_two_h2_tags(): void
+    {
+        $engine = app(SeoEngineService::class);
+
+        $html = '<h2>One</h2><h2>Two</h2><p>Focus keyword sample content here.</p>';
+        $result = $engine->analyzeHtml(
+            $html,
+            'focus keyword',
+            [],
+            [
+                'seo_title' => 'Focus keyword title',
+                'meta_description' => 'Focus keyword description',
+                'slug' => 'focus-keyword-sample',
+            ],
+        );
+
+        $this->assertSame(20, $result['breakdown']['heading']['earned'] ?? 0);
+        $this->assertNotContains('seo.heading', $result['reason_keys']);
+    }
+
+    public function test_length_scoring_partial_and_full(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $words600 = implode(' ', array_fill(0, 600, 'word'));
+        $words1300 = implode(' ', array_fill(0, 1300, 'word'));
+
+        $partial = $engine->analyzeHtml("<p>{$words600}</p>", 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+        $full = $engine->analyzeHtml("<p>{$words1300}</p>", 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(10, $partial['breakdown']['length']['earned'] ?? 0);
+        $this->assertContains('seo.length.partial', $partial['reason_keys']);
+        $this->assertSame(15, $full['breakdown']['length']['earned'] ?? 0);
+    }
+
+    public function test_text_to_image_ideal_ratio_scores_fifteen(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $words = implode(' ', array_fill(0, 500, 'word'));
+        $html = '<p>'.$words.'</p><img src="/a.jpg" alt="ok"><img src="/b.jpg" alt="ok2">';
+
+        $result = $engine->analyzeHtml($html, 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(15, $result['breakdown']['image_ratio']['earned'] ?? 0);
+        $this->assertSame(250, $this->extractImageRatio($result));
+    }
+
+    public function test_text_to_image_penalizes_missing_alt(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $words = implode(' ', array_fill(0, 500, 'word'));
+        $html = '<p>'.$words.'</p><img src="/a.jpg" alt="ok"><img src="/b.jpg">';
+
+        $result = $engine->analyzeHtml($html, 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(10, $result['breakdown']['image_ratio']['earned'] ?? 0);
+    }
+
+    public function test_wiki_trust_link_is_detected(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $html = '<p>Content</p><a href="https://en.wikipedia.org/wiki/Test">Wiki</a>';
+
+        $result = $engine->analyzeHtml($html, 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(15, $result['breakdown']['wiki_trust']['earned'] ?? 0);
+        $this->assertTrue(SeoLinkMapLinkTypeClassifier::forUnresolvedUrl('https://en.wikipedia.org/wiki/Test') === SeoLinkMapType::WikiTrust);
+    }
+
+    public function test_faq_schema_and_featured_snippet_add_points(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $html = '<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table><p>keyword body</p>';
+        $faqs = [['question' => 'Q?', 'answer' => 'A.']];
+
+        $result = $engine->analyzeHtml($html, 'keyword', $faqs, [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(10, $result['breakdown']['featured_snippet']['earned'] ?? 0);
+        $this->assertSame(10, $result['breakdown']['faq_schema']['earned'] ?? 0);
+    }
+
+    public function test_total_score_is_capped_at_one_hundred(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $words = implode(' ', array_fill(0, 1300, 'word'));
+        $html = '<h2>A</h2><h2>B</h2><table><tr><th>X</th><th>Y</th></tr><tr><td>1</td><td>2</td></tr></table>'
+            .'<p>'.$words.' keyword keyword keyword</p>'
+            .'<img src="/a.jpg" alt="keyword"><img src="/b.jpg" alt="keyword">'
+            .'<a href="https://en.wikipedia.org/wiki/Test">Wiki</a>';
+
+        $result = $engine->analyzeHtml($html, 'keyword', [['question' => 'Q', 'answer' => 'A']], [
+            'seo_title' => 'keyword title',
+            'meta_description' => 'keyword meta',
+            'slug' => 'keyword-slug',
+        ]);
+
+        $this->assertLessThanOrEqual(100, $result['seo_score']);
+        $this->assertGreaterThanOrEqual(80, $result['seo_score']);
+    }
+
+    public function test_reason_keys_use_lang_prefix_not_raw_text(): void
+    {
+        $engine = app(SeoEngineService::class);
+
+        $result = $engine->analyzeHtml('<p>short</p>', 'keyword', [], [
+            'seo_title' => 'title',
+            'meta_description' => 'desc',
+            'slug' => 'slug',
+        ]);
+
+        foreach ($result['reason_keys'] as $key) {
+            $this->assertStringStartsWith('seo.', $key);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function extractImageRatio(array $result): int
+    {
+        $params = $result['breakdown']['image_ratio']['params'] ?? [];
+
+        return (int) ($params['ratio'] ?? 0);
+    }
+}

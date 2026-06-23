@@ -76,6 +76,7 @@ final class ArticleProductGalleryDistributeService
             if ($this->sectionHasFaq($sectionContent)) {
                 $result[] = $h2Tag;
                 $result[] = $sectionContent;
+
                 continue;
             }
 
@@ -83,6 +84,7 @@ final class ArticleProductGalleryDistributeService
             if ($this->sectionHasImage($sectionContent)) {
                 $result[] = $h2Tag;
                 $result[] = $sectionContent;
+
                 continue;
             }
 
@@ -90,6 +92,7 @@ final class ArticleProductGalleryDistributeService
             if ($cursor >= count($pool)) {
                 $result[] = $h2Tag;
                 $result[] = $sectionContent;
+
                 continue;
             }
 
@@ -97,7 +100,7 @@ final class ArticleProductGalleryDistributeService
             $imgHtml = $this->buildImgHtml($item, $siteId);
 
             $result[] = $h2Tag;
-            $result[] = "\n" . $imgHtml . $sectionContent;
+            $result[] = "\n".$imgHtml.$sectionContent;
             $inserted++;
         }
 
@@ -130,21 +133,27 @@ final class ArticleProductGalleryDistributeService
         }
 
         $attrs = [
-            'src="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '"',
+            'src="'.htmlspecialchars($url, ENT_QUOTES, 'UTF-8').'"',
         ];
 
         if ($alt !== '') {
-            $attrs[] = 'alt="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
-            $attrs[] = 'title="' . htmlspecialchars($alt, ENT_QUOTES, 'UTF-8') . '"';
+            $attrs[] = 'alt="'.htmlspecialchars($alt, ENT_QUOTES, 'UTF-8').'"';
+            $attrs[] = 'title="'.htmlspecialchars($alt, ENT_QUOTES, 'UTF-8').'"';
+        }
+
+        $wpAttachmentId = (int) ($item['wp_attachment_id'] ?? 0);
+        if ($wpAttachmentId > 0) {
+            $attrs[] = 'data-id="'.$wpAttachmentId.'"';
+            $attrs[] = 'class="aligncenter wp-image-'.$wpAttachmentId.'"';
+        } else {
+            $attrs[] = 'class="aligncenter"';
         }
 
         if ($mediaId > 0) {
-            $attrs[] = 'data-seo-media-id="' . $mediaId . '"';
+            $attrs[] = 'data-seo-media-id="'.$mediaId.'"';
         }
 
-        $attrs[] = 'class="aligncenter"';
-
-        return '<figure class="wp-caption aligncenter"><img ' . implode(' ', $attrs) . " /></figure>\n";
+        return '<figure class="wp-caption aligncenter"><img '.implode(' ', $attrs)." /></figure>\n";
     }
 
     private function resolveAltText(int $mediaId): string

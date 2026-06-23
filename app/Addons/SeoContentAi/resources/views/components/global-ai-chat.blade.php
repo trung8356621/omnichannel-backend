@@ -11,6 +11,7 @@
     $isContentManager = SeoAccessControl::isContentManager();
     $canUseAiChat = ! $isContentManager;
     $teamChatConfig = app(TeamChatAttachmentService::class)->clientConfig();
+    $mediaImportUrl = route('seo.media.import-url');
     $teamAccept = implode(',', array_map(
         static fn (string $ext): string => '.'.$ext,
         $teamChatConfig['allowed_extensions'],
@@ -63,6 +64,7 @@
         attachmentLightboxOpen: false,
         attachmentLightboxUrl: '',
         attachmentLightboxName: '',
+        mediaImportUrl: @js($mediaImportUrl),
 
         init() {
             this.restore();
@@ -72,6 +74,11 @@
                 this.loadingModels = false;
                 this.activeTab = 'team';
             }
+
+            this._onGlobalAiChatImageSelected = (event) => {
+                this.applyLibraryImage(event?.detail ?? {});
+            };
+            window.addEventListener('seo-global-ai-chat-image-selected', this._onGlobalAiChatImageSelected);
         },
 
         async loadModels() {
@@ -713,6 +720,74 @@
             }
         },
 
+        openMediaLibrary() {
+            if (! this.canUseAiChat || this.activeTab !== 'ai' || this.loading) {
+                return;
+            }
+
+            window.dispatchEvent(new CustomEvent('seo-open-workspace-media-picker', {
+                detail: { mode: 'ai-chat' },
+            }));
+        },
+
+        async resolveLibraryImageUrl(payload) {
+            const directUrl = String(payload?.url || '').trim();
+            if (directUrl === '') {
+                throw new Error('Ảnh không có URL.');
+            }
+
+            if (Number(payload?.seoMediaId || 0) > 0) {
+                return directUrl;
+            }
+
+            const response = await fetch(this.mediaImportUrl, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]')?.content || '',
+                },
+                credentials: 'same-origin',
+                body: JSON.stringify({ url: directUrl }),
+            });
+            const data = await response.json();
+            if (! response.ok || ! data.success || ! data.url) {
+                throw new Error(data.message || 'Không import được ảnh từ thư viện.');
+            }
+
+            return String(data.url);
+        },
+
+        async applyLibraryImage(payload) {
+            try {
+                const resolvedUrl = await this.resolveLibraryImageUrl(payload);
+                const response = await fetch(resolvedUrl, { credentials: 'same-origin' });
+                if (! response.ok) {
+                    throw new Error('Không tải được file ảnh.');
+                }
+
+                const blob = await response.blob();
+                if (! String(blob.type || '').startsWith('image/')) {
+                    throw new Error('Tệp đã chọn không phải ảnh.');
+                }
+
+                const slug = String(payload?.slug || 'library-image').replace(/[^\w.-]+/g, '-') || 'library-image';
+                const ext = blob.type === 'image/png'
+                    ? 'png'
+                    : blob.type === 'image/webp'
+                        ? 'webp'
+                        : blob.type === 'image/gif'
+                            ? 'gif'
+                            : 'jpg';
+
+                this.clearImage();
+                this.imageFile = new File([blob], `${slug}.${ext}`, { type: blob.type || 'image/jpeg' });
+                this.imagePreview = URL.createObjectURL(blob);
+            } catch (error) {
+                window.alert(error.message || 'Không chọn được ảnh từ thư viện.');
+            }
+        },
+
         resizeInput() {
             const input = this.$refs.messageInput;
             if (! input) return;
@@ -1168,6 +1243,19 @@
                 >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l9.724-9.724a3 3 0 0 1 4.243 4.243l-9.193 9.193a1.5 1.5 0 0 1-2.121-2.121l8.662-8.662" />
+                    </svg>
+                </button>
+                <button
+                    type="button"
+                    class="seo-global-chat__attach"
+                    x-on:click="openMediaLibrary()"
+                    x-bind:disabled="loading || activeTab !== 'ai'"
+                    x-show="canUseAiChat && activeTab === 'ai'"
+                    aria-label="Chọn ảnh từ thư viện"
+                    title="Chọn ảnh từ thư viện"
+                >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75 5.159 5.159a2.25 2.25 0 0 1 2.013-1.327h9.656a2.25 2.25 0 0 1 2.013 1.327L21.75 15.75M2.25 15.75h19.5M2.25 15.75v2.25A2.25 2.25 0 0 0 4.5 20.25h15a2.25 2.25 0 0 0 2.25-2.25v-2.25M8.25 10.5h.008v.008H8.25V10.5Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 3.75h.008v.008H12.75V14.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
                     </svg>
                 </button>
 

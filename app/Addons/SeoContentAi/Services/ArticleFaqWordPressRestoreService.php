@@ -253,15 +253,19 @@ final class ArticleFaqWordPressRestoreService
      */
     private function persistFreshWordPressContentMeta(SeoArticle $article, array $post, string $editorHtml): void
     {
-        $rawContent = trim((string) ($post['post_content'] ?? ''));
-        if ($rawContent !== '') {
+        $storedContent = trim($editorHtml);
+        if ($storedContent === '') {
+            $storedContent = trim((string) ($post['post_content'] ?? ''));
+        }
+
+        if ($storedContent !== '') {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_content'],
-                ['meta_value' => $rawContent],
+                ['meta_value' => $storedContent],
             );
         }
 
-        $this->persistWordPressSourceSnapshot($article, $editorHtml);
+        $this->persistWordPressSourceSnapshot($article, $storedContent);
     }
 
     /**
@@ -271,7 +275,12 @@ final class ArticleFaqWordPressRestoreService
     {
         $article->loadMissing('articleMetas');
 
-        $content = trim((string) ($post['post_content'] ?? ''));
+        $content = $this->pickRestoredContentSource(
+            trim((string) ($post['post_content'] ?? '')),
+            trim((string) (
+                is_array($post['scoring'] ?? null) ? ($post['scoring']['body'] ?? '') : ''
+            )),
+        );
         if ($content === '') {
             $scoring = is_array($post['scoring'] ?? null) ? $post['scoring'] : [];
             $content = trim((string) ($scoring['body'] ?? ''));
@@ -289,6 +298,7 @@ final class ArticleFaqWordPressRestoreService
         $content = $this->workflowParser->stripFaqShortcodeArtifacts($content);
 
         if ($this->workflowParser->parseFaqsFromContent($content) !== []) {
+            $content = $this->injectRestoredPostImages($article, $content, $post);
             $this->persistWordPressSourceSnapshot($article, $content);
 
             return $content;
@@ -300,18 +310,54 @@ final class ArticleFaqWordPressRestoreService
             $heading = is_array($foundHeading) ? (string) ($foundHeading['text'] ?? 'FAQ') : 'FAQ';
             $faqBlock = $this->workflowParser->buildFaqSectionHtmlForEditor($wpFaqs, $heading);
             $rebuilt = trim($content).($content !== '' ? "\n\n" : '').$faqBlock;
+            $rebuilt = $this->injectRestoredPostImages($article, $rebuilt, $post);
             $this->persistWordPressSourceSnapshot($article, $rebuilt);
 
             return $rebuilt;
         }
 
         if (! $preferFreshRemote && $snapshot !== '') {
-            return $snapshot;
+            return $this->injectRestoredPostImages($article, $snapshot, $post);
         }
 
+        $content = $this->injectRestoredPostImages($article, $content, $post);
         $this->persistWordPressSourceSnapshot($article, $content);
 
         return $content;
+    }
+
+    private function pickRestoredContentSource(string $rawContent, string $renderedBody): string
+    {
+        if ($rawContent === '') {
+            return $renderedBody;
+        }
+
+        if ($renderedBody === '') {
+            return $rawContent;
+        }
+
+        $rawImgCount = preg_match_all('/<img[\s>]/iu', $rawContent) ?: 0;
+        $renderedImgCount = preg_match_all('/<img[\s>]/iu', $renderedBody) ?: 0;
+
+        if ($renderedImgCount > $rawImgCount) {
+            return $renderedBody;
+        }
+
+        return $rawContent;
+    }
+
+    /**
+     * @param  array<string, mixed>  $post
+     */
+    private function injectRestoredPostImages(SeoArticle $article, string $html, array $post): string
+    {
+        $postImages = $post['post_images'] ?? null;
+        if (! is_array($postImages) || $postImages === []) {
+            return $html;
+        }
+
+        return app(ArticlePostImagesService::class)
+            ->injectIntoEmptySections($article, $html, $postImages);
     }
 
     /**

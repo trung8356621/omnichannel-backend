@@ -18,6 +18,7 @@ use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
+use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
@@ -145,7 +146,8 @@ class SeoPanelProvider extends PanelProvider
                 }
 
                 return new HtmlString(
-                    view('seo-content-ai::components.global-ai-chat')->render(),
+                    view('seo-content-ai::components.workspace-media-picker')->render()
+                    .view('seo-content-ai::components.global-ai-chat')->render(),
                 );
             },
         );
@@ -200,6 +202,8 @@ class SeoPanelProvider extends PanelProvider
         Route::middleware($seoWebApiMiddleware)
             ->prefix('api/seo/media')
             ->group(function (): void {
+                Route::get('/workspace-picker', WorkspaceMediaPickerController::class)
+                    ->name('seo.media.workspace-picker');
                 Route::post('/upload', [SeoMediaController::class, 'upload'])
                     ->name('seo.media.upload');
                 Route::post('/import-url', [SeoMediaController::class, 'importFromUrl'])

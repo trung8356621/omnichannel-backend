@@ -814,13 +814,13 @@
                 fn(detail);
             };
             if (detail.target === 'sync') {
-                runAfterMediaDrafts((d) => $wire.syncArticleToWordPress(d.html ?? ''));
+                runAfterMediaDrafts((d) => $wire.syncArticleToWordPress(d.html ?? '', d.seoAnalysis ?? null));
             } else if (detail.target === 'generate-faq') {
                 runAfterMediaDrafts((d) => $wire.generateArticleFaqs(d.html ?? ''));
             } else if (detail.target === 'quick-translate') {
                 runAfterMediaDrafts((d) => $wire.quickTranslateLinkedArticle(d.html ?? ''));
             } else {
-                runAfterMediaDrafts((d) => $wire.persistArticleLocal(d.html ?? ''));
+                runAfterMediaDrafts((d) => $wire.persistArticleLocal(d.html ?? '', d.seoAnalysis ?? null));
             }
         "
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
@@ -878,7 +878,6 @@
         x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
         @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
         x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [])"
-        x-on:seo-analyze-draft.window="$wire.analyzeSeoDraft($event.detail.html)"
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
         x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"

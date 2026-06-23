@@ -67,14 +67,8 @@ final class ExternalPluginRegistry
             ->get(['slug', 'config']);
 
         foreach ($services as $service) {
-            $config = is_array($service->config) ? $service->config : [];
-            $plugins = $config['external_plugins'] ?? [];
-            if (! is_array($plugins)) {
-                continue;
-            }
-
             $addonSlug = trim((string) ($service->slug ?? ''));
-            foreach ($plugins as $plugin) {
+            foreach ($this->externalPluginsForService($service) as $plugin) {
                 if (! is_array($plugin)) {
                     continue;
                 }
@@ -89,5 +83,47 @@ final class ExternalPluginRegistry
         }
 
         return $this->manifests;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    private function externalPluginsForService(Service $service): array
+    {
+        $config = is_array($service->config) ? $service->config : [];
+        $fromConfig = $config['external_plugins'] ?? null;
+        if (is_array($fromConfig) && $fromConfig !== []) {
+            return $fromConfig;
+        }
+
+        $addonMeta = $this->readAddonJsonForSlug((string) $service->slug);
+        if ($addonMeta === null) {
+            return [];
+        }
+
+        $fromFile = $addonMeta['external_plugins'] ?? [];
+
+        return is_array($fromFile) ? $fromFile : [];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function readAddonJsonForSlug(string $serviceSlug): ?array
+    {
+        $serviceSlug = trim($serviceSlug);
+        if ($serviceSlug === '') {
+            return null;
+        }
+
+        $folderName = str_replace(' ', '', ucwords(str_replace(['-', '_'], ' ', $serviceSlug)));
+        $jsonPath = app_path("Addons/{$folderName}/addon.json");
+        if (! is_file($jsonPath)) {
+            return null;
+        }
+
+        $decoded = json_decode((string) file_get_contents($jsonPath), true);
+
+        return is_array($decoded) ? $decoded : null;
     }
 }

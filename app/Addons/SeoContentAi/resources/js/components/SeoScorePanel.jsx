@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
 import { t } from '../utils/i18n';
+import { resolveScoringMessage } from '../utils/seoAnalyzer';
 
 function scoreColor(score) {
     if (score >= 70) return 'text-emerald-600 dark:text-emerald-400';
@@ -42,15 +43,35 @@ function ScoreRing({ score, loading }) {
     );
 }
 
-function formatScoreSuffix(passed, points, maxPoints = 10) {
-    const max = typeof maxPoints === 'number' ? maxPoints : 10;
-    const earned = typeof points === 'number' ? points : 0;
-
-    if (passed) {
-        return earned > 0 ? ` +${earned}` : '';
+function resolveDisplayLine(item, scoringMessages) {
+    if (typeof item === 'string') {
+        return item;
     }
 
-    return ` -${max}`;
+    if (item && typeof item === 'object') {
+        const key = String(item.key ?? '');
+        if (key !== '') {
+            return resolveScoringMessage(key, scoringMessages, item.params ?? {});
+        }
+
+        if (typeof item.message === 'string' && item.message !== '') {
+            return item.message;
+        }
+    }
+
+    return String(item ?? '');
+}
+
+function resolveDisplayItems(items, scoringMessages, reasonKeys) {
+    if (Array.isArray(items) && items.length > 0) {
+        return items.map((item) => resolveDisplayLine(item, scoringMessages));
+    }
+
+    if (Array.isArray(reasonKeys) && reasonKeys.length > 0) {
+        return reasonKeys.map((key) => resolveScoringMessage(key, scoringMessages));
+    }
+
+    return [];
 }
 
 function CheckList({ title, icon: Icon, items, tone }) {
@@ -80,85 +101,36 @@ function CheckList({ title, icon: Icon, items, tone }) {
     );
 }
 
-function ContentBonusRow({ item, faqCount }) {
-    if (!item) {
+function BreakdownSection({ breakdown, scoringMessages }) {
+    if (!breakdown || typeof breakdown !== 'object') {
         return null;
     }
 
-    const passed = Boolean(item.passed);
-    const points = typeof item.points === 'number' ? item.points : 0;
-    const maxPoints = typeof item.max_points === 'number' ? item.max_points : 10;
-    const toneClass = passed
-        ? 'seo-content-bonus-row--pass'
-        : points > 0
-          ? 'seo-content-bonus-row--partial'
-          : 'seo-content-bonus-row--fail';
-    const isFeaturedSnippet = item.key === 'featured_snippet';
-
-    return (
-        <div
-            className={`seo-content-bonus-row ${toneClass}${isFeaturedSnippet ? ' is-clickable' : ''}`}
-            role={isFeaturedSnippet ? 'button' : undefined}
-            tabIndex={isFeaturedSnippet ? 0 : undefined}
-            onClick={
-                isFeaturedSnippet
-                    ? () => {
-                        window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-featured-snippet-table'));
-                    }
-                    : undefined
-            }
-            onKeyDown={
-                isFeaturedSnippet
-                    ? (event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            window.dispatchEvent(new CustomEvent('seo-editor-scroll-to-featured-snippet-table'));
-                        }
-                    }
-                    : undefined
-            }
-            title={isFeaturedSnippet ? t('seo_score_featured_snippet_jump') : undefined}
-        >
-            <div className="seo-content-bonus-row__head">
-                <span className="seo-content-bonus-row__label">{item.label}:</span>
-                <span className="seo-content-bonus-row__points">
-                    {points} / {maxPoints} {t('seo_score_points')}
-                </span>
-            </div>
-            {item.key === 'faq' && typeof faqCount === 'number' ? (
-                <p className="seo-content-bonus-row__meta">
-                    {t('seo_score_faq_count')}: <strong>{faqCount}</strong>
-                </p>
-            ) : null}
-            {item.message ? (
-                <p className="seo-content-bonus-row__message">
-                    {item.message}
-                    {formatScoreSuffix(passed, points, maxPoints)}
-                </p>
-            ) : null}
-        </div>
-    );
-}
-
-function ContentBonusSection({ contentBonus }) {
-    const items = contentBonus?.items;
-    if (!items) {
+    const rows = Object.entries(breakdown);
+    if (rows.length === 0) {
         return null;
     }
 
-    const totalBonus =
-        typeof contentBonus.total_bonus === 'number'
-            ? contentBonus.total_bonus
-            : (items.featured_snippet?.points ?? 0) + (items.faq?.points ?? 0);
-
     return (
-        <div className="seo-content-bonus">
-            <h3 className="seo-content-bonus__title">{t('seo_score_bonus_title')}</h3>
-            <p className="seo-content-bonus__subtitle">
-                {t('seo_score_bonus_subtitle_before')} <strong>{totalBonus}</strong> / 20 {t('seo_score_points')} {t('seo_score_bonus_subtitle_after')}
-            </p>
-            <ContentBonusRow item={items.featured_snippet} />
-            <ContentBonusRow item={items.faq} faqCount={contentBonus.faq_count} />
+        <div className="seo-score-breakdown space-y-2">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">{t('seo_score_breakdown_title')}</h3>
+            <ul className="space-y-1.5">
+                {rows.map(([name, item]) => {
+                    const earned = Number(item?.earned ?? 0);
+                    const max = Number(item?.max ?? 0);
+                    const key = String(item?.key ?? '');
+                    const label = resolveScoringMessage(key, scoringMessages, item?.params ?? {});
+
+                    return (
+                        <li key={name} className="text-sm text-gray-700 dark:text-gray-300 flex justify-between gap-3">
+                            <span>{label}</span>
+                            <span className="font-medium whitespace-nowrap">
+                                {earned}/{max}
+                            </span>
+                        </li>
+                    );
+                })}
+            </ul>
         </div>
     );
 }
@@ -166,15 +138,16 @@ function ContentBonusSection({ contentBonus }) {
 export default function SeoScorePanel({
     focusKeyword,
     analysis,
-    contentBonus: contentBonusProp,
+    scoringMessages = {},
     loading,
     analyzing,
 }) {
-    const score = analysis?.score ?? 0;
-    const good = analysis?.good ?? [];
-    const errors = analysis?.errors ?? [];
-    const warnings = analysis?.warnings ?? [];
-    const contentBonus = contentBonusProp ?? analysis?.content_bonus ?? null;
+    const score = analysis?.score ?? analysis?.seo_score ?? 0;
+    const reasonKeys = analysis?.reason_keys ?? [];
+    const good = resolveDisplayItems(analysis?.good, scoringMessages, []);
+    const errors = resolveDisplayItems(analysis?.errors, scoringMessages, reasonKeys.filter((key) => !String(key).includes('.pass')));
+    const warnings = resolveDisplayItems(analysis?.warnings, scoringMessages, []);
+    const breakdown = analysis?.breakdown ?? null;
 
     return (
         <div className="seo-score-panel">
@@ -200,7 +173,7 @@ export default function SeoScorePanel({
                 </div>
             </div>
 
-            <ContentBonusSection contentBonus={contentBonus} />
+            <BreakdownSection breakdown={breakdown} scoringMessages={scoringMessages} />
 
             <div className="seo-score-checks space-y-4">
                 <CheckList title={t('seo_score_good')} icon={CheckCircle2} items={good} tone="good" />

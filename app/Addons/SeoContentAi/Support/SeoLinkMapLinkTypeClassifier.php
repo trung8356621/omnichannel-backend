@@ -6,6 +6,8 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
+use Illuminate\Support\Facades\Schema;
 
 final class SeoLinkMapLinkTypeClassifier
 {
@@ -31,9 +33,25 @@ final class SeoLinkMapLinkTypeClassifier
             return false;
         }
 
-        return str_contains($host, 'wikipedia.org')
-            || str_ends_with($host, '.gov')
-            || str_ends_with($host, '.edu');
+        foreach (self::wikiTrustDomainPatterns() as $pattern) {
+            if (self::hostMatchesPattern($host, $pattern)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function wikiTrustDomainPatterns(): array
+    {
+        if (! Schema::hasTable('wp_options')) {
+            return ArticleEditorHistoryService::DEFAULT_WIKI_TRUST_DOMAINS;
+        }
+
+        return app(ArticleEditorHistoryService::class)->getWikiTrustDomains();
     }
 
     public static function resolveHost(string $href): string
@@ -58,10 +76,31 @@ final class SeoLinkMapLinkTypeClassifier
         $domain = preg_replace('#^https?://#', '', $domain) ?? $domain;
         $domain = rtrim($domain, '/');
 
-        if (str_starts_with($domain, 'www.')) {
-            $domain = substr($domain, 4);
+        return str_starts_with($domain, 'www.') ? substr($domain, 4) : $domain;
+    }
+
+    private static function hostMatchesPattern(string $host, string $pattern): bool
+    {
+        $host = self::normalizeDomainHost($host);
+        $pattern = self::normalizeDomainHost($pattern);
+
+        if ($host === '' || $pattern === '') {
+            return false;
         }
 
-        return $domain;
+        if (str_starts_with($pattern, '*.')) {
+            $suffix = substr($pattern, 1);
+
+            return $host === substr($pattern, 2) || str_ends_with($host, $suffix);
+        }
+
+        if (str_contains($pattern, '*')) {
+            $escaped = preg_quote($pattern, '#');
+            $escaped = str_replace('\*', '.*', $escaped);
+
+            return preg_match('#^'.$escaped.'$#i', $host) === 1;
+        }
+
+        return $host === $pattern || str_ends_with($host, '.'.$pattern);
     }
 }

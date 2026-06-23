@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace App\Filament\PluginReleasePanel\Pages;
+namespace App\Filament\Pages;
 
 use App\Exceptions\ExternalPlugin\InvalidWordPressPluginZipException;
 use App\Exceptions\ExternalPlugin\WordPressPluginVersionExistsException;
@@ -34,12 +34,7 @@ class ManageExternalPluginRelease extends Page implements HasForms
 
     protected static bool $shouldRegisterNavigation = false;
 
-    protected static ?string $slug = '';
-
-    public static function getSlug(): string
-    {
-        return '';
-    }
+    protected static ?string $slug = 'wp-plugin-release';
 
     /** @var array<string, mixed> */
     public array $overview = [];
@@ -55,7 +50,15 @@ class ManageExternalPluginRelease extends Page implements HasForms
         $manifest = $registry->resolve($requested) ?? $registry->defaultManifest();
 
         if ($manifest === null) {
-            abort(404, 'No external plugins registered.');
+            Notification::make()
+                ->title(__('seo-content-ai::filament.wp_plugin_release.no_plugins_registered'))
+                ->body(__('seo-content-ai::filament.wp_plugin_release.no_plugins_registered_body'))
+                ->warning()
+                ->send();
+
+            $this->redirect(ManageServices::getUrl());
+
+            return;
         }
 
         $this->selectedPluginSlug = $manifest->slug;

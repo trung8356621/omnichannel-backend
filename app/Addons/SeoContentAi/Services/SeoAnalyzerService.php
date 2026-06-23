@@ -13,6 +13,9 @@ use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
+use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
+use App\Services\SeoEngineService;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -25,6 +28,7 @@ class SeoAnalyzerService
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordPersistenceService $keywordPersistence,
         private readonly WorkflowParserService $workflowParser,
+        private readonly SeoEngineService $seoEngine,
     ) {}
 
     /**
@@ -213,6 +217,99 @@ class SeoAnalyzerService
     }
 
     /**
+     * Lưu kết quả chấm điểm do editor JS gửi kèm khi save.
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{
+     *   score:int,
+     *   good:array<int,string>,
+     *   errors:array<int,string>,
+     *   warnings:array<int,string>,
+     *   extracted_links:array{internal:array<int,mixed>,external:array<int,mixed>},
+     *   content_bonus:array<string,mixed>|null,
+     *   suggested_internal_links:array<int,mixed>
+     * }
+     */
+    public function persistClientAnalysis(SeoArticle $article, string $content, array $payload): array
+    {
+        $scoreData = $this->sanitizeClientScorePayload($payload);
+        $extractedLinks = $this->sanitizeClientExtractedLinks($payload['extracted_links'] ?? null, $content, $article);
+
+        $persisted = $this->persistScoreResult($article, $scoreData, $extractedLinks);
+
+        $contentBonus = is_array($payload['content_bonus'] ?? null)
+            ? $payload['content_bonus']
+            : app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content);
+
+        return array_merge($persisted, [
+            'extracted_links' => $extractedLinks,
+            'content_bonus' => $contentBonus,
+            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+                $article,
+                $content,
+                $extractedLinks['internal'] ?? [],
+            ),
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     */
+    private function sanitizeClientScorePayload(array $payload): array
+    {
+        $score = max(0, min(100, (int) ($payload['score'] ?? 0)));
+
+        return $this->buildScoreResult(
+            $score,
+            $this->sanitizeScoreLines($payload['good'] ?? []),
+            $this->sanitizeScoreLines($payload['errors'] ?? []),
+            $this->sanitizeScoreLines($payload['warnings'] ?? []),
+        );
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function sanitizeScoreLines(mixed $lines): array
+    {
+        if (! is_array($lines)) {
+            return [];
+        }
+
+        $result = [];
+        foreach ($lines as $line) {
+            if (! is_string($line)) {
+                continue;
+            }
+
+            $trimmed = trim($line);
+            if ($trimmed !== '') {
+                $result[] = $trimmed;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array{internal: array<int, mixed>, external: array<int, mixed>}
+     */
+    private function sanitizeClientExtractedLinks(mixed $links, string $content, SeoArticle $article): array
+    {
+        if (is_array($links) && is_array($links['internal'] ?? null) && is_array($links['external'] ?? null)) {
+            return [
+                'internal' => array_values($links['internal']),
+                'external' => array_values($links['external']),
+            ];
+        }
+
+        $domain = $this->resolveArticleDomain($article, null);
+
+        return $this->extractLinks($content, $domain);
+    }
+
+    /**
      * @return array{
      *   scoreData: array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>},
      *   extractedLinks: array{internal: array<int, mixed>, external: array<int, mixed>}
@@ -227,148 +324,31 @@ class SeoAnalyzerService
         string $metaDescription,
         string $domain
     ): array {
-        $good = [];
-        $errors = [];
-        $warnings = [];
-        $totalScore = 100;
-
         $extractedLinks = $this->extractLinks($content, $domain);
 
-        // Rule 1: Focus keyword trong tiêu đề SEO
-        if ($this->containsKeyword($seoTitle, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong tiêu đề SEO.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Tiêu đề SEO chưa chứa từ khóa chính.', 10, false);
-            $totalScore -= 10;
-        }
+        $engineResult = $this->seoEngine->analyzeHtml(
+            $content,
+            $focusKeyword,
+            $article->resolveFaqs(),
+            [
+                'seo_title' => $seoTitle,
+                'meta_description' => $metaDescription,
+                'slug' => $slug,
+                'domain' => $domain,
+            ],
+        );
 
-        // Rule 2: Focus keyword trong meta description
-        if ($this->containsKeyword($metaDescription, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong meta description.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Meta description chưa chứa từ khóa chính.', 10, false);
-            $totalScore -= 10;
-        }
-
-        // Rule 3: Focus keyword trong URL slug (so sánh dạng slug / kebab-case)
-        if ($this->slugContainsFocusKeyword($slug, $focusKeyword)) {
-            $good[] = $this->scoredLine('URL chứa từ khóa chính.', 5, true);
-        } else {
-            $errors[] = $this->scoredLine('URL chưa chứa từ khóa chính.', 5, false);
-            $totalScore -= 5;
-        }
-
-        // Rule 4: Focus keyword trong 10% đầu nội dung
-        $firstTenPercent = $this->sliceFirstTenPercentText($content);
-        if ($this->containsKeyword($firstTenPercent, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong 10% đầu nội dung.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Từ khóa chính chưa xuất hiện sớm trong nội dung.', 10, false);
-            $totalScore -= 10;
-        }
-
-        // Rule 5: Focus keyword xuất hiện trong toàn nội dung
-        if ($this->containsKeyword($content, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính có xuất hiện trong nội dung.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Nội dung chưa chứa từ khóa chính.', 10, false);
-            $totalScore -= 10;
-        }
-
-        // Rule 6: Độ dài nội dung
-        $wordCount = $this->countWords($content);
-        $isEcommerceType = (string) $article->type === 'e-commerce';
-        if ($isEcommerceType) {
-            if ($wordCount > 500) {
-                $good[] = $this->scoredLine("Độ dài nội dung phù hợp cho e-commerce ({$wordCount} từ).", 10, true);
-            } else {
-                $errors[] = $this->scoredLine("Nội dung e-commerce quá ngắn ({$wordCount} từ, cần > 500).", 10, false);
-                $totalScore -= 10;
-            }
-        } else {
-            if ($wordCount < 600) {
-                $errors[] = $this->scoredLine("Nội dung quá ngắn ({$wordCount} từ, cần >= 600).", 10, false);
-                $totalScore -= 10;
-            } elseif ($wordCount <= 1000) {
-                $warnings[] = $this->scoredLine("Nội dung trung bình ({$wordCount} từ). Nên > 1000 từ để tối ưu.", 0, false);
-            } else {
-                $good[] = $this->scoredLine("Độ dài nội dung tốt ({$wordCount} từ).", 0, true);
-            }
-        }
-
-        // Rule 7: Từ khóa trong H2/H3/H4
-        $headingText = $this->extractHeadingText($content);
-        if ($this->containsKeyword($headingText, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính xuất hiện trong heading phụ (H2/H3/H4).', 5, true);
-        } else {
-            $errors[] = $this->scoredLine('Heading phụ chưa chứa từ khóa chính.', 5, false);
-            $totalScore -= 5;
-        }
-
-        // Rule 8: Alt ảnh chứa từ khóa
-        $imagesAltText = $this->extractImageAltText($content);
-        if ($this->containsKeyword($imagesAltText, $focusKeyword)) {
-            $good[] = $this->scoredLine('Có ảnh chứa alt text gồm từ khóa chính.', 5, true);
-        } else {
-            $errors[] = $this->scoredLine('Chưa có alt text ảnh chứa từ khóa chính.', 5, false);
-            $totalScore -= 5;
-        }
-
-        // Rule 9: Keyword density (1% - 2.5%)
-        $density = $this->calculateKeywordDensity($content, $focusKeyword);
-        if ($density >= 1.0 && $density <= 2.5) {
-            $good[] = $this->scoredLine('Mật độ từ khóa nằm trong ngưỡng tối ưu (1% - 2.5%).', 5, true);
-        } else {
-            $warnings[] = $this->scoredLine(sprintf('Mật độ từ khóa hiện tại %.2f%% chưa tối ưu.', $density), 5, false);
-            $totalScore -= 5;
-        }
-
-        // Rule 10: Slug ngắn gọn
-        $slugLength = mb_strlen($slug);
-        if ($slugLength > 85) {
-            $errors[] = $this->scoredLine('URL quá dài (> 85 ký tự).', 5, false);
-            $totalScore -= 5;
-        } elseif ($slugLength >= 80) {
-            $warnings[] = $this->scoredLine('URL hơi dài (>= 80 ký tự, nên ngắn hơn).', 5, false);
-            $totalScore -= 2;
-        } else {
-            $good[] = $this->scoredLine('URL ngắn gọn (< 80 ký tự).', 5, true);
-        }
-
-        // Rule 11: Có internal link
-        if (count($extractedLinks['internal']) > 0) {
-            $good[] = $this->scoredLine('Có liên kết nội bộ trong nội dung.', 20, true);
-        } else {
-            $errors[] = $this->scoredLine('Chưa có liên kết nội bộ.', 20, false);
-            $totalScore -= 20;
-        }
-
-        // Rule 12: Có external link
-        if (count($extractedLinks['external']) > 0) {
-            $good[] = $this->scoredLine('Có liên kết ngoài trong nội dung.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Chưa có liên kết ngoài.', 10, false);
-            $totalScore -= 10;
-        }
-
-        // Rule 13: Có FAQ
-        if ($this->articleHasFaqs($article, $content)) {
-            $good[] = $this->scoredLine('Có phần FAQ trong bài.', 10, true);
-        } else {
-            $errors[] = $this->scoredLine('Chưa có phần FAQ.', 10, false);
-            $totalScore -= 10;
-        }
-
-        // Rule 14: Keyword ở 3 từ đầu tiêu đề SEO
-        if ($this->keywordInFirstThreeWords($seoTitle, $focusKeyword)) {
-            $good[] = $this->scoredLine('Từ khóa chính nằm ở phần đầu tiêu đề.', 5, true);
-        } else {
-            $warnings[] = $this->scoredLine('Nên đặt từ khóa chính vào 3 từ đầu tiêu đề.', 5, false);
-            $totalScore -= 5;
-        }
+        $scoreData = $this->buildScoreResult(
+            (int) ($engineResult['score'] ?? 0),
+            $engineResult['good'] ?? [],
+            $engineResult['errors'] ?? [],
+            $engineResult['warnings'] ?? [],
+        );
+        $scoreData['reason_keys'] = $engineResult['reason_keys'] ?? [];
+        $scoreData['breakdown'] = $engineResult['breakdown'] ?? [];
 
         return [
-            'scoreData' => $this->buildScoreResult(max(0, $totalScore), $good, $errors, $warnings),
+            'scoreData' => $scoreData,
             'extractedLinks' => $extractedLinks,
         ];
     }
@@ -431,20 +411,9 @@ class SeoAnalyzerService
         return sprintf('%s %s%d', $message, $sign, $points);
     }
 
-    private function articleHasFaqs(SeoArticle $article, string $content): bool
-    {
-        $article->loadMissing('faqs');
-        if ($article->faqs->count() > 0) {
-            return true;
-        }
-
-        return $this->workflowParser->parseFaqsFromContent($content) !== [];
-    }
-
     /**
      * Bóc tách link trong nội dung bài, gắn keyword mới và gỡ keyword/link outbound cũ của bài này.
-     */
-    /**
+     *
      * @param  array<int, string>  $excludeAnchorPhrases
      */
     public function reconcileKeywordLinksFromContent(
@@ -786,7 +755,7 @@ class SeoAnalyzerService
      *   external: array<int, array{href:string,text:string,is_nofollow:bool,offset:int}>
      * }
      */
-    private function extractLinks(string $content, string $domain): array
+    public function extractLinks(string $content, string $domain): array
     {
         $result = [
             'internal' => [],
@@ -1056,6 +1025,112 @@ class SeoAnalyzerService
         }
 
         return trim(implode(' ', array_filter($alts)));
+    }
+
+    private function countH2Tags(string $html): int
+    {
+        if (trim($html) === '') {
+            return 0;
+        }
+
+        if (preg_match_all('/<h2\b[^>]*>/iu', $html, $matches) === false) {
+            return 0;
+        }
+
+        return count($matches[0] ?? []);
+    }
+
+    /**
+     * @return array{score:int,ratio:int,msg:string}
+     */
+    private function calculateTextToImageScore(string $htmlContent): array
+    {
+        if (trim($htmlContent) === '') {
+            return ['score' => 0, 'ratio' => 0, 'msg' => 'Bài viết quá ngắn'];
+        }
+
+        $dom = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $dom->loadHTML(
+            mb_convert_encoding($htmlContent, 'HTML-ENTITIES', 'UTF-8'),
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
+        );
+        libxml_clear_errors();
+
+        $images = $dom->getElementsByTagName('img');
+        $imageCount = $images->length;
+
+        $textContent = strip_tags($htmlContent);
+        $textContent = preg_replace('/\s+/u', ' ', trim($textContent)) ?? '';
+        $wordCount = $textContent === '' ? 0 : count(explode(' ', $textContent));
+
+        if ($wordCount < 10) {
+            return ['score' => 0, 'ratio' => 0, 'msg' => 'Bài viết quá ngắn'];
+        }
+
+        if ($imageCount === 0) {
+            return [
+                'score' => 0,
+                'ratio' => $wordCount,
+                'msg' => 'Cảnh báo: Bài viết không có hình ảnh minh họa (0 điểm)',
+            ];
+        }
+
+        $wordsPerImage = (int) round($wordCount / $imageCount);
+        $score = 0;
+        $msg = '';
+
+        if ($wordsPerImage >= 250 && $wordsPerImage <= 450) {
+            $score = 15;
+            $msg = "Tuyệt vời: Mật độ ảnh lý tưởng ({$wordsPerImage} từ/ảnh)";
+        } elseif ($wordsPerImage > 450 && $wordsPerImage <= 800) {
+            $score = 10;
+            $msg = "Khá ổn: Bài viết hơi dài, nên chèn thêm ảnh ({$wordsPerImage} từ/ảnh)";
+        } elseif ($wordsPerImage < 250 && $wordsPerImage >= 100) {
+            $score = 8;
+            $msg = "Mật độ ảnh hơi dày ({$wordsPerImage} từ/ảnh)";
+        } else {
+            $score = 3;
+            $msg = "Cảnh báo: Tỷ lệ phân bổ từ và ảnh chưa hợp lý ({$wordsPerImage} từ/ảnh)";
+        }
+
+        $missingAlt = 0;
+        foreach ($images as $img) {
+            $alt = trim((string) $img->getAttribute('alt'));
+            if ($alt === '') {
+                $missingAlt++;
+            }
+        }
+
+        if ($missingAlt > 0) {
+            $score = max(0, $score - 5);
+            $msg .= " - Phát hiện {$missingAlt} ảnh thiếu thẻ ALT!";
+        }
+
+        return [
+            'score' => $score,
+            'ratio' => $wordsPerImage,
+            'msg' => $msg,
+        ];
+    }
+
+    /**
+     * @param  array{internal: array<int, mixed>, external: array<int, mixed>}  $extractedLinks
+     */
+    private function hasWikiTrustExternalLink(array $extractedLinks): bool
+    {
+        foreach ($extractedLinks['external'] as $link) {
+            $href = trim((string) ($link['href'] ?? ''));
+            if ($href === '') {
+                continue;
+            }
+
+            if (SeoLinkMapLinkTypeClassifier::forUnresolvedUrl($href) === SeoLinkMapType::WikiTrust) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function normalizeDomain(string $domain): string

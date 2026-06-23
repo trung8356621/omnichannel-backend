@@ -175,6 +175,53 @@ final class ArticlePostImagesService
     }
 
     /**
+     * Chèn ảnh post_images vào các section <h2> chưa có <img> (dùng khi restore từ WordPress).
+     *
+     * @param  array<int, array<string, mixed>>  $postImages
+     */
+    public function injectIntoEmptySections(SeoArticle $article, string $html, array $postImages): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $normalized = $this->normalizeList($postImages);
+        if ($normalized === []) {
+            return $html;
+        }
+
+        $imgInHtml = preg_match_all('/<img[\s>]/iu', $html) ?: 0;
+        if ($imgInHtml >= count($normalized)) {
+            return $html;
+        }
+
+        $items = [];
+        foreach ($normalized as $row) {
+            $url = trim((string) ($row['wp_url'] ?? $row['src'] ?? ''));
+            if ($url === '') {
+                continue;
+            }
+
+            $items[] = [
+                'id' => 0,
+                'url' => $url,
+                'wp_attachment_id' => (int) ($row['wp_attachment_id'] ?? 0),
+                'alt' => trim((string) ($row['alt'] ?? '')),
+            ];
+        }
+
+        if ($items === []) {
+            return $html;
+        }
+
+        $result = app(ArticleProductGalleryDistributeService::class)
+            ->insertImagesToEmptySections($html, $items, $article);
+
+        return $result['inserted'] > 0 ? $result['html'] : $html;
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $images
      * @return array<int, array<string, mixed>>
      */
@@ -215,7 +262,7 @@ final class ArticlePostImagesService
             $result[] = [
                 'key' => trim((string) ($image['key'] ?? '')) !== ''
                     ? (string) $image['key']
-                    : ($wpId > 0 ? 'wp_' . $wpId : 'img_' . $index),
+                    : ($wpId > 0 ? 'wp_'.$wpId : 'img_'.$index),
                 'block_id' => trim((string) ($image['block_id'] ?? '')),
                 'wp_attachment_id' => $wpId > 0 ? $wpId : null,
                 'src' => $src,
@@ -247,8 +294,8 @@ final class ArticlePostImagesService
         $this->collectFromGutenbergComments($html, $items, $seen);
 
         $internalErrors = libxml_use_internal_errors(true);
-        $doc = new DOMDocument();
-        $wrapped = '<?xml encoding="utf-8" ?><div>' . $html . '</div>';
+        $doc = new DOMDocument;
+        $wrapped = '<?xml encoding="utf-8" ?><div>'.$html.'</div>';
         if (@$doc->loadHTML($wrapped, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD)) {
             $xpath = new DOMXPath($doc);
             $nodes = $xpath->query('//img');
@@ -277,7 +324,7 @@ final class ArticlePostImagesService
                     $wpId = $this->resolveAttachmentIdFromImg($img, $src);
 
                     $items[] = [
-                        'key' => $wpId > 0 ? 'wp_' . $wpId : 'src_' . md5($srcKey),
+                        'key' => $wpId > 0 ? 'wp_'.$wpId : 'src_'.md5($srcKey),
                         'block_id' => '',
                         'wp_attachment_id' => $wpId > 0 ? $wpId : null,
                         'src' => $src,
@@ -377,7 +424,7 @@ final class ArticlePostImagesService
                 continue;
             }
 
-            $key = 'wp_' . $wpId;
+            $key = 'wp_'.$wpId;
             if (isset($seen[$key])) {
                 continue;
             }
@@ -616,12 +663,12 @@ final class ArticlePostImagesService
 
             $path = strtolower(trim((string) $media->path));
             if ($path !== '') {
-                $map['path:' . $path] = (int) $media->id;
+                $map['path:'.$path] = (int) $media->id;
             }
 
             $slug = trim((string) $media->slug);
             if ($slug !== '') {
-                $map['slug:' . strtolower($slug)] = (int) $media->id;
+                $map['slug:'.strtolower($slug)] = (int) $media->id;
             }
         }
 
@@ -634,16 +681,16 @@ final class ArticlePostImagesService
     private function resolveSeoMediaIdFromSrc(SeoArticle $article, string $url, array $seoMediaByWpId): int
     {
         $path = strtolower(rtrim((string) parse_url($url, PHP_URL_PATH), '/'));
-        if ($path !== '' && isset($seoMediaByWpId['path:' . $path])) {
-            $id = (int) $seoMediaByWpId['path:' . $path];
+        if ($path !== '' && isset($seoMediaByWpId['path:'.$path])) {
+            $id = (int) $seoMediaByWpId['path:'.$path];
             $this->touchMediaUsage($article, $id);
 
             return $id;
         }
 
         $slug = $this->slugFromUrl($url);
-        if ($slug !== '' && isset($seoMediaByWpId['slug:' . strtolower($slug)])) {
-            $id = (int) $seoMediaByWpId['slug:' . strtolower($slug)];
+        if ($slug !== '' && isset($seoMediaByWpId['slug:'.strtolower($slug)])) {
+            $id = (int) $seoMediaByWpId['slug:'.strtolower($slug)];
             $this->touchMediaUsage($article, $id);
 
             return $id;
@@ -655,7 +702,7 @@ final class ArticlePostImagesService
 
         $media = SeoMedia::query()
             ->where('article_id', (int) $article->id)
-            ->where('path', 'like', '%' . addcslashes(basename($path), '%_\\') . '%')
+            ->where('path', 'like', '%'.addcslashes(basename($path), '%_\\').'%')
             ->orderByDesc('id')
             ->value('id');
 
@@ -679,6 +726,7 @@ final class ArticlePostImagesService
             $wpId = (int) ($row['wp_attachment_id'] ?? 0);
             if ($wpId > 0 && isset($byWpId[$wpId])) {
                 $this->touchMediaUsage($article, (int) $byWpId[$wpId]);
+
                 continue;
             }
 

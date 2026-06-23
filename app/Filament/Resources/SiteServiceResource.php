@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filament\Resources;
 
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\SeoSiteServiceDatabaseConfigurator;
 use App\Filament\Resources\SiteServiceResource\Pages;
 use App\Models\Service;
@@ -188,6 +189,7 @@ class SiteServiceResource extends Resource
             ];
 
         return $table
+            ->modifyQueryUsing(fn (Builder $query): Builder => $query->with('service'))
             ->columns([
                 Tables\Columns\TextColumn::make('bound_type')
                     ->label(__('Bound'))
@@ -198,7 +200,7 @@ class SiteServiceResource extends Resource
 
                 Tables\Columns\TextColumn::make('bound_target')
                     ->label(__('Bound to'))
-                    ->state(fn (SiteService $record): string => $record->boundLabel())
+                    ->state(fn (?SiteService $record): string => $record instanceof SiteService ? $record->boundLabel() : '')
                     ->searchable(query: function (Builder $query, string $search): Builder {
                         return $query->where(function (Builder $inner) use ($search): void {
                             $inner->whereHas('site', fn (Builder $site): Builder => $site->where('domain', 'like', "%{$search}%"))
@@ -217,6 +219,21 @@ class SiteServiceResource extends Resource
                     ->badge()
                     ->color('info')
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('wp_plugin_release')
+                    ->label(__('WP Plugin'))
+                    ->alignCenter()
+                    ->state(fn (): string => __('Release'))
+                    ->color('warning')
+                    ->badge()
+                    ->icon('heroicon-m-arrow-up-tray')
+                    ->iconPosition(\Filament\Support\Enums\IconPosition::Before)
+                    ->url(fn (?SiteService $record): ?string => $record instanceof SiteService
+                        ? static::wpPluginReleaseUrlFor($record)
+                        : null)
+                    ->openUrlInNewTab()
+                    ->visible(fn (?SiteService $record): bool => $record instanceof SiteService
+                        && static::shouldShowWpPluginReleaseAction($record)),
 
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('Status'))
@@ -244,13 +261,18 @@ class SiteServiceResource extends Resource
                     ->relationship('service', 'name'),
             ])
             ->actions([
-                // Thêm nút đi đến trang Dashboard riêng của Addon nếu có
-                // Tables\Actions\Action::make('open_addon')
-                //     ->label(__('Open Addon'))
-                //     ->icon('heroicon-m-arrow-top-right-on-square')
-                //     ->color('success')
-                //     ->url(fn(SiteService $record): string => "/admin/{$record->service->slug}/dashboard?site_id={$record->site_id}")
-                //     ->visible(fn(SiteService $record) => $record->status === 'active'),
+                Tables\Actions\Action::make('wp_plugin_release')
+                    ->label(__('WP Plugin Release'))
+                    ->icon('heroicon-m-arrow-up-tray')
+                    ->color('warning')
+                    ->button()
+                    ->outlined()
+                    ->url(fn (?SiteService $record): ?string => $record instanceof SiteService
+                        ? static::wpPluginReleaseUrlFor($record)
+                        : null)
+                    ->openUrlInNewTab()
+                    ->visible(fn (?SiteService $record): bool => $record instanceof SiteService
+                        && static::shouldShowWpPluginReleaseAction($record)),
                 ...$actions,
             ])
             ->bulkActions(
@@ -309,6 +331,47 @@ class SiteServiceResource extends Resource
         }
 
         return $query;
+    }
+
+    public static function shouldShowWpPluginReleaseAction(SiteService $record): bool
+    {
+        $user = auth()->user();
+        if (! $user instanceof User) {
+            return false;
+        }
+
+        if (! in_array((string) $user->role, [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
+            return false;
+        }
+
+        return static::isSeoContentAiRecord($record);
+    }
+
+    public static function wpPluginReleaseUrlFor(SiteService $record): ?string
+    {
+        if (! static::shouldShowWpPluginReleaseAction($record)) {
+            return null;
+        }
+
+        return static::wpPluginReleaseUrl();
+    }
+
+    public static function wpPluginReleaseUrl(): string
+    {
+        return url('/wp-plugin-release?name=omi-seo-ai-bridge');
+    }
+
+    public static function isSeoContentAiRecord(SiteService $record): bool
+    {
+        $record->loadMissing('service');
+
+        if (app(SeoDatabaseConnectionService::class)->isSeoContentAiService((int) $record->service_id)) {
+            return true;
+        }
+
+        $addonNamespace = (string) ($record->service?->addon_namespace ?? '');
+
+        return str_contains($addonNamespace, 'SeoContentAi');
     }
 
     public static function getPages(): array

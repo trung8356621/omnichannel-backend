@@ -305,9 +305,13 @@ final class ArticleEditorMediaAiService
         }
         $userBrief = $this->compactVariableValue($userBrief);
 
+        $includeSelectionInPrompt = trim($target) === 'product-gallery';
+        $promptSelectionText = $includeSelectionInPrompt ? $selectionText : '';
+        $promptSelectionHtml = $includeSelectionInPrompt ? $selectionHtml : '';
+
         $input = trim($target) === 'product-gallery'
             ? $userBrief
-            : $this->resolveEditorImageInput($userBrief, $selectionText);
+            : $this->resolveEditorImageInput($userBrief);
 
         $postType = ArticlePostTypeResolver::resolve($article);
         $promptVars = $this->promptSettings->promptVariables($postType);
@@ -316,8 +320,8 @@ final class ArticleEditorMediaAiService
                 'post_title' => $postTitle,
                 'post_content' => Str::limit($bodyPlain, 3000),
                 'focus_keyword' => $focusKeyword,
-                'selected_text' => $selectionText,
-                'selected_html' => $selectionHtml,
+                'selected_text' => $promptSelectionText,
+                'selected_html' => $promptSelectionHtml,
                 'user_brief' => $userBrief,
                 'gallery_description' => $galleryDescription,
                 'loai_san_pham' => $loaiSanPham,
@@ -351,20 +355,9 @@ final class ArticleEditorMediaAiService
         return $variables;
     }
 
-    private function resolveEditorImageInput(string $userBrief, string $selectionText): string
+    private function resolveEditorImageInput(string $userBrief): string
     {
-        $userBrief = trim($userBrief);
-        $selectionText = trim($selectionText);
-
-        if ($userBrief === '') {
-            return $selectionText;
-        }
-
-        if ($selectionText === '' || str_contains($userBrief, $selectionText)) {
-            return $userBrief;
-        }
-
-        return trim($userBrief."\n\n---\nContext:\n".$selectionText);
+        return trim($userBrief);
     }
 
     /**
@@ -415,10 +408,12 @@ final class ArticleEditorMediaAiService
         }
 
         if (! isset($filtered['input']) && in_array('input', $allowedNames, true)) {
-            $input = $this->compactVariableValue($this->resolveEditorImageInput(
-                (string) ($variables['user_brief'] ?? ''),
-                (string) ($variables['selected_text'] ?? ''),
-            ));
+            $input = $this->compactVariableValue((string) ($variables['input'] ?? ''));
+            if ($input === '') {
+                $input = $this->compactVariableValue($this->resolveEditorImageInput(
+                    (string) ($variables['user_brief'] ?? ''),
+                ));
+            }
             if ($input !== '') {
                 $filtered['input'] = $input;
             }

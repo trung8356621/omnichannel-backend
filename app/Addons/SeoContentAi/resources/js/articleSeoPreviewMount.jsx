@@ -36,8 +36,7 @@ export function mountArticleSeoPreview(rootEl, payload) {
         <SeoScorePanel
             focusKeyword={payload.focus_keyword ?? null}
             analysis={payload.analysis ?? null}
-            contentBonus={payload.content_bonus ?? payload.analysis?.content_bonus ?? null}
-            extractedLinks={payload.extracted_links ?? { internal: [], external: [] }}
+            scoringMessages={payload.seo_scoring_messages ?? {}}
             loading={false}
             analyzing={false}
         />,
