@@ -336,7 +336,18 @@ export default function ImageBlockEditor({
         window.addEventListener('paste', onWindowPaste, true);
 
         const focusTimer = window.setTimeout(() => {
-            emptyFrameRef.current?.focus({ preventScroll: true });
+            const frame = emptyFrameRef.current;
+            if (!frame) return;
+
+            const activeEl = document.activeElement;
+            if (
+                activeEl &&
+                (frame.contains(activeEl) || isTypingTarget(activeEl))
+            ) {
+                return;
+            }
+
+            frame.focus({ preventScroll: true });
         }, 0);
 
         return () => {
@@ -567,7 +578,9 @@ export default function ImageBlockEditor({
                 return (
                     <div
                         className="block-image-active block-image-active--empty block-image-active--locked"
-                        onMouseDown={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => {
+                            if (!isTypingTarget(e.target)) e.stopPropagation();
+                        }}
                     >
                         <span className="block-editor-badge">{t('image_block_label')}</span>
                         <button
@@ -594,7 +607,9 @@ export default function ImageBlockEditor({
                     tabIndex={0}
                     role="region"
                     aria-label={t('image_block_clipboard_aria')}
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => {
+                        if (!isTypingTarget(e.target)) e.stopPropagation();
+                    }}
                 >
                     <span className="block-editor-badge">{t('image_block_label')}</span>
                     <button
@@ -664,7 +679,9 @@ export default function ImageBlockEditor({
     }
 
     return (
-        <div className="block-image-active" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="block-image-active" onMouseDown={(e) => {
+            if (!isTypingTarget(e.target)) e.stopPropagation();
+        }}>
                     <span className="block-editor-badge">{t('image_block_label')}</span>
             <button
                 type="button"

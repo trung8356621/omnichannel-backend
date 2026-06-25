@@ -5893,6 +5893,19 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-slug-updated', handleEditorSlugUpdated);
 
         const handleClickOutside = (e) => {
+            // Không đóng block nếu đang focus vào input/textarea bên trong block image hoặc picker
+            const activeEl = document.activeElement;
+            if (
+                activeEl &&
+                ['INPUT', 'TEXTAREA'].includes(activeEl.tagName) &&
+                !activeEl.readOnly &&
+                (activeEl.closest('.block-image-active') || activeEl.closest('.seo-image-block-picker'))
+            ) {
+                if (!e.target.closest('.block-image-active') && !e.target.closest('.seo-image-block-picker')) {
+                    return;
+                }
+            }
+
             if (
                 e.target.closest('.block-editor-active') ||
                 e.target.closest('.block-image-active') ||
@@ -5915,7 +5928,18 @@ export default function SeoArticleEditor({
                 e.target.closest('.seo-editor-block-slot') ||
                 e.target.closest('.seo-section-element-actions') ||
                 e.target.closest('.seo-block-editor-resize') ||
-                e.target.closest('.seo-image-block-picker')
+                e.target.closest('.seo-image-block-picker') ||
+                e.target.closest('.seo-image-block-picker__choice') ||
+                e.target.closest('.seo-image-block-picker__input') ||
+                e.target.closest('.seo-image-block-picker__textarea') ||
+                e.target.closest('.seo-image-block-picker__btn') ||
+                e.target.closest('.seo-image-block-picker__back') ||
+                e.target.closest('.seo-image-meta-panel') ||
+                e.target.closest('.block-editor-text-block') ||
+                e.target.closest('.seo-image-toolbar') ||
+                e.target.tagName === 'INPUT' ||
+                e.target.tagName === 'TEXTAREA' ||
+                e.target.closest('[contenteditable]')
             ) {
                 return;
             }

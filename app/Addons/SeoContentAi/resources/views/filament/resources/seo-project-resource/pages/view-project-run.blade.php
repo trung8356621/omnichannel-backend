@@ -56,6 +56,7 @@
                             <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.keyword') }}</th>
                             <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_status') }}</th>
                             <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_message') }}</th>
+                            <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_date') }}</th>
                             <th class="px-3 py-2">{{ __('seo-content-ai::filament.projects.run_item_actions') }}</th>
                         </tr>
                     </thead>
@@ -66,6 +67,7 @@
                                 $itemStatus = (string) ($item['status'] ?? '');
                                 $articleId = (int) ($item['article_id'] ?? 0);
                                 $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
+                                $canRetry = \App\Addons\SeoContentAi\Support\SeoAccessControl::canRetryProjectRunItem($this->projectRun?->project);
                             @endphp
                             <tr
                                 class="align-top {{ in_array($itemStatus, ['pending', 'manual'], true) ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
@@ -166,6 +168,9 @@
                                         {{ $item['message'] ?? '' }}
                                     @endif
                                 </td>
+                                <td class="px-3 py-3 text-gray-600 dark:text-gray-300">
+                                    {{ $this->itemRunDate($item) }}
+                                </td>
                                 <td class="px-3 py-3 seo-run-row-actions" data-run-actions>
                                     @if ($taskId > 0 && $this->itemIsImproveType($item))
                                         @if ($stepsUrl = $this->itemStepsUrl($item))
@@ -195,7 +200,7 @@
                                                 </x-filament::button>
                                             @endif
 
-                                            @if (! $isReviewed && $itemStatus === 'success')
+                                            @if ($canRetry && ! $isReviewed && $itemStatus === 'success')
                                                 <x-filament::button
                                                     size="xs"
                                                     color="warning"
@@ -211,7 +216,7 @@
                                                         {{ __('seo-content-ai::filament.projects.run_retry_running') }}
                                                     </span>
                                                 </x-filament::button>
-                                            @elseif (! $isReviewed)
+                                            @elseif ($canRetry && ! $isReviewed)
                                                 <x-filament::button
                                                     size="xs"
                                                     color="{{ $itemStatus === 'pending' ? 'success' : 'warning' }}"
@@ -250,7 +255,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="7" class="px-3 py-8 text-center text-gray-500 dark:text-gray-400">
+                                <td colspan="8" class="px-3 py-8 text-center text-gray-500 dark:text-gray-400">
                                     {{ __('seo-content-ai::filament.projects.run_items_empty') }}
                                 </td>
                             </tr>

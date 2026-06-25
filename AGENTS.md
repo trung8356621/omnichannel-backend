@@ -50,6 +50,7 @@
 - Non-admin users must only see records within their permitted owner/site/domain scope.
 - Use Filament notifications for user-facing action results.
 - Place addon pages and resources under the addon's `Filament/` directory so its panel/provider can discover them.
+- Do not use Livewire only to open/close modals, drawers, dropdowns, or other pure UI containers. Toggle those states with JavaScript/Alpine, and call Livewire only when loading data or executing server-side actions.
 
 ## Databases
 

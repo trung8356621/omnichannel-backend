@@ -49,11 +49,11 @@ final class TaskTestInputResolver
             throw new \InvalidArgumentException('Hạng mục dự án thiếu từ khóa / tiêu đề.');
         }
 
-        $galleryDescription = $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+        $galleryDescription = SeoProjectTask::isNewArticleType($task->type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             ? trim((string) ($task->description ?? ''))
             : '';
-        $loaiSanPham = $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+        $loaiSanPham = SeoProjectTask::isNewArticleType($task->type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             ? trim((string) ($task->loai_san_pham ?? ''))
             : '';

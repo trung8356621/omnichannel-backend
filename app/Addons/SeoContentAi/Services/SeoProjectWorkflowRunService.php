@@ -353,7 +353,7 @@ final class SeoProjectWorkflowRunService
         $itemRow = array_merge($existingItem, [
             'status' => 'success',
             'article_id' => $resolvedArticleId,
-            'article_edit_url' => ArticleResource::panelUrl('edit', ['record' => $resolvedArticleId]),
+            'article_edit_url' => ArticleResource::getUrl('edit', ['record' => $resolvedArticleId], isAbsolute: false),
             'message' => 'Đã sửa lỗi thủ công.',
         ]);
         $itemRow['manual_fixed'] = true;
@@ -484,7 +484,7 @@ final class SeoProjectWorkflowRunService
         $retryTask = $project->tasks()->create([
             'site_id' => $failedTask->site_id ?: $project->site_id,
             'type' => $failedTask->type,
-            'post_type' => $failedTask->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            'post_type' => SeoProjectTask::isNewArticleType($failedTask->type)
                 ? SeoProjectTask::normalizePostType($failedTask->post_type)
                 : null,
             'loai_san_pham' => $failedTask->loai_san_pham,
@@ -514,7 +514,7 @@ final class SeoProjectWorkflowRunService
         return $project->tasks()->create([
             'site_id' => (int) $project->site_id,
             'type' => (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD),
-            'post_type' => (string) ($item['type'] ?? '') === SeoProjectTask::TYPE_NEW_KEYWORD
+            'post_type' => SeoProjectTask::isNewArticleType($item['type'] ?? null)
                 ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
                 : null,
             'loai_san_pham' => trim((string) ($item['loai_san_pham'] ?? '')) ?: null,
@@ -537,7 +537,7 @@ final class SeoProjectWorkflowRunService
             ->where('type', $type)
             ->where('source_content', $source);
 
-        if ($type === SeoProjectTask::TYPE_NEW_KEYWORD) {
+        if (SeoProjectTask::isNewArticleType($type)) {
             $query->where(
                 'post_type',
                 SeoProjectTask::normalizePostType($item['post_type'] ?? null),
@@ -624,7 +624,7 @@ final class SeoProjectWorkflowRunService
             'status' => 'manual',
             'article_id' => $articleId > 0 ? $articleId : null,
             'article_edit_url' => $articleId > 0
-                ? ArticleResource::panelUrl('edit', ['record' => $articleId])
+                ? ArticleResource::getUrl('edit', ['record' => $articleId], isAbsolute: false)
                 : null,
             'message' => $message,
             'steps' => [],
@@ -671,21 +671,21 @@ final class SeoProjectWorkflowRunService
             'task_id' => (int) $task->id,
             'type' => (string) $task->type,
             'source_content' => (string) $task->source_content,
-            'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            'post_type' => SeoProjectTask::isNewArticleType($task->type)
                 ? SeoProjectTask::normalizePostType($task->post_type)
                 : null,
-            'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            'loai_san_pham' => SeoProjectTask::isNewArticleType($task->type)
                 && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                     ? (string) ($task->loai_san_pham ?? '')
                     : null,
-            'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            'gallery_description' => SeoProjectTask::isNewArticleType($task->type)
                 && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                     ? (string) ($task->description ?? '')
                     : null,
             'target_date' => $task->target_date?->format('Y-m-d'),
             'status' => $success ? 'success' : 'failed',
             'article_id' => $articleId,
-            'article_edit_url' => $articleId > 0 ? ArticleResource::panelUrl('edit', ['record' => $articleId]) : null,
+            'article_edit_url' => $articleId > 0 ? ArticleResource::getUrl('edit', ['record' => $articleId], isAbsolute: false) : null,
             'message' => $message,
             'steps' => $steps,
         ];
@@ -815,7 +815,7 @@ final class SeoProjectWorkflowRunService
         );
 
         if (
-            (string) $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            SeoProjectTask::isNewArticleType($task->type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             && filled($task->description)
         ) {
@@ -826,7 +826,7 @@ final class SeoProjectWorkflowRunService
         }
 
         if (
-            (string) $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+            SeoProjectTask::isNewArticleType($task->type)
             && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
             && filled($task->loai_san_pham)
         ) {

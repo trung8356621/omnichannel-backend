@@ -182,14 +182,14 @@ class ViewSeoProjectRun extends Page
                 'task_id' => (int) $task->id,
                 'type' => (string) $task->type,
                 'source_content' => (string) $task->source_content,
-                'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'post_type' => SeoProjectTask::isNewArticleType($task->type)
                     ? SeoProjectTask::normalizePostType($task->post_type)
                     : null,
-                'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'loai_san_pham' => SeoProjectTask::isNewArticleType($task->type)
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? (string) ($task->loai_san_pham ?? '')
                         : null,
-                'gallery_description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'gallery_description' => SeoProjectTask::isNewArticleType($task->type)
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? (string) ($task->description ?? '')
                         : null,
@@ -248,9 +248,31 @@ class ViewSeoProjectRun extends Page
      */
     public function itemKeywordEditUrl(array $item): ?string
     {
+        $articleId = (int) ($item['article_id'] ?? 0);
+        if ($articleId > 0) {
+            return ArticleResource::getUrl('edit', ['record' => $articleId]);
+        }
+
         $url = trim((string) ($item['article_edit_url'] ?? ''));
 
         return $url !== '' ? $url : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    public function itemRunDate(array $item): string
+    {
+        $targetDate = trim((string) ($item['target_date'] ?? ''));
+        if ($targetDate !== '') {
+            return $targetDate;
+        }
+
+        if ($this->projectRun?->started_at !== null) {
+            return $this->projectRun->started_at->format('Y-m-d');
+        }
+
+        return '—';
     }
 
     /**
@@ -282,9 +304,7 @@ class ViewSeoProjectRun extends Page
                 ->whereKey($articleId)
                 ->first();
 
-            if (! filled($item['article_edit_url'] ?? null)) {
-                $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $articleId]);
-            }
+            $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $articleId]);
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
 
             return $item;
@@ -470,6 +490,10 @@ class ViewSeoProjectRun extends Page
             return;
         }
 
+        if (! SeoAccessControl::canRetryProjectRunItem($this->projectRun->project)) {
+            abort(403, __('seo-content-ai::filament.projects.run_retry_failed'));
+        }
+
         if ($this->isImproveTaskId($taskId)) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.run_item_failed'))
@@ -533,6 +557,13 @@ class ViewSeoProjectRun extends Page
             return [
                 'success' => false,
                 'message' => 'Run không tồn tại.',
+            ];
+        }
+
+        if (! SeoAccessControl::canRetryProjectRunItem($this->projectRun->project)) {
+            return [
+                'success' => false,
+                'message' => __('seo-content-ai::filament.projects.run_retry_failed'),
             ];
         }
 

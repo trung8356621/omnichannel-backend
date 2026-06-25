@@ -27,7 +27,7 @@ final class SeoProjectRunPreflightService
 
         foreach ($tasks as $task) {
             /** @var SeoProjectTask $task */
-            if ($task->type !== SeoProjectTask::TYPE_NEW_KEYWORD) {
+            if (! SeoProjectTask::isNewArticleType($task->type)) {
                 continue;
             }
 

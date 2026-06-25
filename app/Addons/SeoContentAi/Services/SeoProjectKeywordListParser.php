@@ -59,7 +59,7 @@ final class SeoProjectKeywordListParser
                 'type' => $defaultType,
                 'source_content' => $phrase,
                 'description' => null,
-                'post_type' => $defaultType === SeoProjectTask::TYPE_NEW_KEYWORD
+                'post_type' => SeoProjectTask::isNewArticleType($defaultType)
                     ? SeoProjectTask::POST_TYPE_ARTICLE
                     : null,
             ];

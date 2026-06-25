@@ -575,7 +575,7 @@ final class ArticleEditorMediaAiService
             return '';
         }
 
-        if ((string) $task->type !== SeoProjectTask::TYPE_NEW_KEYWORD) {
+        if (! SeoProjectTask::isNewArticleType($task->type)) {
             return '';
         }
 
@@ -592,7 +592,7 @@ final class ArticleEditorMediaAiService
             return '';
         }
 
-        if ((string) $task->type !== SeoProjectTask::TYPE_NEW_KEYWORD) {
+        if (! SeoProjectTask::isNewArticleType($task->type)) {
             return '';
         }
 

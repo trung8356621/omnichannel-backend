@@ -49,11 +49,16 @@ class SeoTeam extends SeoPanelPage implements HasTable
             ->emptyStateHeading(__('seo-content-ai::filament.team.no_members'))
             ->emptyStateIcon('heroicon-o-users')
             ->columns([
-                Tables\Columns\TextColumn::make('name')
+                Tables\Columns\TextColumn::make('display_name')
                     ->label(__('seo-content-ai::filament.team.name'))
-                    ->searchable()
-                    ->sortable()
-                    ->weight('medium'),
+                    ->searchable(query: fn (Builder $query, string $search): Builder => $query->where('name', 'like', "%{$search}%"))
+                    ->sortable(query: fn (Builder $query, string $direction): Builder => $query->orderBy('name', $direction))
+                    ->weight('medium')
+                    ->extraAttributes([
+                        'x-data' => '{ timer: null }',
+                        'x-on:click' => 'if (timer) { clearTimeout(timer); timer = null; } else { timer = setTimeout(() => { timer = null; }, 250); }',
+                        'x-on:dblclick.prevent' => 'recordKey = $el.closest(\'tr\').getAttribute(\'wire:key\'); id = recordKey?.split(\'-\').pop(); if (id) { $wire.mountTableAction(\'editNickname\', id); }',
+                    ]),
 
                 Tables\Columns\TextColumn::make('email')
                     ->label(__('seo-content-ai::filament.team.email'))
@@ -113,6 +118,25 @@ class SeoTeam extends SeoPanelPage implements HasTable
                 $this->addMemberAction(),
             ])
             ->actions($readOnly ? [] : [
+                Tables\Actions\Action::make('editNickname')
+                    ->label(__('Sửa biệt danh'))
+                    ->modalHeading(__('Sửa biệt danh'))
+                    ->modalSubmitActionLabel(__('Lưu'))
+                    ->modalCancelActionLabel(__('Huỷ'))
+                    ->form([
+                        Forms\Components\TextInput::make('nickname')
+                            ->label(__('Biệt danh'))
+                            ->maxLength(255)
+                            ->default(fn ($record): ?string => $record->getMeta('nickname')),
+                    ])
+                    ->action(function ($record, array $data): void {
+                        $record->setMeta('nickname', $data['nickname']);
+                        Notification::make()
+                            ->title(__('Đã cập nhật biệt danh'))
+                            ->success()
+                            ->send();
+                    })
+                    ->modalAutofocus(),
                 Tables\Actions\Action::make('removeFromTeam')
                     ->label(__('seo-content-ai::filament.team.remove_member'))
                     ->icon('heroicon-o-user-minus')
@@ -361,7 +385,7 @@ class SeoTeam extends SeoPanelPage implements HasTable
         $set('memberEmail', (string) $existing->email);
         $set('pickExistingEmail', (string) $existing->email);
         $set('existingUserId', (int) $existing->id);
-        $set('memberName', (string) $existing->name);
+        $set('memberName', (string) $existing->display_name);
     }
 
     /**
@@ -391,7 +415,7 @@ class SeoTeam extends SeoPanelPage implements HasTable
             ->get()
             ->mapWithKeys(function (User $user): array {
                 $label = trim((string) $user->email);
-                $name = trim((string) $user->name);
+                $name = trim((string) $user->display_name);
                 if ($name !== '') {
                     $label .= ' — '.$name;
                 }

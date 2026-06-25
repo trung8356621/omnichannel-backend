@@ -5,6 +5,7 @@ powershell -ExecutionPolicy Bypass -File D:\work\omnichannel-backend\compress_pl
 
 #CMD HOST
 cd domains/seo.teamviahe.com/public_html
+ln -s domains/seo.teamviahe.com/public_html/storage/app/public/uploads domains/seo.teamviahe.com/public_html/public/uploads/storage
 mysql -u lzxzdusj_omi_seo_ai -p lzxzdusj_omi_seo_ai < seo.teamviahe.com/public_html/omi_seo_ai.sql
 ztARSSpNQj5vpJ7MmHZj
 

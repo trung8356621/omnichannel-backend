@@ -1339,7 +1339,7 @@ final class TaskWorkflowTestRunner
 
     private function shouldScheduleProjectArticle(TaskTestContext $context): bool
     {
-        return $context->projectTaskType === SeoProjectTask::TYPE_NEW_KEYWORD;
+        return SeoProjectTask::isNewArticleType($context->projectTaskType);
     }
 
     private function shouldRunProductGalleryPrompt(TaskTestContext $context, WorkflowExecutionState $state): bool

@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
-use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
@@ -63,10 +64,18 @@ final class ArticlesOptimal extends SeoPanelPage
     #[Url(as: 'tech')]
     public bool $filterTechnicalSeoScore = false;
 
+    #[Url(as: 'lang')]
+    public ?string $filterLanguage = null;
+
     #[Url(as: 'scan')]
     public bool $hasScanned = false;
 
     public bool $scanning = false;
+
+    /** @var array<int, int> */
+    public array $selectedArticleIds = [];
+
+    public ?int $sidebarProjectId = null;
 
     public static function canAccess(array $parameters = []): bool
     {
@@ -102,6 +111,38 @@ final class ArticlesOptimal extends SeoPanelPage
         return $query->pluck('domain', 'id')->all();
     }
 
+    /**
+     * @return array<string, string>
+     */
+    public function getLanguageOptions(): array
+    {
+        $languages = SeoArticle::query()
+            ->whereNotIn('type', ['category', 'product_category'])
+            ->where('status', '!=', 'trash')
+            ->select('language')
+            ->distinct()
+            ->orderBy('language')
+            ->pluck('language')
+            ->filter()
+            ->all();
+
+        $options = [];
+        foreach ($languages as $lang) {
+            $label = match ($lang) {
+                'vi' => 'Tiếng Việt',
+                'en' => 'English',
+                'ja' => '日本語',
+                'ko' => '한국어',
+                'zh' => '中文',
+                'fr' => 'Français',
+                default => mb_strtoupper((string) $lang),
+            };
+            $options[(string) $lang] = $label;
+        }
+
+        return $options;
+    }
+
     public function runScan(): void
     {
         $this->scanning = true;
@@ -110,115 +151,203 @@ final class ArticlesOptimal extends SeoPanelPage
         $this->scanning = false;
     }
 
-    public bool $assignModalOpen = false;
-
-    public ?int $assignArticleId = null;
-
-    public string $assignType = 'rewrite';
-
-    public string $assignRewriteMode = 'keyword';
-
-    public ?string $assignRewriteNotes = null;
-
-    public function openAssignModal(int $articleId): void
+    /**
+     * @return array<int, string>
+     */
+    public function getContentProjectOptions(): array
     {
-        $this->assignArticleId = $articleId;
-        $this->assignType = SeoProjectTask::TYPE_REWRITE;
-        $this->assignRewriteMode = SeoProjectTask::REWRITE_MODE_KEYWORD;
-        $this->assignRewriteNotes = null;
-        $this->assignModalOpen = true;
-    }
+        $siteId = $this->filterSiteId !== null && $this->filterSiteId > 0
+            ? $this->filterSiteId
+            : SeoAccessControl::globalSiteId();
 
-    public function submitAssignToContentProject(): void
-    {
-        if ($this->assignArticleId === null) {
-            $this->assignModalOpen = false;
-
-            return;
+        if ($siteId !== null && $siteId > 0) {
+            return ArticleResource::contentProjectOptions($siteId);
         }
 
-        $article = $this->findAccessibleArticle($this->assignArticleId);
-        if ($article === null) {
+        $options = [];
+        foreach (SeoAccessControl::accessibleSiteIds() as $accessibleSiteId) {
+            $options += ArticleResource::contentProjectOptions((int) $accessibleSiteId);
+        }
+
+        return $options;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function getWriterOptions(): array
+    {
+        return SeoProjectResource::userSelectOptions();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function getSidebarProjectSiteOptions(): array
+    {
+        return SeoAccessControl::accessibleSitesQuery()
+            ->orderBy('domain')
+            ->pluck('domain', 'id')
+            ->all();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function getAssignTypeOptions(): array
+    {
+        return SeoProjectTask::typeOptions();
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function getRewriteModeOptions(): array
+    {
+        return SeoProjectTask::rewriteModeOptions();
+    }
+
+    public function selectSidebarProject(mixed $projectId): void
+    {
+        $this->sidebarProjectId = (int) $projectId > 0 ? (int) $projectId : null;
+    }
+
+    /**
+     * @return list<array{id:int,title:string,status:string,type:string}>
+     */
+    public function getSidebarProjectArticles(): array
+    {
+        $projectId = (int) ($this->sidebarProjectId ?? 0);
+        if ($projectId <= 0) {
+            return [];
+        }
+
+        return SeoProjectTask::query()
+            ->with('article:id,title,status')
+            ->where('project_id', $projectId)
+            ->orderBy('target_date')
+            ->orderBy('id')
+            ->get()
+            ->map(function (SeoProjectTask $task): array {
+                $article = $task->article;
+
+                return [
+                    'id' => (int) ($article?->id ?? 0),
+                    'title' => trim((string) ($article?->title ?? $task->source_content)),
+                    'status' => (string) ($article?->status ?? $task->status ?? ''),
+                    'type' => (string) ($task->type ?? ''),
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function quickCreateSidebarProject(array $data): void
+    {
+        $siteId = (int) ($data['site_id'] ?? 0);
+        if ($siteId <= 0) {
+            $siteId = (int) ($this->filterSiteId ?: SeoAccessControl::globalSiteId() ?: 0);
+        }
+
+        if ($siteId <= 0 || ! SeoAccessControl::canAccessSite($siteId)) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
+                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                ->body(__('seo-content-ai::filament.article_list.assign_projects_mixed_domains'))
                 ->danger()
                 ->send();
 
-            $this->assignModalOpen = false;
-
             return;
         }
 
-        $siteId = (int) ($article->site_id ?? 0);
-        if ($siteId <= 0) {
+        try {
+            $project = ArticleResource::quickCreateContentProject($siteId, (int) ($data['user_id'] ?? 0));
+            $this->sidebarProjectId = (int) $project->id;
+
             Notification::make()
-                ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
-                ->warning()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_success'))
+                ->body(__('seo-content-ai::filament.article_list.quick_create_content_project_success_body', [
+                    'name' => $project->name,
+                ]))
+                ->success()
                 ->send();
-
-            $this->assignModalOpen = false;
-
-            return;
+        } catch (\InvalidArgumentException $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
         }
+    }
 
-        $projectId = ArticleResource::resolveDirectAssignContentProjectId($siteId);
-        if ($projectId === null || $projectId <= 0) {
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function assignArticleToContentProject(int $articleId, array $data): void
+    {
+        $this->assignArticlesToContentProject([$articleId], $data);
+    }
+
+    public function assignArticleToSelectedProject(int $articleId): void
+    {
+        $this->assignArticlesToContentProject([$articleId], [
+            'project_id' => $this->sidebarProjectId,
+            'type' => SeoProjectTask::TYPE_REWRITE,
+            'rewrite_mode' => SeoProjectTask::REWRITE_MODE_KEYWORD,
+        ]);
+    }
+
+    public function assignSelectedArticlesToSelectedProject(mixed $projectId = null): void
+    {
+        $this->assignArticlesToContentProject($this->selectedArticleIds, [
+            'project_id' => $projectId !== null && (int) $projectId > 0 ? (int) $projectId : $this->sidebarProjectId,
+            'type' => SeoProjectTask::TYPE_REWRITE,
+            'rewrite_mode' => SeoProjectTask::REWRITE_MODE_KEYWORD,
+        ]);
+    }
+
+    /**
+     * @param  array<int, int|string>  $articleIds
+     * @param  array<string, mixed>  $data
+     */
+    private function assignArticlesToContentProject(array $articleIds, array $data): void
+    {
+        $projectId = (int) ($data['project_id'] ?? 0);
+        if ($projectId <= 0 || ! SeoProject::query()->whereKey($projectId)->exists()) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
                 ->body(__('seo-content-ai::filament.articles_optimal.assign_no_project'))
                 ->warning()
                 ->send();
 
-            $this->assignModalOpen = false;
-
             return;
         }
 
-        $summary = ArticleResource::assignArticlesToContentProject(
-            Collection::make([$article]),
+        $ids = array_values(array_unique(array_filter(array_map('intval', $articleIds), static fn (int $id): bool => $id > 0)));
+        if ($ids === []) {
+            return;
+        }
+
+        $records = $this->accessibleArticleQuery()
+            ->whereIn('id', $ids)
+            ->get();
+
+        $summary = ArticleResource::assignArticlesFromFormData(
+            Collection::make($records),
             $projectId,
-            ArticleResource::normalizeAssignTaskType($this->assignType),
-            $this->assignRewriteMode,
-            $this->assignRewriteNotes,
+            $data,
         );
 
+        $this->selectedArticleIds = array_values(array_diff(array_map('intval', $this->selectedArticleIds), $ids));
+        $this->sidebarProjectId = $projectId;
+        unset($this->resultsPaginator);
+
         Notification::make()
-            ->title(__('seo-content-ai::filament.articles_optimal.assign_completed'))
+            ->title(__('seo-content-ai::filament.article_list.assign_completed'))
             ->body(ArticleResource::buildAssignContentProjectBody($summary))
             ->success()
             ->send();
-
-        $this->assignModalOpen = false;
-    }
-
-    public function closeAssignModal(): void
-    {
-        $this->assignModalOpen = false;
-        $this->assignArticleId = null;
-        $this->assignType = SeoProjectTask::TYPE_REWRITE;
-        $this->assignRewriteMode = SeoProjectTask::REWRITE_MODE_KEYWORD;
-        $this->assignRewriteNotes = null;
-    }
-
-    public function getAssignTypeOptions(): array
-    {
-        return SeoProjectTask::typeOptions();
-    }
-
-    public function getAssignRewriteModeOptions(): array
-    {
-        return SeoProjectTask::rewriteModeOptions();
-    }
-
-    public function shouldShowRewriteMode(): bool
-    {
-        return ArticleResource::normalizeAssignTaskType($this->assignType) === SeoProjectTask::TYPE_REWRITE;
-    }
-
-    public function shouldShowRewriteNotes(): bool
-    {
-        return $this->shouldShowRewriteMode()
-            && SeoProjectTask::normalizeRewriteMode($this->assignRewriteMode) === SeoProjectTask::REWRITE_MODE_CONTENT;
     }
 
     public function demoteToDraft(int $articleId): void
@@ -272,7 +401,6 @@ final class ArticlesOptimal extends SeoPanelPage
 
         $analyzer = app(SeoAnalyzerService::class);
         $engine = app(SeoEngineService::class);
-        $wpContent = app(WordPressArticleContentService::class);
 
         $rows = [];
         foreach ($this->baseArticleQuery()->get() as $article) {
@@ -280,7 +408,11 @@ final class ArticlesOptimal extends SeoPanelPage
                 continue;
             }
 
-            $row = $this->mapArticleRow($article, $analyzer, $engine, $wpContent);
+            if ((bool) ($article->is_reviewed ?? false) || ArticleResource::articleIsInContentProject($article)) {
+                continue;
+            }
+
+            $row = $this->mapArticleRow($article, $analyzer, $engine);
             if ($row['matches_filters']) {
                 $rows[] = $row;
             }
@@ -307,7 +439,6 @@ final class ArticlesOptimal extends SeoPanelPage
         SeoArticle $article,
         SeoAnalyzerService $analyzer,
         SeoEngineService $engine,
-        WordPressArticleContentService $wpContent,
     ): array {
         $article->loadMissing(['site', 'articleMetas', 'faqs']);
         $body = (string) ($article->body ?? '');
@@ -330,9 +461,10 @@ final class ArticlesOptimal extends SeoPanelPage
 
         return [
             'id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0),
             'title' => (string) ($article->title ?? ''),
             'domain' => (string) ($article->site?->domain ?? ''),
-            'permalink' => $wpContent->resolvePermalink($article) ?: null,
+            'permalink' => $this->resolveCachedPermalink($article),
             'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
             'score' => $score,
             'reason_keys' => $reasonKeys,
@@ -393,6 +525,14 @@ final class ArticlesOptimal extends SeoPanelPage
         return $matched;
     }
 
+    private function resolveCachedPermalink(SeoArticle $article): ?string
+    {
+        $meta = $article->articleMetas->firstWhere('meta_key', 'wp_permalink');
+        $permalink = trim((string) ($meta?->meta_value ?? ''));
+
+        return $permalink !== '' ? $permalink : null;
+    }
+
     /**
      * @return Builder<SeoArticle>
      */
@@ -402,6 +542,14 @@ final class ArticlesOptimal extends SeoPanelPage
             ->countsTowardSeoScore()
             ->whereNotIn('type', ['category', 'product_category'])
             ->where('status', '!=', 'trash')
+            ->where(function (Builder $sub): void {
+                $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+            })
+            ->whereNotExists(function ($sub): void {
+                $sub->selectRaw('1')
+                    ->from('seo_project_tasks')
+                    ->whereColumn('seo_project_tasks.article_id', 'articles.id');
+            })
             ->with(['site:id,domain', 'articleMetas', 'faqs'])
             ->orderByDesc('updated_at');
 
@@ -414,12 +562,24 @@ final class ArticlesOptimal extends SeoPanelPage
             }
         }
 
+        if ($this->filterLanguage !== null && $this->filterLanguage !== '') {
+            $query->where('language', $this->filterLanguage);
+        }
+
         return $query;
     }
 
     private function findAccessibleArticle(int $articleId): ?SeoArticle
     {
-        $query = SeoArticle::query()->whereKey($articleId);
+        return $this->accessibleArticleQuery()->whereKey($articleId)->first();
+    }
+
+    /**
+     * @return Builder<SeoArticle>
+     */
+    private function accessibleArticleQuery(): Builder
+    {
+        $query = SeoArticle::query();
 
         if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
@@ -428,7 +588,7 @@ final class ArticlesOptimal extends SeoPanelPage
             }
         }
 
-        return $query->first();
+        return $query;
     }
 
     private function resolveMetaDescription(SeoArticle $article): string

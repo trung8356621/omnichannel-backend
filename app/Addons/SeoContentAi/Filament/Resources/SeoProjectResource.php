@@ -261,11 +261,15 @@ class SeoProjectResource extends SeoPanelResource
                                     ->live(),
 
                                 Forms\Components\TextInput::make('source_content')
-                                    ->label(__('seo-content-ai::filament.projects.keyword'))
-                                    ->placeholder(__('seo-content-ai::filament.projects.keyword_placeholder'))
+                                    ->label(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_NEW_TITLE
+                                        ? 'Tiêu đề'
+                                        : __('seo-content-ai::filament.projects.keyword'))
+                                    ->placeholder(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_NEW_TITLE
+                                        ? 'VD: Cách chọn balo laptop 14 inch...'
+                                        : __('seo-content-ai::filament.projects.keyword_placeholder'))
                                     ->required()
                                     ->maxLength(500)
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD),
+                                    ->visible(fn (Get $get): bool => SeoProjectTask::isNewArticleType($get('type'))),
 
                                 Forms\Components\Select::make('post_type')
                                     ->label(__('seo-content-ai::filament.article_list.post_type'))
@@ -274,7 +278,7 @@ class SeoProjectResource extends SeoPanelResource
                                     ->required()
                                     ->native(false)
                                     ->live()
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD),
+                                    ->visible(fn (Get $get): bool => SeoProjectTask::isNewArticleType($get('type'))),
 
                                 Forms\Components\Select::make('source_content')
                                     ->label(fn (Get $get): string => $get('type') === SeoProjectTask::TYPE_IMPROVE
@@ -301,7 +305,31 @@ class SeoProjectResource extends SeoPanelResource
                                         fn ($value): ?string => is_string($value) && trim($value) !== ''
                                             ? trim($value)
                                             : null,
-                                    ),
+                                    )
+                                    ->helperText(
+                                        fn (Get $get): ?HtmlString => static::rewriteArticleWpLinkHelper(
+                                            $get('source_content'),
+                                            static::resolveRepeaterSiteId($get),
+                                        ),
+                                    )
+                                    ->live()
+                                    ->afterStateUpdated(function (Forms\Components\Select $component, ?string $state, Get $get): void {
+                                        if ($state === null || trim($state) === '') {
+                                            $component->suffixAction(null);
+
+                                            return;
+                                        }
+
+                                        $permalink = static::resolveArticlePermalinkByTitle(trim($state), static::resolveRepeaterSiteId($get));
+                                        if ($permalink !== null) {
+                                            $component->suffixAction(
+                                                Forms\Components\Actions\Action::make('view_wp_link')
+                                                    ->icon('heroicon-o-link')
+                                                    ->color('info')
+                                                    ->url($permalink, shouldOpenInNewTab: true),
+                                            );
+                                        }
+                                    }),
 
                                 Forms\Components\Select::make('rewrite_mode')
                                     ->label(__('seo-content-ai::filament.projects.rewrite_mode'))
@@ -324,7 +352,7 @@ class SeoProjectResource extends SeoPanelResource
                                     ->label(__('seo-content-ai::filament.projects.loai_san_pham'))
                                     ->placeholder(__('seo-content-ai::filament.projects.loai_san_pham_placeholder'))
                                     ->maxLength(500)
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD
+                                    ->visible(fn (Get $get): bool => SeoProjectTask::isNewArticleType($get('type'))
                                         && $get('post_type') === SeoProjectTask::POST_TYPE_PRODUCT)
                                     ->columnSpanFull(),
 
@@ -332,7 +360,7 @@ class SeoProjectResource extends SeoPanelResource
                                     ->label(__('seo-content-ai::filament.projects.gallery_description'))
                                     ->placeholder(__('seo-content-ai::filament.projects.gallery_description_placeholder'))
                                     ->rows(3)
-                                    ->visible(fn (Get $get): bool => $get('type') === SeoProjectTask::TYPE_NEW_KEYWORD
+                                    ->visible(fn (Get $get): bool => SeoProjectTask::isNewArticleType($get('type'))
                                         && $get('post_type') === SeoProjectTask::POST_TYPE_PRODUCT)
                                     ->columnSpanFull(),
                             ])
@@ -353,6 +381,8 @@ class SeoProjectResource extends SeoPanelResource
                                     if (SeoProjectTask::normalizeRewriteMode($state['rewrite_mode'] ?? null) === SeoProjectTask::REWRITE_MODE_CONTENT) {
                                         $prefix = '[Viết lại/nội dung]';
                                     }
+                                } elseif ($type === SeoProjectTask::TYPE_NEW_TITLE) {
+                                    $prefix = '[Viết mới - tiêu đề]';
                                 } else {
                                     $postTypeLabels = [
                                         SeoProjectTask::POST_TYPE_ARTICLE => 'Article',
@@ -462,7 +492,10 @@ class SeoProjectResource extends SeoPanelResource
 
                 Tables\Filters\SelectFilter::make('user_id')
                     ->label(__('seo-content-ai::filament.projects.writer'))
-                    ->options(fn (): array => static::userSelectOptions()),
+                    ->options(fn (): array => static::userSelectOptions())
+                    ->searchable()
+                    ->preload()
+                    ->native(false),
 
                 Tables\Filters\SelectFilter::make('site_id')
                     ->label(__('seo-content-ai::filament.projects.domain'))
@@ -729,7 +762,7 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function formatUserSelectLabel(User $user): string
     {
-        $name = trim((string) ($user->name ?? ''));
+        $name = trim((string) ($user->display_name ?? ''));
         $email = trim((string) ($user->email ?? ''));
 
         if ($name !== '' && $email !== '') {
@@ -754,7 +787,8 @@ class SeoProjectResource extends SeoPanelResource
     {
         $search = trim($search);
 
-        $query = ArticleResource::getEloquentQuery()->with('site');
+        $query = ArticleResource::getEloquentQuery()
+            ->with(['site', 'articleMetas']);
 
         if ($siteId !== null && $siteId > 0) {
             $query->where('site_id', $siteId);
@@ -802,12 +836,65 @@ class SeoProjectResource extends SeoPanelResource
     {
         $domain = trim((string) ($article->site?->domain ?? ''));
 
-        return sprintf(
+        $permalink = '';
+        if ($article->relationLoaded('articleMetas')) {
+            $meta = $article->articleMetas->firstWhere('meta_key', 'wp_permalink');
+            $permalink = trim((string) ($meta?->meta_value ?? ''));
+        }
+
+        $base = sprintf(
             '#%d · %s (%s)',
             $article->id,
             (string) $article->title,
             $domain !== '' ? $domain : '—',
         );
+
+        if ($permalink !== '') {
+            return $base.' — '.$permalink;
+        }
+
+        return $base;
+    }
+
+    public static function rewriteArticleWpLinkHelper(mixed $title, ?int $siteId = null): ?HtmlString
+    {
+        if (! is_string($title) || trim($title) === '') {
+            return null;
+        }
+
+        $permalink = static::resolveArticlePermalinkByTitle(trim($title), $siteId);
+
+        if ($permalink === null) {
+            return null;
+        }
+
+        $url = e($permalink);
+
+        return new HtmlString(
+            '<a href="'.$url.'" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">View WP article</a>'
+        );
+    }
+
+    public static function resolveArticlePermalinkByTitle(string $title, ?int $siteId = null): ?string
+    {
+        $query = SeoArticle::query()->with('articleMetas')
+            ->where('title', $title);
+
+        if ($siteId !== null && $siteId > 0) {
+            $query->where('site_id', $siteId);
+        }
+
+        $article = $query->orderByDesc('updated_at')->first();
+
+        if ($article === null) {
+            return null;
+        }
+
+        $meta = $article->articleMetas->firstWhere('meta_key', 'wp_permalink');
+
+        $permalink = trim((string) ($meta?->meta_value ?? ''));
+
+        return $permalink !== '' ? $permalink : null;
     }
 
     public static function resolveRepeaterSiteId(Get $get): ?int

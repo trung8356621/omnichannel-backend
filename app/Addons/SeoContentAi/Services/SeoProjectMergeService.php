@@ -165,7 +165,7 @@ final class SeoProjectMergeService
                 SeoProjectTask::STATUS_FAILED,
             ]);
 
-        if ($completedTask->type === SeoProjectTask::TYPE_NEW_KEYWORD) {
+        if (SeoProjectTask::isNewArticleType($completedTask->type)) {
             $query->where('post_type', SeoProjectTask::normalizePostType($completedTask->post_type));
         }
 

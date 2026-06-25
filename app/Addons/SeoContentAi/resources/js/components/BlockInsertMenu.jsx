@@ -184,21 +184,37 @@ export function ImageBlockPickerBox({
     const [prompt, setPrompt] = useState('');
     const [importUrl, setImportUrl] = useState('');
     const [generateKind, setGenerateKind] = useState('image');
+    const importInputRef = useRef(null);
+    const generateTextareaRef = useRef(null);
+
+    // Auto-focus vào input/textarea mỗi khi mode chuyển
+    useEffect(() => {
+        if (mode === 'import') {
+            importInputRef.current?.focus();
+        } else if (mode === 'generate') {
+            generateTextareaRef.current?.focus();
+        }
+    }, [mode]);
 
     if (mode === 'import') {
         return (
             <div className="seo-image-block-picker">
-                <button type="button" className="seo-image-block-picker__back" onClick={() => setMode('actions')}>
+                <button type="button" className="seo-image-block-picker__back" onMouseDown={(e) => e.stopPropagation()} onClick={() => setMode('actions')}>
                     ← Back
                 </button>
                 <div className="seo-image-block-picker__url-row">
                     <input
+                        ref={importInputRef}
                         type="url"
                         className="seo-image-block-picker__input"
                         value={importUrl}
                         onChange={(e) => setImportUrl(e.target.value)}
                         placeholder="https://example.com/image.jpg"
                         disabled={importLoading}
+                        onMouseDown={(e) => {
+                            // Chặn event bubble để không bị handleClickOutside interfere
+                            e.stopPropagation();
+                        }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && importUrl.trim() && !importLoading) {
                                 e.preventDefault();
@@ -210,6 +226,7 @@ export function ImageBlockPickerBox({
                         type="button"
                         className="seo-image-block-picker__choice"
                         disabled={!importUrl.trim() || importLoading || !onImportFromUrl}
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => onImportFromUrl?.(importUrl.trim())}
                     >
                         {importLoading ? t('processing') : 'Import'}
@@ -240,20 +257,25 @@ export function ImageBlockPickerBox({
                     </button>
                 </div>
                 <textarea
+                    ref={generateTextareaRef}
                     className="seo-image-block-picker__textarea"
                     rows={4}
                     value={prompt}
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder="e.g. White nonwoven tote bag, logo print, studio background..."
+                    onMouseDown={(e) => {
+                        e.stopPropagation();
+                    }}
                 />
                 <div className="seo-image-block-picker__actions">
-                    <button type="button" className="seo-image-block-picker__btn" onClick={() => setMode('actions')}>
+                    <button type="button" className="seo-image-block-picker__btn" onMouseDown={(e) => e.stopPropagation()} onClick={() => setMode('actions')}>
                         {t('cancel')}
                     </button>
                     <button
                         type="button"
                         className="seo-image-block-picker__btn is-primary"
                         disabled={!prompt.trim()}
+                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => onGenerateRequest(prompt.trim(), generateKind)}
                     >
                         {t('submit_retry')}
@@ -277,12 +299,13 @@ export function ImageBlockPickerBox({
             >
                 {t('image_block_label')}/{t('generate_video')}
             </button>
-            <button type="button" className="seo-image-block-picker__choice is-secondary" onClick={() => setMode('generate')}>
+            <button type="button" className="seo-image-block-picker__choice is-secondary" onMouseDown={(e) => e.preventDefault()} onClick={() => setMode('generate')}>
                 {t('generate_image')}/{t('generate_video')}
             </button>
             <button
                 type="button"
                 className="seo-image-block-picker__choice is-secondary"
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setMode('import')}
             >
                 Quick download

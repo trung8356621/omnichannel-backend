@@ -104,7 +104,7 @@ final class MediaLibraryArticleResolver
             return null;
         }
 
-        return ArticleResource::getUrl('edit', ['record' => $articleId], panel: ArticleResource::panelId());
+        return ArticleResource::getUrl('edit', ['record' => $articleId], isAbsolute: true, panel: ArticleResource::panelId());
     }
 
     /**

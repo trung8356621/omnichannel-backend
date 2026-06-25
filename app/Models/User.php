@@ -36,6 +36,8 @@ class User extends Authenticatable implements FilamentUser
 
     protected $fillable = ['parent_id', 'role', 'seo_role', 'status', 'name', 'email', 'password'];
 
+    protected $appends = ['display_name'];
+
     public function isStaff()
     {
         return $this->role === self::ROLE_STAFF;
@@ -78,5 +80,34 @@ class User extends Authenticatable implements FilamentUser
             'user_id',
             'connection_id',
         )->withTimestamps();
+    }
+
+    public function meta(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(UserMeta::class, 'user_id');
+    }
+
+    public function getMeta(string $key, mixed $default = null): mixed
+    {
+        $row = $this->meta()->where('meta_key', $key)->first();
+
+        return $row?->meta_value ?? $default;
+    }
+
+    public function setMeta(string $key, mixed $value): static
+    {
+        $this->meta()->updateOrCreate(
+            ['meta_key' => $key],
+            ['meta_value' => $value],
+        );
+
+        return $this;
+    }
+
+    public function getDisplayNameAttribute(): string
+    {
+        $nickname = $this->getMeta('nickname');
+
+        return $nickname ?: $this->name;
     }
 }

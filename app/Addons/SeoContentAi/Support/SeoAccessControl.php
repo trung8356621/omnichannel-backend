@@ -211,6 +211,23 @@ final class SeoAccessControl
             && (int) $project->user_id === (int) auth()->id();
     }
 
+    public static function canRetryProjectRunItem(?SeoProject $project = null): bool
+    {
+        if (self::canMutateInSeoPanel() && self::canAccessPlannerFeatures()) {
+            return true;
+        }
+
+        if (! self::isContentManager()) {
+            return false;
+        }
+
+        if ($project === null) {
+            return true;
+        }
+
+        return (int) $project->user_id === (int) auth()->id();
+    }
+
     public static function canDeleteSeoMedia(): bool
     {
         return self::canMutateInSeoPanel() && ! self::isContentManager();

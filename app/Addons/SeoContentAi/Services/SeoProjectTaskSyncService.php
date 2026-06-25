@@ -175,7 +175,7 @@ final class SeoProjectTaskSyncService
             }
 
             $type = (string) ($row['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
-            if (! in_array($type, [SeoProjectTask::TYPE_REWRITE, SeoProjectTask::TYPE_NEW_KEYWORD, SeoProjectTask::TYPE_IMPROVE], true)) {
+            if (! in_array($type, SeoProjectTask::typeKeys(), true)) {
                 $type = SeoProjectTask::TYPE_NEW_KEYWORD;
             }
 
@@ -188,7 +188,7 @@ final class SeoProjectTaskSyncService
                 'post_type' => null,
             ];
 
-            if ($type === SeoProjectTask::TYPE_NEW_KEYWORD) {
+            if (SeoProjectTask::isNewArticleType($type)) {
                 $postType = SeoProjectTask::normalizePostType($row['post_type'] ?? null);
                 $item['post_type'] = $postType;
 
@@ -310,15 +310,15 @@ final class SeoProjectTaskSyncService
                 'site_id' => $task->site_id !== null ? (int) $task->site_id : null,
                 'type' => $task->type,
                 'source_content' => $task->source_content,
-                'loai_san_pham' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'loai_san_pham' => SeoProjectTask::isNewArticleType($task->type)
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? $task->loai_san_pham
                         : null,
-                'description' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'description' => SeoProjectTask::isNewArticleType($task->type)
                     && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
                         ? $task->description
                         : null,
-                'post_type' => $task->type === SeoProjectTask::TYPE_NEW_KEYWORD
+                'post_type' => SeoProjectTask::isNewArticleType($task->type)
                     ? SeoProjectTask::normalizePostType($task->post_type)
                     : null,
                 'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE

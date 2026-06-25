@@ -282,7 +282,7 @@ final class SeoProjectRunConsolidationService
     {
         $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
         $source = mb_strtolower(trim((string) ($item['source_content'] ?? '')));
-        $postType = $type === SeoProjectTask::TYPE_NEW_KEYWORD
+        $postType = SeoProjectTask::isNewArticleType($type)
             ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
             : '';
 

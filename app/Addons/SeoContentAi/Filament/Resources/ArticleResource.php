@@ -188,7 +188,7 @@ class ArticleResource extends SeoPanelResource
 
                         $record->loadMissing('user');
 
-                        return (string) ($record->user?->name ?? $record->user?->email ?? __('seo-content-ai::filament.article_list.system'));
+                        return (string) ($record->user?->display_name ?? $record->user?->email ?? __('seo-content-ai::filament.article_list.system'));
                     })
                     ->color(fn (string $state): string => $state === __('seo-content-ai::filament.article_list.system') ? 'gray' : 'primary')
                     ->toggleable(isToggledHiddenByDefault: false),
@@ -1030,7 +1030,19 @@ class ArticleResource extends SeoPanelResource
                 FormAction::make('quick_create_content_project')
                     ->label(__('seo-content-ai::filament.article_list.quick_create_content_project'))
                     ->icon('heroicon-o-plus')
-                    ->action(function (Set $set, Get $get) use ($resolveSiteId): void {
+                    ->form([
+                        Forms\Components\Select::make('user_id')
+                            ->label(__('seo-content-ai::filament.projects.assign_writer'))
+                            ->options(fn (): array => SeoProjectResource::userSelectOptions())
+                            ->searchable()
+                            ->preload()
+                            ->required()
+                            ->default(fn (): ?int => SeoAccessControl::isContentManager() ? (int) auth()->id() : null)
+                            ->disabled(fn (): bool => SeoAccessControl::isContentManager())
+                            ->dehydrated()
+                            ->native(false),
+                    ])
+                    ->action(function (array $data, Set $set, Get $get) use ($resolveSiteId): void {
                         $siteId = (int) (static::resolveAssignContentProjectSiteId($resolveSiteId, $get) ?? 0);
                         if ($siteId <= 0) {
                             Notification::make()
@@ -1043,7 +1055,7 @@ class ArticleResource extends SeoPanelResource
                         }
 
                         try {
-                            $project = static::quickCreateContentProject($siteId);
+                            $project = static::quickCreateContentProject($siteId, (int) ($data['user_id'] ?? 0));
                             $set('project_id', $project->id);
 
                             Notification::make()
@@ -1141,6 +1153,7 @@ class ArticleResource extends SeoPanelResource
         return in_array($type, [
             SeoProjectTask::TYPE_REWRITE,
             SeoProjectTask::TYPE_NEW_KEYWORD,
+            SeoProjectTask::TYPE_NEW_TITLE,
             SeoProjectTask::TYPE_IMPROVE,
         ], true)
             ? $type
@@ -1187,13 +1200,13 @@ class ArticleResource extends SeoPanelResource
         return $resolveSiteId();
     }
 
-    public static function quickCreateContentProject(int $siteId): SeoProject
+    public static function quickCreateContentProject(int $siteId, ?int $userId = null): SeoProject
     {
         if ($siteId <= 0) {
             throw new \InvalidArgumentException(__('seo-content-ai::filament.article_list.quick_create_content_project_no_domain'));
         }
 
-        $userId = (int) auth()->id();
+        $userId = (int) ($userId ?: auth()->id());
         if ($userId <= 0) {
             throw new \InvalidArgumentException(__('seo-content-ai::filament.article_list.quick_create_content_project_no_user'));
         }
@@ -1201,12 +1214,13 @@ class ArticleResource extends SeoPanelResource
         $currentMonth = Carbon::now()->startOfMonth();
         $targetMonth = $currentMonth->copy();
 
-        $projectQuery = SeoProject::query()->where('site_id', $siteId);
-        if (SeoAccessControl::isContentManager()) {
-            $projectQuery->where('user_id', $userId);
-        }
+        $existingProject = SeoProject::query()
+            ->where('site_id', $siteId)
+            ->where('user_id', $userId)
+            ->whereDate('month', $currentMonth->format('Y-m-d'))
+            ->exists();
 
-        if ((clone $projectQuery)->whereDate('month', $currentMonth->format('Y-m-d'))->exists()) {
+        if ($existingProject) {
             $targetMonth = $currentMonth->copy()->addMonth();
         }
 
@@ -1227,11 +1241,11 @@ class ArticleResource extends SeoPanelResource
     public static function contentProjectOptions(?int $siteId = null): array
     {
         $query = SeoProject::query()
-            ->with('site')
+            ->with(['site', 'user'])
             ->orderByDesc('month')
             ->orderBy('id');
 
-        if (SeoAccessControl::isContentManager()) {
+        if (! SeoAccessControl::isContentManager()) {
             $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
@@ -1247,12 +1261,16 @@ class ArticleResource extends SeoPanelResource
             ->mapWithKeys(function (SeoProject $project): array {
                 $remaining = $project->remainingTaskCapacity();
                 $domain = trim((string) ($project->site?->domain ?? ''));
+                $writer = $project->user instanceof User
+                    ? SeoProjectResource::formatUserSelectLabel($project->user)
+                    : '';
 
                 return [
                     (int) $project->id => sprintf(
-                        '%s · %s (%s, còn %d)',
+                        '%s · %s · %s (%s, còn %d)',
                         (string) $project->name,
                         $domain !== '' ? $domain : '—',
+                        $writer !== '' ? $writer : '—',
                         $project->monthCarbon()->format('m/Y'),
                         $remaining,
                     ),
@@ -1423,7 +1441,7 @@ class ArticleResource extends SeoPanelResource
                     'status' => SeoProjectTask::STATUS_PENDING,
                 ];
 
-                if ($normalizedTaskType === SeoProjectTask::TYPE_NEW_KEYWORD) {
+                if (SeoProjectTask::isNewArticleType($normalizedTaskType)) {
                     $payload['post_type'] = SeoProjectTask::POST_TYPE_ARTICLE;
                     $payload['article_id'] = null;
                 } else {
