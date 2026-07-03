@@ -25,6 +25,7 @@ final class DomainSyncManifestComparator
         $timestampService = new WordPressArticleTimestampService;
 
         $localIndex = [];
+        $localArticleWpIds = [];
         foreach ($localArticles as $article) {
             $wpId = (int) ($article->wp_post_id ?? 0);
             $type = (string) ($article->type ?? '');
@@ -33,9 +34,14 @@ final class DomainSyncManifestComparator
             }
 
             $localIndex[$this->localKey($type, $wpId)] = $article;
+
+            if ($this->isArticleLikeType($type)) {
+                $localArticleWpIds[$wpId] = true;
+            }
         }
 
         $refs = [];
+        $refKeys = [];
         $skipped = 0;
         $newCount = 0;
         $updateCount = 0;
@@ -58,6 +64,7 @@ final class DomainSyncManifestComparator
                 if ($local === null) {
                     $newCount++;
                     $refs[] = $this->normalizeRef($entry);
+                    $refKeys[$key] = true;
                 } else {
                     $skipped++;
                 }
@@ -68,6 +75,7 @@ final class DomainSyncManifestComparator
             if ($local === null) {
                 $newCount++;
                 $refs[] = $this->normalizeRef($entry);
+                $refKeys[$key] = true;
 
                 continue;
             }
@@ -79,11 +87,23 @@ final class DomainSyncManifestComparator
             if ($timestampService->remoteIsNewerThanLocal($localUpdated, $entry['post_modified'] ?? null)) {
                 $updateCount++;
                 $refs[] = $this->normalizeRef($entry);
+                $refKeys[$key] = true;
 
                 continue;
             }
 
             $skipped++;
+        }
+
+        foreach ($this->missingLocalArticleRefs($manifestEntries, $localArticleWpIds) as $missingRef) {
+            $missingKey = $this->localKey((string) $missingRef['type'], (int) $missingRef['wp_id']);
+            if (isset($refKeys[$missingKey])) {
+                continue;
+            }
+
+            $newCount++;
+            $refs[] = $missingRef;
+            $refKeys[$missingKey] = true;
         }
 
         return [
@@ -92,6 +112,45 @@ final class DomainSyncManifestComparator
             'new_count' => $newCount,
             'update_count' => $updateCount,
         ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $manifestEntries
+     * @param  array<int, bool>  $localArticleWpIds
+     * @return array<int, array<string, mixed>>
+     */
+    private function missingLocalArticleRefs(array $manifestEntries, array $localArticleWpIds): array
+    {
+        $missing = [];
+
+        foreach ($manifestEntries as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            if (($entry['wp_entity'] ?? 'post') !== 'post') {
+                continue;
+            }
+
+            $type = strtolower(trim((string) ($entry['type'] ?? '')));
+            if (! $this->isArticleLikeType($type)) {
+                continue;
+            }
+
+            $wpId = (int) ($entry['wp_id'] ?? 0);
+            if ($wpId <= 0 || isset($localArticleWpIds[$wpId])) {
+                continue;
+            }
+
+            $missing[] = $this->normalizeRef($entry);
+        }
+
+        return $missing;
+    }
+
+    private function isArticleLikeType(string $type): bool
+    {
+        return in_array($type, ['article', ''], true);
     }
 
     private function isTaxonomyType(string $type): bool

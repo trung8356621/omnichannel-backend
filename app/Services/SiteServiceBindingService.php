@@ -168,14 +168,14 @@ final class SiteServiceBindingService
             $userId = (int) ($data['user_id'] ?? 0);
             if ($userId <= 0) {
                 throw ValidationException::withMessages([
-                    'user_id' => 'Chọn owner khi ràng buộc theo user.',
+                    'user_id' => __('site-service.bound_select_owner'),
                 ]);
             }
 
             $user = User::query()->find($userId);
             if ($user === null || $user->role !== User::ROLE_OWNER) {
                 throw ValidationException::withMessages([
-                    'user_id' => 'Chỉ owner mới được ràng buộc trực tiếp theo user.',
+                    'user_id' => __('site-service.bound_owner_only'),
                 ]);
             }
 
@@ -185,7 +185,7 @@ final class SiteServiceBindingService
         $siteId = (int) ($data['site_id'] ?? 0);
         if ($siteId <= 0) {
             throw ValidationException::withMessages([
-                'site_id' => 'Chọn site khi ràng buộc theo site.',
+                'site_id' => __('site-service.bound_select_site'),
             ]);
         }
     }

@@ -16,9 +16,6 @@ return [
     'wiki_trust' => 'Thiếu liên kết ngoài wiki-trust.',
     'wiki_trust.pass' => 'Có liên kết ngoài wiki-trust (+:points).',
 
-    'featured_snippet' => 'Thiếu bảng hoặc danh sách bullet ngắn ở đầu nội dung.',
-    'featured_snippet.pass' => 'Có bảng hoặc bullet list phù hợp featured snippet ở đầu bài (+:points).',
-
     'faq_schema' => 'Thiếu FAQ schema (chưa có dữ liệu FAQ).',
     'faq_schema.pass' => 'Đã có dữ liệu FAQ schema (+:points).',
 

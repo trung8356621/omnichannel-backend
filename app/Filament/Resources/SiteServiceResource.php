@@ -144,8 +144,10 @@ class SiteServiceResource extends Resource
                                 if (class_exists($settingsClass) && method_exists($settingsClass, 'getDefaults')) {
                                     $defaults = (new $settingsClass)->getDefaults();
                                     $set('settings', $defaults);
+                                    $set('seo_db_config_type', (string) ($defaults['db_config_type'] ?? 'auto'));
                                 } else {
                                     $set('settings', []);
+                                    $set('seo_db_config_type', 'auto');
                                 }
                             }),
 
@@ -170,7 +172,17 @@ class SiteServiceResource extends Resource
                             ->keyLabel(__('Parameter Name'))
                             ->valueLabel(__('Value'))
                             ->addActionLabel(__('Add Parameter'))
-                            ->helperText(__('Example: api_key, webhook_url, target_language, db_config_type, etc.')),
+                            ->helperText(__('Example: api_key, webhook_url, target_language, etc.'))
+                            ->formatStateUsing(function (?array $state): array {
+                                if (! is_array($state)) {
+                                    return [];
+                                }
+
+                                $filtered = $state;
+                                unset($filtered['db_config_type']);
+
+                                return $filtered;
+                            }),
                     ]),
             ]);
     }

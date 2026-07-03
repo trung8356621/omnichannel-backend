@@ -15,6 +15,25 @@ class Site extends Model
 
     protected $casts = ['ssl' => 'boolean'];
 
+    protected static function booted(): void
+    {
+        static::deleting(function (Site $site): void {
+            if ($site->isForceDeleting()) {
+                return;
+            }
+
+            $domain = strtolower(trim((string) $site->getOriginal('domain')));
+
+            if ($domain === '' || str_contains($domain, '__trashed__')) {
+                return;
+            }
+
+            $site->forceFill([
+                'domain' => $domain.'__trashed__'.$site->getKey(),
+            ])->saveQuietly();
+        });
+    }
+
     public function siteServices()
     {
         return $this->hasMany(SiteService::class);
@@ -25,7 +44,7 @@ class Site extends Model
      */
     public function primarySiteServiceForSettings(): ?SiteService
     {
-        if (!$this->relationLoaded('siteServices')) {
+        if (! $this->relationLoaded('siteServices')) {
             $this->load(['siteServices.service']);
         }
 
@@ -66,6 +85,7 @@ class Site extends Model
     public function getMeta($key, $default = null)
     {
         $meta = $this->metas()->where('meta_key', $key)->first();
+
         return $meta ? $meta->meta_value : $default;
     }
 }

@@ -240,6 +240,7 @@ function registerArticleEditorLivewireBridge() {
         Livewire.on('article-supplemental-images-synced', forward('article-supplemental-images-synced'));
         Livewire.on('virtual-reviews-updated', forward('virtual-reviews-updated'));
         Livewire.on('google-serp-preview-updated', forward('google-serp-preview-updated'));
+        Livewire.on('pending-internal-link-ready', forward('pending-internal-link-ready'));
         Livewire.on('article-autosave-lock', forward('article-autosave-lock'));
     }
 }

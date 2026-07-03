@@ -296,19 +296,30 @@ final class TaskWorkflowTestRunner
                 ];
             }
 
-            if (
-                $this->isProductGalleryPromptNode($nodeId, $prompt, $edges)
-                && ! $this->shouldRunProductGalleryPrompt($context, $state)
-            ) {
-                return [
-                    'node_id' => $nodeId,
-                    'type' => $type,
-                    'title' => $title,
-                    'status' => 'skipped',
-                    'prompt_id' => $prompt->id,
-                    'prompt_name' => (string) $prompt->name,
-                    'message' => 'Bỏ qua prompt product gallery vì album hình ảnh sản phẩm đã có ảnh.',
-                ];
+            if ($this->isProductGalleryPromptNode($nodeId, $prompt, $edges)) {
+                if (! $this->isProductWorkflowContext($context, $state)) {
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => $type,
+                        'title' => $title,
+                        'status' => 'skipped',
+                        'prompt_id' => $prompt->id,
+                        'prompt_name' => (string) $prompt->name,
+                        'message' => 'Bỏ qua prompt product gallery vì bài viết không phải loại sản phẩm.',
+                    ];
+                }
+
+                if (! $this->shouldRunProductGalleryPrompt($context, $state)) {
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => $type,
+                        'title' => $title,
+                        'status' => 'skipped',
+                        'prompt_id' => $prompt->id,
+                        'prompt_name' => (string) $prompt->name,
+                        'message' => 'Bỏ qua prompt product gallery vì album hình ảnh sản phẩm đã có ảnh.',
+                    ];
+                }
             }
 
             try {
@@ -752,8 +763,8 @@ final class TaskWorkflowTestRunner
             }
         }
 
-        $shouldAppendProductGallery = ! $this->isProductWorkflowContext($context, $state)
-            || $this->shouldRunProductGalleryPrompt($context, $state);
+        $shouldAppendProductGallery = $this->isProductWorkflowContext($context, $state)
+            && $this->shouldRunProductGalleryPrompt($context, $state);
 
         if ($shouldAppendProductGallery) {
             $galleryImagesCount = $this->appendGalleryImagesFromActionEdges($article, $nodeId, $edges, $state);

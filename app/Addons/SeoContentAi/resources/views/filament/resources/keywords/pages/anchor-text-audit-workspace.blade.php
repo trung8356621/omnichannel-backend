@@ -56,7 +56,7 @@
                 >
                     <option value="">{{ __('seo-content-ai::filament.keyword.link_triage_domain_all') }}</option>
                     @foreach ($siteOptions as $siteId => $domainLabel)
-                        <option value="{{ (int) $siteId }}">{{ $domainLabel }}</option>
+                        <option value="{{ (int) $siteId }}" @selected((int) ($triageSiteId ?? 0) === (int) $siteId)>{{ $domainLabel }}</option>
                     @endforeach
                 </select>
             </div>

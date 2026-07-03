@@ -18,14 +18,12 @@ final class IncrementalDomainSyncCacheTest extends TestCase
                 ['id' => 2],
                 ['id' => 3],
             ],
-            'manifest_total' => 5,
-            'skipped' => 2,
             'offset' => 1,
             'updated_at' => now()->toIso8601String(),
         ]);
 
-        $this->assertSame(3, $progress['done']);
-        $this->assertSame(5, $progress['total']);
+        $this->assertSame(1, $progress['done']);
+        $this->assertSame(3, $progress['total']);
         $this->assertTrue($progress['running']);
         $this->assertSame(IncrementalDomainSyncCache::STATUS_RUNNING, $progress['status']);
     }
@@ -55,14 +53,12 @@ final class IncrementalDomainSyncCacheTest extends TestCase
                 ['id' => 1],
                 ['id' => 2],
             ],
-            'manifest_total' => 4,
-            'skipped' => 2,
             'offset' => 2,
             'message' => 'Done',
         ]);
 
-        $this->assertSame(4, $progress['done']);
-        $this->assertSame(4, $progress['total']);
+        $this->assertSame(2, $progress['done']);
+        $this->assertSame(2, $progress['total']);
         $this->assertFalse($progress['running']);
         $this->assertSame('Done', $progress['message']);
     }

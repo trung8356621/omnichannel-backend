@@ -16,9 +16,6 @@ return [
     'wiki_trust' => 'Missing at least one outbound wiki-trust link.',
     'wiki_trust.pass' => 'Has a wiki-trust outbound link (+:points).',
 
-    'featured_snippet' => 'Missing a table or short bullet list at the beginning of the content.',
-    'featured_snippet.pass' => 'Has a featured-snippet-friendly table or bullet list at the start (+:points).',
-
     'faq_schema' => 'FAQ schema is missing (no FAQ data saved).',
     'faq_schema.pass' => 'FAQ schema data is present (+:points).',
 

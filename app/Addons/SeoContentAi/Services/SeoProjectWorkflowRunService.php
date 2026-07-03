@@ -24,6 +24,7 @@ final class SeoProjectWorkflowRunService
         private readonly SeoProjectRunErrorFormatter $errorFormatter,
         private readonly PromptResultLinkService $promptResultLinks,
         private readonly SeoProjectArticleOwnerSyncService $articleOwnerSync,
+        private readonly ArticleEditorReadinessService $editorReadiness,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -415,15 +416,26 @@ final class SeoProjectWorkflowRunService
                         runId: (int) $run->id,
                         taskId: (int) $task->id,
                     );
+                    $article = SeoArticle::query()->find($articleId);
+                    if ($article instanceof SeoArticle) {
+                        $readiness = $this->editorReadiness->queueAfterWorkflowRun($article, (int) $run->id);
+                    }
                 }
 
-                return $this->buildItemRow(
+                $itemRow = $this->buildItemRow(
                     $task,
                     true,
                     $articleId,
                     (string) $result['message'],
                     $this->promptSteps($result['steps'] ?? []),
                 );
+
+                if (isset($readiness)) {
+                    $itemRow['article_editor_ready'] = $readiness->isReady;
+                    $itemRow['article_editor_preparing_message'] = $this->editorReadiness->userMessage($readiness);
+                }
+
+                return $itemRow;
             }
 
             $this->markTaskFailed($task);
@@ -685,7 +697,10 @@ final class SeoProjectWorkflowRunService
             'target_date' => $task->target_date?->format('Y-m-d'),
             'status' => $success ? 'success' : 'failed',
             'article_id' => $articleId,
-            'article_edit_url' => $articleId > 0 ? ArticleResource::getUrl('edit', ['record' => $articleId], isAbsolute: false) : null,
+            'article_edit_url' => $articleId > 0 && $this->editorReadiness->isReady($articleId)
+                ? ArticleResource::getUrl('edit', ['record' => $articleId], isAbsolute: false)
+                : null,
+            'article_editor_ready' => $articleId > 0 ? $this->editorReadiness->isReady($articleId) : true,
             'message' => $message,
             'steps' => $steps,
         ];

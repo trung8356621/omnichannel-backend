@@ -35,8 +35,10 @@ class SeoMediaController extends Controller
 
     public function upload(Request $request): JsonResponse
     {
+        $maxUploadKb = max(1, (int) config('seo-content-ai.media_max_upload_kb', 10240));
+
         $validated = $request->validate([
-            'image' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120',
+            'image' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:'.$maxUploadKb,
             'site_id' => 'nullable|integer',
             'article_id' => 'nullable|integer',
             'source' => 'nullable|string|max:50',

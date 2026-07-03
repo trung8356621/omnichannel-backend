@@ -17,6 +17,8 @@ use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
 use App\Addons\SeoContentAi\Support\KeywordDomainResyncCache;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
+use App\Services\ExternalPlugin\ExternalPluginRegistry;
+use App\Services\ExternalPlugin\WordPressPluginReleaseService;
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
@@ -285,6 +287,24 @@ class GeneralDomain extends Page
     /**
      * @return array<string, mixed>
      */
+    public function getWpPluginReleaseOverview(): array
+    {
+        try {
+            $manifest = app(ExternalPluginRegistry::class)->resolveOrFail('omi-seo-ai-bridge');
+
+            return WordPressPluginReleaseService::forManifest($manifest)->overview();
+        } catch (\Throwable) {
+            return [
+                'has_packages' => false,
+                'latest' => null,
+                'metadata' => [],
+            ];
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     public function getScoringStatistics(): array
     {
         return app(DomainOverviewService::class)->getScoringStatistics((int) $this->getRecord()->getKey());
@@ -521,21 +541,18 @@ class GeneralDomain extends Page
 
         $total = count($refs);
         $this->incrementalSyncTotal = $total;
-        $this->incrementalSyncProgress = (int) ($prepared['skipped'] ?? 0);
+        $this->incrementalSyncProgress = 0;
         $this->incrementalSyncRunning = true;
         $this->incrementalSyncResumable = false;
 
-        $manifestTotal = (int) ($prepared['manifest_total'] ?? $total);
-        $initialDone = min($manifestTotal, (int) ($prepared['skipped'] ?? 0));
-
-        $this->dispatch('incremental-sync-progress', done: $initialDone, total: $manifestTotal > 0 ? $manifestTotal : $total, running: true);
+        $this->dispatch('incremental-sync-progress', done: 0, total: $total, running: true);
 
         RunIncrementalDomainSyncJob::dispatch($siteId, $userId);
 
         Notification::make()
             ->title(__('seo-content-ai::filament.domain.sync_incremental_started'))
             ->body(__('seo-content-ai::filament.domain.sync_incremental_started_hint', [
-                'total' => $manifestTotal > 0 ? $manifestTotal : $total,
+                'total' => $total,
             ]))
             ->info()
             ->send();

@@ -52,4 +52,23 @@ final class DomainSyncManifestComparatorTest extends TestCase
         self::assertCount(1, $plan['refs']);
         self::assertSame(6, $plan['refs'][0]['wp_id']);
     }
+
+    public function test_it_fetches_manifest_articles_missing_locally_even_when_marked_skipped(): void
+    {
+        $local = collect([
+            (object) ['wp_post_id' => 10, 'type' => 'article', 'updated_at' => Carbon::parse('2026-01-01 10:00:00')],
+        ]);
+
+        $manifest = [
+            ['wp_id' => 10, 'type' => 'article', 'wp_post_type' => 'post', 'wp_entity' => 'post', 'post_modified' => '2026-01-01 10:00:00'],
+            ['wp_id' => 99, 'type' => 'article', 'wp_post_type' => 'post', 'wp_entity' => 'post', 'post_modified' => '2026-06-11 08:00:00'],
+        ];
+
+        $plan = (new DomainSyncManifestComparator)->resolveFetchRefs($manifest, $local);
+
+        self::assertSame(1, $plan['skipped']);
+        self::assertSame(1, $plan['new_count']);
+        self::assertCount(1, $plan['refs']);
+        self::assertSame(99, $plan['refs'][0]['wp_id']);
+    }
 }

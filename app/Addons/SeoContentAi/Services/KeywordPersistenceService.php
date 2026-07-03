@@ -6,8 +6,6 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordLink;
-use App\Addons\SeoContentAi\Models\KeywordMeta;
-use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
@@ -34,7 +32,7 @@ final class KeywordPersistenceService
         ?int $targetArticleId = null,
         bool $isNofollow = false,
     ): ?Keyword {
-        $phrase = Keyword::decodePhrase(trim($phrase));
+        $phrase = Keyword::preparePhraseForStorage($phrase);
         if ($phrase === '') {
             return null;
         }

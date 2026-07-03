@@ -41,4 +41,7 @@ return [
 
     /** Số bài/lần khi đồng bộ bổ sung (tránh timeout Livewire). */
     'incremental_sync_chunk_size' => (int) env('SEO_CONTENT_AI_INCREMENTAL_SYNC_CHUNK', 15),
+
+    /** Giới hạn upload ảnh thư viện SEO (kilobytes). */
+    'media_max_upload_kb' => (int) env('SEO_CONTENT_AI_MEDIA_MAX_UPLOAD_KB', 10240),
 ];

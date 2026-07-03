@@ -35,7 +35,12 @@ class SeoScoreChart extends Widget
         if ($siteId === null) {
             return [
                 'has_data' => false,
-                'avg_score' => null,
+                'scoring' => [
+                    'scored' => 0,
+                    'avg_score' => null,
+                    'min_score' => null,
+                    'max_score' => null,
+                ],
                 'segments' => [],
                 'donut_gradient' => '',
             ];
@@ -45,18 +50,31 @@ class SeoScoreChart extends Widget
         $distribution = $overview->getScoreDistribution($siteId);
         $scoring = $overview->getScoringStatistics($siteId);
 
-        $segments = array_values(array_filter(
-            $distribution['segments'],
+        $segments = collect($distribution['segments'] ?? [])
+            ->map(function (array $segment) use ($overview, $siteId): array {
+                if (($segment['count'] ?? 0) > 0) {
+                    $segment['filter_url'] = $overview->buildArticlesFilterUrl(
+                        $siteId,
+                        (string) ($segment['key'] ?? ''),
+                    );
+                }
+
+                return $segment;
+            })
+            ->all();
+
+        $chartSegments = array_values(array_filter(
+            $segments,
             static fn (array $segment): bool => ($segment['count'] ?? 0) > 0,
         ));
 
-        $donutTotal = array_sum(array_column($segments, 'count'));
+        $donutTotal = array_sum(array_column($chartSegments, 'count'));
         $donutGradient = '';
 
         if ($donutTotal > 0) {
             $cursor = 0.0;
             $parts = [];
-            foreach ($segments as $segment) {
+            foreach ($chartSegments as $segment) {
                 $pct = ($segment['count'] / $donutTotal) * 100;
                 $start = $cursor;
                 $cursor += $pct;
@@ -66,9 +84,8 @@ class SeoScoreChart extends Widget
         }
 
         return [
-            'has_data' => $donutTotal > 0,
-            'avg_score' => $scoring['avg_score'],
-            'scored' => $scoring['scored'],
+            'has_data' => ($scoring['scored'] ?? 0) > 0,
+            'scoring' => $scoring,
             'segments' => $segments,
             'donut_gradient' => $donutGradient,
         ];

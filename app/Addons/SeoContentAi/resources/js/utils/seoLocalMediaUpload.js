@@ -1,5 +1,6 @@
 import { uploadSeoMediaFromFile } from './seoMediaApi';
 
+export const LOCAL_MEDIA_MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 export const LOCAL_MEDIA_FILE_ACCEPT = 'image/jpeg,image/png,image/gif,image/webp';
 
 /**
@@ -12,6 +13,11 @@ export async function uploadLocalMediaFiles(fileList, { articleId = null, siteId
 
     if (files.length === 0) {
         throw new Error('Không có file ảnh hợp lệ (JPEG, PNG, GIF, WebP).');
+    }
+
+    const oversized = files.find((file) => file.size > LOCAL_MEDIA_MAX_UPLOAD_BYTES);
+    if (oversized) {
+        throw new Error('Ảnh vượt quá 10MB. Hãy nén hoặc chọn file nhỏ hơn.');
     }
 
     const results = [];

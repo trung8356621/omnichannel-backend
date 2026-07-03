@@ -4,6 +4,7 @@ import BlockFormatToolbar from './BlockFormatToolbar';
 import { BlockInsertBar, BlockInsertMenuBar } from './BlockInsertMenu';
 import BlockEditorResizeHandle, { useBlockEditorHeight } from './BlockEditorResizeHandle';
 import LinkEditBubble from './LinkEditBubble';
+import { resolveLinkEditorAnchorRect } from '../utils/linkEditorAnchor';
 import ImageBlockEditor from './ImageBlockEditor';
 import {
     countMatchingAnchorsInHtml,
@@ -1312,6 +1313,7 @@ function ActiveBlockEditor({
     siteId,
 }) {
     const [linkAnchor, setLinkAnchor] = useState(null);
+    const editorContainerRef = useRef(null);
     const sourceHtml = displayContent ?? block.content;
     const isHydratingRef = useRef(false);
     const { minHeight, setMinHeight, persistHeight, minH, maxH } = useBlockEditorHeight(block.id);
@@ -1422,27 +1424,30 @@ function ActiveBlockEditor({
         };
     }, [editor]);
 
-    const openLinkEditorAtSelection = useCallback(() => {
-        if (!editor) return;
+    const openLinkEditorAtSelection = useCallback((savedSelection = null) => {
+        if (!editor) {
+            return;
+        }
+
+        if (
+            savedSelection &&
+            typeof savedSelection.from === 'number' &&
+            typeof savedSelection.to === 'number'
+        ) {
+            const docSize = editor.state.doc.content.size;
+            const from = Math.min(Math.max(0, savedSelection.from), docSize);
+            const to = Math.min(Math.max(from, savedSelection.to), docSize);
+            editor.chain().focus().setTextSelection({ from, to }).run();
+        }
+
         if (editor.isActive('link')) {
             editor.chain().focus().extendMarkRange('link').run();
-            const { from } = editor.state.selection;
-            const domAt = editor.view.domAtPos(from);
-            const el = domAt.node instanceof Element ? domAt.node : domAt.node?.parentElement;
-            const anchor = el?.closest?.('a');
-            if (anchor) {
-                setLinkAnchor(anchor.getBoundingClientRect());
-                return;
-            }
         }
-        const { from } = editor.state.selection;
-        const coords = editor.view.coordsAtPos(from);
-        setLinkAnchor({
-            top: coords.top,
-            left: coords.left,
-            right: coords.right,
-            bottom: coords.bottom,
-        });
+
+        const rect = resolveLinkEditorAnchorRect(editor);
+        if (rect) {
+            setLinkAnchor(rect);
+        }
     }, [editor]);
 
     useEffect(() => {
@@ -1458,7 +1463,10 @@ function ActiveBlockEditor({
             const start = editor.view.posAtDOM(link, 0);
             const end = editor.view.posAtDOM(link, link.childNodes.length);
             editor.chain().focus().setTextSelection({ from: start, to: end }).run();
-            setLinkAnchor(link.getBoundingClientRect());
+            const rect = resolveLinkEditorAnchorRect(editor);
+            if (rect) {
+                setLinkAnchor(rect);
+            }
         };
 
         editor.view.dom.addEventListener('click', onLinkClick, true);
@@ -1466,7 +1474,7 @@ function ActiveBlockEditor({
     }, [editor]);
 
     return (
-        <div className="block-editor-active">
+        <div className="block-editor-active" ref={editorContainerRef}>
             <span className="block-editor-badge">
                 {suppressBlockUpdate ? t('editor_temp_merge') : block.isWp ? 'WP Block' : t('editor_paragraph')}
             </span>
@@ -1487,7 +1495,14 @@ function ActiveBlockEditor({
                 onResizeEnd={persistHeight}
             />
             {linkAnchor && editor ? (
-                <LinkEditBubble editor={editor} anchorRect={linkAnchor} onClose={() => setLinkAnchor(null)} />
+                <LinkEditBubble
+                    editor={editor}
+                    anchorRect={linkAnchor}
+                    containerRef={editorContainerRef}
+                    onClose={() => setLinkAnchor(null)}
+                    articleId={articleId}
+                    siteId={siteId}
+                />
             ) : null}
         </div>
     );
@@ -1851,6 +1866,8 @@ function BlockEditor({
             setGlobalEditor={setGlobalEditor}
             onDelete={onDelete}
             canDeleteBlock={canDeleteBlock}
+            articleId={articleId}
+            siteId={siteId}
         />
     );
 }
@@ -2068,6 +2085,14 @@ export default function SeoArticleEditor({
             initialSeo?.extracted_links?.internal ?? [],
         ),
     );
+    const domainLinkCatalogRef = useRef(
+        Array.isArray(initialSeo?.domain_link_list_catalog) ? initialSeo.domain_link_list_catalog : [],
+    );
+    const suggestionKeywordCatalogRef = useRef(
+        Array.isArray(initialSeo?.suggested_internal_links_catalog)
+            ? initialSeo.suggested_internal_links_catalog
+            : [],
+    );
 
     const mainKeyword = useMemo(() => {
         const fromFocus = String(focusKeyword ?? '').trim();
@@ -2229,6 +2254,8 @@ export default function SeoArticleEditor({
                     links: enrichedLinks,
                     suggested_internal: filteredSuggested,
                     article_plain_text: articlePlainText,
+                    domain_link_list_catalog: domainLinkCatalogRef.current,
+                    suggested_internal_links_catalog: suggestionKeywordCatalogRef.current,
                 },
             }),
         );

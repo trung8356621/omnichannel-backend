@@ -13,10 +13,10 @@ use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\Tag;
-use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
+use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
@@ -338,6 +338,7 @@ class KeywordResource extends SeoPanelResource
                     ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->options(fn (): array => static::siteSelectOptions())
                     ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
+                    ->placeholder(__('seo-content-ai::filament.keyword.domain_filter_all'))
                     ->searchable()
                     ->preload()
                     ->native(false)
@@ -345,6 +346,18 @@ class KeywordResource extends SeoPanelResource
                         $siteId = (int) ($data['value'] ?? 0);
 
                         return $siteId > 0 ? $query->forSite($siteId) : $query;
+                    })
+                    ->indicateUsing(function (array $data): ?string {
+                        $siteId = (int) ($data['value'] ?? 0);
+                        if ($siteId <= 0) {
+                            return null;
+                        }
+
+                        $domain = static::siteSelectOptions()[$siteId] ?? null;
+
+                        return is_string($domain) && $domain !== ''
+                            ? __('seo-content-ai::filament.keyword.domain').': '.$domain
+                            : null;
                     }),
                 Tables\Filters\Filter::make('keyword_type')
                     ->label(__('seo-content-ai::filament.keyword.type'))
@@ -2499,6 +2512,7 @@ class KeywordResource extends SeoPanelResource
     {
         return [
             'index' => Pages\ListKeywords::route('/'),
+            'focus' => Pages\ListFocusKeywords::route('/focus'),
             'anchor-audit' => Pages\AnchorTextAuditWorkspace::route('/anchor-audit'),
             'workspace-2' => Pages\KeywordWorkspaceTwo::route('/workspace-2'),
             'workspace-3' => Pages\KeywordWorkspaceThree::route('/workspace-3'),

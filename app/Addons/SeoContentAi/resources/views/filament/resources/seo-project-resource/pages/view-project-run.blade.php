@@ -92,7 +92,15 @@
                                                 {{ $this->itemKeywordLabel($item) }}
                                             </a>
                                         @else
-                                            {{ $this->itemKeywordLabel($item) }}
+                                            <span>{{ $this->itemKeywordLabel($item) }}</span>
+                                            @if ($itemStatus === 'success' && (int) ($item['article_id'] ?? 0) > 0 && ! (bool) ($item['article_editor_ready'] ?? true))
+                                                <p
+                                                    class="mt-1 text-xs font-normal text-warning-700 dark:text-warning-400"
+                                                    data-run-article-preparing="{{ (int) ($item['article_id'] ?? 0) }}"
+                                                >
+                                                    {{ $item['article_editor_preparing_message'] ?? __('seo-content-ai::filament.projects.article_editor_preparing_body') }}
+                                                </p>
+                                            @endif
                                         @endif
 
                                         @if ($rewriteNotes = $this->itemRewriteNotes($item))

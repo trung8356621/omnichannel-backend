@@ -44,6 +44,8 @@ class Keyword extends Model
 
     public const METRIC_RESCRAPE_KEEP = 'rescrape_keep';
 
+    public const PHRASE_MAX_LENGTH = 255;
+
     protected $connection = 'omi_seo_ai';
 
     protected $fillable = [
@@ -69,12 +71,65 @@ class Keyword extends Model
         return trim($value);
     }
 
+    /**
+     * Rank Math / Yoast có thể lưu nhiều focus keyword phân tách bằng dấu phẩy — chỉ lấy cụm chính (đầu tiên).
+     */
+    public static function normalizeFocusPhrase(?string $value): string
+    {
+        $value = self::decodePhrase($value);
+        if ($value === '') {
+            return '';
+        }
+
+        $parts = preg_split('/[,，;；|]/u', $value) ?: [];
+        foreach ($parts as $part) {
+            $part = self::decodePhrase(is_string($part) ? $part : '');
+            if ($part !== '') {
+                return $part;
+            }
+        }
+
+        return $value;
+    }
+
+    public static function clampPhrase(?string $value, ?int $maxLength = null): string
+    {
+        $value = self::decodePhrase($value);
+        if ($value === '') {
+            return '';
+        }
+
+        $maxLength = $maxLength ?? self::PHRASE_MAX_LENGTH;
+        if (mb_strlen($value) <= $maxLength) {
+            return $value;
+        }
+
+        return mb_substr($value, 0, $maxLength);
+    }
+
+    public static function preparePhraseForStorage(?string $value): string
+    {
+        return self::clampPhrase(self::normalizeFocusPhrase($value));
+    }
+
     protected function phrase(): Attribute
     {
         return Attribute::make(
             get: fn (?string $value): string => self::decodePhrase($value),
-            set: fn (?string $value): string => self::decodePhrase($value),
+            set: fn (?string $value): string => self::preparePhraseForStorage($value),
         );
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (Keyword $keyword): void {
+            if (! $keyword->isDirty('phrase')) {
+                return;
+            }
+
+            $raw = $keyword->getAttributes()['phrase'] ?? '';
+            $keyword->attributes['phrase'] = self::preparePhraseForStorage(is_string($raw) ? $raw : '');
+        });
     }
 
     public function getNameAttribute(): string

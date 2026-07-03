@@ -147,3 +147,84 @@ export function filterSuggestedInternalLinks(suggested, internal) {
 
     return filtered;
 }
+
+export const MAX_INTERNAL_LINK_SLOTS = 10;
+
+export function isSuggestionExcluded(phrase, excludedLabels) {
+    const normalized = normalizeLinkLabel(phrase);
+    if (!normalized) {
+        return false;
+    }
+
+    return (Array.isArray(excludedLabels) ? excludedLabels : []).some((excluded) =>
+        labelsOverlap(excluded, normalized),
+    );
+}
+
+/**
+ * @param {Array<{ text?: string, href?: string, target_url?: string, keyword_id?: number, can_insert?: boolean }>} sources
+ */
+export function mergeSuggestionCatalog(...sources) {
+    const seen = new Set();
+    const merged = [];
+
+    sources.flat().forEach((item) => {
+        const text = String(item?.text ?? '').trim();
+        const label = normalizeLinkLabel(text);
+        if (!label || seen.has(label)) {
+            return;
+        }
+
+        seen.add(label);
+        const href = String(item?.href ?? item?.target_url ?? '').trim();
+
+        merged.push({
+            text,
+            href: href || null,
+            target_url: String(item?.target_url ?? item?.href ?? '').trim() || null,
+            keyword_id: item?.keyword_id ?? null,
+            can_insert: item?.can_insert !== false && href !== '',
+            is_suggestion: true,
+        });
+    });
+
+    return merged.sort((left, right) => String(right.text).length - String(left.text).length);
+}
+
+/**
+ * @param {{
+ *   catalog?: Array<{ text?: string, href?: string, target_url?: string, keyword_id?: number, can_insert?: boolean }>,
+ *   internal?: Array<{ text?: string, href?: string }>,
+ *   excludedLabels?: string[],
+ *   articlePlainText?: string,
+ *   maxSlots?: number,
+ *   skipContentFilter?: boolean,
+ * }} options
+ */
+export function buildVisibleInternalSuggestions({
+    catalog = [],
+    internal = [],
+    excludedLabels = [],
+    articlePlainText = '',
+    maxSlots = MAX_INTERNAL_LINK_SLOTS,
+    skipContentFilter = false,
+} = {}) {
+    const slots = Math.max(0, maxSlots - (Array.isArray(internal) ? internal.length : 0));
+    if (slots <= 0) {
+        return [];
+    }
+
+    let pool = Array.isArray(catalog) ? catalog : [];
+    const plain = String(articlePlainText ?? '').trim();
+    if (!skipContentFilter && plain !== '') {
+        pool = filterDomainLinksInArticleContent(pool, plain);
+    }
+
+    const withoutExcluded = pool.filter((item) => {
+        const phrase = String(item?.text ?? '').trim();
+
+        return phrase !== '' && !isSuggestionExcluded(phrase, excludedLabels);
+    });
+
+    return filterSuggestedInternalLinks(withoutExcluded, internal).slice(0, slots);
+}

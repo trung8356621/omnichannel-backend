@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Jobs;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptResultLinkService;
@@ -53,6 +55,7 @@ class GenerateMediaJob implements ShouldQueue
         PromptPostProcessingApplyService $postProcessing,
         PromptResultLinkService $promptResultLinks,
         SeoDatabaseConnectionService $databaseConnection,
+        ArticleEditorReadinessService $editorReadiness,
     ): void {
         $databaseConnection->bootstrapLegacySharedConnection();
 
@@ -147,6 +150,14 @@ class GenerateMediaJob implements ShouldQueue
                     logger()->warning(
                         "GenerateMediaJob post-processing failed [media_id={$this->seoMediaId}]: {$postProcessingException->getMessage()}",
                     );
+                }
+            }
+
+            $media = $media->fresh();
+            if ($articleId > 0 && $media instanceof SeoMedia) {
+                $article = SeoArticle::query()->find($articleId);
+                if ($article instanceof SeoArticle) {
+                    $editorReadiness->evaluate($article);
                 }
             }
         } catch (Throwable $exception) {

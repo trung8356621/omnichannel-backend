@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\DomainSyncManifestComparator;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
@@ -194,6 +195,10 @@ class SyncDomainContentService
             }
 
             $entries = is_array($manifestPayload['entries'] ?? null) ? $manifestPayload['entries'] : [];
+            $manifestCounts = is_array($manifestPayload['counts'] ?? null) ? $manifestPayload['counts'] : [];
+            $manifestTotals = is_array($manifestPayload['totals'] ?? null) ? $manifestPayload['totals'] : [];
+            $this->persistManifestCounts($site, $manifestCounts, $manifestTotals);
+
             $localArticles = SeoArticle::query()
                 ->where('site_id', $site->id)
                 ->where('wp_post_id', '>', 0)
@@ -202,10 +207,24 @@ class SyncDomainContentService
             $plan = $this->manifestComparator->resolveFetchRefs($entries, $localArticles);
             $refs = $plan['refs'];
             $manifestTotal = count($entries);
+            $localArticleCount = $localArticles
+                ->filter(static fn (object $article): bool => in_array((string) ($article->type ?? 'article'), ['article', ''], true))
+                ->count();
+            $accounted = $plan['skipped'] + count($refs);
+
+            if ($accounted < $manifestTotal) {
+                Log::warning('SeoContentAi incremental sync manifest unaccounted entries', [
+                    'site_id' => $site->id,
+                    'manifest_entries' => $manifestTotal,
+                    'accounted' => $accounted,
+                    'unaccounted' => $manifestTotal - $accounted,
+                ]);
+            }
 
             Log::info('SeoContentAi incremental sync plan', [
                 'site_id' => $site->id,
                 'manifest_entries' => $manifestTotal,
+                'manifest_counts' => $manifestCounts,
                 'to_fetch' => count($refs),
                 'new_count' => $plan['new_count'],
                 'update_count' => $plan['update_count'],
@@ -213,15 +232,20 @@ class SyncDomainContentService
             ]);
 
             if ($refs === []) {
+                $gapMessage = $this->buildManifestGapMessage($manifestCounts, $localArticleCount);
+
                 return [
                     'success' => true,
-                    'message' => 'Không có thay đổi mới trên WordPress. Đã bỏ qua '.$plan['skipped'].' mục.',
+                    'message' => $gapMessage !== ''
+                        ? $gapMessage
+                        : 'Không có thay đổi mới trên WordPress. Đã bỏ qua '.$plan['skipped'].' mục.',
                     'refs' => [],
                     'skipped' => $plan['skipped'],
                     'new_count' => 0,
                     'update_count' => 0,
                     'total' => 0,
                     'manifest_total' => $manifestTotal,
+                    'manifest_counts' => $manifestCounts,
                 ];
             }
 
@@ -240,6 +264,7 @@ class SyncDomainContentService
                 'update_count' => $plan['update_count'],
                 'total' => count($refs),
                 'manifest_total' => $manifestTotal,
+                'manifest_counts' => $manifestCounts,
             ];
         } catch (Throwable $e) {
             Log::error('SeoContentAi incremental sync prepare failed', [
@@ -310,8 +335,11 @@ class SyncDomainContentService
 
             if ($items === []) {
                 return [
-                    'success' => true,
-                    'message' => 'Lô hiện tại không có dữ liệu khớp trên WordPress.',
+                    'success' => false,
+                    'message' => sprintf(
+                        'WordPress không trả dữ liệu cho %d mục trong lô — sẽ thử lại khi tiếp tục đồng bộ.',
+                        count($chunkRefs),
+                    ),
                     'synced' => $this->emptySyncedCounts(),
                     'imported' => 0,
                     'state' => $state,
@@ -694,117 +722,152 @@ class SyncDomainContentService
                 continue;
             }
 
-            $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
-            $publishedAt = $this->parsePublishedAt($item['published_at'] ?? null);
-
-            $existing = SeoArticle::query()
-                ->where('site_id', $site->id)
-                ->where('wp_post_id', $wpId)
-                ->where('type', $type)
-                ->first();
-
-            if ($existing instanceof SeoArticle && $syncFlags->shouldBlockWordPressImport($existing)) {
-                $syncFlags->markDataOutOfSync($existing);
-
-                if (array_key_exists('conflict', $synced)) {
-                    $synced['conflict']++;
-                } else {
-                    $synced['conflict'] = 1;
-                }
-
-                continue;
-            }
-
-            $title = $this->resolveSyncItemTitle($item, $syncFlags);
-            $hasLocalBody = $existing instanceof SeoArticle && $syncFlags->hasLocalEditorContent($existing);
-
-            // Bài chưa có nội dung editor trên SEO: ghi đè scoring (xóa slug/body). Bài đã có body: chỉ cập nhật tiêu đề/trạng thái.
-            $articleAttributes = [
-                'type' => $type,
-                'title' => $title !== '' ? $title : 'Untitled',
-                'status' => $this->normalizeStatus((string) ($item['status'] ?? 'draft')),
-                'published_at' => $publishedAt,
-            ];
-
-            if (! $hasLocalBody) {
-                $articleAttributes['slug'] = null;
-                $articleAttributes['excerpt'] = null;
-                $articleAttributes['body'] = null;
-                $articleAttributes['blocks'] = null;
-            }
-
-            $article = SeoArticle::query()->updateOrCreate(
-                [
-                    'site_id' => $site->id,
-                    'wp_post_id' => $wpId,
-                    'type' => $type,
-                ],
-                $articleAttributes,
-            );
-
-            if ($title !== '') {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_post_title'],
-                    ['meta_value' => $title],
-                );
-            }
-
-            $wpPostType = (string) ($item['wp_post_type'] ?? '');
-            if ($wpPostType !== '') {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_post_type'],
-                    ['meta_value' => $wpPostType]
-                );
-            }
-
-            $wpEntity = trim((string) ($item['wp_entity'] ?? ''));
-            if ($wpEntity !== '') {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_entity'],
-                    ['meta_value' => $wpEntity],
-                );
-            }
-
-            if ($wpEntity === 'term' && $wpPostType !== '') {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_taxonomy'],
-                    ['meta_value' => $wpPostType],
-                );
-            }
-
-            $this->syncWordPressPostMeta($article, $item);
-            $this->syncSchemaAndWooCommerceMeta($article, $item);
-            app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
-
-            if (! $hasLocalBody) {
-                app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
-            }
-
-            $this->syncSeoMetaFromWordPress($article, $item);
-            $this->syncFocusKeyword($site, $userId, $article, $item);
-            app(WordPressArticleSyncService::class)->applyMultilingualFromSyncPayload($article, $site, $item);
-
-            $syncFlags->clearAll($article);
-
-            if (array_key_exists($type, $synced)) {
-                $synced[$type]++;
-            } else {
-                $synced['other']++;
-            }
-
             try {
-                $analyzer->analyzeFromSyncItem($article, $item, $siteDomain);
+                $this->importSingleSyncItem(
+                    site: $site,
+                    item: $item,
+                    wpId: $wpId,
+                    synced: $synced,
+                    analyzer: $analyzer,
+                    siteDomain: $siteDomain,
+                    userId: $userId,
+                    syncFlags: $syncFlags,
+                );
             } catch (Throwable $e) {
-                Log::warning('SeoAnalyzer failed after sync', [
-                    'article_id' => $article->id,
+                Log::warning('SeoContentAi sync item failed', [
+                    'site_id' => $site->id,
+                    'wp_id' => $wpId,
+                    'type' => (string) ($item['type'] ?? 'article'),
                     'error' => $e->getMessage(),
                 ]);
             }
-
-            $this->timestampService->sync($article, $item);
         }
 
         return $synced;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  array<string, int>  $synced
+     */
+    private function importSingleSyncItem(
+        Site $site,
+        array $item,
+        int $wpId,
+        array &$synced,
+        SeoAnalyzerService $analyzer,
+        string $siteDomain,
+        int $userId,
+        ArticleWordPressSyncFlagService $syncFlags,
+    ): void {
+        $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
+        $publishedAt = $this->parsePublishedAt($item['published_at'] ?? null);
+
+        $existing = SeoArticle::query()
+            ->where('site_id', $site->id)
+            ->where('wp_post_id', $wpId)
+            ->where('type', $type)
+            ->first();
+
+        if ($existing instanceof SeoArticle && $syncFlags->shouldBlockWordPressImport($existing)) {
+            $syncFlags->markDataOutOfSync($existing);
+
+            if (array_key_exists('conflict', $synced)) {
+                $synced['conflict']++;
+            } else {
+                $synced['conflict'] = 1;
+            }
+
+            return;
+        }
+
+        $title = $this->resolveSyncItemTitle($item, $syncFlags);
+        $hasLocalBody = $existing instanceof SeoArticle && $syncFlags->hasLocalEditorContent($existing);
+
+        // Bài chưa có nội dung editor trên SEO: ghi đè scoring (xóa slug/body). Bài đã có body: chỉ cập nhật tiêu đề/trạng thái.
+        $articleAttributes = [
+            'type' => $type,
+            'title' => $title !== '' ? $title : 'Untitled',
+            'status' => $this->normalizeStatus((string) ($item['status'] ?? 'draft')),
+            'published_at' => $publishedAt,
+        ];
+
+        if (! $hasLocalBody) {
+            $articleAttributes['slug'] = null;
+            $articleAttributes['excerpt'] = null;
+            $articleAttributes['body'] = null;
+            $articleAttributes['blocks'] = null;
+        }
+
+        $article = SeoArticle::query()->updateOrCreate(
+            [
+                'site_id' => $site->id,
+                'wp_post_id' => $wpId,
+                'type' => $type,
+            ],
+            $articleAttributes,
+        );
+
+        if ($title !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_title'],
+                ['meta_value' => $title],
+            );
+        }
+
+        $wpPostType = (string) ($item['wp_post_type'] ?? '');
+        if ($wpPostType !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_type'],
+                ['meta_value' => $wpPostType]
+            );
+        }
+
+        $wpEntity = trim((string) ($item['wp_entity'] ?? ''));
+        if ($wpEntity !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_entity'],
+                ['meta_value' => $wpEntity],
+            );
+        }
+
+        if ($wpEntity === 'term' && $wpPostType !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_taxonomy'],
+                ['meta_value' => $wpPostType],
+            );
+        }
+
+        $this->syncWordPressPostMeta($article, $item);
+        $this->syncSchemaAndWooCommerceMeta($article, $item);
+        app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
+
+        if (! $hasLocalBody) {
+            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
+        }
+
+        $this->syncSeoMetaFromWordPress($article, $item);
+        $this->syncFocusKeyword($site, $userId, $article, $item);
+        app(WordPressArticleSyncService::class)->applyMultilingualFromSyncPayload($article, $site, $item);
+
+        $syncFlags->clearAll($article);
+
+        if (array_key_exists($type, $synced)) {
+            $synced[$type]++;
+        } else {
+            $synced['other']++;
+        }
+
+        try {
+            $analyzer->analyzeFromSyncItem($article, $item, $siteDomain);
+        } catch (Throwable $e) {
+            Log::warning('SeoAnalyzer failed after sync', [
+                'article_id' => $article->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
+        $this->timestampService->sync($article, $item);
     }
 
     /**
@@ -982,7 +1045,7 @@ class SyncDomainContentService
 
         $metaMap = [
             'seo_meta_description' => (string) ($seo['meta_description'] ?? ''),
-            'seo_focus_keyword' => (string) ($seo['focus_keyword'] ?? ''),
+            'seo_focus_keyword' => Keyword::preparePhraseForStorage((string) ($seo['focus_keyword'] ?? '')),
         ];
 
         if ($seoTitle !== null && $seoTitle !== '') {
@@ -994,6 +1057,10 @@ class SyncDomainContentService
         foreach ($metaMap as $metaKey => $metaValue) {
             $metaValue = trim($metaValue);
             if ($metaValue === '') {
+                if ($metaKey === 'seo_focus_keyword') {
+                    $article->articleMetas()->where('meta_key', $metaKey)->delete();
+                }
+
                 continue;
             }
 
@@ -1012,12 +1079,57 @@ class SyncDomainContentService
         $seo = is_array($item['seo'] ?? null) ? $item['seo'] : [];
         $scoring = is_array($item['scoring'] ?? null) ? $item['scoring'] : [];
 
-        $phrase = trim((string) ($seo['focus_keyword'] ?? $scoring['focus_keyword'] ?? ''));
+        $phrase = Keyword::preparePhraseForStorage(
+            (string) ($seo['focus_keyword'] ?? $scoring['focus_keyword'] ?? ''),
+        );
         if ($phrase === '') {
             return;
         }
 
         KeywordFocusAttach::syncMainKeyword($article, $site->id, $userId, $phrase);
+    }
+
+    /**
+     * @param  array<string, int>  $counts
+     * @param  array<string, int>  $totals
+     */
+    private function persistManifestCounts(Site $site, array $counts, array $totals = []): void
+    {
+        $payload = [
+            'counts' => $counts,
+            'totals' => $totals,
+            'fetched_at' => now()->toIso8601String(),
+        ];
+
+        $site->metas()->updateOrCreate(
+            ['meta_key' => 'seo_wp_manifest_counts'],
+            ['meta_value' => json_encode($payload, JSON_UNESCAPED_UNICODE)],
+        );
+    }
+
+    /**
+     * @param  array<string, int>  $manifestCounts
+     */
+    private function buildManifestGapMessage(array $manifestCounts, int $localArticleCount): string
+    {
+        $wpPosts = (int) ($manifestCounts['article'] ?? 0);
+        $wpPages = (int) ($manifestCounts['page'] ?? 0);
+        $wpArticleTotal = $wpPosts + $wpPages;
+
+        if ($wpArticleTotal <= 0 || $localArticleCount >= $wpArticleTotal) {
+            return '';
+        }
+
+        $missing = $wpArticleTotal - $localArticleCount;
+
+        return sprintf(
+            'WordPress có %d bài (post %d + page %d) nhưng local chỉ có %d — thiếu %d bài. Hãy cập nhật plugin WP hoặc dùng «Làm sạch & Đồng bộ lại» nếu vẫn lệch.',
+            $wpArticleTotal,
+            $wpPosts,
+            $wpPages,
+            $localArticleCount,
+            $missing,
+        );
     }
 
     private function buildSyncUrl(Site $site): string

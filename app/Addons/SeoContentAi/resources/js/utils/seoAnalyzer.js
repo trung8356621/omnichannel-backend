@@ -1,4 +1,5 @@
 import { normalizeArticleSlug } from './articleSlugUtils';
+import { isFaqPlaceholderHtml } from './editorHtmlUtils';
 import {
     containsKeywordPhrase,
     normalizePhrase,
@@ -9,7 +10,6 @@ const MAX_HEADING = 20;
 const MAX_LENGTH = 15;
 const MAX_IMAGE_RATIO = 15;
 const MAX_WIKI_TRUST = 15;
-const MAX_FEATURED_SNIPPET = 10;
 const MAX_FAQ_SCHEMA = 10;
 const MAX_KEYWORD = 15;
 
@@ -251,43 +251,92 @@ function normalizeFaqs(faqs) {
     });
 }
 
-function hasTableNearStart(html) {
-    const leading = String(html ?? '').trim().slice(0, 4000);
+function parseFaqHeadingPairs(container) {
+    const faqs = [];
 
-    return /<table\b/i.test(leading);
+    container.querySelectorAll('h3').forEach((heading) => {
+        const question = String(heading.textContent ?? '').trim();
+        if (question === '') {
+            return;
+        }
+
+        let answer = '';
+        let sibling = heading.nextElementSibling;
+
+        while (sibling) {
+            const tag = sibling.tagName.toLowerCase();
+            if (['h1', 'h2', 'h3'].includes(tag)) {
+                break;
+            }
+
+            if (tag === 'p') {
+                const text = String(sibling.textContent ?? '').trim();
+                if (text !== '') {
+                    answer = answer === '' ? text : `${answer} ${text}`;
+                }
+            }
+
+            sibling = sibling.nextElementSibling;
+        }
+
+        if (answer !== '') {
+            faqs.push({ question, answer });
+        }
+    });
+
+    return faqs;
 }
 
-function hasShortBulletListNearStart(html) {
+function parseFaqsFromHtmlForScoring(html) {
+    const source = String(html ?? '').trim();
+    if (source === '') {
+        return [];
+    }
+
     if (typeof document === 'undefined') {
-        return false;
+        if (isFaqPlaceholderHtml(source) || /omi-faq-item/i.test(source)) {
+            return [{ question: 'FAQ', answer: 'detected' }];
+        }
+
+        return [];
     }
 
     const container = document.createElement('div');
-    container.innerHTML = String(html ?? '');
+    container.innerHTML = source;
 
-    for (const child of Array.from(container.children)) {
-        const tag = child.tagName.toLowerCase();
-        if (['p', 'div', 'span', 'br'].includes(tag)) {
-            const text = String(child.textContent ?? '').trim();
-            if (text === '') {
-                continue;
-            }
+    const fromAccordion = [];
+    container.querySelectorAll('.omi-faq-item').forEach((item) => {
+        const question = String(item.querySelector('.omi-faq-item__question')?.textContent ?? '').trim();
+        const answer = String(item.querySelector('.omi-faq-item__answer')?.textContent ?? '').trim();
+
+        if (question !== '' && answer !== '') {
+            fromAccordion.push({ question, answer });
         }
+    });
 
-        if (!['ul', 'ol'].includes(tag)) {
-            break;
-        }
-
-        const items = child.querySelectorAll(':scope > li');
-
-        return items.length > 0 && items.length <= 5;
+    if (fromAccordion.length > 0) {
+        return fromAccordion;
     }
 
-    return false;
+    const fromHeadings = parseFaqHeadingPairs(container);
+    if (fromHeadings.length > 0) {
+        return fromHeadings;
+    }
+
+    if (isFaqPlaceholderHtml(source)) {
+        return [{ question: '[omi_faq]', answer: 'shortcode' }];
+    }
+
+    return [];
 }
 
-function hasFeaturedSnippetStructure(html) {
-    return hasTableNearStart(html) || hasShortBulletListNearStart(html);
+function resolveFaqsForScoring(html, faqs) {
+    const normalized = normalizeFaqs(faqs);
+    if (normalized.length > 0) {
+        return normalized;
+    }
+
+    return parseFaqsFromHtmlForScoring(html);
 }
 
 function applyCategoryResult(category, messages, good, errors, warnings, reasonKeys) {
@@ -387,20 +436,8 @@ function scoreWikiTrust(extractedLinks, wikiTrustDomains) {
     };
 }
 
-function scoreFeaturedSnippet(html) {
-    const passed = hasFeaturedSnippetStructure(html);
-
-    return {
-        max: MAX_FEATURED_SNIPPET,
-        earned: passed ? MAX_FEATURED_SNIPPET : 0,
-        passed,
-        key: passed ? 'seo.featured_snippet.pass' : 'seo.featured_snippet',
-        params: { points: MAX_FEATURED_SNIPPET },
-    };
-}
-
-function scoreFaqSchema(faqs) {
-    const passed = normalizeFaqs(faqs).length > 0;
+function scoreFaqSchema(html, faqs) {
+    const passed = resolveFaqsForScoring(html, faqs).length > 0;
 
     return {
         max: MAX_FAQ_SCHEMA,
@@ -455,8 +492,7 @@ function computeUnifiedScore({
         length: scoreLength(content),
         image_ratio: scoreTextToImage(content),
         wiki_trust: scoreWikiTrust(extractedLinks, wikiTrustDomains),
-        featured_snippet: scoreFeaturedSnippet(content),
-        faq_schema: scoreFaqSchema(faqs),
+        faq_schema: scoreFaqSchema(content, faqs),
         keyword: scoreKeywordPlacement({
             html: content,
             keyword,

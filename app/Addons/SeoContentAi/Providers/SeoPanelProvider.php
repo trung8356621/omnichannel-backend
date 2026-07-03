@@ -114,6 +114,14 @@ class SeoPanelProvider extends PanelProvider
                     return '';
                 }
 
+                if (request()->routeIs([
+                    'filament.seo.resources.keywords.index',
+                    'filament.seo.resources.keywords.focus',
+                    'filament.seo.resources.keywords.anchor-audit',
+                ])) {
+                    return '';
+                }
+
                 return Blade::render('@livewire(\'global-seo-bar\')');
             },
         );
@@ -141,6 +149,11 @@ class SeoPanelProvider extends PanelProvider
                 if (
                     request()->routeIs('filament.seo.resources.articles.edit')
                     || preg_match('#^seo/articles/\d+/edit/?$#', request()->path()) === 1
+                    || request()->routeIs([
+                        'filament.seo.resources.keywords.index',
+                        'filament.seo.resources.keywords.focus',
+                        'filament.seo.resources.keywords.anchor-audit',
+                    ])
                 ) {
                     return new HtmlString('');
                 }

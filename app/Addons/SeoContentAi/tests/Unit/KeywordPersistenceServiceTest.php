@@ -6,7 +6,6 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Models\KeywordMeta;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Tests\Support\UsesSeoDatabase;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
@@ -75,5 +74,18 @@ final class KeywordPersistenceServiceTest extends TestCase
 
         $this->assertNull($service->upsert('   ', Keyword::TYPE_NORMAL, 2));
         $this->assertNull($service->upsert('&nbsp;', Keyword::TYPE_NORMAL, 2));
+    }
+
+    public function test_upsert_uses_primary_focus_phrase_when_rank_math_lists_multiple(): void
+    {
+        $this->requireSeoDatabaseConnection();
+        $suffix = uniqid('kw_multi_', true);
+        $raw = 'balo quảng cáo '.$suffix.', balo phụ '.$suffix;
+        $service = app(KeywordPersistenceService::class);
+
+        $keyword = $service->upsert($raw, Keyword::TYPE_NORMAL, 2, '/a');
+
+        $this->assertNotNull($keyword);
+        $this->assertSame('balo quảng cáo '.$suffix, (string) $keyword->phrase);
     }
 }

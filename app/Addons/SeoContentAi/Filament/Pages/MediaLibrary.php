@@ -125,6 +125,26 @@ class MediaLibrary extends Page
         $notification->success()->send();
     }
 
+    public function refreshAfterLocalUpload(int $uploadedCount = 1): void
+    {
+        if (! in_array($this->activeTab, ['local', 'generated'], true)) {
+            $this->activeTab = 'local';
+        }
+
+        $this->page = 1;
+        $this->loadImages();
+
+        $count = max(1, $uploadedCount);
+
+        Notification::make()
+            ->title($count === 1
+                ? __('seo-content-ai::filament.media_tools.upload_success_one')
+                : __('seo-content-ai::filament.media_tools.upload_success_many', ['count' => $count]))
+            ->body(__('seo-content-ai::filament.media_tools.upload_success_body'))
+            ->success()
+            ->send();
+    }
+
     #[On('seo-magic-eraser-saved')]
     public function onMagicEraserSaved(string $url, ?int $imageId = null, bool $pendingWpSync = false): void
     {

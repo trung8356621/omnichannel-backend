@@ -7,7 +7,6 @@ namespace App\Services;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
 use DOMDocument;
-use DOMXPath;
 use Illuminate\Support\Str;
 
 final class SeoEngineService
@@ -19,8 +18,6 @@ final class SeoEngineService
     private const MAX_IMAGE_RATIO = 15;
 
     private const MAX_WIKI_TRUST = 15;
-
-    private const MAX_FEATURED_SNIPPET = 10;
 
     private const MAX_FAQ_SCHEMA = 10;
 
@@ -89,12 +86,7 @@ final class SeoEngineService
         $totalScore += $wikiTrust['earned'];
         $this->applyCategoryResult($wikiTrust, $good, $errors, $warnings, $reasonKeys);
 
-        $featuredSnippet = $this->scoreFeaturedSnippet($htmlContent);
-        $breakdown['featured_snippet'] = $featuredSnippet;
-        $totalScore += $featuredSnippet['earned'];
-        $this->applyCategoryResult($featuredSnippet, $good, $errors, $warnings, $reasonKeys);
-
-        $faqSchema = $this->scoreFaqSchema($faqsMeta);
+        $faqSchema = $this->scoreFaqSchema($faqsMeta, $htmlContent);
         $breakdown['faq_schema'] = $faqSchema;
         $totalScore += $faqSchema['earned'];
         $this->applyCategoryResult($faqSchema, $good, $errors, $warnings, $reasonKeys);
@@ -322,28 +314,12 @@ final class SeoEngineService
     }
 
     /**
-     * @return array{max: int, earned: int, passed: bool, key: string, params?: array<string, mixed>}
-     */
-    private function scoreFeaturedSnippet(string $html): array
-    {
-        $passed = $this->hasFeaturedSnippetStructure($html);
-
-        return [
-            'max' => self::MAX_FEATURED_SNIPPET,
-            'earned' => $passed ? self::MAX_FEATURED_SNIPPET : 0,
-            'passed' => $passed,
-            'key' => $passed ? 'seo.featured_snippet.pass' : 'seo.featured_snippet',
-            'params' => ['points' => self::MAX_FEATURED_SNIPPET],
-        ];
-    }
-
-    /**
      * @param  list<array{question?: string, answer?: string}>  $faqsMeta
      * @return array{max: int, earned: int, passed: bool, key: string, params?: array<string, mixed>}
      */
-    private function scoreFaqSchema(array $faqsMeta): array
+    private function scoreFaqSchema(array $faqsMeta, string $html = ''): array
     {
-        $passed = $this->hasFaqData($faqsMeta);
+        $passed = $this->hasFaqData($faqsMeta, $html);
 
         return [
             'max' => self::MAX_FAQ_SCHEMA,
@@ -386,7 +362,7 @@ final class SeoEngineService
     /**
      * @param  list<array{question?: string, answer?: string}>  $faqsMeta
      */
-    private function hasFaqData(array $faqsMeta): bool
+    private function hasFaqData(array $faqsMeta, string $html = ''): bool
     {
         foreach ($faqsMeta as $item) {
             if (! is_array($item)) {
@@ -401,76 +377,20 @@ final class SeoEngineService
             }
         }
 
-        return false;
-    }
-
-    private function hasFeaturedSnippetStructure(string $html): bool
-    {
-        if (trim($html) === '') {
+        $html = trim($html);
+        if ($html === '') {
             return false;
         }
 
-        if ($this->hasTableNearStart($html)) {
+        if (preg_match('/omi-faq-placeholder|\[omi_faq\]/i', $html) === 1) {
             return true;
         }
 
-        return $this->hasShortBulletListNearStart($html);
-    }
-
-    private function hasTableNearStart(string $html): bool
-    {
-        $leading = $this->extractLeadingContentHtml($html, 4000);
-
-        return preg_match('/<table\b/i', $leading) === 1;
-    }
-
-    private function hasShortBulletListNearStart(string $html): bool
-    {
-        if (trim($html) === '') {
-            return false;
+        if (preg_match('/\bomi-faq-item\b/i', $html) === 1) {
+            return true;
         }
 
-        $dom = new DOMDocument;
-        libxml_use_internal_errors(true);
-        $dom->loadHTML('<?xml encoding="utf-8" ?>'.$html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        libxml_clear_errors();
-
-        $xpath = new DOMXPath($dom);
-        $nodes = $xpath->query('//body/*|/*');
-
-        if ($nodes === false) {
-            return false;
-        }
-
-        foreach ($nodes as $node) {
-            $tag = strtolower($node->nodeName);
-            if (in_array($tag, ['p', 'div', 'span', 'br'], true)) {
-                $text = trim((string) $node->textContent);
-                if ($text === '' && $tag !== 'div') {
-                    continue;
-                }
-                if ($text === '' && $tag === 'div' && ! $node->hasChildNodes()) {
-                    continue;
-                }
-            }
-
-            if (! in_array($tag, ['ul', 'ol'], true)) {
-                break;
-            }
-
-            $items = $xpath->query('.//li', $node);
-
-            return $items !== false && $items->length > 0 && $items->length <= 5;
-        }
-
-        return false;
-    }
-
-    private function extractLeadingContentHtml(string $html, int $maxLength): string
-    {
-        $trimmed = ltrim($html);
-
-        return mb_substr($trimmed, 0, max(1, $maxLength));
+        return preg_match('/<h3\b[^>]*>[\s\S]*?<\/h3>\s*<p\b/i', $html) === 1;
     }
 
     private function hasWikiTrustExternalLink(string $html, string $domain): bool

@@ -7,18 +7,16 @@ namespace App\Addons\SeoContentAi\Support;
 use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordMeta;
-use App\Addons\SeoContentAi\Models\KeywordTag;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
-use Illuminate\Support\Collection;
 
 final class KeywordFocusAttach
 {
     public static function syncMainKeyword(SeoArticle $article, int $siteId, int $_userId, string $phrase): void
     {
-        $phrase = Keyword::decodePhrase(trim($phrase));
+        $phrase = Keyword::preparePhraseForStorage($phrase);
         $articleId = (int) $article->id;
 
         if ($phrase === '') {
@@ -38,7 +36,7 @@ final class KeywordFocusAttach
 
     public static function attachMainKeyword(SeoArticle $article, int $siteId, string $phrase): ?int
     {
-        $phrase = Keyword::decodePhrase($phrase);
+        $phrase = Keyword::preparePhraseForStorage($phrase);
         if ($phrase === '') {
             return null;
         }
@@ -66,6 +64,8 @@ final class KeywordFocusAttach
         self::clearMainArticleMetaForArticle((int) $article->id, exceptKeywordId: $keywordId);
         $metaRepository->setMainArticleId($keywordId, (int) $article->id);
 
+        app(\App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService::class)->resolveForKeyword($keywordId);
+
         return $keywordId;
     }
 
@@ -92,8 +92,8 @@ final class KeywordFocusAttach
                         continue;
                     }
 
-                    $phrase = trim((string) ($article->articleMetas
-                        ->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''));
+                    $phrase = Keyword::preparePhraseForStorage(trim((string) ($article->articleMetas
+                        ->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? '')));
 
                     if ($phrase === '') {
                         continue;

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
@@ -595,7 +596,7 @@ class WordPressArticleContentService
 
         $article->loadMissing(['articleMetas', 'site']);
 
-        $focusKeyword = trim((string) ($seo['focus_keyword'] ?? ''));
+        $focusKeyword = Keyword::preparePhraseForStorage((string) ($seo['focus_keyword'] ?? ''));
         $existingFocus = trim((string) ($article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword')?->meta_value ?? ''));
 
         if ($focusKeyword !== '' && ($force || $existingFocus === '')) {

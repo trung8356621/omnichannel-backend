@@ -135,6 +135,7 @@ final class WordPressArticleSyncService
                     ['meta_key' => 'wp_permalink'],
                     ['meta_value' => $permalink],
                 );
+                app(ArticlePendingInternalLinkService::class)->resolveForMainArticle($article->fresh());
             }
 
             return [
@@ -541,6 +542,7 @@ final class WordPressArticleSyncService
                     ['meta_key' => 'wp_permalink'],
                     ['meta_value' => $remotePermalink],
                 );
+                app(ArticlePendingInternalLinkService::class)->resolveForMainArticle($article->fresh());
             }
 
             $this->storeWpPostContentMeta($article, $postContent);

@@ -21,6 +21,11 @@ class UserResource extends Resource
 
     protected static ?string $navigationIcon = 'heroicon-o-rectangle-stack';
 
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->role === User::ROLE_ADMIN;
+    }
+
     public static function form(Form $form): Form
     {
         return $form

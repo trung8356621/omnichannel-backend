@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
+use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
@@ -14,7 +15,6 @@ use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
-use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Services\SeoEngineService;
 use DOMDocument;
 use DOMXPath;
@@ -69,13 +69,13 @@ class SeoAnalyzerService
         $scoring = is_array($item['scoring'] ?? null) ? $item['scoring'] : [];
         $seo = is_array($item['seo'] ?? null) ? $item['seo'] : [];
 
-        $focusKeyword = $this->normalizeFocusKeyword(
-            trim((string) ($scoring['focus_keyword'] ?? $seo['focus_keyword'] ?? ''))
+        $focusKeyword = Keyword::normalizeFocusPhrase(
+            trim((string) ($scoring['focus_keyword'] ?? $seo['focus_keyword'] ?? '')),
         );
 
         if ($focusKeyword === '') {
             $fromDb = $this->resolveFocusKeyword($article);
-            $focusKeyword = $fromDb !== null ? $this->normalizeFocusKeyword($fromDb) : '';
+            $focusKeyword = $fromDb !== null ? Keyword::normalizeFocusPhrase($fromDb) : '';
         }
 
         if ($focusKeyword === '') {
@@ -329,7 +329,7 @@ class SeoAnalyzerService
         $engineResult = $this->seoEngine->analyzeHtml(
             $content,
             $focusKeyword,
-            $article->resolveFaqs(),
+            $this->resolveFaqsForScoring($article, $content),
             [
                 'seo_title' => $seoTitle,
                 'meta_description' => $metaDescription,
@@ -351,6 +351,27 @@ class SeoAnalyzerService
             'scoreData' => $scoreData,
             'extractedLinks' => $extractedLinks,
         ];
+    }
+
+    /**
+     * @return list<array{question: string, answer: string, more?: string}>
+     */
+    private function resolveFaqsForScoring(SeoArticle $article, string $content): array
+    {
+        $dbFaqs = $article->resolveFaqs();
+        $content = trim($content);
+
+        if ($content === '') {
+            return $dbFaqs;
+        }
+
+        $contentFaqs = $this->workflowParser->parseFaqsFromContent($content);
+
+        if (count($contentFaqs) > count($dbFaqs)) {
+            return $contentFaqs;
+        }
+
+        return $dbFaqs;
     }
 
     /**
@@ -504,7 +525,7 @@ class SeoAnalyzerService
 
         foreach ($extractedLinks['internal'] as $link) {
             $href = (string) ($link['href'] ?? '');
-            $anchorText = Keyword::decodePhrase(
+            $anchorText = Keyword::preparePhraseForStorage(
                 Str::limit(strip_tags((string) ($link['text'] ?? '')), 255, ''),
             );
             $anchorText = $this->normalizeAnchorAgainstFocusKeyword($anchorText, $focusKeyword);
@@ -597,22 +618,6 @@ class SeoAnalyzerService
         return $this->normalizeDomain((string) ($site?->domain ?? ''));
     }
 
-    private function normalizeFocusKeyword(string $raw): string
-    {
-        $raw = trim($raw);
-        if ($raw === '') {
-            return '';
-        }
-
-        if (str_contains($raw, ',')) {
-            $parts = array_map(static fn (string $part): string => trim($part), explode(',', $raw));
-
-            return $parts[0] ?? '';
-        }
-
-        return $raw;
-    }
-
     private function normalizeAnchorAgainstFocusKeyword(string $anchorText, ?string $focusKeyword): string
     {
         $anchorText = Keyword::decodePhrase($anchorText);
@@ -702,7 +707,7 @@ class SeoAnalyzerService
 
         $metaKeyword = $article->articleMetas->firstWhere('meta_key', 'seo_focus_keyword');
         if ($metaKeyword && is_string($metaKeyword->meta_value) && trim($metaKeyword->meta_value) !== '') {
-            $fromMeta = $this->normalizeFocusKeyword($metaKeyword->meta_value);
+            $fromMeta = Keyword::normalizeFocusPhrase($metaKeyword->meta_value);
 
             if ($fromMeta !== '') {
                 return $fromMeta;
@@ -723,7 +728,7 @@ class SeoAnalyzerService
             return null;
         }
 
-        $keyword = $this->normalizeFocusKeyword((string) $mainKeyword->phrase);
+        $keyword = Keyword::normalizeFocusPhrase((string) $mainKeyword->phrase);
 
         return $keyword !== '' ? $keyword : null;
     }
@@ -873,7 +878,7 @@ class SeoAnalyzerService
      */
     private function slugContainsFocusKeyword(string $slug, string $focusKeyword): bool
     {
-        $keywordSlug = Str::slug($this->normalizeFocusKeyword($focusKeyword));
+        $keywordSlug = Str::slug(Keyword::normalizeFocusPhrase($focusKeyword));
         $articleSlug = Str::slug(trim($slug));
 
         if ($keywordSlug === '' || $articleSlug === '') {

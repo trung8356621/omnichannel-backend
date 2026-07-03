@@ -84,6 +84,7 @@ function registerSeoProjectRunQueue() {
                                 await component.$refresh();
                             }
                         },
+                        checkArticleEditorReady: (articleId) => component.call('checkArticleEditorReady', articleId),
                     };
                 }
             }
@@ -97,6 +98,7 @@ function registerSeoProjectRunQueue() {
                             await this.$wire.$refresh();
                         }
                     },
+                    checkArticleEditorReady: (articleId) => this.$wire.checkArticleEditorReady(articleId),
                 };
             }
 
@@ -205,6 +207,12 @@ function registerSeoProjectRunQueue() {
                 if (messageCell) {
                     messageCell.textContent = String(item?.message ?? '');
                 }
+
+                const articleId = Number(item?.article_id ?? 0);
+                const editorReady = item?.article_editor_ready !== false;
+                if (articleId > 0 && !editorReady) {
+                    this.pollArticleEditorReady(taskId, articleId, item);
+                }
             } else {
                 row.dataset.runItemStatus = 'failed';
 
@@ -253,6 +261,29 @@ function registerSeoProjectRunQueue() {
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#39;');
+        },
+
+        async pollArticleEditorReady(taskId, articleId, item) {
+            const wire = this.resolveWire();
+            if (!wire?.checkArticleEditorReady) {
+                return;
+            }
+
+            const maxAttempts = 120;
+            let attempts = 0;
+
+            while (attempts < maxAttempts) {
+                attempts += 1;
+                const response = await wire.checkArticleEditorReady(articleId);
+                if (response?.ready) {
+                    await wire.refresh();
+                    return;
+                }
+
+                await new Promise((resolve) => {
+                    window.setTimeout(resolve, 3000);
+                });
+            }
         },
     }));
 }

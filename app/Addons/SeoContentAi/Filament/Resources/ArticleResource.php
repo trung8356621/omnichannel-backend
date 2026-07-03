@@ -1335,6 +1335,25 @@ class ArticleResource extends SeoPanelResource
         return static::articleAssignedContentProjectId($article) !== null;
     }
 
+    public static function articleContentProjectUrl(SeoArticle $article): ?string
+    {
+        $projectId = static::articleAssignedContentProjectId($article);
+        if ($projectId === null) {
+            return null;
+        }
+
+        $project = SeoProject::query()->find($projectId);
+        if (! $project instanceof SeoProject) {
+            return null;
+        }
+
+        if (! SeoProjectResource::canView($project)) {
+            return null;
+        }
+
+        return SeoProjectResource::projectRecordUrl($project);
+    }
+
     /**
      * @param  SupportCollection<int, SeoArticle>|Collection<int, SeoArticle>  $records
      * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}

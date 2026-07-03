@@ -26,10 +26,17 @@ final class ArticleEditorSeoPayloadService
         $analysis = $this->decodeArticleMetaJson($article, 'seo_rank_math_score');
         $extractedLinks = $article->resolveExtractedLinks();
         $bodyHtml = (string) ($article->body ?? '');
-        $suggestedInternalLinks = app(ArticleInternalLinkSuggestionService::class)->suggest(
+        $internalLinks = $extractedLinks['internal'] ?? [];
+        $suggestionService = app(ArticleInternalLinkSuggestionService::class);
+        $suggestedInternalLinks = $suggestionService->suggest(
             $article,
             $bodyHtml,
-            $extractedLinks['internal'] ?? [],
+            $internalLinks,
+        );
+        $suggestedInternalLinksCatalog = $suggestionService->suggestCatalog(
+            $article,
+            $bodyHtml,
+            $internalLinks,
         );
         $contentBonus = $this->contentBonus->resolveForArticle($article);
 
@@ -78,6 +85,7 @@ final class ArticleEditorSeoPayloadService
             'content_bonus' => $contentBonus,
             'extracted_links' => $extractedLinks,
             'suggested_internal_links' => $suggestedInternalLinks,
+            'suggested_internal_links_catalog' => $suggestedInternalLinksCatalog,
             'google_serp_preview' => $googleSerpPreview,
             'article_slug' => trim((string) ($article->slug ?? '')),
             'permalink_base' => $article->site

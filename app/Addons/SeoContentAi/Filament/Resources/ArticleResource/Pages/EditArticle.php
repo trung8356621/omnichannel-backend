@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
+use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -18,6 +19,7 @@ use App\Addons\SeoContentAi\Services\ArticleCtaPlaceholderService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
+use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
@@ -27,9 +29,10 @@ use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
 use App\Addons\SeoContentAi\Services\ArticleFeaturedSnippetGeneratorService;
-use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
+use App\Addons\SeoContentAi\Services\ArticleInternalLinkSearchService;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
+use App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
@@ -41,16 +44,15 @@ use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoArticleRevisionService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
-use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
+use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Addons\SeoContentAi\Services\VirtualCommentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
-use App\Services\SeoEngineService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
@@ -62,6 +64,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
+use App\Services\SeoEngineService;
 use Filament\Actions;
 use Filament\Notifications\Notification;
 use Filament\Support\Enums\MaxWidth;
@@ -161,6 +164,10 @@ class EditArticle extends SeoEditRecord
 
     public ?int $reviewsCountForEditor = null;
 
+    public bool $editorPreparing = false;
+
+    public string $editorPreparingMessage = '';
+
     public function mount(int|string $record): void
     {
         parent::mount($record);
@@ -188,6 +195,16 @@ class EditArticle extends SeoEditRecord
         }
 
         ArticleResource::syncGlobalSiteForArticle($this->record);
+
+        $readiness = app(ArticleEditorReadinessService::class)->evaluate($this->record);
+        if (! $readiness->isReady) {
+            $this->editorPreparing = true;
+            $this->editorPreparingMessage = app(ArticleEditorReadinessService::class)->userMessage($readiness);
+            $this->articleTitle = (string) ($this->record->title ?? '');
+
+            return;
+        }
+
         $this->syncTitleFromWordPressWhenAllowed();
         $this->hydrateArticleState();
         $this->syncWordPressCategoriesOnLoad();
@@ -205,6 +222,31 @@ class EditArticle extends SeoEditRecord
                 ->success()
                 ->send();
         }
+    }
+
+    public function pollEditorReadiness(): void
+    {
+        if (! $this->editorPreparing) {
+            return;
+        }
+
+        $this->record->refresh();
+        $readiness = app(ArticleEditorReadinessService::class)->evaluate($this->record);
+        $this->editorPreparingMessage = app(ArticleEditorReadinessService::class)->userMessage($readiness);
+
+        if (! $readiness->isReady) {
+            return;
+        }
+
+        $this->editorPreparing = false;
+        $this->editorPreparingMessage = '';
+        $this->syncTitleFromWordPressWhenAllowed();
+        $this->hydrateArticleState();
+        $this->syncWordPressCategoriesOnLoad();
+        $this->importFaqsFromWordPressOnLoad();
+        $this->syncReviewedStatusFromExistingReviews();
+        $this->articleHeavyActionBusy = false;
+        $this->articleHeavyAction = null;
     }
 
     public function updatedArticleSlug($value): void
@@ -575,6 +617,12 @@ class EditArticle extends SeoEditRecord
                 ->color('info')
                 ->url(fn (): string => ArticleResource::getUrl('prompts', ['record' => $this->record]))
                 ->openUrlInNewTab(),
+            Actions\Action::make('open_content_project')
+                ->label(__('seo-content-ai::filament.article_edit.open_content_project'))
+                ->icon('heroicon-o-folder-open')
+                ->color('gray')
+                ->visible(fn (): bool => ArticleResource::articleIsInContentProject($this->record))
+                ->url(fn (): ?string => ArticleResource::articleContentProjectUrl($this->record)),
             Actions\Action::make('assign_to_content_project')
                 ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->icon('heroicon-o-folder-plus')
@@ -3321,7 +3369,8 @@ class EditArticle extends SeoEditRecord
         $projectRunRevision = (string) ($this->record->articleMetas()
             ->where('meta_key', 'content_project_run')
             ->value('meta_value') ?? '');
-        $contentRevisionSource = $projectRunRevision."\0".$this->editorHtml;
+        $bodyHash = hash('sha256', trim($this->editorHtml));
+        $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
         $productCategoryOptions = $siteId > 0
             ? app(\App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService::class)
                 ->productCategoryOptionsForSite($siteId)
@@ -4027,6 +4076,187 @@ class EditArticle extends SeoEditRecord
             ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
             ->success()
             ->send();
+    }
+
+    /**
+     * @return list<array{id: int, title: string, url: string, label: string}>
+     */
+    public function searchInternalLinkArticles(string $query = ''): array
+    {
+        return app(ArticleInternalLinkSearchService::class)->search(
+            (int) $this->record->site_id,
+            (int) $this->record->id,
+            $query,
+        );
+    }
+
+    /**
+     * Mở modal Filament «Assign to Content Projects» (cùng form keyword list).
+     */
+    public function assignKeywordAnchorToContentProjectAction(): Actions\Action
+    {
+        return Actions\Action::make('assignKeywordAnchorToContentProject')
+            ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+            ->icon('heroicon-o-folder-plus')
+            ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
+            ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
+            ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
+            ->form(function (): array {
+                $siteId = (int) ($this->record->site_id ?? 0);
+
+                if (KeywordResource::resolveKeywordDirectAssignData($siteId) !== null) {
+                    return [];
+                }
+
+                return KeywordResource::assignKeywordContentProjectFormSchema(
+                    $siteId > 0 ? [$siteId] : [],
+                );
+            })
+            ->requiresConfirmation(function (): bool {
+                $siteId = (int) ($this->record->site_id ?? 0);
+
+                return KeywordResource::resolveKeywordDirectAssignData($siteId) === null;
+            })
+            ->modalHidden(function (): bool {
+                $siteId = (int) ($this->record->site_id ?? 0);
+
+                return KeywordResource::resolveKeywordDirectAssignData($siteId) !== null;
+            })
+            ->action(function (array $arguments, array $data): void {
+                $this->completeKeywordAnchorContentProjectAssign(
+                    trim((string) ($arguments['anchorPhrase'] ?? '')),
+                    $data,
+                );
+            });
+    }
+
+    /**
+     * @return array{
+     *     success: bool,
+     *     placeholder_href?: string,
+     *     keyword_id?: int,
+     *     assigned_to_project?: bool,
+     *     already_has_target?: bool,
+     *     message?: string,
+     * }
+     */
+    public function assignPendingInternalLinkFromEditor(string $anchorPhrase, ?int $contentProjectId = null): array
+    {
+        $siteId = (int) ($this->record->site_id ?? 0);
+        $projectId = $contentProjectId !== null && $contentProjectId > 0
+            ? $contentProjectId
+            : ArticleResource::resolveDirectAssignContentProjectId($siteId);
+
+        if ($projectId === null || $projectId <= 0) {
+            return [
+                'success' => false,
+                'message' => __('seo-content-ai::filament.article_edit.pending_link_no_content_project'),
+            ];
+        }
+
+        $allowedProjects = ArticleResource::contentProjectOptions($siteId);
+        if (! array_key_exists($projectId, $allowedProjects)) {
+            return [
+                'success' => false,
+                'message' => __('seo-content-ai::filament.article_edit.pending_link_invalid_content_project'),
+            ];
+        }
+
+        return $this->assignPendingInternalLinkForEditor($anchorPhrase, $projectId);
+    }
+
+    private function completeKeywordAnchorContentProjectAssign(string $anchorPhrase, array $data): void
+    {
+        if ($anchorPhrase === '') {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.pending_link_empty_phrase'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $siteId = (int) ($this->record->site_id ?? 0);
+        $assignData = KeywordResource::resolveKeywordDirectAssignData($siteId) ?? $data;
+        $projectId = $this->resolveContentProjectIdFromAssignData($assignData, $siteId);
+
+        if ($projectId === null || $projectId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.pending_link_no_content_project'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $result = $this->assignPendingInternalLinkForEditor($anchorPhrase, $projectId);
+
+        if (! ($result['success'] ?? false)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.workspace_assign_denied'))
+                ->body((string) ($result['message'] ?? ''))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.keyword.assign_completed'))
+            ->body((string) ($result['message'] ?? ''))
+            ->success()
+            ->send();
+
+        $this->dispatch(
+            'pending-internal-link-ready',
+            placeholderHref: (string) ($result['placeholder_href'] ?? ''),
+            message: (string) ($result['message'] ?? ''),
+        );
+    }
+
+    /**
+     * @return array{
+     *     success: bool,
+     *     placeholder_href?: string,
+     *     keyword_id?: int,
+     *     assigned_to_project?: bool,
+     *     already_has_target?: bool,
+     *     message?: string,
+     * }
+     */
+    private function assignPendingInternalLinkForEditor(string $anchorPhrase, ?int $projectId): array
+    {
+        return app(ArticlePendingInternalLinkService::class)->assignFromEditor(
+            $this->record,
+            $anchorPhrase,
+            $projectId,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function resolveContentProjectIdFromAssignData(array $data, int $siteId): ?int
+    {
+        if ($siteId > 0) {
+            $projectId = (int) ($data['project_id_'.$siteId] ?? 0);
+            if ($projectId > 0) {
+                return $projectId;
+            }
+        }
+
+        foreach ($data as $key => $value) {
+            if (! is_string($key) || ! str_starts_with($key, 'project_id_')) {
+                continue;
+            }
+
+            $projectId = (int) $value;
+            if ($projectId > 0) {
+                return $projectId;
+            }
+        }
+
+        return null;
     }
 
     public function generateFeaturedSnippetFromEditor(string $refBlockId, string $position = 'after'): void

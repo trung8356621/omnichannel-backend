@@ -6,6 +6,17 @@
 @endpush
 
 <x-filament-panels::page @class(['seo-article-edit-page'])>
+@if ($this->editorPreparing)
+    <div class="mx-auto flex max-w-xl flex-col items-center gap-4 py-20 text-center" wire:poll.3s="pollEditorReadiness">
+        <x-filament::loading-indicator class="h-10 w-10" />
+        <h2 class="text-lg font-semibold text-gray-950 dark:text-white">
+            {{ __('seo-content-ai::filament.projects.article_editor_preparing_title') }}
+        </h2>
+        <p class="text-sm text-gray-600 dark:text-gray-300">
+            {{ $this->editorPreparingMessage }}
+        </p>
+    </div>
+@else
 @once
 <script>
         window.__seoArticleHeavyActionOverlay = {
@@ -1569,4 +1580,5 @@
             </script>
         @endif
     @endpush
+@endif
 </x-filament-panels::page>

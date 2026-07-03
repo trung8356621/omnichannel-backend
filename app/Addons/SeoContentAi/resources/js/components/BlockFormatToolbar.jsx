@@ -59,8 +59,10 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
     if (!editor) return null;
 
     const openLinkEditor = () => {
+        const { from, to } = editor.state.selection;
+        const savedSelection = { from, to };
         if (onEditLink) {
-            onEditLink();
+            onEditLink(savedSelection);
         }
     };
 

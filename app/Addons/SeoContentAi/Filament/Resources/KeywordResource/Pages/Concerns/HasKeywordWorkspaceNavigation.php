@@ -20,6 +20,11 @@ trait HasKeywordWorkspaceNavigation
                 'url' => KeywordResource::getUrl('index'),
             ],
             [
+                'key' => 'focus',
+                'label' => __('seo-content-ai::filament.keyword.workspace_nav_focus'),
+                'url' => KeywordResource::getUrl('focus'),
+            ],
+            [
                 'key' => 'anchor-audit',
                 'label' => __('seo-content-ai::filament.keyword.workspace_nav_anchor_audit'),
                 'url' => KeywordResource::getUrl('anchor-audit'),

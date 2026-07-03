@@ -1,8 +1,16 @@
-import React, { useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, Link2, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, Copy, Link2, RotateCcw, Trash2 } from 'lucide-react';
+import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { t } from '../utils/i18n';
 import {
-    filterSuggestedInternalLinks,
+    clearExcludedLinkSuggestions,
+    loadExcludedLinkSuggestions,
+    saveExcludedLinkSuggestions,
+} from '../utils/articleExcludedLinkSuggestionsStorage';
+import {
+    buildVisibleInternalSuggestions,
+    filterDomainLinksInArticleContent,
+    mergeSuggestionCatalog,
     normalizeHrefForCompare,
     normalizeLinkLabel,
 } from '../utils/articleLinkSuggestionFilter';
@@ -62,7 +70,7 @@ function occurrenceCount(item) {
 }
 
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onExcludeSuggestion?: Function }} props
  */
 function KeywordList({
     items,
@@ -76,6 +84,7 @@ function KeywordList({
     onInsertSuggestion,
     onCopyKeyword,
     onRemoveInternalLink,
+    onExcludeSuggestion,
 }) {
     if (!items.length) {
         return (
@@ -167,6 +176,21 @@ function KeywordList({
                                     <Copy size={14} aria-hidden />
                                 </button>
                             ) : null}
+                            {variant === 'suggestion' && onExcludeSuggestion ? (
+                                <button
+                                    type="button"
+                                    className="wp-article-links-delete-btn is-suggestion"
+                                    aria-label={t('links_exclude_suggestion', { label })}
+                                    title={t('links_exclude_suggestion_title', { label })}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        onExcludeSuggestion(item, index, itemKey);
+                                    }}
+                                >
+                                    <Trash2 size={14} aria-hidden />
+                                </button>
+                            ) : null}
                             {variant === 'default' && target === 'editor' && onRemoveInternalLink ? (
                                 <button
                                     type="button"
@@ -195,15 +219,19 @@ function InternalLinksSection({
     suggestedInternal,
     activeKey,
     hiddenRowKeys,
+    excludedCount = 0,
+    onClearExcluded,
     onKeywordClick,
     onSuggestionClick,
     onInsertSuggestion,
     onCopyKeyword,
     onRemoveInternalLink,
+    onExcludeSuggestion,
 }) {
     const showSuggestions = internal.length < 10 && suggestedInternal.length > 0;
+    const showExcludedClear = excludedCount > 0;
 
-    if (internal.length === 0 && !showSuggestions) {
+    if (internal.length === 0 && !showSuggestions && !showExcludedClear) {
         return (
             <KeywordList
                 items={[]}
@@ -233,31 +261,115 @@ function InternalLinksSection({
             ) : (
                 <p className="wp-article-links-empty">{t('links_internal_empty')}</p>
             )}
-            {showSuggestions ? (
-                <KeywordList
-                    items={suggestedInternal}
-                    title={t('links_suggestion_title', { count: suggestedInternal.length })}
-                    activeKey={activeKey}
-                    target="editor"
-                    variant="suggestion"
-                    hideTitle
-                    hiddenRowKeys={hiddenRowKeys}
-                    onKeywordClick={onSuggestionClick}
-                    onInsertSuggestion={onInsertSuggestion}
-                    onCopyKeyword={onCopyKeyword}
-                />
+            {showSuggestions || showExcludedClear ? (
+                <div className="wp-article-links-suggestions-head">
+                    {showSuggestions ? (
+                        <KeywordList
+                            items={suggestedInternal}
+                            title={t('links_suggestion_title', { count: suggestedInternal.length })}
+                            activeKey={activeKey}
+                            target="editor"
+                            variant="suggestion"
+                            hideTitle
+                            hiddenRowKeys={hiddenRowKeys}
+                            onKeywordClick={onSuggestionClick}
+                            onInsertSuggestion={onInsertSuggestion}
+                            onCopyKeyword={onCopyKeyword}
+                            onExcludeSuggestion={onExcludeSuggestion}
+                        />
+                    ) : (
+                        <p className="wp-article-links-empty">{t('links_suggestions_all_excluded')}</p>
+                    )}
+                    {showExcludedClear ? (
+                        <button
+                            type="button"
+                            className="wp-article-links-clear-excluded-btn"
+                            title={t('links_clear_excluded_title')}
+                            onClick={onClearExcluded}
+                        >
+                            <RotateCcw size={13} aria-hidden />
+                            {t('links_clear_excluded', { count: excludedCount })}
+                        </button>
+                    ) : null}
+                </div>
             ) : null}
         </div>
     );
 }
 
+function readEditorSeoBootstrap() {
+    try {
+        const el = document.getElementById('seo-article-initial-seo');
+        const raw = el?.textContent?.trim();
+        if (!raw) {
+            return null;
+        }
+
+        const data = JSON.parse(raw);
+
+        return data && typeof data === 'object' ? data : null;
+    } catch {
+        return null;
+    }
+}
+
+function readArticleMetaIds() {
+    try {
+        const el = document.getElementById('seo-article-meta');
+        const raw = el?.textContent?.trim();
+        if (!raw) {
+            return { articleId: 0, siteId: 0 };
+        }
+
+        const meta = JSON.parse(raw);
+
+        return {
+            articleId: Number(meta?.id ?? 0),
+            siteId: Number(meta?.site_id ?? meta?.siteId ?? 0),
+        };
+    } catch {
+        return { articleId: 0, siteId: 0 };
+    }
+}
+
+function readSuggestionCatalogBootstrap() {
+    const data = readEditorSeoBootstrap();
+
+    return Array.isArray(data?.domain_link_list_catalog) ? data.domain_link_list_catalog : [];
+}
+
 export default function ArticleLinksSidebar() {
-    const [links, setLinks] = useState({ internal: [], external: [], faq: [] });
-    const [suggestedInternal, setSuggestedInternal] = useState([]);
+    const articleMetaRef = useRef(readArticleMetaIds());
+    const editorSeoBootstrap = useRef(readEditorSeoBootstrap());
+    const keywordCatalogRef = useRef(
+        mergeSuggestionCatalog(
+            editorSeoBootstrap.current?.suggested_internal_links_catalog ?? [],
+            editorSeoBootstrap.current?.suggested_internal_links ?? [],
+        ),
+    );
+    const domainCatalogRef = useRef(readSuggestionCatalogBootstrap());
+    const [catalogVersion, setCatalogVersion] = useState(0);
+    const [links, setLinks] = useState(() => ({
+        internal: editorSeoBootstrap.current?.extracted_links?.internal ?? [],
+        external: editorSeoBootstrap.current?.extracted_links?.external ?? [],
+        faq: [],
+    }));
+    const [articlePlainText, setArticlePlainText] = useState('');
+    const [excludedSuggestionLabels, setExcludedSuggestionLabels] = useState(() => {
+        const { articleId, siteId } = articleMetaRef.current;
+
+        return new Set(loadExcludedLinkSuggestions(articleId, siteId));
+    });
+    const excludedPersistRef = useRef(excludedSuggestionLabels);
     const [activeKey, setActiveKey] = useState('');
     const [cycleByKey, setCycleByKey] = useState({});
     const [collapsed, setCollapsed] = useState(false);
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
+
+    const { debounced: debouncedPersistExcluded } = useDebouncedCallback(() => {
+        const { articleId, siteId } = articleMetaRef.current;
+        saveExcludedLinkSuggestions(articleId, siteId, [...excludedPersistRef.current]);
+    }, 400);
 
     const hideSuggestionRow = (itemKey) => {
         if (!itemKey) {
@@ -273,6 +385,55 @@ export default function ArticleLinksSidebar() {
         });
     };
 
+    const excludeSuggestion = (item) => {
+        const label = normalizeLinkLabel(item?.text);
+        if (!label) {
+            return;
+        }
+
+        setExcludedSuggestionLabels((prev) => {
+            if (prev.has(label)) {
+                return prev;
+            }
+
+            const next = new Set(prev);
+            next.add(label);
+            excludedPersistRef.current = next;
+            debouncedPersistExcluded();
+            return next;
+        });
+
+        const displayLabel = String(item?.text ?? '').trim();
+        if (displayLabel !== '') {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('links_excluded_suggestion_title'),
+                        body: t('links_excluded_suggestion_body', { label: displayLabel }),
+                        status: 'success',
+                    },
+                }),
+            );
+        }
+    };
+
+    const clearExcludedSuggestions = () => {
+        const { articleId, siteId } = articleMetaRef.current;
+        clearExcludedLinkSuggestions(articleId, siteId);
+        excludedPersistRef.current = new Set();
+        setExcludedSuggestionLabels(new Set());
+
+        window.dispatchEvent(
+            new CustomEvent('seo-article-editor-notify', {
+                detail: {
+                    title: t('links_clear_excluded_done_title'),
+                    body: t('links_clear_excluded_done_body'),
+                    status: 'success',
+                },
+            }),
+        );
+    };
+
     useEffect(() => {
         const onLinksUpdate = (event) => {
             const payload = event.detail?.links ?? event.detail?.extracted_links;
@@ -286,15 +447,35 @@ export default function ArticleLinksSidebar() {
             }));
             setCycleByKey({});
             setHiddenRowKeys(new Set());
+            setArticlePlainText(String(event.detail?.article_plain_text ?? ''));
 
-            const internal = Array.isArray(payload.internal) ? payload.internal : [];
-            setSuggestedInternal((prevSuggested) => {
-                const suggested = Array.isArray(event.detail?.suggested_internal)
-                    ? event.detail.suggested_internal
-                    : prevSuggested;
+            const incomingSuggested = Array.isArray(event.detail?.suggested_internal)
+                ? event.detail.suggested_internal
+                : [];
+            const incomingKeywordCatalog = Array.isArray(event.detail?.suggested_internal_links_catalog)
+                ? event.detail.suggested_internal_links_catalog
+                : [];
+            const incomingCatalog = Array.isArray(event.detail?.domain_link_list_catalog)
+                ? event.detail.domain_link_list_catalog
+                : [];
 
-                return filterSuggestedInternalLinks(suggested, internal);
-            });
+            if (incomingKeywordCatalog.length > 0) {
+                keywordCatalogRef.current = mergeSuggestionCatalog(
+                    keywordCatalogRef.current,
+                    incomingKeywordCatalog,
+                    incomingSuggested,
+                );
+            } else if (incomingSuggested.length > 0) {
+                keywordCatalogRef.current = mergeSuggestionCatalog(
+                    keywordCatalogRef.current,
+                    incomingSuggested,
+                );
+            }
+
+            if (incomingCatalog.length > 0) {
+                domainCatalogRef.current = mergeSuggestionCatalog(domainCatalogRef.current, incomingCatalog);
+            }
+            setCatalogVersion((version) => version + 1);
         };
 
         const onFaqUpdate = (event) => {
@@ -308,25 +489,8 @@ export default function ArticleLinksSidebar() {
             }));
         };
 
-        const onInserted = (event) => {
-            const text = normalizeLinkLabel(event.detail?.text);
-            const hrefKey = normalizeHrefForCompare(event.detail?.href);
-            if (!text && !hrefKey) {
-                return;
-            }
-            setSuggestedInternal((prev) =>
-                prev.filter((item) => {
-                    if (text && normalizeLinkLabel(item.text) === text) {
-                        return false;
-                    }
-
-                    if (hrefKey && normalizeHrefForCompare(item.href ?? item.target_url) === hrefKey) {
-                        return false;
-                    }
-
-                    return true;
-                }),
-            );
+        const onInserted = () => {
+            setHiddenRowKeys(new Set());
         };
 
         window.addEventListener('seo-editor-links-updated', onLinksUpdate);
@@ -343,6 +507,22 @@ export default function ArticleLinksSidebar() {
     const internal = links.internal ?? [];
     const external = links.external ?? [];
     const faq = links.faq ?? [];
+
+    const suggestedInternal = useMemo(() => {
+        const plain = articlePlainText.trim();
+        const domainPool =
+            plain !== ''
+                ? filterDomainLinksInArticleContent(domainCatalogRef.current, plain)
+                : domainCatalogRef.current;
+        const pool = mergeSuggestionCatalog(keywordCatalogRef.current, domainPool);
+
+        return buildVisibleInternalSuggestions({
+            catalog: pool,
+            internal,
+            excludedLabels: [...excludedSuggestionLabels],
+            skipContentFilter: true,
+        });
+    }, [internal, excludedSuggestionLabels, articlePlainText, catalogVersion]);
 
     const copyKeyword = async (value) => {
         const text = String(value ?? '').trim();
@@ -495,6 +675,8 @@ export default function ArticleLinksSidebar() {
                         suggestedInternal={suggestedInternal}
                         activeKey={activeKey}
                         hiddenRowKeys={hiddenRowKeys}
+                        excludedCount={excludedSuggestionLabels.size}
+                        onClearExcluded={clearExcludedSuggestions}
                         onKeywordClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'internal', index, itemKey)
                         }
@@ -504,6 +686,7 @@ export default function ArticleLinksSidebar() {
                             scrollToKeyword(item, 'internal', index, itemKey, { searchPlainText: true })
                         }
                         onInsertSuggestion={insertSuggestedLink}
+                        onExcludeSuggestion={excludeSuggestion}
                     />
                     <KeywordList
                         items={external}
@@ -529,8 +712,4 @@ export default function ArticleLinksSidebar() {
             ) : null}
         </div>
     );
-}
-
-function normalizeSuggestionText(text) {
-    return normalizeLinkLabel(text);
 }

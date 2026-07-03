@@ -339,23 +339,23 @@ function registerSeoMediaLibraryActions() {
                 const uploaded = await uploadLocalMediaFiles(files, { siteId, source: 'library' });
                 const count = uploaded.length;
 
-                if (typeof this.$wire?.notifyLocalMediaUpload === 'function') {
-                    await this.$wire.notifyLocalMediaUpload(
-                        'success',
-                        count === 1 ? 'Đã upload ảnh' : `Đã upload ${count} ảnh`,
-                        count === 1 ? 'Ảnh đã được thêm vào thư viện nội bộ (Laravel).' : 'Các ảnh đã được thêm vào thư viện nội bộ (Laravel).',
-                    );
-                }
-
-                if (typeof this.$wire?.loadImages === 'function') {
+                if (typeof this.$wire?.refreshAfterLocalUpload === 'function') {
+                    await this.$wire.refreshAfterLocalUpload(count);
+                } else if (typeof this.$wire?.loadImages === 'function') {
                     await this.$wire.loadImages();
                 } else if (typeof Livewire !== 'undefined') {
                     Livewire.dispatch('seo-media-library-refresh');
                 }
+
+                window.dispatchEvent(new CustomEvent('seo-media-library-dom-refreshed'));
             } catch (error) {
                 const message = error?.message ?? 'Không thể upload ảnh.';
                 if (typeof this.$wire?.notifyLocalMediaUpload === 'function') {
-                    await this.$wire.notifyLocalMediaUpload('danger', 'Upload thất bại', message);
+                    await this.$wire.notifyLocalMediaUpload(
+                        'danger',
+                        'Upload thất bại',
+                        message,
+                    );
                 }
             } finally {
                 this.localMediaUploading = false;

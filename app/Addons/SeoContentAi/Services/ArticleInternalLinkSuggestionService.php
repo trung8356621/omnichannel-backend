@@ -30,6 +30,33 @@ final class ArticleInternalLinkSuggestionService
             return [];
         }
 
+        $maxSuggestions = self::MAX_INTERNAL_LINKS - count($internalLinks);
+
+        return array_slice(
+            $this->collectCandidates($article, $content, $internalLinks),
+            0,
+            max(0, $maxSuggestions),
+        );
+    }
+
+    /**
+     * Toàn bộ từ khóa trong bài có thể gợi ý (không giới hạn số dòng hiển thị).
+     * Dùng cho client exclude / refill danh sách gợi ý.
+     *
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
+     */
+    public function suggestCatalog(SeoArticle $article, string $content, array $internalLinks): array
+    {
+        return $this->collectCandidates($article, $content, $internalLinks);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
+     */
+    private function collectCandidates(SeoArticle $article, string $content, array $internalLinks): array
+    {
         $siteId = (int) ($article->site_id ?? 0);
         if ($siteId <= 0) {
             return [];
@@ -43,7 +70,6 @@ final class ArticleInternalLinkSuggestionService
         $linkedContext = $this->collectLinkedContext($internalLinks);
         $linkedLabels = $linkedContext['labels'];
         $linkedHrefs = $linkedContext['hrefs'];
-        $maxSuggestions = self::MAX_INTERNAL_LINKS - count($internalLinks);
         $ownArticlePhrases = $this->ownArticlePhraseBlocklist($article);
 
         $excludeKeywordIds = collect();
@@ -71,10 +97,6 @@ final class ArticleInternalLinkSuggestionService
         $suggestions = [];
 
         foreach ($keywords as $keyword) {
-            if (count($suggestions) >= $maxSuggestions) {
-                break;
-            }
-
             $phrase = trim((string) $keyword->phrase);
             if ($phrase === '' || $this->isAlreadyLinked($phrase, $linkedLabels)) {
                 continue;

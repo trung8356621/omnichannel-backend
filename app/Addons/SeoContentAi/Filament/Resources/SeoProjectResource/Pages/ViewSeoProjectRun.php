@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
@@ -250,12 +251,41 @@ class ViewSeoProjectRun extends Page
     {
         $articleId = (int) ($item['article_id'] ?? 0);
         if ($articleId > 0) {
+            if (! (bool) ($item['article_editor_ready'] ?? app(ArticleEditorReadinessService::class)->isReady($articleId))) {
+                return null;
+            }
+
             return ArticleResource::getUrl('edit', ['record' => $articleId]);
         }
 
         $url = trim((string) ($item['article_edit_url'] ?? ''));
 
         return $url !== '' ? $url : null;
+    }
+
+    /**
+     * @return array{ready: bool, edit_url: ?string, message: string}
+     */
+    public function checkArticleEditorReady(int $articleId): array
+    {
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle) {
+            return [
+                'ready' => false,
+                'edit_url' => null,
+                'message' => __('seo-content-ai::filament.projects.article_editor_preparing_body'),
+            ];
+        }
+
+        $readiness = app(ArticleEditorReadinessService::class)->evaluate($article);
+
+        return [
+            'ready' => $readiness->isReady,
+            'edit_url' => $readiness->isReady
+                ? ArticleResource::getUrl('edit', ['record' => $articleId])
+                : null,
+            'message' => app(ArticleEditorReadinessService::class)->userMessage($readiness),
+        ];
     }
 
     /**
@@ -305,6 +335,14 @@ class ViewSeoProjectRun extends Page
                 ->first();
 
             $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $articleId]);
+            $readiness = app(ArticleEditorReadinessService::class)->evaluate(
+                SeoArticle::query()->find($articleId) ?? $article,
+            );
+            $item['article_editor_ready'] = $readiness->isReady;
+            if (! $readiness->isReady) {
+                $item['article_edit_url'] = null;
+                $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
+            }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
 
             return $item;
@@ -323,7 +361,17 @@ class ViewSeoProjectRun extends Page
                 ->first();
 
             $item['article_id'] = $resolvedId;
-            $item['article_edit_url'] = ArticleResource::getUrl('edit', ['record' => $resolvedId]);
+            $fullArticle = SeoArticle::query()->find($resolvedId);
+            $readiness = $fullArticle instanceof SeoArticle
+                ? app(ArticleEditorReadinessService::class)->evaluate($fullArticle)
+                : new \App\Addons\SeoContentAi\Services\ArticleEditorReadinessResult(isReady: false, reasons: ['missing_article']);
+            $item['article_editor_ready'] = $readiness->isReady;
+            $item['article_edit_url'] = $readiness->isReady
+                ? ArticleResource::getUrl('edit', ['record' => $resolvedId])
+                : null;
+            if (! $readiness->isReady) {
+                $item['article_editor_preparing_message'] = app(ArticleEditorReadinessService::class)->userMessage($readiness);
+            }
             $item['article_is_reviewed'] = (bool) ($article?->is_reviewed ?? false);
         }
 

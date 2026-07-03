@@ -88,6 +88,9 @@ final class PromptTestPublishService
         app(ArticlePostImagesService::class)->syncFromHtml($article->fresh(), $html);
         app(SeoAnalyzerService::class)->analyze($article->fresh());
 
+        app(ArticleEditorReadinessService::class)->syncWpPostContentFromBody($article->fresh());
+        app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($article->fresh());
+
         if ($faqs !== [] && SeoAccessControl::canSyncArticlesToWordPress()) {
             app(WordPressFaqSyncService::class)->syncForArticle($article->fresh());
         }

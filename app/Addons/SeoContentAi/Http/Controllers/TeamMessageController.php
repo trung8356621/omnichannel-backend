@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
+use App\Addons\SeoContentAi\Services\TeamChatNotificationService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\TeamMessage;
@@ -18,6 +19,7 @@ final class TeamMessageController extends Controller
 {
     public function __construct(
         private readonly TeamChatAttachmentService $attachmentService,
+        private readonly TeamChatNotificationService $teamChatNotificationService,
     ) {}
 
     public function config(): JsonResponse
@@ -38,6 +40,27 @@ final class TeamMessageController extends Controller
         $ownerId = SeoAccessControl::accountOwnerId();
         if ($ownerId === null || $ownerId <= 0) {
             return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        if ($request->boolean('unread_summary')) {
+            $sinceId = max(0, (int) $request->query('since_id', 0));
+            $userId = (int) auth()->id();
+
+            $unreadCount = TeamMessage::query()
+                ->where('owner_id', $ownerId)
+                ->where('id', '>', $sinceId)
+                ->when($userId > 0, fn ($query) => $query->where('user_id', '!=', $userId))
+                ->count();
+
+            $latestId = (int) (TeamMessage::query()
+                ->where('owner_id', $ownerId)
+                ->max('id') ?? 0);
+
+            return response()->json([
+                'unread_count' => $unreadCount,
+                'latest_message_id' => $latestId,
+                'owner_id' => $ownerId,
+            ]);
         }
 
         $afterId = max(0, (int) $request->query('after_id', 0));
@@ -118,6 +141,8 @@ final class TeamMessageController extends Controller
         ]);
 
         $message->load(['user:id,name,email']);
+
+        $this->teamChatNotificationService->notifyWorkspaceMembers($message);
 
         return response()->json([
             'success' => true,

@@ -131,6 +131,11 @@ final class SeoAccessControl
         return ! self::isContentManager();
     }
 
+    public static function shouldShowGlobalSitePicker(): bool
+    {
+        return ! request()->routeIs('filament.seo.resources.keywords.*');
+    }
+
     public static function isSeoPanelAdminViewer(): bool
     {
         $user = auth()->user();

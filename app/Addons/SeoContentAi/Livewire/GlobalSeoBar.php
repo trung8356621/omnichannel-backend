@@ -134,7 +134,8 @@ class GlobalSeoBar extends Component
         return view('seo-content-ai::livewire.global-seo-bar', [
             'sites' => $this->resolveSitesQuery()->get(),
             'roleOptions' => $roleOptions,
-            'showContentProjectPicker' => $showContentProjectPicker,
+            'showDomainPicker' => SeoAccessControl::shouldShowGlobalSitePicker(),
+            'showContentProjectPicker' => $showContentProjectPicker && SeoAccessControl::shouldShowGlobalSitePicker(),
             'contentProjectOptions' => $contentProjectOptions,
             'isAdminViewer' => SeoAccessControl::isSeoPanelReadOnly(),
         ]);
@@ -153,7 +154,7 @@ class GlobalSeoBar extends Component
 
     private function shouldForceAllDomainsScope(): bool
     {
-        return request()->routeIs('filament.seo.resources.keywords.index');
+        return request()->routeIs('filament.seo.resources.keywords.*');
     }
 
     private function restoreGlobalSiteFromStorage(): void

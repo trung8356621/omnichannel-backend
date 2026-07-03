@@ -7,11 +7,13 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Models\Site;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
-use App\Models\Site;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 final class DomainOverviewService
 {
@@ -192,7 +194,19 @@ final class DomainOverviewService
     }
 
     /**
-     * @return array{articles: int, products: int, categories: int, product_categories: int, other: int, total: int}
+     * @return array{
+     *     articles: int,
+     *     products: int,
+     *     categories: int,
+     *     product_categories: int,
+     *     other: int,
+     *     total: int,
+     *     wp_posts: int,
+     *     wp_pages: int,
+     *     wp_articles_total: int,
+     *     wp_categories: int,
+     *     article_gap: int
+     * }
      */
     public function getSyncStatistics(int $siteId): array
     {
@@ -210,6 +224,12 @@ final class DomainOverviewService
             ->whereNotIn('type', ['article', 'product', 'category', 'product_category'])
             ->count();
 
+        $wpManifest = $this->resolveWpManifestCounts($siteId);
+        $wpPosts = (int) ($wpManifest['counts']['article'] ?? 0);
+        $wpPages = (int) ($wpManifest['counts']['page'] ?? 0);
+        $wpArticlesTotal = $wpPosts + $wpPages;
+        $wpCategories = (int) ($wpManifest['counts']['category'] ?? 0);
+
         return [
             'articles' => $articles,
             'products' => $products,
@@ -217,6 +237,37 @@ final class DomainOverviewService
             'product_categories' => $productCategories,
             'other' => $other,
             'total' => $articles + $products + $categories + $productCategories + $other,
+            'wp_posts' => $wpPosts,
+            'wp_pages' => $wpPages,
+            'wp_articles_total' => $wpArticlesTotal,
+            'wp_categories' => $wpCategories,
+            'article_gap' => max(0, $wpArticlesTotal - $articles),
+        ];
+    }
+
+    /**
+     * @return array{counts: array<string, int>, totals: array<string, int>}
+     */
+    private function resolveWpManifestCounts(int $siteId): array
+    {
+        $site = Site::query()->find($siteId);
+        if (! $site instanceof Site) {
+            return ['counts' => [], 'totals' => []];
+        }
+
+        $raw = $site->getMeta('seo_wp_manifest_counts');
+        if (! is_string($raw) || $raw === '') {
+            return ['counts' => [], 'totals' => []];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (! is_array($decoded)) {
+            return ['counts' => [], 'totals' => []];
+        }
+
+        return [
+            'counts' => is_array($decoded['counts'] ?? null) ? $decoded['counts'] : [],
+            'totals' => is_array($decoded['totals'] ?? null) ? $decoded['totals'] : [],
         ];
     }
 
@@ -286,22 +337,31 @@ final class DomainOverviewService
             ->withQueryString();
     }
 
-    /**
-     * @return \Illuminate\Database\Eloquent\Builder<SeoLinkMap>
-     */
-    private function linksGroupedQuery(int $siteId)
+    private function linksGroupedQuery(int $siteId): QueryBuilder
     {
-        return SeoLinkMap::query()
+        $urlKeySql = "COALESCE(NULLIF(seo_link_maps.target_external_url, ''), CONCAT('article:', seo_link_maps.target_article_id))";
+
+        $inner = SeoLinkMap::query()
             ->join('articles', function ($join) use ($siteId): void {
                 $join->on('articles.id', '=', 'seo_link_maps.source_article_id')
                     ->where('articles.site_id', '=', $siteId)
                     ->whereNull('articles.deleted_at');
             })
-            ->selectRaw('MIN(seo_link_maps.id) as id')
-            ->selectRaw("COALESCE(NULLIF(seo_link_maps.target_external_url, ''), CONCAT('article:', seo_link_maps.target_article_id)) as url")
-            ->addSelect('seo_link_maps.link_type as type')
-            ->selectRaw('COUNT(DISTINCT seo_link_maps.source_article_id) as articles_count')
-            ->groupByRaw("COALESCE(NULLIF(seo_link_maps.target_external_url, ''), CONCAT('article:', seo_link_maps.target_article_id)), seo_link_maps.link_type")
+            ->select([
+                'seo_link_maps.id',
+                'seo_link_maps.source_article_id',
+            ])
+            ->selectRaw("{$urlKeySql} as url_key")
+            ->selectRaw('seo_link_maps.link_type as link_type');
+
+        return DB::connection((new SeoLinkMap)->getConnectionName())
+            ->query()
+            ->fromSub($inner, 'link_rows')
+            ->selectRaw('MIN(link_rows.id) as id')
+            ->selectRaw('link_rows.url_key as url')
+            ->selectRaw('link_rows.link_type as type')
+            ->selectRaw('COUNT(DISTINCT link_rows.source_article_id) as articles_count')
+            ->groupBy('link_rows.url_key', 'link_rows.link_type')
             ->orderByDesc('articles_count');
     }
 

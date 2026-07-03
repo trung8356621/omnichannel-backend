@@ -58,7 +58,7 @@ final class ArticleLinkContextMapService
         $touchedKeywordIds = [];
 
         foreach ($anchors as $anchor) {
-            $anchorText = Keyword::decodePhrase((string) ($anchor['anchor_text'] ?? ''));
+            $anchorText = Keyword::preparePhraseForStorage((string) ($anchor['anchor_text'] ?? ''));
             $href = trim((string) ($anchor['href'] ?? ''));
 
             if ($anchorText === '' || $href === '') {

@@ -11,12 +11,18 @@ use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\SoftDeletingScope;
+use Illuminate\Validation\Rules\Unique;
 
 class SiteResource extends Resource
 {
     protected static ?string $model = Site::class;
 
     protected static ?string $navigationIcon = 'heroicon-o-globe-alt';
+
+    public static function canAccess(): bool
+    {
+        return auth()->user()?->role === 'admin';
+    }
 
     /** Menu cấp cao, không gom chung nhóm khác */
     protected static ?string $navigationGroup = null;
@@ -47,7 +53,12 @@ class SiteResource extends Resource
                     ->label(__('Domain'))
                     ->placeholder('example.com')
                     ->required()
-                    ->unique(ignoreRecord: true)
+                    ->unique(
+                        table: Site::class,
+                        column: 'domain',
+                        ignoreRecord: true,
+                        modifyRuleUsing: fn (Unique $rule): Unique => $rule->whereNull('deleted_at'),
+                    )
                     ->maxLength(255)
                     // Tự động bóc tách domain nếu khách nhập full URL
                     ->live(onBlur: true)

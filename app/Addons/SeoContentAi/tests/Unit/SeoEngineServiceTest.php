@@ -99,10 +99,10 @@ final class SeoEngineServiceTest extends TestCase
         $this->assertTrue(SeoLinkMapLinkTypeClassifier::forUnresolvedUrl('https://en.wikipedia.org/wiki/Test') === SeoLinkMapType::WikiTrust);
     }
 
-    public function test_faq_schema_and_featured_snippet_add_points(): void
+    public function test_faq_schema_adds_points(): void
     {
         $engine = app(SeoEngineService::class);
-        $html = '<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table><p>keyword body</p>';
+        $html = '<p>keyword body</p>';
         $faqs = [['question' => 'Q?', 'answer' => 'A.']];
 
         $result = $engine->analyzeHtml($html, 'keyword', $faqs, [
@@ -111,7 +111,40 @@ final class SeoEngineServiceTest extends TestCase
             'slug' => 'keyword',
         ]);
 
-        $this->assertSame(10, $result['breakdown']['featured_snippet']['earned'] ?? 0);
+        $this->assertArrayNotHasKey('featured_snippet', $result['breakdown']);
+        $this->assertSame(10, $result['breakdown']['faq_schema']['earned'] ?? 0);
+    }
+
+    public function test_faq_schema_detects_shortcode_without_panel_rows(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $html = '<h2>FAQ</h2><p class="omi-faq-placeholder" data-omi-faq="1">[omi_faq]</p>';
+
+        $result = $engine->analyzeHtml($html, 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
+        $this->assertSame(10, $result['breakdown']['faq_schema']['earned'] ?? 0);
+        $this->assertNotContains('seo.faq_schema', $result['reason_keys']);
+    }
+
+    public function test_faq_schema_detects_inline_h3_paragraph_pairs(): void
+    {
+        $engine = app(SeoEngineService::class);
+        $html = <<<'HTML'
+<h2>Câu hỏi thường gặp</h2>
+<h3>Túi handmade có bền không?</h3>
+<p>Có, nếu bảo quản đúng cách.</p>
+HTML;
+
+        $result = $engine->analyzeHtml($html, 'keyword', [], [
+            'seo_title' => 'keyword',
+            'meta_description' => 'keyword',
+            'slug' => 'keyword',
+        ]);
+
         $this->assertSame(10, $result['breakdown']['faq_schema']['earned'] ?? 0);
     }
 

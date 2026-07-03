@@ -16,6 +16,10 @@
         static fn (string $ext): string => '.'.$ext,
         $teamChatConfig['allowed_extensions'],
     ));
+    $workspaceChatI18n = [
+        'browser_fallback_body' => __('seo-content-ai::filament.workspace_chat.browser_notification_body'),
+        'unknown_sender' => __('seo-content-ai::filament.workspace_chat.notify_unknown_sender'),
+    ];
 @endphp
 
 @vite('app/Addons/SeoContentAi/resources/css/global-ai-chat.css')
@@ -43,7 +47,10 @@
         canUseAiChat: @js($canUseAiChat),
         teamAccept: @js($teamAccept),
         lastTeamMessageId: 0,
+        lastReadTeamMessageId: 0,
+        teamUnreadCount: 0,
         pollTimer: null,
+        workspaceChatI18n: @js($workspaceChatI18n),
         currentUserId: @js($currentUserId),
         storageKey: @js($storageKey),
         modelsUrl: @js($modelsUrl),
@@ -75,10 +82,21 @@
                 this.activeTab = 'team';
             }
 
+            this.refreshTeamUnreadOnInit();
+            this.startTeamPolling();
+            this.requestBrowserNotificationPermission();
+
             this._onGlobalAiChatImageSelected = (event) => {
                 this.applyLibraryImage(event?.detail ?? {});
             };
             window.addEventListener('seo-global-ai-chat-image-selected', this._onGlobalAiChatImageSelected);
+        },
+
+        destroy() {
+            this.stopTeamPolling();
+            if (this._onGlobalAiChatImageSelected) {
+                window.removeEventListener('seo-global-ai-chat-image-selected', this._onGlobalAiChatImageSelected);
+            }
         },
 
         async loadModels() {
@@ -122,7 +140,6 @@
             this.openChat = true;
             if (this.activeTab === 'team') {
                 this.loadTeamMessages();
-                this.startPolling();
             } else {
                 this.scrollToBottom();
             }
@@ -130,7 +147,6 @@
 
         closePanel() {
             this.openChat = false;
-            this.stopPolling();
             this.closeAttachmentLightbox();
         },
 
@@ -138,23 +154,103 @@
             this.activeTab = tab;
             if (tab === 'team') {
                 this.loadTeamMessages();
-                this.startPolling();
             } else {
-                this.stopPolling();
                 this.scrollToBottom();
             }
         },
 
-        startPolling() {
-            this.stopPolling();
-            this.pollTimer = window.setInterval(() => this.pollTeamMessages(), 4000);
+        startTeamPolling() {
+            this.stopTeamPolling();
+            this.pollTimer = window.setInterval(() => this.pollTeamActivity(), 4000);
         },
 
-        stopPolling() {
+        stopTeamPolling() {
             if (this.pollTimer) {
                 window.clearInterval(this.pollTimer);
                 this.pollTimer = null;
             }
+        },
+
+        markTeamAsRead() {
+            this.teamUnreadCount = 0;
+            if (this.lastTeamMessageId > this.lastReadTeamMessageId) {
+                this.lastReadTeamMessageId = this.lastTeamMessageId;
+                localStorage.setItem(`${this.storageKey}_team_read`, String(this.lastReadTeamMessageId));
+            }
+        },
+
+        persistTeamCursor() {
+            localStorage.setItem(`${this.storageKey}_team_last`, String(this.lastTeamMessageId));
+        },
+
+        async refreshTeamUnreadOnInit() {
+            this.lastReadTeamMessageId = Number(localStorage.getItem(`${this.storageKey}_team_read`) || 0);
+            this.lastTeamMessageId = Number(localStorage.getItem(`${this.storageKey}_team_last`) || 0);
+
+            try {
+                const params = new URLSearchParams({
+                    unread_summary: '1',
+                    since_id: String(this.lastReadTeamMessageId),
+                });
+                const response = await fetch(`${this.teamMessagesUrl}?${params.toString()}`, {
+                    headers: { Accept: 'application/json' },
+                    credentials: 'same-origin',
+                });
+                const data = await response.json();
+                if (! response.ok) {
+                    return;
+                }
+
+                this.teamUnreadCount = Math.max(0, Number(data.unread_count) || 0);
+                const latestId = Number(data.latest_message_id) || 0;
+                if (latestId > this.lastTeamMessageId) {
+                    this.lastTeamMessageId = latestId;
+                    this.persistTeamCursor();
+                }
+                if (Number(data.owner_id) > 0) {
+                    this.workspaceOwnerId = Number(data.owner_id);
+                }
+            } catch (error) {
+                console.error(error);
+            }
+        },
+
+        showTeamBrowserNotification(item) {
+            if (! item || item.is_mine) {
+                return;
+            }
+            if (this.openChat && this.activeTab === 'team') {
+                return;
+            }
+            if (! ('Notification' in window) || Notification.permission !== 'granted') {
+                return;
+            }
+
+            const name = String(item.user_name || this.workspaceChatI18n.unknown_sender || 'Thành viên');
+            let body = String(item.message || '').trim();
+            if (body === '' && item.attachment_name) {
+                body = '📎 ' + String(item.attachment_name);
+            }
+            if (body === '') {
+                body = String(this.workspaceChatI18n.browser_fallback_body || 'Tin nhắn mới');
+            }
+
+            try {
+                new Notification(name, {
+                    body,
+                    tag: 'seo-workspace-chat-' + String(item.id),
+                });
+            } catch (error) {
+                // ignore
+            }
+        },
+
+        requestBrowserNotificationPermission() {
+            if (! ('Notification' in window) || Notification.permission !== 'default') {
+                return;
+            }
+
+            Notification.requestPermission().catch(() => {});
         },
 
         mergeTeamMessages(incoming) {
@@ -172,6 +268,7 @@
                 known.add(id);
                 if (id > this.lastTeamMessageId) {
                     this.lastTeamMessageId = id;
+                    this.persistTeamCursor();
                 }
             });
 
@@ -202,8 +299,12 @@
                 }
                 this.lastTeamMessageId = this.teamMessages.reduce(
                     (max, item) => Math.max(max, Number(item.id) || 0),
-                    0,
+                    this.lastTeamMessageId,
                 );
+                if (this.lastTeamMessageId > 0) {
+                    this.persistTeamCursor();
+                }
+                this.markTeamAsRead();
                 this.scrollTeamToBottom();
             } catch (error) {
                 console.error(error);
@@ -212,11 +313,7 @@
             }
         },
 
-        async pollTeamMessages() {
-            if (! this.openChat || this.activeTab !== 'team') {
-                return;
-            }
-
+        async pollTeamActivity() {
             try {
                 const url = this.lastTeamMessageId > 0
                     ? `${this.teamMessagesUrl}?after_id=${this.lastTeamMessageId}`
@@ -235,18 +332,45 @@
                     this.workspaceOwnerId = Number(data.owner_id);
                 }
 
-                const beforeCount = this.teamMessages.length;
-                this.mergeTeamMessages(data.messages);
+                const incoming = Array.isArray(data.messages) ? data.messages : [];
+                const viewingTeam = this.openChat && this.activeTab === 'team';
 
-                if (this.lastTeamMessageId <= 0 && Array.isArray(data.messages) && data.messages.length > 0) {
-                    this.lastTeamMessageId = data.messages.reduce(
-                        (max, item) => Math.max(max, Number(item.id) || 0),
-                        0,
-                    );
+                if (viewingTeam) {
+                    const beforeCount = this.teamMessages.length;
+                    this.mergeTeamMessages(incoming);
+
+                    if (this.lastTeamMessageId <= 0 && incoming.length > 0) {
+                        this.lastTeamMessageId = incoming.reduce(
+                            (max, item) => Math.max(max, Number(item.id) || 0),
+                            0,
+                        );
+                        this.persistTeamCursor();
+                    }
+
+                    if (this.teamMessages.length > beforeCount) {
+                        this.scrollTeamToBottom();
+                    }
+
+                    this.markTeamAsRead();
+                    return;
                 }
 
-                if (this.teamMessages.length > beforeCount) {
-                    this.scrollTeamToBottom();
+                incoming.forEach((item) => {
+                    const id = Number(item.id) || 0;
+                    if (! id || id <= this.lastTeamMessageId) {
+                        return;
+                    }
+
+                    this.lastTeamMessageId = id;
+
+                    if (! item.is_mine) {
+                        this.teamUnreadCount++;
+                        this.showTeamBrowserNotification(item);
+                    }
+                });
+
+                if (incoming.length > 0) {
+                    this.persistTeamCursor();
                 }
             } catch (error) {
                 console.error(error);
@@ -291,6 +415,7 @@
 
                 if (data.message) {
                     this.mergeTeamMessages([data.message]);
+                    this.markTeamAsRead();
                     this.scrollTeamToBottom();
                 }
             } catch (error) {
@@ -915,12 +1040,19 @@
         x-on:click="openPanel()"
         x-show="! openChat"
         x-transition.opacity
-        aria-label="Mở chat workspace"
+        x-bind:aria-label="teamUnreadCount > 0 ? `Mở chat workspace (${teamUnreadCount} tin chưa đọc)` : 'Mở chat workspace'"
     >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 12c0 4.142-4.03 7.5-9 7.5a10.8 10.8 0 0 1-3.75-.658L3 20.25l1.575-3.675A6.9 6.9 0 0 1 3 12c0-4.142 4.03-7.5 9-7.5s9 3.358 9 7.5Z" />
         </svg>
+        <span
+            class="seo-global-chat__launcher-badge"
+            x-show="teamUnreadCount > 0"
+            x-text="teamUnreadCount > 99 ? '99+' : String(teamUnreadCount)"
+            x-cloak
+            aria-hidden="true"
+        ></span>
     </button>
 
     <div

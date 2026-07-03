@@ -14,10 +14,21 @@
     $editDomainUrl = DomainResource::getUrl('edit', ['record' => $site]);
     $keywordsTabUrl = $this->getInternalLinkTabUrl('keywords');
     $linksTabUrl = $this->getInternalLinkTabUrl('links');
+    $wpPluginOverview = $this->getWpPluginReleaseOverview();
+
+    $scoreSegments = collect($distribution['segments'] ?? [])
+        ->map(function (array $segment): array {
+            if (($segment['count'] ?? 0) > 0) {
+                $segment['filter_url'] = $this->getArticlesFilterUrl((string) ($segment['key'] ?? ''));
+            }
+
+            return $segment;
+        })
+        ->all();
 
     $chartSegments = array_values(array_filter(
-        $distribution['segments'],
-        static fn (array $s): bool => ($s['count'] ?? 0) > 0
+        $scoreSegments,
+        static fn (array $segment): bool => ($segment['count'] ?? 0) > 0,
     ));
     $donutGradient = '';
     $donutTotal = array_sum(array_column($chartSegments, 'count'));
@@ -67,20 +78,26 @@
             @if(($api['platform'] ?? '') !== 'wordpress')
                 <p class="text-sm text-gray-500">{{ __('Nền tảng không dùng token WordPress.') }}</p>
             @else
-                <div class="space-y-4">
-                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
-                        'label' => __('Read token'),
-                        'plain' => ($this->tokensUnlocked && $this->readTokenVisible) ? $plainTokens['read_token'] : '',
-                        'visible' => $this->readTokenVisible,
-                        'unlocked' => $this->tokensUnlocked,
-                        'field' => 'read',
-                    ])
-                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
-                        'label' => __('Migration token'),
-                        'plain' => ($this->tokensUnlocked && $this->migrationTokenVisible) ? $plainTokens['migration_token'] : '',
-                        'visible' => $this->migrationTokenVisible,
-                        'unlocked' => $this->tokensUnlocked,
-                        'field' => 'migration',
+                <div class="seo-api-key-layout">
+                    <div class="seo-api-key-layout__tokens space-y-4">
+                        @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
+                            'label' => __('Read token'),
+                            'plain' => ($this->tokensUnlocked && $this->readTokenVisible) ? $plainTokens['read_token'] : '',
+                            'visible' => $this->readTokenVisible,
+                            'unlocked' => $this->tokensUnlocked,
+                            'field' => 'read',
+                        ])
+                        @include('seo-content-ai::filament.resources.domain-resource.pages.partials.api-token-field', [
+                            'label' => __('Migration token'),
+                            'plain' => ($this->tokensUnlocked && $this->migrationTokenVisible) ? $plainTokens['migration_token'] : '',
+                            'visible' => $this->migrationTokenVisible,
+                            'unlocked' => $this->tokensUnlocked,
+                            'field' => 'migration',
+                        ])
+                    </div>
+
+                    @include('seo-content-ai::filament.resources.domain-resource.pages.partials.wp-plugin-download-compact', [
+                        'overview' => $wpPluginOverview,
                     ])
                 </div>
 
@@ -148,42 +165,11 @@
                             {{ __('Chưa có bài được chấm. Cần Focus Keyword trên WordPress.') }}
                         </p>
                     @else
-                        <div class="seo-score-donut">
-                            <div
-                                class="seo-score-donut__chart"
-                                style="{{ $donutGradient !== '' ? 'background: ' . $donutGradient : 'background: rgb(var(--gray-200))' }}"
-                                role="img"
-                                aria-label="{{ __('Biểu đồ phân bố điểm SEO') }}"
-                            >
-                                <div class="seo-score-donut__hole">
-                                    <strong>{{ $scoring['avg_score'] }}</strong>
-                                    <span>{{ __('Điểm TB') }}</span>
-                                </div>
-                            </div>
-                            @if(count($distribution['segments']) > 0)
-                                <ul class="seo-score-legend">
-                                    @foreach($distribution['segments'] as $seg)
-                                        @if(($seg['count'] ?? 0) > 0)
-                                            <li>
-                                                <span class="seo-score-legend__dot" style="background: {{ $seg['color'] }}"></span>
-                                                <span class="seo-score-legend__label">{{ $seg['label'] }}:</span>
-                                                <a
-                                                    href="{{ $this->getArticlesFilterUrl($seg['key']) }}"
-                                                    class="seo-score-legend__link"
-                                                >
-                                                    {{ $seg['count'] }} {{ __('bài') }}
-                                                </a>
-                                            </li>
-                                        @endif
-                                    @endforeach
-                                </ul>
-                            @endif
-                            <div class="seo-score-stats">
-                                <p><span class="font-semibold">{{ __('Đã chấm') }}:</span> {{ $scoring['scored'] }}</p>
-                                <p><span class="font-semibold">{{ __('Thấp nhất') }}:</span> {{ $scoring['min_score'] }}</p>
-                                <p><span class="font-semibold">{{ __('Cao nhất') }}:</span> {{ $scoring['max_score'] }}</p>
-                            </div>
-                        </div>
+                        @include('seo-content-ai::filament.resources.domain-resource.pages.partials.seo-score-donut-block', [
+                            'scoring' => $scoring,
+                            'segments' => $scoreSegments,
+                            'donutGradient' => $donutGradient,
+                        ])
                     @endif
                 </x-filament::section>
 
@@ -194,6 +180,16 @@
 
                     <div class="grid gap-2 text-sm sm:grid-cols-2">
                         <p><span class="font-semibold">{{ __('Bài viết') }}:</span> {{ $stats['articles'] }}</p>
+                        @if(($stats['wp_articles_total'] ?? 0) > 0)
+                            <p class="text-xs text-gray-500 sm:col-span-2">
+                                {{ __('WP') }}: {{ $stats['wp_posts'] }} post + {{ $stats['wp_pages'] }} page
+                                @if(($stats['article_gap'] ?? 0) > 0)
+                                    <span class="font-semibold text-warning-600 dark:text-warning-400">
+                                        — {{ __('thiếu') }} {{ $stats['article_gap'] }} {{ __('bài so với plugin') }}
+                                    </span>
+                                @endif
+                            </p>
+                        @endif
                         <p><span class="font-semibold">{{ __('Sản phẩm') }}:</span> {{ $stats['products'] }}</p>
                         <p><span class="font-semibold">{{ __('Danh mục') }}:</span> {{ $stats['categories'] }}</p>
                         <p><span class="font-semibold">{{ __('Danh mục SP') }}:</span> {{ $stats['product_categories'] }}</p>

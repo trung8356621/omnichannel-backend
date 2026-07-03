@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Filament\Pages;
 
 use App\Addons\AddonDatabaseConfig;
@@ -11,17 +13,28 @@ use Illuminate\Support\Facades\DB;
 
 class ManageServices extends Page
 {
-    protected static ?string $navigationGroup = 'Hệ thống'; // Khớp với nhãn trong Provider
+    protected static ?string $navigationGroup = null;
 
-    protected static ?int $navigationSort = 999; // Nằm cuối
+    protected static ?int $navigationSort = 999;
 
     protected static ?string $navigationIcon = 'heroicon-o-puzzle-piece';
 
     protected static string $view = 'filament.pages.manage-services';
 
-    protected static ?string $navigationLabel = 'Quản lý Service';
+    public static function getNavigationGroup(): ?string
+    {
+        return __('site-service.system_nav_group');
+    }
 
-    protected static ?string $title = 'Hệ thống Addon & Dịch vụ';
+    public static function getNavigationLabel(): string
+    {
+        return __('site-service.manage_services_nav');
+    }
+
+    public function getTitle(): string
+    {
+        return __('site-service.manage_services_title');
+    }
 
     public $services = [];
 
@@ -35,7 +48,7 @@ class ManageServices extends Page
     {
         $service = Service::find($id);
         if (! $service) {
-            Notification::make()->title('Không tìm thấy service')->danger()->send();
+            Notification::make()->title(__('site-service.service_not_found'))->danger()->send();
 
             return;
         }
@@ -52,8 +65,8 @@ class ManageServices extends Page
                 );
                 if (! $exists) {
                     Notification::make()
-                        ->title('Không thể kích hoạt addon')
-                        ->body("Database chưa được tạo. Vui lòng tạo database \"{$dbName}\" (và chạy migration cho addon) trước khi kích hoạt.")
+                        ->title(__('site-service.cannot_activate_addon'))
+                        ->body(__('site-service.database_not_created', ['name' => $dbName]))
                         ->danger()
                         ->send();
 
@@ -64,7 +77,7 @@ class ManageServices extends Page
 
         $service->update(['is_active' => ! $service->is_active]);
         $this->services = Service::all()->toArray();
-        Notification::make()->title('Cập nhật trạng thái thành công')->success()->send();
+        Notification::make()->title(__('site-service.status_updated'))->success()->send();
     }
 
     public static function shouldRegisterNavigation(): bool
