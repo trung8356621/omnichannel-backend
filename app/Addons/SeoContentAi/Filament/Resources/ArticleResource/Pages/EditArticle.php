@@ -35,6 +35,7 @@ use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\ArticlePendingInternalLinkService;
 use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
+use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
@@ -2127,6 +2128,108 @@ class EditArticle extends SeoEditRecord
         $this->dispatch('flush-article-faqs');
     }
 
+    /**
+     * Lưu / đồng bộ gói: publish box, danh mục, FAQ, media draft và nội dung — một round-trip Livewire.
+     *
+     * @param  array{
+     *     action?: string,
+     *     html?: string,
+     *     seo_analysis?: array<string, mixed>|null,
+     *     faqs?: list<array<string, mixed>>|null,
+     *     publish_box?: array<string, mixed>|null,
+     *     category_ids?: list<int>|null,
+     *     featured_image?: array<string, mixed>|null,
+     *     product_album?: list<array<string, mixed>>|null,
+     * }  $bundle
+     */
+    public function executeHeavyArticleAction(array $bundle): void
+    {
+        if ($this->articleHeavyActionBusy) {
+            return;
+        }
+
+        $action = ($bundle['action'] ?? 'save') === 'sync' ? 'sync' : 'save';
+        if ($action === 'sync') {
+            abort_if(SeoAccessControl::isContentManager(), 403);
+        }
+
+        $this->beginHeavyArticleAction($action);
+        $this->pendingEditorCollectTarget = null;
+
+        try {
+            $publishBox = $bundle['publish_box'] ?? null;
+            if (is_array($publishBox)) {
+                $this->applyPublishBoxFromClient(
+                    (string) ($publishBox['post_type'] ?? $this->articlePostType),
+                    (string) ($publishBox['status'] ?? $this->articleStatus),
+                    (string) ($publishBox['visibility'] ?? $this->visibility),
+                    (string) ($publishBox['publish_day'] ?? $this->publishDay),
+                    (string) ($publishBox['publish_month'] ?? $this->publishMonth),
+                    (string) ($publishBox['publish_year'] ?? $this->publishYear),
+                    (string) ($publishBox['publish_hour'] ?? $this->publishHour),
+                    (string) ($publishBox['publish_minute'] ?? $this->publishMinute),
+                );
+            }
+
+            $categoryIds = $bundle['category_ids'] ?? null;
+            if (is_array($categoryIds)) {
+                $this->applyArticleCategoriesFromClient($categoryIds);
+            }
+
+            $faqs = $bundle['faqs'] ?? null;
+            if (is_array($faqs) && ! $this->shouldSkipMalformedFaqsBundleSave($faqs)) {
+                $this->saveArticleFaqsInline($faqs);
+            }
+
+            $featuredImage = $bundle['featured_image'] ?? null;
+            if (is_array($featuredImage) && trim((string) ($featuredImage['url'] ?? '')) !== '') {
+                $this->persistFeaturedImageFromClient($featuredImage);
+            }
+
+            $productAlbum = $bundle['product_album'] ?? null;
+            if (is_array($productAlbum)) {
+                $this->persistProductAlbumFromClient($productAlbum);
+            }
+
+            $html = (string) ($bundle['html'] ?? '');
+            $seoAnalysis = is_array($bundle['seo_analysis'] ?? null) ? $bundle['seo_analysis'] : null;
+
+            if ($action === 'sync') {
+                $this->syncArticleToWordPress($html, $seoAnalysis);
+            } else {
+                $this->persistArticleLocal($html, $seoAnalysis);
+            }
+        } catch (\Throwable $exception) {
+            $this->cancelHeavyArticleAction();
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Payload FAQ lỗi từ sidebar link ({text,index}) — không ghi đè FAQ đã có trên DB.
+     *
+     * @param  list<mixed>  $faqs
+     */
+    private function shouldSkipMalformedFaqsBundleSave(array $faqs): bool
+    {
+        foreach ($faqs as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            if (
+                array_key_exists('text', $row)
+                && ! array_key_exists('answer', $row)
+                && ! array_key_exists('question', $row)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function beginHeavyArticleAction(string $action): void
     {
         $this->articleHeavyActionBusy = true;
@@ -2137,17 +2240,24 @@ class EditArticle extends SeoEditRecord
 
     private function finishHeavyArticleActionWithReload(bool $clearLocalState = false): void
     {
+        $action = $this->articleHeavyAction ?? 'save';
+        $articleId = (int) $this->record->getKey();
+        $siteId = (int) ($this->record->site_id ?? 0);
+
         if ($clearLocalState) {
-            $articleId = (int) $this->record->getKey();
-            $siteId = (int) ($this->record->site_id ?? 0);
             $this->js(
-                "window.__seoClearArticleLocalState?.({$articleId}, {$siteId}); window.location.reload();"
+                "window.__seoArticleHeavyActionOverlay?.show('{$action}', { persistUntilUnload: true });"
+                ."window.__seoClearArticleLocalState?.({$articleId}, {$siteId});"
+                .'window.location.reload();'
             );
 
             return;
         }
 
-        $this->js('window.location.reload()');
+        $this->js(
+            "window.__seoArticleHeavyActionOverlay?.show('{$action}', { persistUntilUnload: true });"
+            .'window.location.reload();'
+        );
     }
 
     private function cancelHeavyArticleAction(): void
@@ -2418,7 +2528,7 @@ class EditArticle extends SeoEditRecord
 
     public function getVirtualCommentsCount(): int
     {
-        return count(app(VirtualCommentService::class)->getFromArticle($this->record));
+        return count(app(VirtualCommentService::class)->getForEditor($this->record));
     }
 
     public function getReviewsCountForEditor(): int
@@ -2516,59 +2626,12 @@ class EditArticle extends SeoEditRecord
             );
 
         if ($success) {
-            if ($message !== '' && str_contains($message, 'Đồng bộ WordPress thất bại')) {
-                $notification->warning();
-            } else {
-                $notification->success();
-            }
+            $notification->success();
         } else {
             $notification->danger();
         }
 
         $notification->send();
-    }
-
-    public function syncVirtualReviewsToWordPress(): void
-    {
-        abort_if(SeoAccessControl::isContentManager(), 403);
-
-        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
-                ->body('Bài viết chưa có WordPress Post ID.')
-                ->warning()
-                ->send();
-
-            return;
-        }
-
-        if ($this->getVirtualCommentsCount() === 0) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
-                ->body(__('seo-content-ai::filament.article_list.reviews_tab_empty'))
-                ->warning()
-                ->send();
-
-            return;
-        }
-
-        $result = app(VirtualCommentService::class)->syncToWordPress($this->record->fresh());
-
-        if ($result['success'] ?? false) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_success'))
-                ->body((string) ($result['message'] ?? ''))
-                ->success()
-                ->send();
-
-            return;
-        }
-
-        Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
-            ->body((string) ($result['message'] ?? ''))
-            ->danger()
-            ->send();
     }
 
     /**
@@ -2891,7 +2954,7 @@ class EditArticle extends SeoEditRecord
         abort_if(SeoAccessControl::isContentManager(), 403);
 
         try {
-            $html = $this->persistArticleLocalSilent($html, syncVirtualCommentsToWordPress: false);
+            $html = $this->persistArticleLocalSilent($html);
 
             $slug = Str::slug($this->articleSlug);
             if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
@@ -2978,7 +3041,7 @@ class EditArticle extends SeoEditRecord
         }
     }
 
-    private function persistArticleLocalSilent(string $html, bool $syncVirtualCommentsToWordPress = true): string
+    private function persistArticleLocalSilent(string $html): string
     {
         $html = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
         $html = $this->guardArticleBodyBeforeSave($html);
@@ -3018,35 +3081,9 @@ class EditArticle extends SeoEditRecord
 
         $this->captureArticleRevisionAfterSave($html);
 
-        if ($syncVirtualCommentsToWordPress) {
-            $this->syncVirtualCommentsToWordPressIfLinked();
-        }
-
         app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh(), $html);
 
         return $html;
-    }
-
-    private function syncVirtualCommentsToWordPressIfLinked(): void
-    {
-        if ((int) ($this->record->wp_post_id ?? 0) <= 0) {
-            return;
-        }
-
-        if ($this->getVirtualCommentsCount() === 0) {
-            return;
-        }
-
-        $result = app(VirtualCommentService::class)->syncToWordPress($this->record->fresh());
-        if ($result['success'] ?? false) {
-            return;
-        }
-
-        Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.virtual_comments_sync_failed'))
-            ->body((string) ($result['message'] ?? ''))
-            ->warning()
-            ->send();
     }
 
     public function importMarkdownDebug(string $markdown): void
@@ -3707,6 +3744,22 @@ class EditArticle extends SeoEditRecord
 
     public function saveArticleFaqs(array $faqs): void
     {
+        $this->saveArticleFaqsWithOptionalCollect($faqs, allowCollectContinuation: true);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $faqs
+     */
+    private function saveArticleFaqsInline(array $faqs): void
+    {
+        $this->saveArticleFaqsWithOptionalCollect($faqs, allowCollectContinuation: false);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $faqs
+     */
+    private function saveArticleFaqsWithOptionalCollect(array $faqs, bool $allowCollectContinuation): void
+    {
         $previousCount = $this->record->faqs()->count();
         $incomingCount = count(array_filter($faqs, static function ($row): bool {
             if (! is_array($row)) {
@@ -3723,11 +3776,15 @@ class EditArticle extends SeoEditRecord
         }
 
         if ($savedCount === 0 && $incomingCount > 0) {
-            if ($this->pendingEditorCollectTarget !== null) {
+            if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
                 $target = $this->pendingEditorCollectTarget;
                 $this->pendingEditorCollectTarget = null;
                 $this->dispatch('collect-editor-html', target: $target);
 
+                return;
+            }
+
+            if (! $allowCollectContinuation) {
                 return;
             }
 
@@ -3753,11 +3810,15 @@ class EditArticle extends SeoEditRecord
                     editorHtml: $this->editorHtml,
                 );
 
-                if ($this->pendingEditorCollectTarget !== null) {
+                if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
                     $target = $this->pendingEditorCollectTarget;
                     $this->pendingEditorCollectTarget = null;
                     $this->dispatch('collect-editor-html', target: $target);
 
+                    return;
+                }
+
+                if (! $allowCollectContinuation) {
                     return;
                 }
 
@@ -3770,11 +3831,15 @@ class EditArticle extends SeoEditRecord
                 return;
             }
 
-            if ($this->pendingEditorCollectTarget !== null) {
+            if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
                 $target = $this->pendingEditorCollectTarget;
                 $this->pendingEditorCollectTarget = null;
                 $this->dispatch('collect-editor-html', target: $target);
 
+                return;
+            }
+
+            if (! $allowCollectContinuation) {
                 return;
             }
 
@@ -3800,11 +3865,15 @@ class EditArticle extends SeoEditRecord
                     editorHtml: $this->editorHtml,
                 );
 
-                if ($this->pendingEditorCollectTarget !== null) {
+                if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
                     $target = $this->pendingEditorCollectTarget;
                     $this->pendingEditorCollectTarget = null;
                     $this->dispatch('collect-editor-html', target: $target);
 
+                    return;
+                }
+
+                if (! $allowCollectContinuation) {
                     return;
                 }
 
@@ -3818,11 +3887,15 @@ class EditArticle extends SeoEditRecord
             }
         }
 
-        if ($this->pendingEditorCollectTarget !== null) {
+        if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
             $target = $this->pendingEditorCollectTarget;
             $this->pendingEditorCollectTarget = null;
             $this->dispatch('collect-editor-html', target: $target);
 
+            return;
+        }
+
+        if (! $allowCollectContinuation) {
             return;
         }
 

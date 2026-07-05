@@ -11,4 +11,4 @@ ztARSSpNQj5vpJ7MmHZj
 
 #Để chạy queue
 nohup php artisan queue:work > /dev/null 2>&1 &
-kill -9 2868530
+pkill -f "queue:work"

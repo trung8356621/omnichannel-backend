@@ -61,24 +61,34 @@
                 init() {
                     this.publishIso = this.buildIso();
                     window.__seoPublishBoxPush = () => this.pushToWire();
+                    window.__seoPublishBoxSnapshot = () => ({
+                        post_type: this.postType,
+                        status: this.status,
+                        visibility: this.visibility,
+                        publish_day: this.publishDay,
+                        publish_month: this.publishMonth,
+                        publish_year: this.publishYear,
+                        publish_hour: this.publishHour,
+                        publish_minute: this.publishMinute,
+                    });
 
                     const lockPage = () => {
                         this.pageActionLocked = true;
                     };
                     const unlockPage = () => {
+                        if (window.__seoArticleHeavyActionOverlay?.persistUntilUnload) {
+                            return;
+                        }
+
                         this.pageActionLocked = false;
                     };
 
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
                     window.addEventListener('article-wordpress-sync-unlock', unlockPage);
 
-                    if (this.$wire?.articleHeavyActionBusy) {
-                        this.$wire.set('articleHeavyActionBusy', false);
-                        this.$wire.set('articleHeavyAction', null);
+                    if (window.__seoArticleHeavyActionOverlay?.locked) {
+                        lockPage();
                     }
-
-                    unlockPage();
-                    window.__seoArticleHeavyActionOverlay?.hide?.();
                 },
 
                 isPublishActionDisabled() {
@@ -266,11 +276,15 @@
                     }));
 
                     try {
-                        await this.pushToWire();
-                        if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
-                            await window.__seoPushPublishCategoriesToWire();
+                        if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
+                            await window.__seoExecuteHeavyArticleAction('save', this.$wire);
+                        } else {
+                            await this.pushToWire();
+                            if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
+                                await window.__seoPushPublishCategoriesToWire();
+                            }
+                            await this.$wire.requestSaveArticle();
                         }
-                        await this.$wire.requestSaveArticle();
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
                         window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
@@ -294,11 +308,15 @@
                             detail: { action: 'sync' },
                         }));
 
-                        await this.pushToWire();
-                        if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
-                            await window.__seoPushPublishCategoriesToWire();
+                        if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
+                            await window.__seoExecuteHeavyArticleAction('sync', this.$wire);
+                        } else {
+                            await this.pushToWire();
+                            if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
+                                await window.__seoPushPublishCategoriesToWire();
+                            }
+                            await this.$wire.requestSyncToWordPress();
                         }
-                        await this.$wire.requestSyncToWordPress();
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
                         console.warn('Đồng bộ WordPress thất bại ở client', error);
@@ -493,23 +511,6 @@
                         <span class="text-gray-500 dark:text-gray-400">
                             · {{ __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => $this->getVirtualCommentsCount()]) }}
                         </span>
-                    @endif
-                    @if ($this->getVirtualCommentsCount() > 0)
-                        <button
-                            type="button"
-                            wire:click.stop="syncVirtualReviewsToWordPress"
-                            wire:loading.attr="disabled"
-                            wire:target="syncVirtualReviewsToWordPress"
-                            class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
-                            title="{{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp_hint') }}"
-                        >
-                            <span wire:loading.remove wire:target="syncVirtualReviewsToWordPress">
-                                {{ __('seo-content-ai::filament.article_list.sync_reviews_to_wp') }}
-                            </span>
-                            <span wire:loading wire:target="syncVirtualReviewsToWordPress">
-                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
-                            </span>
-                        </button>
                     @elseif ($this->shouldShowQuickCreateReviewsButton())
                         <button
                             type="button"

@@ -50,7 +50,7 @@
 @endphp
 
 {{-- Livewire 3 yêu cầu MỘT phần tử gốc — bọc toàn bộ view trong div này. --}}
-<div @if($incrementalSyncRunning || $keywordResyncRunning) wire:poll.5s="refreshSyncProgress" @endif>
+<div @if($incrementalSyncRunning || $metadataSyncRunning || $keywordResyncRunning) wire:poll.5s="refreshSyncProgress" @endif>
     @if(is_readable($overviewCss))
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif

@@ -41,6 +41,13 @@
 
                 init() {
                     window.__seoPushPublishCategoriesToWire = () => this.pushCategoriesToWire();
+                    window.__seoPublishCategoriesSnapshot = () => {
+                        if (typeof this.resolveEffectiveCategoryIds === 'function') {
+                            return this.resolveEffectiveCategoryIds();
+                        }
+
+                        return Array.isArray(this.selectedIds) ? this.selectedIds.map(Number) : [];
+                    };
                     window.__seoEnsureBeforePublishAction = () => {
                         void this.pushCategoriesToWire();
 

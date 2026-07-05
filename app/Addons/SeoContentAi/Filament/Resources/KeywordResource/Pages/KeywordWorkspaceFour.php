@@ -19,6 +19,11 @@ final class KeywordWorkspaceFour extends Page
 
     protected static bool $shouldRegisterNavigation = false;
 
+    public function mount(): void
+    {
+        $this->initializeKeywordWorkspaceSiteFilter();
+    }
+
     public static function canAccess(array $parameters = []): bool
     {
         return KeywordResource::canViewAny();

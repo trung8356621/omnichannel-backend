@@ -55,6 +55,8 @@ final class KeywordWorkspaceTwo extends Page
 
     public function mount(): void
     {
+        $this->initializeKeywordWorkspaceSiteFilter();
+
         if ($this->selectedKeywordId !== null && $this->selectedKeywordId <= 0) {
             $this->selectedKeywordId = null;
         }
@@ -80,7 +82,7 @@ final class KeywordWorkspaceTwo extends Page
      */
     public function getPillarList(): array
     {
-        return $this->clusterMap->buildPillarList(SeoAccessControl::globalSiteId());
+        return $this->clusterMap->buildPillarList($this->resolveKeywordWorkspaceSiteId());
     }
 
     /**
@@ -132,7 +134,7 @@ final class KeywordWorkspaceTwo extends Page
         return collect($this->clusterBuilder->searchAttachableKeywords(
             $this->selectedKeywordId,
             $this->modalSearchQuery,
-            SeoAccessControl::globalSiteId(),
+            $this->resolveKeywordWorkspaceSiteId(),
         ))
             ->reject(static fn (array $item): bool => in_array((int) $item['id'], $draftIds, true))
             ->values()
@@ -161,7 +163,7 @@ final class KeywordWorkspaceTwo extends Page
         }
 
         try {
-            $keyword = $this->clusterBuilder->createPillar($phrase, SeoAccessControl::globalSiteId());
+            $keyword = $this->clusterBuilder->createPillar($phrase, $this->resolveKeywordWorkspaceSiteId());
         } catch (\InvalidArgumentException $exception) {
             $this->notifyError($exception->getMessage());
 
@@ -207,7 +209,7 @@ final class KeywordWorkspaceTwo extends Page
 
         $this->clusterDraft = $this->clusterBuilder->reverseScanSuggestions(
             $this->selectedKeywordId,
-            SeoAccessControl::globalSiteId(),
+            $this->resolveKeywordWorkspaceSiteId(),
         );
         $this->isScanningSuggestions = false;
     }

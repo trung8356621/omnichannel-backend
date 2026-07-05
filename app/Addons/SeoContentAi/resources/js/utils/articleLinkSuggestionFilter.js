@@ -149,6 +149,8 @@ export function filterSuggestedInternalLinks(suggested, internal) {
 }
 
 export const MAX_INTERNAL_LINK_SLOTS = 10;
+/** Số gợi ý hiển thị khi bài còn < 10 link nội bộ (không trừ theo số link đã có). */
+export const MAX_VISIBLE_INTERNAL_SUGGESTIONS = 10;
 
 export function isSuggestionExcluded(phrase, excludedLabels) {
     const normalized = normalizeLinkLabel(phrase);
@@ -209,8 +211,8 @@ export function buildVisibleInternalSuggestions({
     maxSlots = MAX_INTERNAL_LINK_SLOTS,
     skipContentFilter = false,
 } = {}) {
-    const slots = Math.max(0, maxSlots - (Array.isArray(internal) ? internal.length : 0));
-    if (slots <= 0) {
+    const internalCount = Array.isArray(internal) ? internal.length : 0;
+    if (internalCount >= maxSlots) {
         return [];
     }
 
@@ -226,5 +228,8 @@ export function buildVisibleInternalSuggestions({
         return phrase !== '' && !isSuggestionExcluded(phrase, excludedLabels);
     });
 
-    return filterSuggestedInternalLinks(withoutExcluded, internal).slice(0, slots);
+    return filterSuggestedInternalLinks(withoutExcluded, internal).slice(
+        0,
+        MAX_VISIBLE_INTERNAL_SUGGESTIONS,
+    );
 }

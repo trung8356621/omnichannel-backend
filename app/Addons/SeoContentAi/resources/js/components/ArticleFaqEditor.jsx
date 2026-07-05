@@ -187,6 +187,23 @@ export default function ArticleFaqEditor({
     );
     const faqsRef = React.useRef(faqs);
     faqsRef.current = faqs;
+
+    useEffect(() => {
+        window.__seoCollectArticleFaqs = () => [...(faqsRef.current ?? [])];
+
+        return () => {
+            delete window.__seoCollectArticleFaqs;
+        };
+    }, []);
+
+    useEffect(() => {
+        window.dispatchEvent(
+            new CustomEvent('article-faq-rows-changed', {
+                detail: { faqs },
+            }),
+        );
+    }, [faqs]);
+
     const skipBlurDuplicateCheckRef = useRef(false);
     const [renewingIndex, setRenewingIndex] = useState(null);
     const [generatingAll, setGeneratingAll] = useState(false);

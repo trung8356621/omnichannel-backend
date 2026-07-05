@@ -22,10 +22,12 @@
         window.__seoArticleHeavyActionOverlay = {
             id: 'seo-article-heavy-action-overlay',
             locked: false,
+            persistUntilUnload: false,
             action: null,
             guardTimer: null,
-            show(action = 'sync') {
+            show(action = 'sync', options = {}) {
                 this.locked = true;
+                this.persistUntilUnload = Boolean(options.persistUntilUnload);
                 this.action = action === 'save' ? 'save' : 'sync';
                 let overlay = document.getElementById(this.id);
 
@@ -48,7 +50,7 @@
                     title.setAttribute('data-heavy-action-title', '');
 
                     const message = document.createElement('span');
-                    message.textContent = 'Vui lòng chờ. Trang sẽ tự tải lại sau khi hoàn tất.';
+                    message.textContent = 'Vui lòng chờ — không chỉnh sửa cho đến khi trang tải lại xong.';
 
                     const skeleton = document.createElement('div');
                     skeleton.className = 'seo-article-sync-overlay__skeleton';
@@ -101,6 +103,10 @@
                 }
             },
             hide() {
+                if (this.persistUntilUnload) {
+                    return;
+                }
+
                 this.locked = false;
                 this.action = null;
                 if (this.guardTimer) {
@@ -156,11 +162,11 @@
             galleryPickerAnchorKey: null,
             init() {
                 this.syncFeaturedImageDraft();
-                if (this.$wire?.articleHeavyActionBusy) {
-                    this.$wire.set('articleHeavyActionBusy', false);
-                    this.$wire.set('articleHeavyAction', null);
+                if (window.__seoArticleHeavyActionOverlay?.locked) {
+                    this.syncPageLocked = true;
+                    this.heavyPageAction = window.__seoArticleHeavyActionOverlay.action ?? 'sync';
+                    return;
                 }
-                this.unlockPageAfterHeavyActionFailure();
             },
             syncFeaturedImageDraft() {
                 const stored = window.__seoFeaturedImageStorage?.load?.(this.articleId);
@@ -180,14 +186,22 @@
 
                 clearTimeout(this._heavyActionUnlockTimer);
                 this._heavyActionUnlockTimer = setTimeout(() => {
+                    if (window.__seoArticleHeavyActionOverlay?.persistUntilUnload) {
+                        return;
+                    }
+
                     if (!this.$wire?.articleHeavyActionBusy) {
                         this.unlockPageAfterHeavyActionFailure();
                     }
-                }, 45000);
+                }, 120000);
 
                 return true;
             },
             unlockPageAfterHeavyActionFailure() {
+                if (window.__seoArticleHeavyActionOverlay?.persistUntilUnload) {
+                    return;
+                }
+
                 clearTimeout(this._heavyActionUnlockTimer);
                 this.syncPageLocked = false;
                 this.heavyPageAction = null;
@@ -841,19 +855,16 @@
             if (syncPageLocked || $wire.articleHeavyActionBusy) {
                 return;
             }
-            const pushPublish = window.__seoPublishBoxPush;
             if (action === 'save') {
                 if (!lockPageForHeavyAction('save')) {
                     return;
                 }
                 const runSave = async () => {
-                    if (typeof pushPublish === 'function') {
-                        await pushPublish();
+                    if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
+                        await window.__seoExecuteHeavyArticleAction('save', $wire);
+                    } else {
+                        await $wire.requestSaveArticle();
                     }
-                    if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
-                        await window.__seoPushPublishCategoriesToWire();
-                    }
-                    await $wire.requestSaveArticle();
                     window.__seoResetPublishTabPrimed?.();
                 };
                 runSave().catch(() => unlockPageAfterHeavyActionFailure());
@@ -869,10 +880,11 @@
                         if (!lockPageForHeavyAction('sync')) {
                             return;
                         }
-                        if (typeof pushPublish === 'function') {
-                            await pushPublish();
+                        if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
+                            await window.__seoExecuteHeavyArticleAction('sync', $wire);
+                        } else {
+                            await $wire.requestSyncToWordPress();
                         }
-                        await $wire.requestSyncToWordPress();
                         window.__seoResetPublishTabPrimed?.();
                     };
                     runSync().catch(() => unlockPageAfterHeavyActionFailure());
@@ -1151,6 +1163,16 @@
                                                 aria-label="Xóa ảnh khỏi album"
                                             >
                                                 ×
+                                            </button>
+                                            <button
+                                                type="button"
+                                                class="wp-product-gallery-split"
+                                                x-show="Number(image.id) > 0"
+                                                x-on:click.stop="openSplitter(image.id)"
+                                                title="Tách lưới nhanh"
+                                                aria-label="Tách lưới nhanh"
+                                            >
+                                                ✂
                                             </button>
                                         </div>
                                     </template>

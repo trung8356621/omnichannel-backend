@@ -14,6 +14,8 @@ final class ArticleInternalLinkSuggestionService
 {
     private const MAX_INTERNAL_LINKS = 10;
 
+    private const MAX_SUGGESTION_DISPLAY = 10;
+
     public function __construct(
         private readonly KeywordLinkTargetResolver $linkTargetResolver,
     ) {}
@@ -30,12 +32,10 @@ final class ArticleInternalLinkSuggestionService
             return [];
         }
 
-        $maxSuggestions = self::MAX_INTERNAL_LINKS - count($internalLinks);
-
         return array_slice(
             $this->collectCandidates($article, $content, $internalLinks),
             0,
-            max(0, $maxSuggestions),
+            self::MAX_SUGGESTION_DISPLAY,
         );
     }
 

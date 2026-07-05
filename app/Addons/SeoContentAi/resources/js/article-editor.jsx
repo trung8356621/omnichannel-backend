@@ -15,6 +15,7 @@ import {
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
 import { clearArticleLocalState } from './utils/articleLocalState';
+import { loadFaqDraft } from './utils/articleEditorStorage';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
@@ -37,6 +38,7 @@ import {
     loadWpCategoryIds,
     saveWpCategoryIds,
 } from './utils/articleWpCategoriesStorage';
+import { buildMediaImageEditorUrl } from './utils/seoMediaApi';
 
 installArticleAutosaveLock();
 
@@ -69,6 +71,60 @@ window.__seoProductAlbumStorage = {
 };
 
 window.__seoPersistProductAlbumDraft = persistProductAlbumDraftToServer;
+
+window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction(action, wire) {
+    const normalizedAction = action === 'sync' ? 'sync' : 'save';
+
+    window.dispatchEvent(
+        new CustomEvent('article-wordpress-sync-lock', { detail: { action: normalizedAction } }),
+    );
+    window.__seoArticleHeavyActionOverlay?.show(normalizedAction);
+    window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
+
+    try {
+        const collect = window.__seoCollectEditorHeavyBundle;
+        if (typeof collect !== 'function') {
+            throw new Error('Editor chưa sẵn sàng — tải lại trang rồi thử lại.');
+        }
+
+        const editorBundle = await collect();
+        const html = String(editorBundle?.html ?? '').trim();
+        if (!html) {
+            throw new Error('Không thu thập được nội dung bài viết.');
+        }
+
+        const articleId = Number(editorBundle?.articleId ?? 0);
+        const featured = window.__seoFeaturedImageStorage?.load?.(articleId) ?? null;
+        const productAlbum = window.__seoProductAlbumStorage?.load?.(articleId) ?? null;
+        const faqsFromEditor =
+            typeof window.__seoCollectArticleFaqs === 'function' ? window.__seoCollectArticleFaqs() : null;
+        const faqsFromBundle = Array.isArray(editorBundle?.faqs) ? editorBundle.faqs : null;
+        const faqsFromDraft = articleId > 0 ? loadFaqDraft(articleId) : null;
+        const faqsPayload = Array.isArray(faqsFromEditor)
+            ? faqsFromEditor
+            : Array.isArray(faqsFromBundle)
+              ? faqsFromBundle
+              : Array.isArray(faqsFromDraft)
+                ? faqsFromDraft
+                : [];
+
+        await wire.executeHeavyArticleAction({
+            action: normalizedAction,
+            html,
+            seo_analysis: editorBundle?.seoAnalysis ?? null,
+            faqs: faqsPayload,
+            publish_box: window.__seoPublishBoxSnapshot?.() ?? null,
+            category_ids: window.__seoPublishCategoriesSnapshot?.() ?? null,
+            featured_image: featured,
+            product_album: productAlbum,
+        });
+    } catch (error) {
+        window.__seoArticleHeavyActionOverlay?.hide?.();
+        window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
+        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+        throw error;
+    }
+};
 
 window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
     const id = Number(articleId ?? 0);
@@ -152,8 +208,46 @@ window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
 
             return `${count} ảnh · Ảnh đầu là đại diện · Kéo thả để đổi vị trí`;
         },
+        openSplitter(seoMediaId) {
+            const mediaId = Number(seoMediaId ?? 0);
+            if (mediaId <= 0) {
+                return;
+            }
+
+            try {
+                sessionStorage.setItem(`seo-product-gallery-split-return-${this.articleId}`, window.location.href);
+            } catch {
+                /* ignore */
+            }
+
+            const url = buildMediaImageEditorUrl({ seoMediaId: mediaId, tab: 'splitter' });
+            if (url) {
+                window.location.assign(url);
+            }
+        },
     };
 };
+
+window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) {
+        return;
+    }
+
+    const data = event.data;
+    if (!data || data.type !== 'seo-image-splitter-saved') {
+        return;
+    }
+
+    const galleryItems = Array.isArray(data.product_gallery_items) ? data.product_gallery_items : [];
+    const articleId = Number(data.article_id ?? 0);
+    const storage = window.__seoProductAlbumStorage;
+
+    if (galleryItems.length === 0 || !storage?.append || !Number.isFinite(articleId) || articleId <= 0) {
+        return;
+    }
+
+    storage.append(articleId, galleryItems);
+});
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
 function normalizeLivewireEventDetail(payload) {

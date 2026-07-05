@@ -377,6 +377,108 @@ class SyncDomainContentService
     }
 
     /**
+     * Lập kế hoạch đồng bộ lại metadata/thành phần bài đã có local (ngôn ngữ, Polylang, SEO meta, trạng thái…).
+     *
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     refs?: array<int, array<string, mixed>>,
+     *     total?: int
+     * }
+     */
+    public function prepareMetadataResync(Site $site): array
+    {
+        $validation = $this->validateWordPressSite($site);
+        if ($validation !== null) {
+            return $validation;
+        }
+
+        $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+        $manifestUrl = $this->buildSyncManifestUrl($site);
+
+        try {
+            $siteInfoResult = app(WordPressSiteInfoService::class)->fetchAndStore($site);
+            if (! ($siteInfoResult['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => 'Không lấy được thông tin plugin SEO từ WordPress: '
+                        .(string) ($siteInfoResult['message'] ?? 'Lỗi không xác định.'),
+                ];
+            }
+
+            $manifestResponse = Http::timeout(120)
+                ->acceptJson()
+                ->withToken($readToken)
+                ->get($manifestUrl);
+
+            if ($manifestResponse->status() === 404) {
+                return [
+                    'success' => false,
+                    'message' => 'Plugin WordPress chưa hỗ trợ đồng bộ metadata (cần TVH SEO AI Bridge ≥ 1.0.41).',
+                ];
+            }
+
+            if (! $manifestResponse->successful()) {
+                $message = (string) ($manifestResponse->json('message') ?? $manifestResponse->body());
+
+                return [
+                    'success' => false,
+                    'message' => 'WordPress trả lỗi HTTP '.$manifestResponse->status().': '.mb_substr($message, 0, 300),
+                ];
+            }
+
+            $manifestPayload = $manifestResponse->json();
+            if (! is_array($manifestPayload) || ! ($manifestPayload['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => 'Phản hồi manifest WordPress không hợp lệ.',
+                ];
+            }
+
+            $entries = is_array($manifestPayload['entries'] ?? null) ? $manifestPayload['entries'] : [];
+            $manifestCounts = is_array($manifestPayload['counts'] ?? null) ? $manifestPayload['counts'] : [];
+            $manifestTotals = is_array($manifestPayload['totals'] ?? null) ? $manifestPayload['totals'] : [];
+            $this->persistManifestCounts($site, $manifestCounts, $manifestTotals);
+
+            $localArticles = SeoArticle::query()
+                ->where('site_id', $site->id)
+                ->where('wp_post_id', '>', 0)
+                ->get(['wp_post_id', 'type', 'updated_at']);
+
+            $plan = $this->manifestComparator->resolveMetadataRefreshRefs($entries, $localArticles);
+            $refs = $plan['refs'];
+            $total = (int) $plan['total'];
+
+            if ($refs === []) {
+                return [
+                    'success' => true,
+                    'message' => 'Không có bài local nào khớp manifest WordPress để cập nhật thành phần.',
+                    'refs' => [],
+                    'total' => 0,
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => sprintf('Sẽ cập nhật thành phần cho %d bài/term đã có trên SEO.', $total),
+                'refs' => $refs,
+                'total' => $total,
+            ];
+        } catch (Throwable $e) {
+            Log::error('SeoContentAi metadata resync prepare failed', [
+                'site_id' => $site->id,
+                'url' => $manifestUrl,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * @param  array<string, int>  $base
      * @param  array<string, int>  $add
      * @return array<string, int>
@@ -944,14 +1046,6 @@ class SyncDomainContentService
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_product_gallery'],
                 ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
-            );
-        }
-
-        $virtualComments = $item['virtual_comments'] ?? null;
-        if (is_array($virtualComments) && $virtualComments !== []) {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => VirtualCommentService::ARTICLE_META_KEY],
-                ['meta_value' => json_encode($virtualComments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
             );
         }
     }

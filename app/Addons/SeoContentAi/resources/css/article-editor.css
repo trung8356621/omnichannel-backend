@@ -795,6 +795,33 @@
     background: #b32d2e;
 }
 
+.wp-article-edit .wp-product-gallery-split {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    z-index: 2;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 4px;
+    background: rgba(37, 99, 235, 0.92);
+    color: #fff;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wp-article-edit .wp-product-gallery-split:hover {
+    background: rgba(29, 78, 216, 0.98);
+}
+
+.dark .wp-article-edit .wp-product-gallery-split {
+    background: rgba(59, 130, 246, 0.92);
+}
+
 .dark .wp-article-edit .wp-product-gallery-thumb-wrap {
     border-color: rgb(55 65 81);
     background: rgb(30 41 59);
@@ -3545,6 +3572,12 @@
     min-width: 0;
 }
 
+/* Tab bar sticky trong phạm vi editor (tới hết section FAQ), dừng trước #seo-article-faq-root */
+.seo-editor-sticky-boundary {
+    position: relative;
+    min-width: 0;
+}
+
 @media (max-width: 1023px) {
     .seo-article-editor-left-rail {
         position: static;
@@ -3575,6 +3608,10 @@
     border-bottom: 1px solid #c3c4c7;
     background: #fff;
     padding: 0 0.5rem;
+    position: sticky;
+    top: var(--wp-article-sidebar-top, calc(4rem + 0.75rem));
+    z-index: 15;
+    scroll-margin-top: var(--wp-article-sidebar-top, calc(4rem + 0.75rem));
 }
 
 .dark .seo-editor-tabs {
@@ -5633,7 +5670,7 @@ section[data-seo-section-id].is-outline-jump-highlight {
 
 .seo-link-bubble-search-row {
     display: flex;
-    align-items: stretch;
+    align-items: center;
     gap: 0.35rem;
 }
 
@@ -5644,6 +5681,7 @@ section[data-seo-section-id].is-outline-jump-highlight {
     gap: 0.25rem;
     flex-shrink: 0;
     max-width: 46%;
+    height: 32px;
     padding: 0 0.55rem;
     font-size: 11px;
     font-weight: 600;
@@ -5695,8 +5733,21 @@ section[data-seo-section-id].is-outline-jump-highlight {
 }
 
 .seo-link-bubble-input--search {
+    width: 100%;
+    height: 32px;
     padding-left: 1.85rem;
-    padding-right: 1.85rem;
+    padding-right: 0.4rem;
+}
+
+.seo-link-bubble-input--search::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    cursor: pointer;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='18' y1='6' x2='6' y2='18'/%3E%3Cline x1='6' y1='6' x2='18' y2='18'/%3E%3C/svg%3E")
+        center / 14px 14px no-repeat;
 }
 
 .seo-link-bubble-results {
@@ -6363,6 +6414,20 @@ section[data-seo-section-id].is-outline-jump-highlight {
     line-height: 1.45;
     color: #1d2327;
     word-break: break-word;
+}
+
+.seo-article-images-slug {
+    margin: 0.25rem 0 0;
+    padding: 0 0.15rem;
+    font-size: 0.6875rem;
+    line-height: 1.35;
+    color: #646970;
+    word-break: break-all;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.dark .seo-article-images-slug {
+    color: #94a3b8;
 }
 
 .dark .seo-article-images-alt {

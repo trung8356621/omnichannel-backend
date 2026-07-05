@@ -2,7 +2,6 @@
     $cssPath = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
     $tabCounts = $this->getTriageTabCounts();
     $paginator = $this->getTriagePaginator();
-    $siteOptions = $this->getSiteFilterOptions();
 @endphp
 
 <x-filament-panels::page class="keyword-workspace-page link-triage-page">
@@ -29,7 +28,7 @@
                         type="button"
                         wire:click="setTriageFilter('{{ $tabKey }}')"
                         wire:loading.attr="disabled"
-                        wire:target="setTriageFilter,triageSiteId"
+                        wire:target="setTriageFilter,keywordWorkspaceSiteId"
                         role="tab"
                         aria-selected="{{ $triageFilter === $tabKey ? 'true' : 'false' }}"
                         @class([
@@ -42,28 +41,10 @@
                     </button>
                 @endforeach
             </div>
-
-            <div class="link-triage-domain-filter">
-                <label for="link-triage-site-filter" class="sr-only">
-                    {{ __('seo-content-ai::filament.keyword.link_triage_domain_filter') }}
-                </label>
-                <select
-                    id="link-triage-site-filter"
-                    wire:model.live="triageSiteId"
-                    wire:loading.attr="disabled"
-                    wire:target="setTriageFilter,triageSiteId"
-                    class="link-triage-domain-select"
-                >
-                    <option value="">{{ __('seo-content-ai::filament.keyword.link_triage_domain_all') }}</option>
-                    @foreach ($siteOptions as $siteId => $domainLabel)
-                        <option value="{{ (int) $siteId }}" @selected((int) ($triageSiteId ?? 0) === (int) $siteId)>{{ $domainLabel }}</option>
-                    @endforeach
-                </select>
-            </div>
         </div>
 
         <div class="link-triage-table-shell overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-white/10 dark:bg-gray-900/40">
-            <div wire:loading.flex wire:target="setTriageFilter,triageSiteId" class="link-triage-loading-overlay">
+            <div wire:loading.flex wire:target="setTriageFilter,keywordWorkspaceSiteId" class="link-triage-loading-overlay">
                 @for ($i = 0; $i < 6; $i++)
                     <div class="link-triage-skeleton-row animate-pulse"></div>
                 @endfor

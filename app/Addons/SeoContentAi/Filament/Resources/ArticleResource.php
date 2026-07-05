@@ -159,9 +159,25 @@ class ArticleResource extends SeoPanelResource
                     ->sortable()
                     ->badge()
                     ->color('info')
-                    ->formatStateUsing(fn (?string $state): string => $state
-                        ? Str::ucfirst(str_replace('_', ' ', $state))
-                        : '—')
+                    ->formatStateUsing(fn (?string $state, SeoArticle $record): string => static::resolveWordPressPostTypeLabel($record))
+                    ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('articles_in_category_count')
+                    ->label(__('seo-content-ai::filament.article_list.articles_in_category'))
+                    ->numeric()
+                    ->sortable()
+                    ->alignCenter()
+                    ->url(function (SeoArticle $record): ?string {
+                        $wpId = (int) ($record->wp_post_id ?? 0);
+                        if ($wpId <= 0) {
+                            return null;
+                        }
+
+                        return app(\App\Addons\SeoContentAi\Services\DomainOverviewService::class)
+                            ->buildArticlesFilterUrlForCategory($wpId, (int) ($record->site_id ?? 0) ?: null);
+                    })
+                    ->color('primary')
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_CATEGORIES)
                     ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('language')
                     ->label(__('seo-content-ai::filament.article_list.language'))
@@ -269,32 +285,80 @@ class ArticleResource extends SeoPanelResource
 
                         $query->where('language', $lang);
                     }),
-                SelectFilter::make('type')
+                SelectFilter::make('post_type')
                     ->label(__('seo-content-ai::filament.article_list.post_type'))
                     ->options([
-                        'article' => __('seo-content-ai::filament.article_list.post_type_article'),
+                        'post' => __('seo-content-ai::filament.article_list.post_type_post'),
+                        'page' => __('seo-content-ai::filament.article_list.post_type_page'),
                         'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+                    ])
+                    ->native(false)
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_post_types'))
+                    ->indicator(__('seo-content-ai::filament.article_list.post_type'))
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_POSTS)
+                    ->query(function (Builder $query, array $data, $livewire): void {
+                        if (! $livewire instanceof Pages\ListArticles
+                            || $livewire->contentTab !== Pages\ListArticles::TAB_POSTS) {
+                            return;
+                        }
+
+                        $postType = $data['value'] ?? null;
+                        if (! is_string($postType) || $postType === '') {
+                            return;
+                        }
+
+                        static::applyPostTypeFilterScope($query, $postType);
+                    }),
+                SelectFilter::make('taxonomy')
+                    ->label(__('seo-content-ai::filament.article_list.taxonomy'))
+                    ->options([
                         'category' => __('seo-content-ai::filament.article_list.post_type_category'),
                         'product_category' => __('seo-content-ai::filament.article_list.post_type_product_category'),
                     ])
                     ->native(false)
-                    ->placeholder(__('seo-content-ai::filament.article_list.all_types'))
-                    ->indicator(__('seo-content-ai::filament.article_list.type'))
-                    ->query(function (Builder $query, array $data): void {
-                        $type = $data['value'] ?? null;
-                        if (! is_string($type) || $type === '') {
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_taxonomies'))
+                    ->indicator(__('seo-content-ai::filament.article_list.taxonomy'))
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_CATEGORIES)
+                    ->query(function (Builder $query, array $data, $livewire): void {
+                        if (! $livewire instanceof Pages\ListArticles
+                            || $livewire->contentTab !== Pages\ListArticles::TAB_CATEGORIES) {
                             return;
                         }
 
-                        if ($type === 'article') {
-                            $query->where(function (Builder $q): void {
-                                $q->where('type', 'article')->orWhereNull('type');
-                            });
-
+                        $taxonomy = $data['value'] ?? null;
+                        if (! is_string($taxonomy) || $taxonomy === '') {
                             return;
                         }
 
-                        $query->where('type', $type);
+                        $query->where('type', $taxonomy);
+                    }),
+                SelectFilter::make('category_id')
+                    ->label(__('seo-content-ai::filament.article_list.category_filter'))
+                    ->options(fn ($livewire): array => $livewire instanceof Pages\ListArticles
+                        ? static::buildCategoryFilterOptions($livewire)
+                        : [])
+                    ->searchable()
+                    ->preload()
+                    ->native(false)
+                    ->placeholder(__('seo-content-ai::filament.article_list.all_categories'))
+                    ->indicator(__('seo-content-ai::filament.article_list.category_filter'))
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_POSTS
+                        && trim((string) ($livewire->tableFilters['post_type']['value'] ?? '')) !== 'page')
+                    ->query(function (Builder $query, array $data, $livewire): void {
+                        if (! $livewire instanceof Pages\ListArticles
+                            || $livewire->contentTab !== Pages\ListArticles::TAB_POSTS) {
+                            return;
+                        }
+
+                        $categoryWpId = (int) ($data['value'] ?? 0);
+                        if ($categoryWpId <= 0) {
+                            return;
+                        }
+
+                        static::applyCategoryMembershipScope($query, $categoryWpId);
                     }),
                 SelectFilter::make('seo_score_band')
                     ->label(__('seo-content-ai::filament.article_list.seo_score'))
@@ -464,7 +528,7 @@ class ArticleResource extends SeoPanelResource
             ->filtersFormColumns([
                 'default' => 1,
                 'sm' => 2,
-                'lg' => 4,
+                'lg' => 5,
             ])
             ->persistFiltersInSession()
             ->actionsAlignment('start')
@@ -544,6 +608,180 @@ class ArticleResource extends SeoPanelResource
             ]));
     }
 
+    public static function applyPostTypeFilterScope(Builder $query, string $wpPostType): void
+    {
+        $wpPostType = strtolower(trim($wpPostType));
+
+        match ($wpPostType) {
+            'product' => $query->where('type', 'product'),
+            'page' => static::applyArticlesWithWpPostTypeMetaScope($query, 'page'),
+            'post' => $query->where(function (Builder $scopeQuery): void {
+                $scopeQuery
+                    ->where(function (Builder $typeQuery): void {
+                        $typeQuery
+                            ->whereIn('type', ['article'])
+                            ->orWhereNull('type')
+                            ->orWhere('type', '');
+                    })
+                    ->whereNotIn('articles.id', function ($subQuery): void {
+                        $subQuery->select('article_id')
+                            ->from('article_meta')
+                            ->where('meta_key', 'wp_post_type')
+                            ->where('meta_value', 'page');
+                    });
+            }),
+            default => null,
+        };
+    }
+
+    public static function resolveWordPressPostTypeLabel(SeoArticle $record): string
+    {
+        $record->loadMissing('articleMetas');
+
+        $wpPostType = strtolower(trim((string) (
+            $record->articleMetas->firstWhere('meta_key', 'wp_post_type')?->meta_value ?? ''
+        )));
+
+        if ($wpPostType !== '') {
+            return match ($wpPostType) {
+                'post' => __('seo-content-ai::filament.article_list.post_type_post'),
+                'page' => __('seo-content-ai::filament.article_list.post_type_page'),
+                'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+                'category' => __('seo-content-ai::filament.article_list.post_type_category'),
+                'product_cat', 'product_category' => __('seo-content-ai::filament.article_list.post_type_product_category'),
+                default => Str::ucfirst(str_replace('_', ' ', $wpPostType)),
+            };
+        }
+
+        return match ((string) ($record->type ?? 'article')) {
+            'product' => __('seo-content-ai::filament.article_list.post_type_product'),
+            'category' => __('seo-content-ai::filament.article_list.post_type_category'),
+            'product_category' => __('seo-content-ai::filament.article_list.post_type_product_category'),
+            default => __('seo-content-ai::filament.article_list.post_type_post'),
+        };
+    }
+
+    private static function applyArticlesWithWpPostTypeMetaScope(Builder $query, string $wpPostType): void
+    {
+        $query->whereIn('articles.id', function ($subQuery) use ($wpPostType): void {
+            $subQuery->select('article_id')
+                ->from('article_meta')
+                ->where('meta_key', 'wp_post_type')
+                ->where('meta_value', $wpPostType);
+        });
+    }
+
+    public static function applyContentTabScope(Builder $query, string $contentTab): Builder
+    {
+        if ($contentTab === Pages\ListArticles::TAB_CATEGORIES) {
+            return $query->whereIn('type', ['category', 'product_category']);
+        }
+
+        return $query->where(function (Builder $scopeQuery): void {
+            $scopeQuery
+                ->whereIn('type', ['article', 'product'])
+                ->orWhere(function (Builder $sub): void {
+                    $sub->whereNull('type')->orWhere('type', '');
+                });
+        });
+    }
+
+    public static function applyCategoryMembershipScope(Builder $query, int $categoryWpId): void
+    {
+        $query->whereIn('articles.id', function ($subQuery) use ($categoryWpId): void {
+            $subQuery->select('article_id')
+                ->from('article_meta')
+                ->where('meta_key', 'category_ids')
+                ->whereRaw(static::articleMetaContainsCategoryWpIdSql(), [$categoryWpId]);
+        });
+    }
+
+    public static function appendArticlesInCategoryCountSelect(Builder $query): Builder
+    {
+        if ($query->getQuery()->columns === null) {
+            $query->select('articles.*');
+        }
+
+        return $query->selectSub(function ($subQuery): void {
+            $subQuery->from('articles as post_articles')
+                ->selectRaw('count(*)')
+                ->whereColumn('post_articles.site_id', 'articles.site_id')
+                ->where(function ($typeQuery): void {
+                    $typeQuery
+                        ->whereIn('post_articles.type', ['article', 'product'])
+                        ->orWhere(function ($nullTypeQuery): void {
+                            $nullTypeQuery
+                                ->whereNull('post_articles.type')
+                                ->orWhere('post_articles.type', '');
+                        });
+                })
+                ->whereIn('post_articles.id', function ($metaQuery): void {
+                    $metaQuery->select('article_id')
+                        ->from('article_meta')
+                        ->where('meta_key', 'category_ids')
+                        ->whereRaw(static::articleMetaContainsCategoryWpIdSql('articles.wp_post_id'));
+                });
+        }, 'articles_in_category_count');
+    }
+
+    /**
+     * MariaDB không hỗ trợ CAST(... AS JSON); dùng FIND_IN_SET trên mảng ID phẳng trong meta_value.
+     */
+    private static function articleMetaContainsCategoryWpIdSql(string $categoryWpIdExpression = '?'): string
+    {
+        return sprintf(
+            'FIND_IN_SET(%s, REPLACE(REPLACE(REPLACE(`meta_value`, " ", ""), "[", ""), "]", "")) > 0',
+            $categoryWpIdExpression,
+        );
+    }
+
+    /**
+     * @return array<int|string, string>
+     */
+    public static function buildCategoryFilterOptions(Pages\ListArticles $livewire): array
+    {
+        $siteId = (int) ($livewire->tableFilters['site_id']['value'] ?? SeoAccessControl::globalSiteId() ?? 0);
+
+        $query = SeoArticle::query()
+            ->whereIn('type', ['category', 'product_category'])
+            ->where('wp_post_id', '>', 0)
+            ->orderBy('title');
+
+        $postType = trim((string) ($livewire->tableFilters['post_type']['value'] ?? ''));
+        if ($postType === 'post') {
+            $query->where('type', 'category');
+        } elseif ($postType === 'product') {
+            $query->where('type', 'product_category');
+        } elseif ($postType === 'page') {
+            return [];
+        }
+
+        if ($siteId > 0) {
+            $query->where('site_id', $siteId);
+        } elseif (SeoAccessControl::shouldScopeToAccountOwner()) {
+            SeoAccessControl::applyAccessibleSiteScope($query);
+        }
+
+        return $query
+            ->get(['wp_post_id', 'title', 'type'])
+            ->mapWithKeys(function (SeoArticle $term): array {
+                $wpId = (int) ($term->wp_post_id ?? 0);
+                if ($wpId <= 0) {
+                    return [];
+                }
+
+                $title = trim((string) ($term->title ?? ''));
+                $label = $title !== '' ? $title : __('seo-content-ai::filament.article_list.category_fallback', ['id' => $wpId]);
+
+                if ($term->type === 'product_category') {
+                    $label = '[SP] '.$label;
+                }
+
+                return [$wpId => $label];
+            })
+            ->all();
+    }
+
     public static function getEloquentQuery(): Builder
     {
         return static::applyArticleAccessScopes(
@@ -580,6 +818,7 @@ class ArticleResource extends SeoPanelResource
                 'wp_post_images',
                 'wp_featured_image_url',
                 'wp_permalink',
+                'wp_post_type',
             ]),
         ];
     }

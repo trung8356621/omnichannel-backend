@@ -44,9 +44,6 @@ class ListKeywords extends ListRecords
     #[Url(as: 'stat')]
     public ?string $dictionaryStatFilter = null;
 
-    #[Url(as: 'site_id')]
-    public ?int $dictionarySiteId = null;
-
     /** @var list<int> */
     public array $expandedParentIds = [];
 
@@ -54,13 +51,7 @@ class ListKeywords extends ListRecords
 
     public function mount(): void
     {
-        SeoAccessControl::setGlobalSiteId(null);
-
-        if ($this->dictionarySiteId !== null && $this->dictionarySiteId <= 0) {
-            $this->dictionarySiteId = null;
-        }
-
-        $this->syncDictionarySiteFilterFromUrl();
+        $this->initializeKeywordWorkspaceSiteFilter();
     }
 
     public function getKeywordWorkspaceMode(): string
@@ -68,24 +59,14 @@ class ListKeywords extends ListRecords
         return 'dictionary';
     }
 
-    public function updatedDictionarySiteId(): void
+    public function onKeywordWorkspaceSiteFilterChanged(): void
     {
-        if ($this->dictionarySiteId !== null && $this->dictionarySiteId <= 0) {
-            $this->dictionarySiteId = null;
-        }
-
-        $this->syncTableSiteFilterFromDictionarySiteId();
         $this->resetPage();
         $this->flushCachedTableRecords();
     }
 
     public function updatedTableFilters(): void
     {
-        if (array_key_exists('site_id', $this->tableFilters)) {
-            $siteId = (int) ($this->tableFilters['site_id']['value'] ?? 0);
-            $this->dictionarySiteId = $siteId > 0 ? $siteId : null;
-        }
-
         $this->resetPage();
         $this->flushCachedTableRecords();
     }
@@ -601,10 +582,7 @@ class ListKeywords extends ListRecords
             return KeywordResource::applyParentScopeToQuery($query, $this->parentId);
         }
 
-        $siteId = (int) ($this->tableFilters['site_id']['value'] ?? 0);
-        if ($siteId <= 0 && $this->dictionarySiteId !== null && $this->dictionarySiteId > 0) {
-            $siteId = (int) $this->dictionarySiteId;
-        }
+        $siteId = (int) ($this->resolveKeywordWorkspaceSiteId() ?? 0);
 
         if ($siteId > 0) {
             $query->forSite($siteId);
@@ -672,40 +650,6 @@ class ListKeywords extends ListRecords
         };
     }
 
-    private function syncDictionarySiteFilterFromUrl(): void
-    {
-        if ($this->parentId !== null && $this->parentId > 0) {
-            return;
-        }
-
-        if ($this->dictionarySiteId === null || $this->dictionarySiteId <= 0) {
-            return;
-        }
-
-        $this->tableFilters['site_id'] = [
-            'value' => (string) $this->dictionarySiteId,
-            'isActive' => true,
-        ];
-    }
-
-    private function syncTableSiteFilterFromDictionarySiteId(): void
-    {
-        if ($this->parentId !== null && $this->parentId > 0) {
-            return;
-        }
-
-        if ($this->dictionarySiteId !== null && $this->dictionarySiteId > 0) {
-            $this->tableFilters['site_id'] = [
-                'value' => (string) $this->dictionarySiteId,
-                'isActive' => true,
-            ];
-
-            return;
-        }
-
-        unset($this->tableFilters['site_id']);
-    }
-
     protected function getHeaderActions(): array
     {
         $actions = [];
@@ -731,7 +675,7 @@ class ListKeywords extends ListRecords
                 Forms\Components\Select::make('site_id')
                     ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->options(fn (): array => KeywordResource::siteSelectOptions())
-                    ->default(fn (): ?int => $this->dictionarySiteId ?? SeoAccessControl::globalSiteId())
+                    ->default(fn (): ?int => $this->resolveKeywordWorkspaceSiteId())
                     ->hidden(fn (): bool => SeoAccessControl::hasGlobalSiteScope())
                     ->required()
                     ->searchable()
@@ -744,7 +688,7 @@ class ListKeywords extends ListRecords
                     ->required(),
             ])
             ->action(function (array $data): void {
-                $siteId = (int) ($data['site_id'] ?? $this->dictionarySiteId ?? SeoAccessControl::globalSiteId() ?? 0);
+                $siteId = (int) ($data['site_id'] ?? $this->resolveKeywordWorkspaceSiteId() ?? 0);
                 $phrases = collect(preg_split('/\R/u', (string) ($data['phrases'] ?? '')) ?: [])
                     ->map(static fn (string $phrase): string => trim($phrase))
                     ->filter()

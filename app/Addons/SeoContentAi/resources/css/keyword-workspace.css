@@ -13,6 +13,78 @@
 }
 
 /* Shared workspace tabs (x-seo-content-ai::workspace-tabs) */
+.keyword-workspace-tabs-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem 1rem;
+    border-bottom: 1px solid rgb(229 231 235);
+}
+
+.dark .keyword-workspace-tabs-bar {
+    border-bottom-color: rgb(255 255 255 / 0.1);
+}
+
+.keyword-workspace-tabs-bar .workspace-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.keyword-workspace-tabs-bar__filter {
+    flex: 0 0 auto;
+    width: min(100%, 16rem);
+    margin-left: auto;
+    padding-bottom: 0.625rem;
+}
+
+@media (max-width: 767px) {
+    .keyword-workspace-tabs-bar__filter {
+        width: 100%;
+        margin-left: 0;
+        padding-bottom: 0;
+    }
+}
+
+.keyword-workspace-domain-select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+    border-radius: 0.625rem;
+    border: 1px solid rgb(209 213 219);
+    background-color: rgb(255 255 255);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+    background-position: right 0.6rem center;
+    background-repeat: no-repeat;
+    background-size: 1.25rem 1.25rem;
+    padding: 0.5rem 2.25rem 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: rgb(17 24 39);
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+}
+
+.dark .keyword-workspace-domain-select {
+    border-color: rgb(255 255 255 / 0.12);
+    background-color: rgb(17 24 39 / 0.65);
+    color: rgb(243 244 246);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%239ca3af' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E");
+}
+
+.keyword-workspace-domain-select:focus {
+    outline: 2px solid rgb(99 102 241);
+    outline-offset: 1px;
+    border-color: rgb(99 102 241);
+}
+
+.dark .keyword-workspace-domain-select:focus {
+    outline-color: rgb(129 140 248);
+    border-color: rgb(129 140 248);
+}
+
 .workspace-tabs {
     margin-bottom: 0;
 }
@@ -21,11 +93,7 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
-    border-bottom: 1px solid rgb(229 231 235);
-}
-
-.dark .workspace-tabs__list {
-    border-bottom-color: rgb(255 255 255 / 0.1);
+    border-bottom: none;
 }
 
 .workspace-tabs__item {

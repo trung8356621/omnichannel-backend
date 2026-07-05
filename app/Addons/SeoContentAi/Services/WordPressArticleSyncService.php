@@ -436,7 +436,6 @@ final class WordPressArticleSyncService
             app(ArticleFaqExtractDebugService::class)->clear($article);
         }
 
-        $virtualComments = app(VirtualCommentService::class)->getFromArticle($article);
         $wpContentService = app(WordPressArticleContentService::class);
         $wpTaxonomy = $wpContentService->resolveWpTaxonomy($article);
 
@@ -461,14 +460,7 @@ final class WordPressArticleSyncService
                 'post_type' => $requestedPostType,
                 'post_content' => $postContent !== '' ? $postContent : null,
                 'faqs' => $faqs,
-                'virtual_comments' => $virtualComments,
                 'seo' => $this->resolveSeoPayloadForWordPress($article, $seoOverride),
-                'meta_input' => [
-                    VirtualCommentService::WP_META_KEY => json_encode(
-                        $virtualComments,
-                        JSON_UNESCAPED_UNICODE,
-                    ),
-                ],
             ];
 
             $categoryIds = $this->resolveCategoryIdsForWordPress($article);

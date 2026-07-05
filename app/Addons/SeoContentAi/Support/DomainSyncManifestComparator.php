@@ -115,6 +115,58 @@ final class DomainSyncManifestComparator
     }
 
     /**
+     * Lập danh sách refs cho mọi bài/term đã có local — bỏ qua so sánh post_modified.
+     *
+     * @param  array<int, array<string, mixed>>  $manifestEntries
+     * @param  Collection<int, object{wp_post_id: int, type: string, updated_at: mixed}>  $localArticles
+     * @return array{
+     *     refs: array<int, array<string, mixed>>,
+     *     total: int
+     * }
+     */
+    public function resolveMetadataRefreshRefs(array $manifestEntries, Collection $localArticles): array
+    {
+        $localIndex = [];
+        foreach ($localArticles as $article) {
+            $wpId = (int) ($article->wp_post_id ?? 0);
+            $type = (string) ($article->type ?? '');
+            if ($wpId <= 0 || $type === '') {
+                continue;
+            }
+
+            $localIndex[$this->localKey($type, $wpId)] = true;
+        }
+
+        $refs = [];
+        $seen = [];
+
+        foreach ($manifestEntries as $entry) {
+            if (! is_array($entry)) {
+                continue;
+            }
+
+            $wpId = (int) ($entry['wp_id'] ?? 0);
+            $type = strtolower(trim((string) ($entry['type'] ?? '')));
+            if ($wpId <= 0 || $type === '') {
+                continue;
+            }
+
+            $key = $this->localKey($type, $wpId);
+            if (! isset($localIndex[$key]) || isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $refs[] = $this->normalizeRef($entry);
+        }
+
+        return [
+            'refs' => $refs,
+            'total' => count($refs),
+        ];
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $manifestEntries
      * @param  array<int, bool>  $localArticleWpIds
      * @return array<int, array<string, mixed>>

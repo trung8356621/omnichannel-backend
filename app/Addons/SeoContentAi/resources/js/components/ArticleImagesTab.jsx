@@ -237,19 +237,19 @@ function ImageRow({
     siteId,
     articleId,
     onPatch,
-    onSlugChange,
     onFocusBlock,
     onQuickFixSlug,
     onQuickFixAltTitle,
     onRemoveImage,
+    onAltTitleChange,
     canQuickFix = false,
     onNotify,
 }) {
-    const [slug, setSlug] = useState(row.slug ?? '');
+    const [alt, setAlt] = useState(row.alt ?? '');
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
     const canPatchInEditor = Boolean(row.blockId);
-    const altText = (row.alt || row.title || '').trim();
+    const slugText = (row.slug || '').trim();
     const showActions = canProcessArticleImage(row);
     const busy = openingEditor || applyingWatermark;
     const excluded = Boolean(row.excludeQuickFix);
@@ -258,11 +258,10 @@ function ImageRow({
     const primaryUrl = wpUrl || String(row.src || '').trim();
     const showLocalExtra = distinctUrls(primaryUrl, localUrl);
     const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
-    const slugReadonly = isLegacyRandomFolderSeoMediaSrc(primaryUrl) && seoMediaId <= 0;
 
     useEffect(() => {
-        setSlug(row.slug ?? '');
-    }, [row.slug, row.src]);
+        setAlt(row.alt ?? '');
+    }, [row.alt, row.src]);
 
     const openImageEditor = async () => {
         if (!siteId || busy) {
@@ -358,54 +357,43 @@ function ImageRow({
                     <img
                         key={`${row.blockId}-${row.src}`}
                         src={row.src}
-                        alt={altText}
+                        alt={(alt || row.title || '').trim()}
                         className="seo-article-images-thumb"
                     />
                 </button>
-                <p className="seo-article-images-alt">{altText || '—'}</p>
+                <p className="seo-article-images-slug" title={slugText || t('image_slug_placeholder')}>
+                    {slugText || '—'}
+                </p>
             </div>
 
             <div className="seo-article-images-fields">
                 <div className="seo-article-images-field-row">
-                    <label className="seo-image-meta-label">
-                        {t('slug_file_url')}
-                        {row.wpAttachmentId ? (
-                            <span className="seo-article-images-hint">{t('wp_slug_hint')}</span>
-                        ) : row.seoMediaId ? (
-                            <span className="seo-article-images-hint">{t('local_slug_hint')}</span>
-                        ) : null}
-                    </label>
+                    <label className="seo-image-meta-label">{t('image_alt_label')}</label>
                     <input
                         type="text"
                         className="seo-image-meta-input"
-                        value={slug}
-                        readOnly={slugReadonly}
-                        onChange={(e) => setSlug(e.target.value)}
+                        value={alt}
+                        onChange={(e) => setAlt(e.target.value)}
                         onBlur={() => {
-                            if (slugReadonly) {
+                            const trimmed = alt.trim();
+                            if (trimmed === (row.alt || '').trim()) {
                                 return;
                             }
+
+                            if (onAltTitleChange) {
+                                onAltTitleChange(row, trimmed);
+                                return;
+                            }
+
                             if (!canPatchInEditor) {
                                 return;
                             }
-                            const trimmed = slug.trim();
-                            if (trimmed !== row.slug) {
-                                const ok = onSlugChange?.(row, trimmed, (patch) =>
-                                    onPatch?.(row.blockId, patch),
-                                );
-                                if (ok === false) {
-                                    setSlug(row.slug ?? '');
-                                }
-                            }
+
+                            onPatch?.(row.blockId, { alt: trimmed, title: trimmed });
                         }}
-                        placeholder={t('image_slug_placeholder')}
-                        disabled={!canPatchInEditor}
+                        placeholder={t('image_alt_placeholder')}
+                        disabled={!canPatchInEditor && !onAltTitleChange}
                     />
-                    {slugReadonly ? (
-                        <p className="seo-article-images-hint mt-1">
-                            {t('readonly_legacy_slug')}
-                        </p>
-                    ) : null}
                     {row.wpAttachmentId && primaryUrl ? (
                         <a
                             href={primaryUrl}
@@ -560,7 +548,6 @@ export default function ArticleImagesTab({
     focusKeyword,
     articleTitle = '',
     onPatchImage,
-    onSlugChange,
     onFocusBlock,
     onQuickFixSlugAll,
     quickFixSlugAllBusy = false,
@@ -568,6 +555,7 @@ export default function ArticleImagesTab({
     onQuickFixAltTitleAll,
     onQuickFixAltTitleOne,
     onRemoveImage,
+    onAltTitleChange,
     onNotify,
 }) {
     const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
@@ -847,11 +835,11 @@ export default function ArticleImagesTab({
                         siteId={siteId}
                         articleId={articleId}
                         onPatch={onPatchImage}
-                        onSlugChange={onSlugChange}
                         onFocusBlock={onFocusBlock}
                         onQuickFixSlug={onQuickFixSlugOne}
                         onQuickFixAltTitle={onQuickFixAltTitleOne}
                         onRemoveImage={onRemoveImage}
+                        onAltTitleChange={onAltTitleChange}
                         canQuickFix={canQuickFix}
                         onNotify={onNotify}
                     />

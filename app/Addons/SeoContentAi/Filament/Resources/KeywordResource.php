@@ -64,6 +64,11 @@ class KeywordResource extends SeoPanelResource
         return SeoAccessControl::canAccessPlannerFeatures();
     }
 
+    public static function shouldRegisterNavigation(): bool
+    {
+        return false;
+    }
+
     public static function canCreate(): bool
     {
         return static::allowsSeoPanelMutation()
@@ -337,7 +342,7 @@ class KeywordResource extends SeoPanelResource
                 Tables\Filters\SelectFilter::make('site_id')
                     ->label(__('seo-content-ai::filament.keyword.domain'))
                     ->options(fn (): array => static::siteSelectOptions())
-                    ->visible(fn (): bool => ! SeoAccessControl::hasGlobalSiteScope())
+                    ->hidden()
                     ->placeholder(__('seo-content-ai::filament.keyword.domain_filter_all'))
                     ->searchable()
                     ->preload()
@@ -2515,8 +2520,6 @@ class KeywordResource extends SeoPanelResource
             'focus' => Pages\ListFocusKeywords::route('/focus'),
             'anchor-audit' => Pages\AnchorTextAuditWorkspace::route('/anchor-audit'),
             'workspace-2' => Pages\KeywordWorkspaceTwo::route('/workspace-2'),
-            'workspace-3' => Pages\KeywordWorkspaceThree::route('/workspace-3'),
-            'workspace-4' => Pages\KeywordWorkspaceFour::route('/workspace-4'),
         ];
     }
 }

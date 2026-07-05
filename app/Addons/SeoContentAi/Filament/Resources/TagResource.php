@@ -28,9 +28,7 @@ class TagResource extends SeoPanelResource
 
     protected static ?string $navigationGroup = 'SEO Workspace';
 
-    protected static ?string $navigationParentItem = 'Keywords';
-
-    protected static ?int $navigationSort = 13;
+    protected static ?int $navigationSort = 14;
 
     public static function canViewAny(): bool
     {

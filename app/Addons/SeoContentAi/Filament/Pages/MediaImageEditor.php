@@ -71,6 +71,13 @@ class MediaImageEditor extends Page
 
         $this->pendingWpSync = $pendingService->hasPendingEdit($siteId, $this->wpAttachmentId);
         $this->canDeleteOriginal = SeoAccessControl::canDeleteSeoMedia();
+
+        if ($this->articleId > 0) {
+            $linkedArticle = SeoArticle::query()->find($this->articleId);
+            if ($linkedArticle instanceof SeoArticle && (string) ($linkedArticle->type ?? '') === 'product') {
+                $this->canDeleteOriginal = false;
+            }
+        }
     }
 
     public function getTitle(): string|Htmlable

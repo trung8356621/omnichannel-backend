@@ -49,17 +49,12 @@ final class AnchorTextAuditWorkspace extends Page implements HasActions, HasForm
     #[Url(as: 'filter')]
     public string $triageFilter = 'all_issues';
 
-    #[Url(as: 'site')]
-    public ?int $triageSiteId = null;
-
     public function mount(): void
     {
+        $this->initializeKeywordWorkspaceSiteFilter();
+
         if (! in_array($this->triageFilter, ['all_issues', 'broken', 'weak_context', 'external'], true)) {
             $this->triageFilter = 'all_issues';
-        }
-
-        if ($this->triageSiteId !== null && $this->triageSiteId <= 0) {
-            $this->triageSiteId = null;
         }
     }
 
@@ -78,14 +73,6 @@ final class AnchorTextAuditWorkspace extends Page implements HasActions, HasForm
         return 'anchor-audit';
     }
 
-    /**
-     * @return array<int, string>
-     */
-    public function getSiteFilterOptions(): array
-    {
-        return KeywordResource::siteSelectOptions();
-    }
-
     public function setTriageFilter(string $filter): void
     {
         if (! in_array($filter, ['all_issues', 'broken', 'weak_context', 'external'], true)) {
@@ -96,12 +83,8 @@ final class AnchorTextAuditWorkspace extends Page implements HasActions, HasForm
         $this->resetPage();
     }
 
-    public function updatedTriageSiteId(): void
+    public function onKeywordWorkspaceSiteFilterChanged(): void
     {
-        if ($this->triageSiteId !== null && $this->triageSiteId <= 0) {
-            $this->triageSiteId = null;
-        }
-
         $this->resetPage();
     }
 
@@ -259,7 +242,7 @@ final class AnchorTextAuditWorkspace extends Page implements HasActions, HasForm
      */
     private function baseTriageQuery(): Builder
     {
-        $siteId = $this->triageSiteId ?? SeoAccessControl::globalSiteId();
+        $siteId = $this->resolveKeywordWorkspaceSiteId();
 
         return SeoLinkMap::query()
             ->with([

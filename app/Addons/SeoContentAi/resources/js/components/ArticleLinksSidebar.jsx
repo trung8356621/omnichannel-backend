@@ -10,6 +10,7 @@ import {
 import {
     buildVisibleInternalSuggestions,
     filterDomainLinksInArticleContent,
+    isSuggestionExcluded,
     mergeSuggestionCatalog,
     normalizeHrefForCompare,
     normalizeLinkLabel,
@@ -349,6 +350,8 @@ export default function ArticleLinksSidebar() {
     );
     const domainCatalogRef = useRef(readSuggestionCatalogBootstrap());
     const [catalogVersion, setCatalogVersion] = useState(0);
+    const stableSuggestionsRef = useRef([]);
+    const stableSuggestionsKeyRef = useRef('');
     const [links, setLinks] = useState(() => ({
         internal: editorSeoBootstrap.current?.extracted_links?.internal ?? [],
         external: editorSeoBootstrap.current?.extracted_links?.external ?? [],
@@ -515,13 +518,29 @@ export default function ArticleLinksSidebar() {
                 ? filterDomainLinksInArticleContent(domainCatalogRef.current, plain)
                 : domainCatalogRef.current;
         const pool = mergeSuggestionCatalog(keywordCatalogRef.current, domainPool);
+        const internalSignature = (internal ?? [])
+            .map((item) => {
+                const label = normalizeLinkLabel(item?.text);
+                const href = normalizeHrefForCompare(item?.href);
 
-        return buildVisibleInternalSuggestions({
-            catalog: pool,
-            internal,
-            excludedLabels: [...excludedSuggestionLabels],
-            skipContentFilter: true,
-        });
+                return `${label}|${href}`;
+            })
+            .join(';');
+        const poolKey = `${catalogVersion}:${internalSignature}:${plain}`;
+
+        if (stableSuggestionsKeyRef.current !== poolKey) {
+            stableSuggestionsKeyRef.current = poolKey;
+            stableSuggestionsRef.current = buildVisibleInternalSuggestions({
+                catalog: pool,
+                internal,
+                excludedLabels: [],
+                skipContentFilter: true,
+            });
+        }
+
+        return stableSuggestionsRef.current.filter(
+            (item) => !isSuggestionExcluded(String(item?.text ?? ''), excludedSuggestionLabels),
+        );
     }, [internal, excludedSuggestionLabels, articlePlainText, catalogVersion]);
 
     const copyKeyword = async (value) => {

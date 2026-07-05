@@ -126,37 +126,14 @@ final class ArticleQuickPostReviewService
             return $result;
         }
 
-        $count = count($this->virtualComments->getFromArticle($article));
-        if ($count === 0) {
-            return $result;
-        }
-
-        if ((int) ($article->wp_post_id ?? 0) <= 0) {
-            return $result;
-        }
-
-        if ((string) ($result['message'] ?? '') !== '' && str_contains((string) $result['message'], 'Đồng bộ WordPress thất bại')) {
-            return [
-                'success' => true,
-                'message' => (string) $result['message'],
-                'created_count' => $count,
-            ];
-        }
-
-        $sync = $this->virtualComments->syncToWordPress($article);
-        if ($sync['success'] ?? false) {
-            return [
-                'success' => true,
-                'message' => (string) ($sync['message'] ?? $result['message'] ?? ''),
-                'created_count' => (int) ($sync['count'] ?? $count),
-            ];
+        $count = (int) ($result['created_count'] ?? 0);
+        if ($count <= 0 && (int) ($article->wp_post_id ?? 0) > 0) {
+            $count = count($this->virtualComments->getFromWordPress($article));
         }
 
         return [
             'success' => true,
-            'message' => trim((string) ($result['message'] ?? ''))
-                . ' '
-                . trim((string) ($sync['message'] ?? 'Chưa đồng bộ được lên WordPress.')),
+            'message' => (string) ($result['message'] ?? ''),
             'created_count' => $count,
         ];
     }

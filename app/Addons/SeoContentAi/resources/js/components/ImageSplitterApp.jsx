@@ -409,15 +409,31 @@ export default function ImageSplitterApp({
 
             setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));
 
+            const galleryItems = Array.isArray(data.product_gallery_items) ? data.product_gallery_items : [];
+            const returnUrl =
+                effectiveArticleId > 0
+                    ? sessionStorage.getItem(`seo-product-gallery-split-return-${effectiveArticleId}`)
+                    : null;
+
             if (window.opener) {
                 window.opener.postMessage(
                     {
                         type: 'seo-image-splitter-saved',
                         saved: data.saved ?? [],
                         deletedOriginal: !!data.deleted_original,
+                        product_gallery_items: galleryItems,
+                        article_id: effectiveArticleId,
                     },
                     window.location.origin,
                 );
+            } else if (returnUrl && galleryItems.length > 0) {
+                try {
+                    sessionStorage.removeItem(`seo-product-gallery-split-return-${effectiveArticleId}`);
+                } catch {
+                    /* ignore */
+                }
+                window.location.assign(returnUrl);
+                return;
             }
         } catch (e) {
             setError(e.message || t('splitter_save_error'));

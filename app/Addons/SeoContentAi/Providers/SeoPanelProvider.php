@@ -20,6 +20,7 @@ use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
+use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
@@ -161,6 +162,19 @@ class SeoPanelProvider extends PanelProvider
                 return new HtmlString(
                     view('seo-content-ai::components.workspace-media-picker')->render()
                     .view('seo-content-ai::components.global-ai-chat')->render(),
+                );
+            },
+        );
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::SIDEBAR_NAV_END,
+            function (): HtmlString {
+                if (filament()->getCurrentPanel()?->getId() !== 'seo') {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::filament.hooks.seo-sidebar-keywords-nav')->render()
                 );
             },
         );
@@ -343,6 +357,11 @@ class SeoPanelProvider extends PanelProvider
             ->group(function (): void {
                 Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
                     ->name('seo.articles.wp-edit-redirect');
+
+                Route::redirect('/keywords/workspace-3', '../performance-hub?tab=ai-discovery')
+                    ->name('seo.keywords.workspace-3-legacy');
+                Route::redirect('/keywords/workspace-4', '../performance-hub')
+                    ->name('seo.keywords.workspace-4-legacy');
             });
 
         Route::middleware($seoWebApiMiddleware)
@@ -420,6 +439,7 @@ class SeoPanelProvider extends PanelProvider
             ->authMiddleware([
                 \Filament\Http\Middleware\Authenticate::class,
                 CheckMainRole::class,
+                SeoPlannerPermissionMiddleware::class,
             ]);
     }
 }

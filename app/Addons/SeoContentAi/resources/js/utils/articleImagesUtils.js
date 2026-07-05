@@ -147,6 +147,12 @@ export function enrichBlocksWithPostImages(blocks, postImages) {
         const merged = {
             ...image,
             wpAttachmentId: image.wpAttachmentId ?? meta.wp_attachment_id ?? null,
+            seoMediaId:
+                image.seoMediaId ??
+                image.seo_media_id ??
+                meta.seo_media_id ??
+                meta.seoMediaId ??
+                null,
             wpSrc: blockHasWordPressSrc ? resolveFullWordPressImageUrl(parsedSrc) : preferredWp,
             localSrc: blockHasWordPressSrc
                 ? String(meta.local_src ?? meta.localSrc ?? image.localSrc ?? '')
@@ -280,6 +286,53 @@ function resolveLocalRenameSrc(row) {
 }
 
 /**
+ * WP attachment ID dùng khi cập nhật alt/title lên WordPress (không lọc bỏ như rename slug).
+ */
+export function resolveWpAttachmentIdForMetaUpdate(row) {
+    if (!row) {
+        return 0;
+    }
+
+    const rawWp = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+    const rawSeo = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+    const src = String(row?.src ?? '').trim();
+    const wpSrc = String(row?.wpSrc ?? row?.wp_url ?? '').trim();
+    const isLocalDisplay = isLocalSeoMediaSrc(src);
+
+    if (!isLocalDisplay) {
+        if (rawWp > 0) {
+            return rawWp;
+        }
+
+        return resolveImageRefIds(row).wpAttachmentId;
+    }
+
+    if (rawWp > 0 && rawSeo > 0 && rawWp !== rawSeo) {
+        return rawWp;
+    }
+
+    if (rawWp > 0 && wpSrc !== '' && !isLocalSeoMediaSrc(wpSrc)) {
+        return rawWp;
+    }
+
+    return 0;
+}
+
+/**
+ * @returns {{ seoMediaId: number, wpAttachmentId: number, patch: { alt: string, title: string } }}
+ */
+export function buildAltTitleMetaUpdatePayload(row, altTitle) {
+    const phrase = String(altTitle ?? '').trim();
+    const patch = phrase ? { alt: phrase, title: phrase } : { alt: '', title: '' };
+
+    return {
+        patch,
+        seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0),
+        wpAttachmentId: resolveWpAttachmentIdForMetaUpdate(row),
+    };
+}
+
+/**
  * Phân biệt ID WordPress vs seo_media (album local hay gán nhầm wp_attachment_id).
  */
 export function resolveImageRefIds(row) {
@@ -296,6 +349,9 @@ export function resolveImageRefIds(row) {
     if (isLocal) {
         if (seoMediaId <= 0 && wpAttachmentId > 0 && !hasWpUrl) {
             seoMediaId = wpAttachmentId;
+        }
+
+        if (!hasWpUrl) {
             wpAttachmentId = 0;
         } else if (seoMediaId > 0 && wpAttachmentId > 0 && seoMediaId === wpAttachmentId) {
             seoMediaId = 0;
@@ -312,6 +368,13 @@ export function resolveImageRefIds(row) {
         localSrc,
         wpSrc: hasWpUrl ? resolveFullWordPressImageUrl(wpSrcRaw) : '',
     };
+}
+
+/** Chỉ đổi slug qua WordPress khi ảnh thật sự dùng URL WP (không phải file nội bộ Laravel). */
+export function shouldRenameSlugOnWordPress(row) {
+    const { wpAttachmentId, wpSrc, isLocal } = resolveImageRefIds(row);
+
+    return wpAttachmentId > 0 && wpSrc !== '' && !isLocal;
 }
 
 /**
@@ -349,7 +412,7 @@ export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
     let wpRename = null;
     let localRename = null;
 
-    if (wpAttachmentId > 0) {
+    if (shouldRenameSlugOnWordPress(row)) {
         wpRename = {
             attachment_id: wpAttachmentId,
             new_slug: suggestedSlug,
@@ -390,8 +453,7 @@ export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
  */
 export function computeQuickFixAltTitleSupplementalOutcome(row, keyword) {
     const phrase = String(keyword ?? '').trim();
-    const patch = phrase ? { alt: phrase, title: phrase } : {};
-    const { wpAttachmentId } = resolveImageRefIds(row);
+    const { patch, wpAttachmentId } = buildAltTitleMetaUpdatePayload(row, phrase);
 
     if (!phrase || wpAttachmentId <= 0) {
         return { patch, wpMeta: null };
@@ -454,7 +516,7 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
     const localFileSrc = resolveLocalRenameSrc(row);
     const oldUrlForWp = resolveWpRenameOldUrl(row);
 
-    if (wpAttachmentId > 0 && slug !== oldSlug) {
+    if (shouldRenameSlugOnWordPress(row) && slug !== oldSlug) {
         renameQueue.push({
             attachment_id: wpAttachmentId,
             new_slug: slug,
@@ -552,7 +614,7 @@ export function applyQuickFixAltTitleToBlocks(blocks, keyword) {
 
     eligible.forEach((row) => {
         result = applyImagePatchToBlocks(result, row.blockId, patch);
-        const { wpAttachmentId } = resolveImageRefIds(row);
+        const wpAttachmentId = resolveWpAttachmentIdForMetaUpdate(row);
         if (wpAttachmentId > 0 && !wpMetaSeen.has(wpAttachmentId)) {
             wpMetaSeen.add(wpAttachmentId);
             wpMetaQueue.push({
@@ -655,7 +717,7 @@ export function applyQuickFixAltTitleToBlock(blocks, keyword, blockId) {
 
     const patch = { alt: phrase, title: phrase };
     const nextBlocks = applyImagePatchToBlocks(blocks, row.blockId, patch);
-    const { wpAttachmentId } = resolveImageRefIds(row);
+    const wpAttachmentId = resolveWpAttachmentIdForMetaUpdate(row);
     const wpMetaQueue =
         wpAttachmentId > 0
             ? [{ attachment_id: wpAttachmentId, alt_text: phrase, title: phrase }]
@@ -828,12 +890,14 @@ export function buildPostImagesIndex(blocks) {
         key: row.key,
         block_id: row.blockId,
         wp_attachment_id: row.wpAttachmentId,
+        seo_media_id: row.seoMediaId ?? null,
         src: row.src,
         slug: row.slug,
         alt: row.alt,
         title: row.title,
         caption: row.caption,
         align: row.align,
+        local_src: row.localSrc ?? (isLocalSeoMediaSrc(row.src) ? row.src : ''),
     }));
 }
 

@@ -1,0 +1,265 @@
+.performance-hub-shell {
+    max-width: 100%;
+}
+
+.performance-hub-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.performance-hub-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: rgb(17 24 39);
+}
+
+.dark .performance-hub-title {
+    color: rgb(243 244 246);
+}
+
+.performance-hub-subtitle {
+    margin-top: 0.25rem;
+    font-size: 0.875rem;
+    color: rgb(107 114 128);
+}
+
+.dark .performance-hub-subtitle {
+    color: rgb(156 163 175);
+}
+
+.performance-hub-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border-bottom: 1px solid rgb(229 231 235);
+    padding-bottom: 0.25rem;
+}
+
+.dark .performance-hub-tabs {
+    border-bottom-color: rgb(255 255 255 / 0.1);
+}
+
+.performance-hub-tab {
+    border-radius: 0.5rem 0.5rem 0 0;
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: rgb(107 114 128);
+    transition: color 150ms, background-color 150ms;
+}
+
+.performance-hub-tab:hover {
+    color: rgb(17 24 39);
+    background: rgb(243 244 246);
+}
+
+.dark .performance-hub-tab:hover {
+    color: rgb(243 244 246);
+    background: rgb(255 255 255 / 0.05);
+}
+
+.performance-hub-tab.is-active {
+    color: rgb(5 150 105);
+    background: rgb(236 253 245);
+}
+
+.dark .performance-hub-tab.is-active {
+    color: rgb(110 231 183);
+    background: rgb(16 185 129 / 0.12);
+}
+
+.performance-hub-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.performance-hub-panel-hint {
+    font-size: 0.875rem;
+    color: rgb(107 114 128);
+}
+
+.dark .performance-hub-panel-hint {
+    color: rgb(156 163 175);
+}
+
+.performance-hub-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+    gap: 1rem;
+}
+
+@media (min-width: 640px) {
+    .performance-hub-kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (min-width: 1024px) {
+    .performance-hub-kpi-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+}
+
+.performance-hub-kpi-card {
+    border-radius: 0.75rem;
+    border: 1px solid rgb(229 231 235);
+    background: rgb(255 255 255);
+    padding: 1rem;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+}
+
+.dark .performance-hub-kpi-card {
+    border-color: rgb(255 255 255 / 0.1);
+    background: rgb(17 24 39 / 0.4);
+}
+
+.performance-hub-kpi-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgb(107 114 128);
+}
+
+.dark .performance-hub-kpi-label {
+    color: rgb(156 163 175);
+}
+
+.performance-hub-kpi-value {
+    margin-top: 0.375rem;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: rgb(17 24 39);
+}
+
+.dark .performance-hub-kpi-value {
+    color: rgb(243 244 246);
+}
+
+.performance-hub-empty {
+    border-radius: 0.75rem;
+    border: 1px dashed rgb(209 213 219);
+    padding: 1rem;
+    font-size: 0.875rem;
+    color: rgb(107 114 128);
+}
+
+.dark .performance-hub-empty {
+    border-color: rgb(255 255 255 / 0.15);
+    color: rgb(156 163 175);
+}
+
+.performance-hub-table-wrap {
+    overflow-x: auto;
+    border-radius: 0.75rem;
+    border: 1px solid rgb(229 231 235);
+    background: rgb(255 255 255);
+}
+
+.dark .performance-hub-table-wrap {
+    border-color: rgb(255 255 255 / 0.1);
+    background: rgb(17 24 39 / 0.4);
+}
+
+.performance-hub-table {
+    width: 100%;
+    min-width: 640px;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+.performance-hub-table thead {
+    background: rgb(249 250 251);
+}
+
+.dark .performance-hub-table thead {
+    background: rgb(255 255 255 / 0.05);
+}
+
+.performance-hub-table th,
+.performance-hub-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid rgb(243 244 246);
+}
+
+.dark .performance-hub-table th,
+.dark .performance-hub-table td {
+    border-bottom-color: rgb(255 255 255 / 0.08);
+}
+
+.performance-hub-table-empty {
+    text-align: center;
+    color: rgb(107 114 128);
+}
+
+.dark .performance-hub-table-empty {
+    color: rgb(156 163 175);
+}
+
+.performance-hub-sort-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-sort-btn:hover {
+    color: rgb(17 24 39);
+}
+
+.dark .performance-hub-sort-btn:hover {
+    color: rgb(243 244 246);
+}
+
+.performance-hub-action-btn {
+    border-radius: 0.5rem;
+    background: rgb(5 150 105);
+    padding: 0.375rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: white;
+}
+
+.performance-hub-action-btn:hover {
+    background: rgb(4 120 87);
+}
+
+.performance-hub-action-btn--secondary {
+    background: rgb(59 130 246);
+}
+
+.performance-hub-action-btn--secondary:hover {
+    background: rgb(37 99 235);
+}
+
+.performance-hub-warning-row {
+    background: rgb(255 251 235);
+}
+
+.dark .performance-hub-warning-row {
+    background: rgb(245 158 11 / 0.08);
+}
+
+.performance-hub-link {
+    color: rgb(5 150 105);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.dark .performance-hub-link {
+    color: rgb(110 231 183);
+}
+
+.performance-hub-page .ai-discovery-layout {
+    margin-top: 0;
+}

@@ -126,7 +126,13 @@ export function buildMediaImageEditorUrl({ seoMediaId = null, tab = null } = {})
         return null;
     }
 
-    const target = new URL(MEDIA_IMAGE_EDITOR_PATH, window.location.origin);
+    const { connectionHash } = readSeoArticleApiContext();
+    const basePath =
+        connectionHash !== ''
+            ? `/seo/${encodeURIComponent(connectionHash)}/media-image-editor`
+            : MEDIA_IMAGE_EDITOR_PATH;
+
+    const target = new URL(basePath, window.location.origin);
     target.searchParams.set('media', String(mediaId));
     if (tab) {
         target.searchParams.set('tab', String(tab));
@@ -145,7 +151,7 @@ export function buildImageSplitterUrl({ seoMediaId = null } = {}) {
     });
 }
 
-import { csrfToken, seoArticleApiHeaders } from './seoArticleApi';
+import { csrfToken, readSeoArticleApiContext, seoArticleApiHeaders } from './seoArticleApi';
 
 let activeClipboardUpload = null;
 let lastClipboardPasteAt = 0;
@@ -425,18 +431,22 @@ export async function renameSeoMedia(mediaId, newSlug) {
     return data;
 }
 
-export async function renameSeoMediaByUrl(mediaUrl, newSlug, { siteId = null, articleId = null } = {}) {
+export async function renameSeoMediaByUrl(mediaUrl, newSlug, { siteId = null, articleId = null, seoMediaId = null } = {}) {
     const payload = {
         url: mediaUrl,
         new_slug: newSlug,
     };
     const resolvedSiteId = Number.parseInt(String(siteId ?? ''), 10);
     const resolvedArticleId = Number.parseInt(String(articleId ?? ''), 10);
+    const resolvedSeoMediaId = Number.parseInt(String(seoMediaId ?? ''), 10);
     if (Number.isFinite(resolvedSiteId) && resolvedSiteId > 0) {
         payload.site_id = resolvedSiteId;
     }
     if (Number.isFinite(resolvedArticleId) && resolvedArticleId > 0) {
         payload.article_id = resolvedArticleId;
+    }
+    if (Number.isFinite(resolvedSeoMediaId) && resolvedSeoMediaId > 0) {
+        payload.seo_media_id = resolvedSeoMediaId;
     }
 
     const response = await fetch(RENAME_BY_URL, {

@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
+use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoMainDomainService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
@@ -17,12 +18,74 @@ use Filament\Actions;
 use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
+use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 
 class ListArticles extends ListRecords
 {
+    public const TAB_POSTS = 'posts';
+
+    public const TAB_CATEGORIES = 'categories';
+
     protected static string $resource = ArticleResource::class;
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
+
+    public string $contentTab = self::TAB_POSTS;
+
+    public function mount(): void
+    {
+        parent::mount();
+
+        $tab = request()->query('tab', self::TAB_POSTS);
+        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES], true)) {
+            $this->contentTab = $tab;
+        }
+
+        $categoryFilter = request()->input('tableFilters.category_id.value');
+        if ($categoryFilter !== null && $categoryFilter !== '') {
+            $this->contentTab = self::TAB_POSTS;
+        }
+    }
+
+    public function getContentTabUrl(string $tab): string
+    {
+        $params = ['tab' => $tab];
+
+        $filters = $this->tableFilters ?? [];
+        unset($filters['type']);
+
+        if ($tab === self::TAB_CATEGORIES) {
+            unset($filters['category_id'], $filters['post_type']);
+        } else {
+            unset($filters['taxonomy']);
+        }
+
+        if ($filters !== []) {
+            $params['tableFilters'] = $filters;
+        }
+
+        return ArticleResource::panelUrl('index').'?'.http_build_query($params);
+    }
+
+    public function getArticlesFilterUrlForCategory(int $categoryWpId, ?int $siteId = null): string
+    {
+        return app(DomainOverviewService::class)->buildArticlesFilterUrlForCategory($categoryWpId, $siteId);
+    }
+
+    public function table(Table $table): Table
+    {
+        return ArticleResource::table($table)
+            ->modifyQueryUsing(function (Builder $query): Builder {
+                ArticleResource::applyContentTabScope($query, $this->contentTab);
+
+                if ($this->contentTab === self::TAB_CATEGORIES) {
+                    return ArticleResource::appendArticlesInCategoryCountSelect($query);
+                }
+
+                return $query;
+            });
+    }
 
     public function setSeoScoreBandFilter(?string $band = null): void
     {
@@ -171,7 +234,7 @@ class ListArticles extends ListRecords
                         );
 
                         if ($result['messages'] !== []) {
-                            $body .= "\n" . implode("\n", array_slice($result['messages'], 0, 8));
+                            $body .= "\n".implode("\n", array_slice($result['messages'], 0, 8));
                             if (count($result['messages']) > 8) {
                                 $body .= "\n…";
                             }

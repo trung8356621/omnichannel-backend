@@ -7,9 +7,9 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Models\Site;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
+use App\Models\Site;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Collection;
@@ -152,6 +152,22 @@ final class DomainOverviewService
                 'keyword_id' => (string) $keywordId,
                 'usage' => 'internal_link',
             ],
+        ]);
+    }
+
+    public function buildArticlesFilterUrlForCategory(int $categoryWpId, ?int $siteId = null): string
+    {
+        $filters = [
+            'category_id' => ['value' => (string) $categoryWpId],
+        ];
+
+        if ($siteId !== null && $siteId > 0) {
+            $filters['site_id'] = ['value' => (string) $siteId];
+        }
+
+        return ArticleResource::panelUrl('index').'?'.http_build_query([
+            'tab' => 'posts',
+            'tableFilters' => $filters,
         ]);
     }
 

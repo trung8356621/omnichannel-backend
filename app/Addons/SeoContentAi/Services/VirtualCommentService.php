@@ -16,7 +16,8 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Lưu bình luận/review AI dưới dạng JSON (Laravel meta + WP post meta _omi_seo_virtual_comments).
+ * Bình luận/review ảo lưu trên WordPress (post meta _omi_seo_virtual_comments).
+ * Laravel chỉ đọc qua REST; không giữ bản sao local sau khi đăng.
  */
 final class VirtualCommentService
 {
@@ -80,6 +81,63 @@ final class VirtualCommentService
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     */
+    public function clearFromArticle(SeoArticle $article): void
+    {
+        $article->articleMetas()->where('meta_key', self::ARTICLE_META_KEY)->delete();
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $items
+     * @return array{success: bool, message: string, count?: int}
+     */
+    public function pushToWordPress(SeoArticle $article, array $items): array
+    {
+        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
+            return [
+                'success' => false,
+                'message' => 'Quản lý nội dung không được đăng bình luận ảo lên WordPress.',
+            ];
+        }
+
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Bài viết chưa có WordPress Post ID.',
+            ];
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return [
+                'success' => false,
+                'message' => 'Bài viết chưa gắn domain.',
+            ];
+        }
+
+        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
+        $payloadComments = $this->normalizeItems($items, $isProduct, $article);
+
+        if ($payloadComments === []) {
+            return [
+                'success' => false,
+                'message' => 'Không có bình luận hợp lệ để lưu.',
+            ];
+        }
+
+        $result = $this->postVirtualCommentsToWordPress($site, $wpPostId, $payloadComments, $isProduct, (int) $article->id);
+
+        if ($result['success'] ?? false) {
+            $this->clearFromArticle($article);
+        }
+
+        return $result;
     }
 
     /**
@@ -252,58 +310,66 @@ final class VirtualCommentService
     }
 
     /**
-     * Ưu tiên dữ liệu local; fallback qua WordPress nếu local chưa có.
+     * Đọc bình luận ảo từ WordPress. Chỉ fallback meta Laravel cũ khi chưa đọc được WP.
      *
      * @return list<array{author: string, content: string, rating?: int, date: string}>
      */
     public function getForEditor(SeoArticle $article): array
     {
-        $local = $this->getFromArticle($article);
-        if ($local !== []) {
-            return $local;
+        $fromWordPress = $this->getFromWordPress($article);
+        if ($fromWordPress !== []) {
+            return $fromWordPress;
         }
 
-        return $this->getFromWordPress($article);
+        $legacyLocal = $this->getFromArticle($article);
+        if ($legacyLocal === []) {
+            return [];
+        }
+
+        if ((int) ($article->wp_post_id ?? 0) > 0 && SeoAccessControl::canSyncArticlesToWordPress()) {
+            $migrated = $this->pushToWordPress($article, $legacyLocal);
+            if ($migrated['success'] ?? false) {
+                $fromWordPress = $this->getFromWordPress($article);
+
+                return $fromWordPress !== [] ? $fromWordPress : $legacyLocal;
+            }
+        }
+
+        return $legacyLocal;
     }
 
     /**
-     * @param  list<array<string, mixed>>|null  $items  null = đọc từ meta bài viết
+     * @param  list<array<string, mixed>>|null  $items  null = migrate bản Laravel cũ (nếu còn)
      * @return array{success: bool, message: string, count?: int}
      */
     public function syncToWordPress(SeoArticle $article, ?array $items = null): array
     {
-        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
-            return [
-                'success' => false,
-                'message' => 'Quản lý nội dung không được đồng bộ review/bình luận lên WordPress.',
-            ];
-        }
-
-        $wpPostId = (int) ($article->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
-            return [
-                'success' => false,
-                'message' => 'Bài viết chưa có WordPress Post ID.',
-            ];
-        }
-
-        $article->loadMissing('site');
-        $site = $article->site;
-        if (! $site instanceof Site) {
-            return [
-                'success' => false,
-                'message' => 'Bài viết chưa gắn domain.',
-            ];
-        }
-
-        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
-
         if ($items !== null) {
-            $this->storeOnArticle($article, $items, $isProduct);
+            return $this->pushToWordPress($article, $items);
         }
 
-        $virtualComments = $this->getFromArticle($article);
+        $legacyLocal = $this->getFromArticle($article);
+        if ($legacyLocal !== []) {
+            return $this->pushToWordPress($article, $legacyLocal);
+        }
 
+        return [
+            'success' => false,
+            'message' => 'Bình luận ảo được lưu trực tiếp trên WordPress. Không còn bản sao trên Laravel.',
+        ];
+    }
+
+    /**
+     * @param  list<array{author: string, content: string, rating?: int, date: string}>  $payloadComments
+     * @return array{success: bool, message: string, count?: int}
+     */
+    private function postVirtualCommentsToWordPress(
+        Site $site,
+        int $wpPostId,
+        array $payloadComments,
+        bool $isProduct,
+        int $articleId,
+    ): array {
         $site->loadMissing('metas');
         $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
         if ($writeToken === '') {
@@ -320,25 +386,6 @@ final class VirtualCommentService
                 'message' => 'Không xác định được URL WordPress.',
             ];
         }
-
-        $payloadComments = array_values(array_map(
-            function (array $row) use ($isProduct): array {
-                $normalized = [
-                    'author' => (string) ($row['author'] ?? 'Khách mua hàng'),
-                    'content' => (string) ($row['content'] ?? ''),
-                    'date' => (string) ($row['date'] ?? ''),
-                ];
-
-                if ($isProduct) {
-                    $normalized['rating'] = max(1, min(5, (int) ($row['rating'] ?? 5)));
-                } elseif (isset($row['rating']) && is_numeric($row['rating'])) {
-                    $normalized['rating'] = max(1, min(5, (int) $row['rating']));
-                }
-
-                return $normalized;
-            },
-            $virtualComments,
-        ));
 
         try {
             $response = Http::timeout(60)
@@ -372,17 +419,17 @@ final class VirtualCommentService
                 ];
             }
 
-            $count = (int) ($body['virtual_count'] ?? $body['count'] ?? count($virtualComments));
+            $count = (int) ($body['virtual_count'] ?? $body['count'] ?? count($payloadComments));
             $kind = $isProduct ? 'review ảo' : 'bình luận ảo';
 
             return [
                 'success' => true,
-                'message' => sprintf('Đã lưu %d %s trên WordPress (meta %s).', $count, $kind, self::WP_META_KEY),
+                'message' => sprintf('Đã lưu %d %s trên WordPress.', $count, $kind),
                 'count' => $count,
             ];
         } catch (Throwable $e) {
             Log::error('Virtual comments sync failed', [
-                'article_id' => $article->id,
+                'article_id' => $articleId,
                 'wp_post_id' => $wpPostId,
                 'error' => $e->getMessage(),
             ]);

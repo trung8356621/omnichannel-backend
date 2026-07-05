@@ -121,7 +121,7 @@ final class ArticleGoogleSerpPreviewService
      */
     private function resolveVirtualReviewStats(SeoArticle $article): ?array
     {
-        $reviews = $this->virtualComments->getFromArticle($article);
+        $reviews = $this->virtualComments->getForEditor($article);
         if ($reviews === []) {
             return null;
         }

@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoMediaUrlImportResolverService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
+use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\Site;
@@ -161,26 +162,69 @@ class SeoMediaController extends Controller
         ]);
 
         $updated = [];
+        /** @var array<int, list<array{attachment_id: int, alt_text: string, title: string}>> $wpItemsBySite */
+        $wpItemsBySite = [];
+
         foreach ($validated['items'] as $item) {
             $media = SeoMedia::query()->find((int) $item['id']);
             if (! $media instanceof SeoMedia || ! $this->canAccessMedia($media)) {
                 continue;
             }
 
-            $media->alt_text = trim((string) ($item['alt_text'] ?? ''));
+            $altText = trim((string) ($item['alt_text'] ?? ''));
+            $title = trim((string) ($item['title'] ?? ''));
+            $media->alt_text = $altText;
             $media->save();
 
             $updated[] = [
                 'id' => (int) $media->id,
                 'alt_text' => (string) $media->alt_text,
-                'title' => trim((string) ($item['title'] ?? '')),
+                'title' => $title !== '' ? $title : $altText,
             ];
+
+            $wpAttachmentId = (int) ($media->wp_attachment_id ?? 0);
+            $siteId = (int) ($media->site_id ?? 0);
+            if ($wpAttachmentId <= 0 || $siteId <= 0 || ($altText === '' && $title === '')) {
+                continue;
+            }
+
+            $wpItemsBySite[$siteId] ??= [];
+            $wpItemsBySite[$siteId][] = [
+                'attachment_id' => $wpAttachmentId,
+                'alt_text' => $altText,
+                'title' => $title !== '' ? $title : $altText,
+            ];
+        }
+
+        $wpSyncErrors = [];
+        $wpUpdatedCount = 0;
+
+        if ($wpItemsBySite !== []) {
+            $wpService = app(WordPressAttachmentMetaUpdateService::class);
+
+            foreach ($wpItemsBySite as $siteId => $wpItems) {
+                $site = Site::query()->find((int) $siteId);
+                if ($site === null) {
+                    continue;
+                }
+
+                $result = $wpService->updateForSite($site, $wpItems);
+                if ($result['success'] ?? false) {
+                    $wpUpdatedCount += (int) ($result['updated_count'] ?? 0);
+
+                    continue;
+                }
+
+                $wpSyncErrors[] = (string) ($result['message'] ?? 'Không cập nhật được alt/title WordPress.');
+            }
         }
 
         return response()->json([
             'success' => true,
             'updated_count' => count($updated),
             'updated' => $updated,
+            'wp_updated_count' => $wpUpdatedCount,
+            'wp_sync_errors' => $wpSyncErrors,
         ]);
     }
 
@@ -191,6 +235,7 @@ class SeoMediaController extends Controller
             'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
             'site_id' => ['nullable', 'integer'],
             'article_id' => ['nullable', 'integer'],
+            'seo_media_id' => ['nullable', 'integer', 'min:1'],
         ]);
 
         $url = trim((string) $validated['url']);
@@ -220,7 +265,18 @@ class SeoMediaController extends Controller
             }
         }
 
-        $media = $this->resolveSeoMediaForStoragePath($relativePath, $siteId);
+        $media = null;
+        $requestedSeoMediaId = isset($validated['seo_media_id']) ? (int) $validated['seo_media_id'] : 0;
+        if ($requestedSeoMediaId > 0) {
+            $candidate = SeoMedia::query()->find($requestedSeoMediaId);
+            if ($candidate instanceof SeoMedia) {
+                $media = $candidate;
+            }
+        }
+
+        if (! $media instanceof SeoMedia) {
+            $media = $this->resolveSeoMediaForStoragePath($relativePath, $siteId);
+        }
 
         if (! $media instanceof SeoMedia && Storage::disk('public')->exists($relativePath)) {
             $filename = basename($relativePath);
@@ -366,6 +422,7 @@ class SeoMediaController extends Controller
             isset($validated['article_id']) ? (int) $validated['article_id'] : null,
             isset($validated['original_seo_media_id']) ? (int) $validated['original_seo_media_id'] : null,
         );
+        $article = null;
         if ($articleId !== null) {
             $article = SeoArticle::query()->findOrFail($articleId);
             abort_unless(SeoAccessControl::canAccessArticle($article), 403);
@@ -378,13 +435,42 @@ class SeoMediaController extends Controller
         }
 
         try {
+            $deleteOriginal = SeoAccessControl::canDeleteSeoMedia();
+            $originalSeoMediaId = isset($validated['original_seo_media_id'])
+                ? (int) $validated['original_seo_media_id']
+                : null;
+            $originalMedia = ($originalSeoMediaId ?? 0) > 0
+                ? SeoMedia::query()->find($originalSeoMediaId)
+                : null;
+
+            if ($articleId !== null && $article instanceof SeoArticle) {
+                if ((string) ($article->type ?? '') === 'product') {
+                    $deleteOriginal = false;
+                }
+            }
+
             $result = $this->imageSplitter->savePiecesAndDeleteOriginal(
                 $site,
                 array_values($pieceFiles),
                 $articleId,
-                isset($validated['original_seo_media_id']) ? (int) $validated['original_seo_media_id'] : null,
-                SeoAccessControl::canDeleteSeoMedia(),
+                $originalSeoMediaId,
+                $deleteOriginal,
             );
+
+            if (
+                $article instanceof SeoArticle
+                && (string) ($article->type ?? '') === 'product'
+                && is_array($result['saved'] ?? null)
+                && $result['saved'] !== []
+            ) {
+                $postProcessing = app(PromptPostProcessingApplyService::class);
+                $galleryItems = $postProcessing->finalizeProductGalleryManualSplit(
+                    $article,
+                    $originalMedia instanceof SeoMedia ? $originalMedia : null,
+                    $result['saved'],
+                );
+                $result['product_gallery_items'] = $galleryItems;
+            }
         } catch (\InvalidArgumentException $e) {
             return response()->json([
                 'success' => false,

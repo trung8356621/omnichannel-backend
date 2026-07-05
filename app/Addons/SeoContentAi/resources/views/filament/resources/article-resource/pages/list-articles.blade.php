@@ -1,5 +1,6 @@
 @php
     $seoPreviewUrlTemplate = route('seo.articles.seo-preview', ['article' => '__ID__']);
+    $overviewCss = base_path('app/Addons/SeoContentAi/resources/css/domain-overview.css');
 @endphp
 
 <x-filament-panels::page
@@ -8,6 +9,25 @@
         'fi-resource-' . str_replace('/', '-', $this->getResource()::getSlug()),
     ])
 >
+    @if(is_readable($overviewCss))
+        <style>{!! file_get_contents($overviewCss) !!}</style>
+    @endif
+
+    <div class="seo-internal-tabs mb-4">
+        <a
+            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS) }}"
+            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS])
+        >
+            {{ __('seo-content-ai::filament.article_list.tab_posts') }}
+        </a>
+        <a
+            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES) }}"
+            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_CATEGORIES])
+        >
+            {{ __('seo-content-ai::filament.article_list.tab_categories') }}
+        </a>
+    </div>
+
     <div class="article-list-table-shell">
         <div
             class="article-list-table-shell__overlay"

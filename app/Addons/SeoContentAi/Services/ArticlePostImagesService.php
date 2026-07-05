@@ -265,6 +265,9 @@ final class ArticlePostImagesService
                     : ($wpId > 0 ? 'wp_'.$wpId : 'img_'.$index),
                 'block_id' => trim((string) ($image['block_id'] ?? '')),
                 'wp_attachment_id' => $wpId > 0 ? $wpId : null,
+                'seo_media_id' => (int) ($image['seo_media_id'] ?? $image['seoMediaId'] ?? 0) > 0
+                    ? (int) ($image['seo_media_id'] ?? $image['seoMediaId'])
+                    : null,
                 'src' => $src,
                 'slug' => $slug,
                 'alt' => (string) ($image['alt'] ?? ''),
@@ -500,6 +503,8 @@ final class ArticlePostImagesService
             return [];
         }
 
+        $seoMediaByKey = $this->seoMediaIdMapForArticle($article, $images);
+
         $wpIds = array_values(array_unique(array_filter(
             array_map(
                 static fn (array $row): int => (int) ($row['wp_attachment_id'] ?? 0),
@@ -508,69 +513,115 @@ final class ArticlePostImagesService
             static fn (int $id): bool => $id > 0,
         )));
 
-        if ($wpIds === []) {
-            return $images;
-        }
-
-        $medias = SeoMedia::query()
-            ->where('site_id', (int) $article->site_id)
-            ->whereIn('wp_attachment_id', $wpIds)
-            ->get();
-
         $byWpId = [];
-        foreach ($medias as $media) {
-            $wpId = (int) ($media->wp_attachment_id ?? 0);
-            if ($wpId <= 0) {
-                continue;
-            }
+        if ($wpIds !== []) {
+            $medias = SeoMedia::query()
+                ->where('site_id', (int) $article->site_id)
+                ->whereIn('wp_attachment_id', $wpIds)
+                ->get();
 
-            $wpUrl = trim((string) ($media->getAttribute('wp_url') ?? ''));
-            $localSrc = trim((string) $media->publicUrl());
-
-            if ($wpUrl !== '') {
-                $wpUrl = WordPressImageUrl::toFullSize($wpUrl);
-            }
-
-            if (! isset($byWpId[$wpId])) {
-                $byWpId[$wpId] = [
-                    'wp_url' => $wpUrl,
-                    'local_src' => $localSrc,
-                ];
-            } else {
-                if ($byWpId[$wpId]['wp_url'] === '' && $wpUrl !== '') {
-                    $byWpId[$wpId]['wp_url'] = $wpUrl;
+            foreach ($medias as $media) {
+                $wpId = (int) ($media->wp_attachment_id ?? 0);
+                if ($wpId <= 0) {
+                    continue;
                 }
-                if ($byWpId[$wpId]['local_src'] === '' && $localSrc !== '') {
-                    $byWpId[$wpId]['local_src'] = $localSrc;
+
+                $wpUrl = trim((string) ($media->getAttribute('wp_url') ?? ''));
+                $localSrc = trim((string) $media->publicUrl());
+
+                if ($wpUrl !== '') {
+                    $wpUrl = WordPressImageUrl::toFullSize($wpUrl);
+                }
+
+                if (! isset($byWpId[$wpId])) {
+                    $byWpId[$wpId] = [
+                        'wp_url' => $wpUrl,
+                        'local_src' => $localSrc,
+                    ];
+                } else {
+                    if ($byWpId[$wpId]['wp_url'] === '' && $wpUrl !== '') {
+                        $byWpId[$wpId]['wp_url'] = $wpUrl;
+                    }
+                    if ($byWpId[$wpId]['local_src'] === '' && $localSrc !== '') {
+                        $byWpId[$wpId]['local_src'] = $localSrc;
+                    }
                 }
             }
         }
 
-        return array_map(function (array $row) use ($byWpId): array {
+        $resolvedIds = [];
+
+        $mapped = array_map(function (array $row) use ($article, $byWpId, $seoMediaByKey, &$resolvedIds): array {
             $wpId = (int) ($row['wp_attachment_id'] ?? 0);
-            if ($wpId <= 0 || ! isset($byWpId[$wpId])) {
-                return $row;
-            }
-
-            $fromMedia = $byWpId[$wpId];
-            if (trim((string) ($row['wp_url'] ?? '')) === '' && $fromMedia['wp_url'] !== '') {
-                $row['wp_url'] = $fromMedia['wp_url'];
-            }
-            if (trim((string) ($row['local_src'] ?? '')) === '' && $fromMedia['local_src'] !== '') {
-                $row['local_src'] = $fromMedia['local_src'];
-            }
-
-            if (! WordPressImageUrl::isLocalSeoMediaSrc((string) ($row['src'] ?? ''))) {
-                $fullWp = WordPressImageUrl::toFullSize(trim((string) ($row['wp_url'] ?? '')));
-                if ($fullWp !== '') {
-                    $row['src'] = $fullWp;
-                } else {
-                    $row['src'] = WordPressImageUrl::toFullSize((string) ($row['src'] ?? ''));
+            if ($wpId > 0 && isset($byWpId[$wpId])) {
+                $fromMedia = $byWpId[$wpId];
+                if (trim((string) ($row['wp_url'] ?? '')) === '' && $fromMedia['wp_url'] !== '') {
+                    $row['wp_url'] = $fromMedia['wp_url'];
                 }
+                if (trim((string) ($row['local_src'] ?? '')) === '' && $fromMedia['local_src'] !== '') {
+                    $row['local_src'] = $fromMedia['local_src'];
+                }
+
+                if (! WordPressImageUrl::isLocalSeoMediaSrc((string) ($row['src'] ?? ''))) {
+                    $fullWp = WordPressImageUrl::toFullSize(trim((string) ($row['wp_url'] ?? '')));
+                    if ($fullWp !== '') {
+                        $row['src'] = $fullWp;
+                    } else {
+                        $row['src'] = WordPressImageUrl::toFullSize((string) ($row['src'] ?? ''));
+                    }
+                }
+            }
+
+            $fullUrl = $this->resolvePickerFullUrl($row);
+            $seoMediaId = (int) ($row['seo_media_id'] ?? 0);
+            if ($seoMediaId <= 0 && $wpId > 0) {
+                $seoMediaId = (int) ($seoMediaByKey[$wpId] ?? 0);
+            }
+            if ($seoMediaId <= 0 && $fullUrl !== '') {
+                $seoMediaId = $this->resolveSeoMediaIdFromSrc($article, $fullUrl, $seoMediaByKey);
+            }
+
+            if ($seoMediaId > 0) {
+                $row['seo_media_id'] = $seoMediaId;
+                $resolvedIds[$seoMediaId] = true;
             }
 
             return $row;
         }, $images);
+
+        if ($resolvedIds === []) {
+            return $mapped;
+        }
+
+        $mediaById = SeoMedia::query()
+            ->whereIn('id', array_keys($resolvedIds))
+            ->get()
+            ->keyBy('id');
+
+        return array_map(function (array $row) use ($mediaById): array {
+            $seoMediaId = (int) ($row['seo_media_id'] ?? 0);
+            if ($seoMediaId <= 0 || ! $mediaById->has($seoMediaId)) {
+                return $row;
+            }
+
+            /** @var SeoMedia $media */
+            $media = $mediaById->get($seoMediaId);
+            $currentUrl = trim((string) $media->publicUrl());
+            $currentSlug = trim((string) $media->slug);
+
+            if ($currentSlug !== '') {
+                $row['slug'] = $currentSlug;
+            }
+
+            if ($currentUrl !== '') {
+                $row['local_src'] = $currentUrl;
+                if (WordPressImageUrl::isLocalSeoMediaSrc((string) ($row['src'] ?? ''))) {
+                    $row['src'] = $currentUrl;
+                }
+            }
+
+            return $row;
+        }, $mapped);
     }
 
     private function isLocalSeoMediaSrc(string $src): bool
@@ -680,9 +731,9 @@ final class ArticlePostImagesService
      */
     private function resolveSeoMediaIdFromSrc(SeoArticle $article, string $url, array $seoMediaByWpId): int
     {
-        $path = strtolower(rtrim((string) parse_url($url, PHP_URL_PATH), '/'));
-        if ($path !== '' && isset($seoMediaByWpId['path:'.$path])) {
-            $id = (int) $seoMediaByWpId['path:'.$path];
+        $relativePath = $this->normalizeStorageRelativePath($url);
+        if ($relativePath !== '' && isset($seoMediaByWpId['path:'.$relativePath])) {
+            $id = (int) $seoMediaByWpId['path:'.$relativePath];
             $this->touchMediaUsage($article, $id);
 
             return $id;
@@ -700,9 +751,14 @@ final class ArticlePostImagesService
             return 0;
         }
 
+        $basename = basename($relativePath !== '' ? $relativePath : $url);
         $media = SeoMedia::query()
-            ->where('article_id', (int) $article->id)
-            ->where('path', 'like', '%'.addcslashes(basename($path), '%_\\').'%')
+            ->where('site_id', (int) $article->site_id)
+            ->where(function ($query) use ($article, $basename): void {
+                $query->where('article_id', (int) $article->id)
+                    ->orWhere('filename', $basename);
+            })
+            ->where('path', 'like', '%'.addcslashes($basename, '%_\\').'%')
             ->orderByDesc('id')
             ->value('id');
 
@@ -710,6 +766,24 @@ final class ArticlePostImagesService
         $this->touchMediaUsage($article, $id);
 
         return $id;
+    }
+
+    private function normalizeStorageRelativePath(string $url): string
+    {
+        $path = strtolower(rtrim((string) parse_url($url, PHP_URL_PATH), '/'));
+        if ($path === '') {
+            return '';
+        }
+
+        if (str_starts_with($path, '/storage/')) {
+            return ltrim(substr($path, strlen('/storage/')), '/');
+        }
+
+        if (str_starts_with($path, 'storage/')) {
+            return ltrim(substr($path, strlen('storage/')), '/');
+        }
+
+        return ltrim($path, '/');
     }
 
     /**

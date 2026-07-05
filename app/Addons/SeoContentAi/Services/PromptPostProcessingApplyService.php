@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Intervention\Image\Format;
 use Intervention\Image\Laravel\Facades\Image;
 
 final class PromptPostProcessingApplyService
@@ -25,6 +26,10 @@ final class PromptPostProcessingApplyService
         $config = PromptPostProcessing::fromPrompt($prompt);
 
         if (! PromptPostProcessing::isActive($config)) {
+            return PromptPostProcessingApplyResult::skipped($media);
+        }
+
+        if ($this->shouldSkipAutoPostProcessingForProductGallery($media, $prompt)) {
             return PromptPostProcessingApplyResult::skipped($media);
         }
 
@@ -129,7 +134,26 @@ final class PromptPostProcessingApplyService
                 }
 
                 $pieceImage = Image::decodeBinary($sourceBinary)->crop($width, $height, $x, $y);
-                $binary = (string) $pieceImage->encode();
+                $binary = (string) $pieceImage->encodeUsingFormat(Format::PNG);
+
+                if ($config['resize_enabled']) {
+                    $resized = $this->mediaResize->resizeBinary(
+                        $binary,
+                        $config['resize_width'],
+                        $config['resize_height'],
+                        'png',
+                    );
+
+                    if (! ($resized['success'] ?? false)) {
+                        return PromptPostProcessingApplyResult::failed(
+                            $media,
+                            (string) ($resized['message'] ?? 'Không resize được ảnh con.'),
+                        );
+                    }
+
+                    $binary = $resized['binary'];
+                }
+
                 $slugSeed = sprintf('%s-%d-%d', $baseSlug, $row + 1, $col + 1);
 
                 $saved = $this->storeNewPiece($binary, $extension, $siteId, $article, $slugSeed, $media);
@@ -139,14 +163,6 @@ final class PromptPostProcessingApplyService
 
         if ($pieces === []) {
             return PromptPostProcessingApplyResult::failed($media, 'Không tạo được ảnh con từ lưới.');
-        }
-
-        if ($config['resize_enabled']) {
-            $resizeResult = $this->resizePieces($pieces, $config);
-            if ($resizeResult instanceof PromptPostProcessingApplyResult) {
-                return $resizeResult;
-            }
-            $pieces = $resizeResult;
         }
 
         $this->persistSplitPiecesOnSource($media, $pieces);
@@ -324,6 +340,147 @@ final class PromptPostProcessingApplyService
     /**
      * @param  list<SeoMedia>  $pieces
      */
+    /**
+     * Sau khi user tách lưới thủ công từ product gallery: resize theo prompt album + thêm ảnh con vào album.
+     *
+     * @param  list<array{id: int, url: string, slug: string}>  $savedPieceRows
+     * @return list<array{id: int, url: string}>
+     */
+    public function finalizeProductGalleryManualSplit(
+        SeoArticle $article,
+        ?SeoMedia $originalMedia,
+        array $savedPieceRows,
+    ): array {
+        if ($savedPieceRows === []) {
+            return [];
+        }
+
+        if ($originalMedia instanceof SeoMedia) {
+            $this->ensureMediaLinkedToArticle($originalMedia, $article);
+        }
+
+        $pieceIds = array_values(array_filter(array_map(
+            static fn (array $row): int => (int) ($row['id'] ?? 0),
+            $savedPieceRows,
+        ), static fn (int $id): bool => $id > 0));
+
+        if ($pieceIds === []) {
+            return [];
+        }
+
+        /** @var list<SeoMedia> $pieces */
+        $pieces = SeoMedia::query()
+            ->whereIn('id', $pieceIds)
+            ->orderBy('id')
+            ->get()
+            ->all();
+
+        if ($pieces === []) {
+            return [];
+        }
+
+        $config = $this->resolveProductGalleryPostProcessingConfig();
+        if ($config['resize_enabled']) {
+            $resizeResult = $this->resizePieces($pieces, $config);
+            if ($resizeResult instanceof PromptPostProcessingApplyResult) {
+                logger()->warning('Product gallery manual split resize failed', [
+                    'article_id' => (int) $article->id,
+                    'message' => $resizeResult->message,
+                ]);
+            } else {
+                $pieces = $resizeResult;
+            }
+        }
+
+        $galleryService = app(ArticleMediaLocalService::class);
+        $appended = [];
+
+        foreach ($pieces as $piece) {
+            $fresh = $piece->fresh();
+            if (! $fresh instanceof SeoMedia) {
+                continue;
+            }
+
+            $this->ensureMediaLinkedToArticle($fresh, $article);
+            $galleryService->appendProductAlbumLocal($article, (int) $fresh->id, $fresh->publicUrl());
+            $appended[] = [
+                'id' => (int) $fresh->id,
+                'url' => $fresh->publicUrl(),
+            ];
+        }
+
+        return $appended;
+    }
+
+    private function shouldSkipAutoPostProcessingForProductGallery(SeoMedia $media, SeoPrompt $prompt): bool
+    {
+        $editorBlockId = trim((string) ($media->editor_block_id ?? ''));
+        if ($editorBlockId === ArticleEditorMediaAiService::PRODUCT_GALLERY_EDITOR_BLOCK_ID) {
+            return true;
+        }
+
+        $articleId = $media->firstArticleId();
+        if ($articleId === null) {
+            return false;
+        }
+
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle || (string) ($article->type ?? '') !== 'product') {
+            return false;
+        }
+
+        $productGalleryPromptId = app(SeoCreateArticleSettingsService::class)->getCreateProductGalleryImagePromptId();
+
+        return $productGalleryPromptId !== null && (int) $prompt->id === (int) $productGalleryPromptId;
+    }
+
+    /**
+     * @return array{
+     *     split_enabled: bool,
+     *     split_rows: int,
+     *     split_columns: int,
+     *     resize_enabled: bool,
+     *     resize_width: int|null,
+     *     resize_height: int|null,
+     * }
+     */
+    private function resolveProductGalleryPostProcessingConfig(): array
+    {
+        $promptId = app(SeoCreateArticleSettingsService::class)->getCreateProductGalleryImagePromptId();
+        if ($promptId === null) {
+            return PromptPostProcessing::normalize([]);
+        }
+
+        $prompt = SeoPrompt::query()->find($promptId);
+
+        return $prompt instanceof SeoPrompt
+            ? PromptPostProcessing::fromPrompt($prompt)
+            : PromptPostProcessing::normalize([]);
+    }
+
+    private function ensureMediaLinkedToArticle(SeoMedia $media, SeoArticle $article): void
+    {
+        $updates = [];
+        $siteId = (int) ($article->site_id ?? 0);
+        $articleId = (int) ($article->id ?? 0);
+
+        if ($siteId > 0 && (int) ($media->site_id ?? 0) <= 0) {
+            $updates['site_id'] = $siteId;
+        }
+
+        if ($articleId > 0) {
+            $articleIds = SeoMedia::normalizeArticleIds($media->article_id);
+            if (! in_array($articleId, $articleIds, true)) {
+                $articleIds[] = $articleId;
+                $updates['article_id'] = array_values(array_unique($articleIds));
+            }
+        }
+
+        if ($updates !== []) {
+            $media->update($updates);
+        }
+    }
+
     private function appendPiecesToProductAlbum(SeoMedia $sourceMedia, array $pieces): void
     {
         $articleId = $sourceMedia->firstArticleId();
