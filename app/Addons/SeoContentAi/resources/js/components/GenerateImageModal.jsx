@@ -2,40 +2,72 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import SeoSelect from './SeoSelect';
+import ImageSplitterPanel from './ImageSplitterPanel';
 import { fetchSeoMediaStatus } from '../utils/seoMediaApi';
-import { loadProductAlbum } from '../utils/articleProductAlbumStorage';
+import {
+    appendProductAlbumItems,
+    loadProductAlbum,
+    normalizeProductAlbumItem,
+} from '../utils/articleProductAlbumStorage';
 import { t } from '../utils/i18n';
 
-function readProductGalleryUrlsFromStorage(articleId) {
+function normalizeGalleryPreviewItem(item, { connected = false, processing = false } = {}) {
+    const normalized = normalizeProductAlbumItem(item);
+    if (!normalized) {
+        return null;
+    }
+
+    return {
+        id: normalized.id,
+        url: normalized.url,
+        connected: Boolean(item?.connected ?? connected),
+        processing: Boolean(item?.processing ?? processing),
+    };
+}
+
+function mergeGalleryPreviewItems(...lists) {
+    const byUrl = new Map();
+
+    lists.flat().forEach((raw) => {
+        const item = normalizeGalleryPreviewItem(raw);
+        if (!item) {
+            return;
+        }
+
+        const existing = byUrl.get(item.url);
+        if (!existing) {
+            byUrl.set(item.url, item);
+            return;
+        }
+
+        byUrl.set(item.url, {
+            ...existing,
+            id: item.id > 0 ? item.id : existing.id,
+            connected: existing.connected || item.connected,
+            processing: item.processing && !existing.connected ? true : existing.processing && item.processing,
+        });
+    });
+
+    return Array.from(byUrl.values());
+}
+
+function readProductGalleryItemsFromStorage(articleId) {
     if (!articleId) {
         return [];
     }
 
-    return loadProductAlbum(articleId)
-        .map((item) => String(item?.url ?? '').trim())
-        .filter(Boolean);
+    return loadProductAlbum(articleId).map((item) => normalizeGalleryPreviewItem(item) ?? item);
 }
 
-function readProductGalleryUrlsFromDom() {
+function readProductGalleryItemsFromDom() {
     return Array.from(document.querySelectorAll('[data-gallery-url]'))
-        .map((node) => String(node.dataset.galleryUrl ?? '').trim())
+        .map((node) =>
+            normalizeGalleryPreviewItem({
+                url: String(node.dataset.galleryUrl ?? '').trim(),
+                id: Number(node.dataset.galleryId ?? 0) || 0,
+            }),
+        )
         .filter(Boolean);
-}
-
-function mergeUniqueUrls(...lists) {
-    const seen = new Set();
-    const merged = [];
-
-    lists.flat().forEach((url) => {
-        const normalized = String(url ?? '').trim();
-        if (!normalized || seen.has(normalized)) {
-            return;
-        }
-        seen.add(normalized);
-        merged.push(normalized);
-    });
-
-    return merged;
 }
 
 function requestPromptPreview(detail) {
@@ -59,7 +91,8 @@ function requestPromptPreview(detail) {
  *   mode?: 'editor' | 'product-gallery',
  *   productCategoryOptions?: Array<{ id: number, label: string }>,
  *   articleId?: number | string | null,
- *   productGalleryUrls?: string[],
+ *   siteId?: number | string | null,
+ *   productGalleryItems?: Array<{ id?: number, url: string, connected?: boolean }>,
  * }} props
  */
 export default function GenerateImageModal({
@@ -71,7 +104,8 @@ export default function GenerateImageModal({
     mode = 'editor',
     productCategoryOptions = [],
     articleId = null,
-    productGalleryUrls = [],
+    siteId = null,
+    productGalleryItems = [],
 }) {
     const [prompt, setPrompt] = useState(initialPrompt);
     const [productCategoryId, setProductCategoryId] = useState('');
@@ -81,36 +115,48 @@ export default function GenerateImageModal({
     const [renderedPromptMeta, setRenderedPromptMeta] = useState({ promptId: 0, promptName: '' });
     const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
     const [promptPreviewError, setPromptPreviewError] = useState('');
-    const [galleryUrls, setGalleryUrls] = useState([]);
-    const [livePreviewUrl, setLivePreviewUrl] = useState('');
-    const [processingPreviewUrl, setProcessingPreviewUrl] = useState('');
-    const [pendingMediaId, setPendingMediaId] = useState(null);
+    const [galleryItems, setGalleryItems] = useState([]);
+    const [selectedSplitUrl, setSelectedSplitUrl] = useState('');
     const [generationError, setGenerationError] = useState('');
     const pollTimerRef = useRef(null);
     const pendingMediaIdRef = useRef(null);
+    const connectedUrlsRef = useRef(new Set());
+    const [pendingMediaId, setPendingMediaId] = useState(null);
 
     const isProductGallery = mode === 'product-gallery';
     const twoColumn = isProductGallery;
+    const numericArticleId = Number(articleId ?? 0) || 0;
+    const numericSiteId = Number(siteId ?? 0) || 0;
 
     useEffect(() => {
         pendingMediaIdRef.current = pendingMediaId;
     }, [pendingMediaId]);
 
-    const refreshGalleryUrls = useCallback(() => {
-        setGalleryUrls(
-            mergeUniqueUrls(
-                productGalleryUrls,
-                readProductGalleryUrlsFromDom(),
-                readProductGalleryUrlsFromStorage(articleId),
-            ),
+    const refreshGalleryItems = useCallback(() => {
+        const external = mergeGalleryPreviewItems(
+            productGalleryItems,
+            readProductGalleryItemsFromDom(),
+            readProductGalleryItemsFromStorage(articleId),
         );
-    }, [articleId, productGalleryUrls]);
+        const externalUrls = new Set(external.map((item) => item.url));
+
+        connectedUrlsRef.current.forEach((url) => {
+            if (!externalUrls.has(url)) {
+                connectedUrlsRef.current.delete(url);
+            }
+        });
+
+        setGalleryItems(
+            external.map((item) => ({
+                ...item,
+                connected: item.connected || connectedUrlsRef.current.has(item.url),
+            })),
+        );
+    }, [articleId, productGalleryItems]);
 
     useEffect(() => {
-        if (productGalleryUrls.length > 0) {
-            refreshGalleryUrls();
-        }
-    }, [productGalleryUrls, refreshGalleryUrls]);
+        refreshGalleryItems();
+    }, [productGalleryItems, refreshGalleryItems]);
 
     useEffect(() => {
         if (open) {
@@ -121,63 +167,93 @@ export default function GenerateImageModal({
             setRenderedPrompt('');
             setRenderedPromptMeta({ promptId: 0, promptName: '' });
             setPromptPreviewError('');
-            setLivePreviewUrl('');
-            setProcessingPreviewUrl('');
             setPendingMediaId(null);
             setGenerationError('');
-            refreshGalleryUrls();
+            setSelectedSplitUrl('');
+            refreshGalleryItems();
         }
-    }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryUrls]);
+    }, [open, initialPrompt, initialLoaiSanPhamCustom, refreshGalleryItems]);
 
-    const applyGalleryPreviewFromPayload = useCallback((payload) => {
-        const url = String(payload?.url ?? '').trim();
-        const status = String(payload?.status ?? '').toLowerCase();
-        const galleryItems = Array.isArray(payload?.gallery_urls)
-            ? payload.gallery_urls
-            : Array.isArray(payload?.galleryUrls)
-              ? payload.galleryUrls
-              : [];
-
-        if (url) {
-            if (status === 'processing' || status === 'pending') {
-                setProcessingPreviewUrl(url);
-                setLivePreviewUrl('');
-            } else {
-                setLivePreviewUrl(url);
-                setProcessingPreviewUrl('');
-            }
+    const markConnectedItem = useCallback((item) => {
+        const normalized = normalizeGalleryPreviewItem(item, { connected: true });
+        if (!normalized) {
+            return;
         }
 
-        if (galleryItems.length > 0) {
-            const urls = galleryItems
-                .map((item) => (typeof item === 'string' ? item : String(item?.url ?? '').trim()))
-                .filter(Boolean);
-            if (urls.length > 0) {
-                setGalleryUrls((prev) => mergeUniqueUrls(urls, prev));
-                setProcessingPreviewUrl('');
-            }
-        }
-
-        if (status === 'completed' || status === 'failed') {
-            setSubmitting(false);
-            setPendingMediaId(null);
-        }
-
-        if (status === 'failed') {
-            setGenerationError(String(payload?.error_message ?? payload?.message ?? t('editor_ai_failed')));
-        }
+        connectedUrlsRef.current.add(normalized.url);
+        setGalleryItems((prev) => mergeGalleryPreviewItems(prev, [normalized]));
     }, []);
+
+    const applyGalleryPreviewFromPayload = useCallback(
+        (payload) => {
+            const url = String(payload?.url ?? '').trim();
+            const status = String(payload?.status ?? '').toLowerCase();
+            const mediaId = Number(payload?.seoMediaId ?? payload?.seo_media_id ?? 0) || 0;
+            const galleryRows = Array.isArray(payload?.gallery_urls)
+                ? payload.gallery_urls
+                : Array.isArray(payload?.galleryUrls)
+                  ? payload.galleryUrls
+                  : [];
+
+            if (url) {
+                const processing = status === 'processing' || status === 'pending';
+                const item = {
+                    id: mediaId,
+                    url,
+                    processing,
+                    connected: status === 'completed',
+                };
+
+                if (status === 'completed') {
+                    markConnectedItem(item);
+                } else {
+                    setGalleryItems((prev) => mergeGalleryPreviewItems(prev, [item]));
+                }
+            }
+
+            if (galleryRows.length > 0) {
+                const rows = galleryRows
+                    .map((row) => {
+                        if (typeof row === 'string') {
+                            return normalizeGalleryPreviewItem({ url: row, connected: true });
+                        }
+
+                        return normalizeGalleryPreviewItem({ ...row, connected: true });
+                    })
+                    .filter(Boolean);
+
+                rows.forEach((row) => connectedUrlsRef.current.add(row.url));
+                setGalleryItems((prev) => mergeGalleryPreviewItems(prev, rows));
+            }
+
+            if (status === 'completed' || status === 'failed') {
+                setSubmitting(false);
+                setPendingMediaId(null);
+                setGalleryItems((prev) =>
+                    prev.map((item) => ({
+                        ...item,
+                        processing: false,
+                    })),
+                );
+            }
+
+            if (status === 'failed') {
+                setGenerationError(String(payload?.error_message ?? payload?.message ?? t('editor_ai_failed')));
+            }
+        },
+        [markConnectedItem],
+    );
 
     useEffect(() => {
         if (!open || !isProductGallery) {
             return undefined;
         }
 
-        const onGalleryUpdated = () => refreshGalleryUrls();
+        const onGalleryUpdated = () => refreshGalleryItems();
         window.addEventListener('seo-product-gallery-updated', onGalleryUpdated);
 
         return () => window.removeEventListener('seo-product-gallery-updated', onGalleryUpdated);
-    }, [open, isProductGallery, refreshGalleryUrls]);
+    }, [open, isProductGallery, refreshGalleryItems]);
 
     useEffect(() => {
         if (!open || !isProductGallery) {
@@ -229,7 +305,6 @@ export default function GenerateImageModal({
 
             setSubmitting(false);
             setPendingMediaId(null);
-            setProcessingPreviewUrl('');
             setGenerationError(String(detail.message ?? t('editor_generate_image_failed')));
         };
 
@@ -294,6 +369,30 @@ export default function GenerateImageModal({
         };
     }, [open, isProductGallery, pendingMediaId, applyGalleryPreviewFromPayload]);
 
+    const handleSplitSaved = useCallback(
+        (data) => {
+            const galleryRows = Array.isArray(data?.product_gallery_items) ? data.product_gallery_items : [];
+            if (numericArticleId > 0 && galleryRows.length > 0) {
+                const appended = appendProductAlbumItems(numericArticleId, galleryRows);
+                appended.forEach((row) => {
+                    const normalized = normalizeGalleryPreviewItem(row, { connected: true });
+                    if (normalized) {
+                        connectedUrlsRef.current.add(normalized.url);
+                    }
+                });
+                setGalleryItems((prev) =>
+                    mergeGalleryPreviewItems(
+                        prev,
+                        appended.map((row) => normalizeGalleryPreviewItem(row, { connected: true })).filter(Boolean),
+                    ),
+                );
+            }
+
+            setSelectedSplitUrl('');
+        },
+        [numericArticleId],
+    );
+
     const categoryId = Number.parseInt(String(productCategoryId || ''), 10) || 0;
     const customValue = String(loaiSanPhamCustom || '').trim();
     const brief = String(prompt || '').trim();
@@ -346,13 +445,15 @@ export default function GenerateImageModal({
         return parts.join(' — ');
     }, [isProductGallery, customValue, productCategoryId, productCategoryOptions]);
 
-    const previewImageUrls = useMemo(() => {
-        return mergeUniqueUrls(
-            processingPreviewUrl ? [processingPreviewUrl] : [],
-            livePreviewUrl ? [livePreviewUrl] : [],
-            galleryUrls,
-        );
-    }, [galleryUrls, livePreviewUrl, processingPreviewUrl]);
+    const previewItems = useMemo(() => galleryItems, [galleryItems]);
+
+    const selectedSplitItem = useMemo(() => {
+        if (!selectedSplitUrl) {
+            return null;
+        }
+
+        return previewItems.find((item) => item.url === selectedSplitUrl) ?? null;
+    }, [previewItems, selectedSplitUrl]);
 
     if (!open) {
         return null;
@@ -374,8 +475,6 @@ export default function GenerateImageModal({
 
         setSubmitting(true);
         setGenerationError('');
-        setProcessingPreviewUrl('');
-        setLivePreviewUrl('');
         setPendingMediaId(null);
 
         if (isProductGallery) {
@@ -456,32 +555,64 @@ export default function GenerateImageModal({
                 {generationError ? (
                     <p className="seo-generate-image-modal__error">{generationError}</p>
                 ) : null}
-                {submitting && previewImageUrls.length === 0 ? (
+                {submitting && previewItems.length === 0 ? (
                     <p className="seo-generate-image-modal__empty">{t('generating_image')}</p>
                 ) : null}
-                {previewImageUrls.length > 0 ? (
+                {previewItems.length > 0 ? (
                     <div className="seo-generate-image-modal__image-grid">
-                        {previewImageUrls.map((url) => (
-                            <a
-                                key={url}
-                                href={url}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                        {previewItems.map((item) => (
+                            <button
+                                key={item.url}
+                                type="button"
                                 className={`seo-generate-image-modal__image-thumb${
-                                    processingPreviewUrl === url ? ' is-processing' : ''
+                                    item.processing ? ' is-processing' : ''
+                                }${selectedSplitUrl === item.url ? ' is-selected' : ''}${
+                                    item.connected ? ' is-connected' : ''
                                 }`}
+                                onClick={() => {
+                                    if (Number(item.id) > 0) {
+                                        setSelectedSplitUrl((current) =>
+                                            current === item.url ? '' : item.url,
+                                        );
+                                    }
+                                }}
+                                title={
+                                    Number(item.id) > 0
+                                        ? t('generate_image_preview_select_for_split')
+                                        : undefined
+                                }
                             >
-                                <img src={url} alt="" loading="lazy" />
-                                {processingPreviewUrl === url ? (
+                                <img src={item.url} alt="" loading="lazy" />
+                                {item.processing ? (
                                     <span className="seo-generate-image-modal__image-badge">{t('processing')}</span>
                                 ) : null}
-                            </a>
+                                {item.connected ? (
+                                    <span className="seo-generate-image-modal__image-badge is-connected">
+                                        {t('generate_image_preview_connected')}
+                                    </span>
+                                ) : null}
+                            </button>
                         ))}
                     </div>
                 ) : (
                     <p className="seo-generate-image-modal__empty">{t('generate_image_preview_no_images')}</p>
                 )}
             </section>
+
+            {selectedSplitItem && Number(selectedSplitItem.id) > 0 ? (
+                <section className="seo-generate-image-modal__preview-section seo-generate-image-modal__split-section">
+                    <h4 className="seo-generate-image-modal__preview-heading">{t('split_grid')}</h4>
+                    <p className="seo-generate-image-modal__helper">{t('generate_image_split_keep_original_hint')}</p>
+                    <ImageSplitterPanel
+                        siteId={numericSiteId > 0 ? numericSiteId : null}
+                        articleId={numericArticleId > 0 ? numericArticleId : null}
+                        seoMediaId={selectedSplitItem.id}
+                        imageUrl={selectedSplitItem.url}
+                        canDeleteOriginal={false}
+                        onSplitSaved={handleSplitSaved}
+                    />
+                </section>
+            ) : null}
 
             <section className="seo-generate-image-modal__preview-section">
                 <div className="seo-generate-image-modal__preview-heading-row">

@@ -29,6 +29,7 @@ use App\Addons\SeoContentAi\Services\ArticleFaqManualExtractService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressImportService;
 use App\Addons\SeoContentAi\Services\ArticleFaqWordPressRestoreService;
 use App\Addons\SeoContentAi\Services\ArticleFeaturedSnippetGeneratorService;
+use App\Addons\SeoContentAi\Services\ArticleGoogleSerpPreviewService;
 use App\Addons\SeoContentAi\Services\ArticleInternalLinkSearchService;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;

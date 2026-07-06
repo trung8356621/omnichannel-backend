@@ -127,6 +127,33 @@
                 }
             },
         };
+
+        window.__seoBeginArticleHeavyActionClient = function beginArticleHeavyActionClient(action = 'sync') {
+            const normalized = action === 'save' ? 'save' : 'sync';
+            window.__seoArticleHeavyActionOverlay?.show(normalized);
+            window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
+            window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
+                detail: { action: normalized },
+            }));
+
+            return normalized;
+        };
+
+        window.__seoEndArticleHeavyActionClient = function endArticleHeavyActionClient() {
+            if (window.__seoArticleHeavyActionOverlay?.persistUntilUnload) {
+                return;
+            }
+
+            window.__seoArticleHeavyActionOverlay?.hide();
+            window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
+            window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+        };
+
+        window.__seoYieldForHeavyActionPaint = function yieldForHeavyActionPaint() {
+            return new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            });
+        };
 </script>
 @endonce
 
@@ -160,6 +187,7 @@
             galleryPickerSelectedKeys: [],
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
+            pickerWasOpened: false,
             init() {
                 this.syncFeaturedImageDraft();
                 if (window.__seoArticleHeavyActionOverlay?.locked) {
@@ -174,15 +202,22 @@
                     this.featuredImageDraft = stored;
                 }
             },
+            onFeaturedImageCleared(event) {
+                const detail = event?.detail ?? {};
+                const aid = Number(detail.articleId ?? detail.article_id ?? 0);
+                if (aid !== this.articleId) {
+                    return;
+                }
+
+                this.featuredImageDraft = null;
+            },
             lockPageForHeavyAction(action = 'sync') {
                 if (this.syncPageLocked || document.getElementById('seo-article-heavy-action-overlay')) {
                     return false;
                 }
 
                 this.syncPageLocked = true;
-                this.heavyPageAction = action === 'save' ? 'save' : 'sync';
-                window.__seoArticleHeavyActionOverlay?.show(this.heavyPageAction);
-                window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
+                this.heavyPageAction = window.__seoBeginArticleHeavyActionClient?.(action) ?? (action === 'save' ? 'save' : 'sync');
 
                 clearTimeout(this._heavyActionUnlockTimer);
                 this._heavyActionUnlockTimer = setTimeout(() => {
@@ -205,8 +240,7 @@
                 clearTimeout(this._heavyActionUnlockTimer);
                 this.syncPageLocked = false;
                 this.heavyPageAction = null;
-                window.__seoArticleHeavyActionOverlay?.hide();
-                window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
+                window.__seoEndArticleHeavyActionClient?.();
             },
             galleryPickerSelectedCount() {
                 return this.galleryPickerSelectedKeys.length;
@@ -418,6 +452,7 @@
                     this.pickerCatalog = Array.isArray(detail.images) ? detail.images : [];
                 }
                 this.pickerImages = Array.isArray(detail.images) ? detail.images : [];
+                this.savePickerSession();
             },
             tryHydratePickerFromCache(tab, page) {
                 if (!this.isPickerCacheableTab(tab)) {
@@ -497,8 +532,9 @@
 
                 const offset = (this.pickerPage - 1) * perPage;
                 this.pickerImages = rows.slice(offset, offset + perPage);
+                this.savePickerSession();
             },
-            loadArticleTabFromEditor() {
+            loadArticleTabFromEditor({ preservePage = false } = {}) {
                 return new Promise((resolve) => {
                     this.pickerLoading = true;
                     this.pickerSearching = false;
@@ -514,7 +550,9 @@
                         const images = Array.isArray(event.detail?.images) ? event.detail.images : [];
                         this.pickerCatalog = images;
                         this.pickerTab = 'article';
-                        this.pickerPage = 1;
+                        if (!preservePage) {
+                            this.pickerPage = 1;
+                        }
                         this.pickerError = null;
                         this.applyPickerView();
                         this.pickerLoading = false;
@@ -563,17 +601,21 @@
 
                 if (tab === 'article') {
                     await this.loadArticleTabFromEditor();
+                    this.savePickerSession();
 
                     return;
                 }
 
                 const hydrated = this.tryHydratePickerFromCache(tab, 1);
                 if (hydrated) {
+                    this.savePickerSession();
+
                     return;
                 }
 
                 this.pickerLoading = true;
                 await this.fetchPickerImages({ resetPage: true });
+                this.savePickerSession();
             },
             async pickerPrevPage() {
                 if (this.pickerPage <= 1) {
@@ -620,44 +662,103 @@
             async reloadPickerImages() {
                 await this.fetchPickerImages({ skipCache: true });
             },
+            pickerSessionStorageKey() {
+                return `seo-article-picker-ui:${this.articleId}`;
+            },
+            savePickerSession() {
+                if (!this.articleId) {
+                    return;
+                }
+
+                try {
+                    sessionStorage.setItem(
+                        this.pickerSessionStorageKey(),
+                        JSON.stringify({
+                            tab: this.pickerTab,
+                            page: Math.max(1, Number(this.pickerPage) || 1),
+                            search: String(this.pickerSearchQuery ?? ''),
+                            totalPages: Math.max(1, Number(this.pickerTotalPages) || 1),
+                            touched: true,
+                        }),
+                    );
+                } catch {
+                    // ignore quota / private mode
+                }
+            },
+            restorePickerSession() {
+                if (!this.articleId) {
+                    return false;
+                }
+
+                try {
+                    const raw = sessionStorage.getItem(this.pickerSessionStorageKey());
+                    if (!raw) {
+                        return false;
+                    }
+
+                    const session = JSON.parse(raw);
+                    if (!session?.touched) {
+                        return false;
+                    }
+
+                    if (session.tab) {
+                        this.pickerTab = session.tab;
+                    }
+
+                    this.pickerPage = Math.max(1, Number(session.page) || 1);
+                    this.pickerSearchQuery = String(session.search ?? '');
+                    this.pickerTotalPages = Math.max(1, Number(session.totalPages) || 1);
+
+                    return true;
+                } catch {
+                    return false;
+                }
+            },
+            pickerHasSession() {
+                return (Array.isArray(this.pickerCatalog) && this.pickerCatalog.length > 0)
+                    || (Array.isArray(this.pickerImages) && this.pickerImages.length > 0);
+            },
+            shouldRestorePickerSession() {
+                return this.restorePickerSession() || this.pickerHasSession();
+            },
             async openArticleMediaModal(mode, blockId = null) {
-                this.clearGalleryPickerSelection();
-                this.mediaModalMode = mode;
+                this.mediaModalMode = mode === 'gallery' ? 'gallery' : (mode === 'editor-block' ? 'editor-block' : 'featured');
                 this.mediaModalTargetBlockId = blockId;
+
+                if (this.pickerWasOpened || (Array.isArray(this.pickerImages) && this.pickerImages.length > 0)) {
+                    this.clearGalleryPickerSelection();
+                    this.mediaModalOpen = true;
+                    window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
+
+                    return;
+                }
+
+                this.clearGalleryPickerSelection();
                 this.mediaModalOpen = true;
                 window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
-                this.pickerSearchQuery = '';
-                this.pickerCatalog = [];
-                this.pickerImages = [];
-                this.pickerLoading = true;
-                this.pickerSearching = false;
 
                 if (mode === 'editor-block') {
                     this.pickerTab = 'article';
                     await this.loadArticleTabFromEditor();
+                    this.pickerWasOpened = true;
 
                     return;
                 }
 
-                this.mediaModalMode = mode === 'gallery' ? 'gallery' : 'featured';
                 this.pickerTab = this.pickerWordPressLinked() ? 'original' : 'local';
+                this.pickerLoading = true;
                 if (this.tryHydratePickerFromCache(this.pickerTab, 1)) {
+                    this.pickerWasOpened = true;
+
                     return;
                 }
 
                 await this.fetchPickerImages({ resetPage: true });
+                this.pickerWasOpened = true;
             },
             closeArticleMediaModal() {
-                this.clearGalleryPickerSelection();
                 this.mediaModalOpen = false;
-                this.mediaModalTargetBlockId = null;
                 window.__seoArticleAutosaveLock?.set('media-picker-modal', false);
-                this.pickerImages = [];
-                this.pickerCatalog = [];
-                this.pickerSearchQuery = '';
-                this.pickerError = null;
-                this.pickerLoading = false;
-                this.pickerSearching = false;
             },
             handlePickerImageClick(event, image, el) {
                 if (!image || !String(image.url || '').trim()) {
@@ -699,6 +800,7 @@
                             ...payload,
                             blockId: String(this.mediaModalTargetBlockId || ''),
                             attachmentId: payload.wpAttachmentId,
+                            pickerTab: this.pickerTab,
                         },
                     }));
                     this.closeArticleMediaModal();
@@ -720,6 +822,7 @@
                     detail: {
                         ...payload,
                         mode: 'featured',
+                        pickerTab: this.pickerTab,
                     },
                 }));
                 this.closeArticleMediaModal();
@@ -790,6 +893,7 @@
         }"
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
         x-on:seo-featured-image-storage-ready.window="syncFeaturedImageDraft()"
+        x-on:seo-featured-image-cleared.window="onFeaturedImageCleared($event)"
         x-on:article-wordpress-sync-lock.window="lockPageForHeavyAction($event.detail?.action ?? 'sync')"
         x-on:article-wordpress-sync-unlock.window="unlockPageAfterHeavyActionFailure()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
@@ -798,24 +902,42 @@
             $wire.handleEditorNotify(payload);
         "
         x-on:open-article-media-modal.window="
-            mediaModalOpen = true;
-            window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
             const wireMode = $wire.mediaPickerMode || 'featured';
-            if (wireMode === 'gallery' || wireMode === 'editor-block') {
-                mediaModalMode = wireMode;
-            }
+            const mode = wireMode === 'editor-block'
+                ? 'editor-block'
+                : (wireMode === 'gallery' ? 'gallery' : 'featured');
+            openArticleMediaModal(mode);
         "
         x-on:article-media-picker-loading.window="
+            if (!mediaModalOpen) {
+                return;
+            }
             if (!pickerSuppressLoadingOverlay) {
                 pickerLoading = true;
             }
         "
         x-on:article-media-picker-loaded.window="
+            if (!mediaModalOpen) {
+                return;
+            }
             pickerSuppressLoadingOverlay = false;
             applyPickerPayload($event.detail);
             pickerLoading = false;
             pickerSearching = false;
             persistPickerCacheFromFetch($event.detail);
+        "
+        x-on:seo-editor-images-catalog.window="
+            if (!$event.detail?.autoSync) {
+                return;
+            }
+            const images = Array.isArray($event.detail?.images) ? $event.detail.images : [];
+            if (images.length === 0) {
+                return;
+            }
+            pickerCatalog = images;
+            if (mediaModalOpen && pickerTab === 'article') {
+                applyPickerView();
+            }
         "
         x-on:flush-article-faqs.window="
             setTimeout(() => {
@@ -826,6 +948,10 @@
         "
         x-on:editor-html-collected.window="
             const detail = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            const heavyAction = detail.target === 'sync' ? 'sync' : (detail.target === 'save' || !detail.target ? 'save' : null);
+            if (heavyAction && !window.__seoArticleHeavyActionOverlay?.locked) {
+                window.__seoBeginArticleHeavyActionClient?.(heavyAction);
+            }
             const articleId = @js((int) $record->getKey());
             const persistAlbum = window.__seoPersistProductAlbumDraft;
             const persistFeatured = window.__seoPersistFeaturedImageDraft;
@@ -870,15 +996,16 @@
                 runSave().catch(() => unlockPageAfterHeavyActionFailure());
             } else if (action === 'sync') {
                 @if ($record->wp_post_id && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                    if (!lockPageForHeavyAction('sync')) {
+                        return;
+                    }
                     const runSync = async () => {
                         if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
                             const allowed = await window.__seoEnsureCategoriesBeforeSync();
                             if (! allowed) {
+                                unlockPageAfterHeavyActionFailure();
                                 return;
                             }
-                        }
-                        if (!lockPageForHeavyAction('sync')) {
-                            return;
                         }
                         if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
                             await window.__seoExecuteHeavyArticleAction('sync', $wire);
@@ -1132,6 +1259,7 @@
                                             role="listitem"
                                             draggable="true"
                                             x-bind:data-gallery-url="image.url"
+                                            x-bind:data-gallery-id="image.id"
                                             x-on:dragstart="startDrag($event)"
                                             x-on:dragover="allowDrop($event)"
                                             x-on:drop="onDrop($event)"
@@ -1164,30 +1292,18 @@
                                             >
                                                 ×
                                             </button>
-                                            <button
-                                                type="button"
-                                                class="wp-product-gallery-split"
-                                                x-show="Number(image.id) > 0"
-                                                x-on:click.stop="openSplitter(image.id)"
-                                                title="Tách lưới nhanh"
-                                                aria-label="Tách lưới nhanh"
-                                            >
-                                                ✂
-                                            </button>
                                         </div>
                                     </template>
                                 </div>
                             </template>
-                            <template x-if="albumItems.length === 0">
-                                <button
-                                    type="button"
-                                    class="wp-product-gallery-generate mt-2"
-                                    title="Tạo ảnh AI cho album sản phẩm"
-                                    x-on:click="window.dispatchEvent(new CustomEvent('seo-open-generate-image-modal', { detail: { target: 'product-gallery' } }))"
-                                >
-                                    Tạo ảnh
-                                </button>
-                            </template>
+                            <button
+                                type="button"
+                                class="wp-product-gallery-generate mt-2"
+                                title="Tạo ảnh AI hoặc tách lưới album sản phẩm"
+                                x-on:click="window.dispatchEvent(new CustomEvent('seo-open-generate-image-modal', { detail: { target: 'product-gallery' } }))"
+                            >
+                                <span x-text="albumItems.length > 0 ? 'Tạo / tách ảnh' : 'Tạo ảnh'"></span>
+                            </button>
                             <button
                                 type="button"
                                 x-on:click="openArticleMediaModal('gallery')"

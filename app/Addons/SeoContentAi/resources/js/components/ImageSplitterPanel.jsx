@@ -10,6 +10,7 @@ export default function ImageSplitterPanel({
     imageUrl = '',
     splitPayload = null,
     canDeleteOriginal = true,
+    onSplitSaved = null,
 }) {
     return (
         <div
@@ -28,6 +29,7 @@ export default function ImageSplitterPanel({
                 fallbackImageUrl={imageUrl}
                 splitPayload={splitPayload}
                 canDeleteOriginal={canDeleteOriginal}
+                onSplitSaved={onSplitSaved}
             />
         </div>
     );

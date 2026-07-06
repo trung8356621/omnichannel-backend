@@ -45,7 +45,13 @@ import {
 } from '../utils/seoAnalyzer';
 import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
 import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
-import { appendProductAlbumItems, loadProductAlbum } from '../utils/articleProductAlbumStorage';
+import {
+    appendProductAlbumItems,
+    loadProductAlbum,
+    normalizeProductAlbumList,
+    removeProductAlbumItem,
+} from '../utils/articleProductAlbumStorage';
+import { clearFeaturedImageStorage, saveFeaturedImage } from '../utils/articleFeaturedImageStorage';
 import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
@@ -54,9 +60,12 @@ import {
     applyQuickFixAltTitleToBlocks,
     applyQuickFixSlugToBlock,
     applyQuickFixSlugToBlocks,
+    assignInArticleQuickFixIndices,
     buildAltTitleMetaUpdatePayload,
     buildMergedEditorImagesForPicker,
+    buildQuickFixIndexByBlockId,
     collectImagesFromBlocks,
+    filterSupplementalDuplicatesOfBlockRows,
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
     finalizeBlocksAfterWpRename,
@@ -64,6 +73,8 @@ import {
     imageSlugFromKeyword,
     resolveImageRefIds,
     shouldRenameSlugOnWordPress,
+    syncSupplementalRowsFromBlockImages,
+    syncProductAlbumUrlsFromBlockImages,
     slugFromUrl,
 } from '../utils/articleImagesUtils';
 import {
@@ -878,6 +889,38 @@ const buildGallerySupplementalRows = (supplementalImages, storageAlbum, articleI
     });
 
     return rows;
+};
+
+const resolveSupplementalImagesWithGallery = (
+    supplementalImages,
+    galleryItems,
+    articleId,
+    supportsProductGallery = false,
+) => {
+    const album = Array.isArray(galleryItems) ? galleryItems : [];
+
+    if (supportsProductGallery) {
+        const nonProductMedia = (Array.isArray(supplementalImages) ? supplementalImages : []).filter(
+            (row) => {
+                const origin = String(row?.origin ?? '').trim();
+
+                return origin !== 'gallery' && origin !== 'featured';
+            },
+        );
+
+        if (album.length === 0) {
+            return nonProductMedia;
+        }
+
+        return [...nonProductMedia, ...buildGallerySupplementalRows([], album, articleId)];
+    }
+
+    const nonGallery = (Array.isArray(supplementalImages) ? supplementalImages : []).filter(
+        (row) => String(row?.origin ?? '').trim() !== 'gallery',
+    );
+    const galleryRows = buildGallerySupplementalRows([], galleryItems, articleId);
+
+    return [...nonGallery, ...galleryRows];
 };
 
 const escapeRegExp = (value) => String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1976,9 +2019,19 @@ export default function SeoArticleEditor({
     const outlineAppendDoneRef = useRef(new Set());
     const [insertMenu, setInsertMenu] = useState(null);
     const [collapsedSectionIds, setCollapsedSectionIds] = useState({});
-    const [supplementalImages, setSupplementalImages] = useState(() =>
-        Array.isArray(initialSupplementalImages) ? initialSupplementalImages : [],
-    );
+    const [supplementalImages, setSupplementalImages] = useState(() => {
+        const initial = Array.isArray(initialSupplementalImages) ? initialSupplementalImages : [];
+        if (!supportsProductGallery || !articleId) {
+            return initial;
+        }
+
+        const album = loadProductAlbum(articleId);
+
+        return resolveSupplementalImagesWithGallery(initial, album, articleId, supportsProductGallery);
+    });
+    const supplementalImagesRef = useRef(supplementalImages);
+    supplementalImagesRef.current = supplementalImages;
+    const publishEditorImagesCatalogRef = useRef(() => {});
     const [postImages, setPostImages] = useState(() =>
         Array.isArray(initialPostImages) ? initialPostImages : [],
     );
@@ -2030,22 +2083,11 @@ export default function SeoArticleEditor({
         };
     }, [articleId]);
 
-    const parseGalleryUrlList = useCallback((items) => {
-        if (!Array.isArray(items)) {
-            return [];
-        }
+    const parseGalleryItems = useCallback((items) => normalizeProductAlbumList(items), []);
 
-        return items
-            .map((item) => {
-                if (typeof item === 'string') {
-                    return item.trim();
-                }
-                return String(item?.url ?? item?.src ?? '').trim();
-            })
-            .filter(Boolean);
-    }, []);
-
-    const [productGalleryUrls, setProductGalleryUrls] = useState(() => parseGalleryUrlList(initialProductGallery));
+    const [productGalleryItems, setProductGalleryItems] = useState(() =>
+        parseGalleryItems(initialProductGallery.length > 0 ? initialProductGallery : loadProductAlbum(articleId)),
+    );
 
     useEffect(() => {
         const onGalleryUpdated = (event) => {
@@ -2054,13 +2096,39 @@ export default function SeoArticleEditor({
             if (!Array.isArray(gallery)) {
                 return;
             }
-            setProductGalleryUrls(parseGalleryUrlList(gallery));
+
+            const items = parseGalleryItems(gallery);
+            setProductGalleryItems(items);
+            setSupplementalImages((prev) =>
+                resolveSupplementalImagesWithGallery(prev, items, articleId, supportsProductGallery),
+            );
+
+            if (supportsProductGallery && articleId) {
+                if (items.length === 0) {
+                    clearFeaturedImageStorage(articleId);
+                    window.dispatchEvent(
+                        new CustomEvent('seo-featured-image-cleared', {
+                            detail: { articleId: Number(articleId) },
+                        }),
+                    );
+                } else {
+                    const first = items[0];
+                    saveFeaturedImage(articleId, {
+                        url: first.url,
+                        wpAttachmentId: first.id,
+                        seoMediaId: first.id,
+                    });
+                }
+            }
+
+            setImagesReloadKey((key) => key + 1);
+            queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
         };
 
         window.addEventListener('seo-product-gallery-updated', onGalleryUpdated);
 
         return () => window.removeEventListener('seo-product-gallery-updated', onGalleryUpdated);
-    }, [parseGalleryUrlList]);
+    }, [articleId, parseGalleryItems, supportsProductGallery]);
 
     const [siteDomain] = useState(() => String(initialSeo?.site_domain ?? '').trim());
     const articleType = String(initialSeo?.article_type ?? initialPostType ?? 'post').trim();
@@ -2157,6 +2225,12 @@ export default function SeoArticleEditor({
 
         return () => setArticleAutosaveLock('generate-image-modal', false);
     }, [generateImageModalOpen]);
+
+    useEffect(() => {
+        setArticleAutosaveLock('quick-fix-slug-all', quickFixSlugAllBusy);
+
+        return () => setArticleAutosaveLock('quick-fix-slug-all', false);
+    }, [quickFixSlugAllBusy]);
 
     const submitGenerateImageFromModal = useCallback(
         (payload) => {
@@ -3155,22 +3229,20 @@ export default function SeoArticleEditor({
             };
 
             baseRows.forEach(appendSourceRow);
-            buildGallerySupplementalRows(baseRows, null, articleId).forEach(appendSourceRow);
+            if (!Array.isArray(imageRows)) {
+                buildGallerySupplementalRows(supplementalImages ?? [], null, articleId).forEach(appendSourceRow);
+            }
 
-            const indexByBlockId = {};
-            sourceRows.forEach((row) => {
-                const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
-                const quickFixIndex = Number(row?.quickFixIndex ?? 0);
-                if (blockId && quickFixIndex > 0) {
-                    indexByBlockId[blockId] = quickFixIndex;
-                }
-            });
+            const indexedRows = assignInArticleQuickFixIndices(
+                filterSupplementalDuplicatesOfBlockRows(sourceRows),
+            );
+            const indexByBlockId = buildQuickFixIndexByBlockId(indexedRows);
 
-            const supplementalOnlyRows = sourceRows.filter(
+            const supplementalOnlyRows = indexedRows.filter(
                 (row) => String(row?.blockId ?? row?.block_id ?? '').trim() === '',
             );
 
-            return { keyword, sourceRows, indexByBlockId, supplementalOnlyRows };
+            return { keyword, sourceRows: indexedRows, indexByBlockId, supplementalOnlyRows };
         },
         [focusKeyword, articleTitle, supplementalImages, articleId],
     );
@@ -3292,6 +3364,35 @@ export default function SeoArticleEditor({
         });
     }, []);
 
+    const finalizeSlugRenameSideEffects = useCallback(() => {
+        const currentBlocks = blocksRef.current;
+
+        setSupplementalImages((prev) => syncSupplementalRowsFromBlockImages(prev, currentBlocks));
+
+        if (supportsProductGallery && articleId) {
+            syncProductAlbumUrlsFromBlockImages(articleId, currentBlocks);
+            const album = loadProductAlbum(articleId);
+            if (album.length > 0) {
+                saveFeaturedImage(articleId, {
+                    url: album[0].url,
+                    wpAttachmentId: album[0].id,
+                    seoMediaId: album[0].id,
+                });
+            } else {
+                clearFeaturedImageStorage(articleId);
+                window.dispatchEvent(
+                    new CustomEvent('seo-featured-image-cleared', {
+                        detail: { articleId: Number(articleId) },
+                    }),
+                );
+            }
+        }
+
+        setImagesReloadKey((key) => key + 1);
+        queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
+        scheduleAutosave();
+    }, [articleId, scheduleAutosave, supportsProductGallery]);
+
     const quickFixSlugAllImages = useCallback(
         async (imageRows = null) => {
             if (quickFixSlugAllBusy) {
@@ -3305,74 +3406,104 @@ export default function SeoArticleEditor({
 
             const { keyword, indexByBlockId, supplementalOnlyRows } = context;
 
-            const supplementalOutcomes = supplementalOnlyRows.map((row, index) => ({
-                row,
-                outcome: computeQuickFixSlugSupplementalOutcome(
-                    Number(row?.quickFixIndex ?? 0) > 0 ? row : { ...row, quickFixIndex: index + 1 },
-                    keyword,
-                ),
-            }));
-
             const preview = applyQuickFixSlugToBlocks(blocksRef.current, keyword, indexByBlockId);
-            const supplementalWpRenames = supplementalOutcomes
-                .map(({ outcome }) => outcome.wpRename)
-                .filter(Boolean);
-            const supplementalLocalRenames = supplementalOutcomes
-                .map(({ outcome }) => outcome.localRename)
-                .filter(Boolean);
 
-            const previewWpRenameCount = preview.renameQueue.length;
-            const supplementalWpRenameCount = supplementalWpRenames.length;
-            const totalWpRenames = previewWpRenameCount + supplementalWpRenameCount;
-            const totalLocalRenames =
-                (preview.localRenameQueue ?? []).length + supplementalLocalRenames.length;
+            const blockEligibleCount = collectImagesFromBlocks(blocksRef.current).filter(
+                (row) => !row?.excludeQuickFix,
+            ).length;
+
+            const extraWpRenames = [];
+            const extraLocalRenames = [];
+            const wpRenameSeen = new Set(
+                (preview.renameQueue ?? []).map((item) => Number(item.attachment_id ?? 0)).filter((id) => id > 0),
+            );
+            const localRenameSeen = new Set(
+                (preview.localRenameQueue ?? []).map((item) => {
+                    const id = Number(item.seo_media_id ?? 0);
+                    return id > 0 ? `id:${id}` : `src:${normalizeImageSrcKey(item.src)}`;
+                }),
+            );
+
+            let supplementalOrdinal = blockEligibleCount;
+            supplementalOnlyRows.forEach((row) => {
+                supplementalOrdinal += 1;
+                const enriched = { ...row, quickFixIndex: supplementalOrdinal };
+                const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword);
+
+                if (Object.keys(outcome.patch ?? {}).length > 0) {
+                    patchSupplementalImageRow(enriched, outcome.patch);
+                }
+
+                if (outcome.wpRename) {
+                    const wpId = Number(outcome.wpRename.attachment_id ?? 0);
+                    if (wpId > 0 && !wpRenameSeen.has(wpId)) {
+                        wpRenameSeen.add(wpId);
+                        extraWpRenames.push(outcome.wpRename);
+                    }
+                }
+
+                if (outcome.localRename) {
+                    const id = Number(outcome.localRename.seo_media_id ?? 0);
+                    const key =
+                        id > 0 ? `id:${id}` : `src:${normalizeImageSrcKey(outcome.localRename.src)}`;
+                    if (!localRenameSeen.has(key)) {
+                        localRenameSeen.add(key);
+                        extraLocalRenames.push({ ...outcome.localRename, block_id: '' });
+                    }
+                }
+            });
+
+            const mergedPreview = {
+                ...preview,
+                renameQueue: [...(preview.renameQueue ?? []), ...extraWpRenames],
+                localRenameQueue: [...(preview.localRenameQueue ?? []), ...extraLocalRenames],
+            };
+
+            const totalWpRenames = mergedPreview.renameQueue.length;
+            const totalLocalRenames = (mergedPreview.localRenameQueue ?? []).length;
 
             if (totalWpRenames > 0 && !confirmSlugRename({ count: totalWpRenames, isQuickFix: true })) {
                 return;
             }
 
-            if (totalWpRenames === 0 && totalLocalRenames === 0 && preview.applied === 0) {
+            if (totalWpRenames === 0 && totalLocalRenames === 0 && mergedPreview.applied === 0) {
                 return;
             }
 
             setQuickFixSlugAllBusy(true);
+            window.__seoBeginArticleHeavyActionClient?.('save');
+
             await new Promise((resolve) => {
                 window.requestAnimationFrame(() => resolve());
             });
 
             try {
-                const localTasks = [applyQuickFixSlugPreview(preview, keyword)];
+                const localTasks = [applyQuickFixSlugPreview(mergedPreview, keyword)];
 
-                supplementalOutcomes.forEach(({ row, outcome }) => {
-                    if (Object.keys(outcome.patch ?? {}).length > 0) {
-                        patchSupplementalImageRow(row, outcome.patch);
-                    }
-                });
+                if (extraLocalRenames.length > 0) {
+                    localTasks.push(runSupplementalLocalRenames(extraLocalRenames, supplementalOnlyRows));
+                }
 
                 let wpBatchCount = 0;
-                if (previewWpRenameCount > 0) {
+                if (totalWpRenames > 0) {
                     wpBatchCount += 1;
                 }
 
-                if (supplementalWpRenames.length > 0) {
-                    wpBatchCount += 1;
-                    requestWordPressRenames(supplementalWpRenames);
-                }
-
-                localTasks.push(runSupplementalLocalRenames(supplementalLocalRenames, supplementalOnlyRows));
                 localTasks.push(waitForWordPressSlugRenameFinished(wpBatchCount));
 
                 await Promise.all(localTasks);
+                finalizeSlugRenameSideEffects();
             } finally {
                 setQuickFixSlugAllBusy(false);
+                window.__seoEndArticleHeavyActionClient?.();
             }
         },
         [
             applyQuickFixSlugPreview,
             buildQuickFixContext,
+            finalizeSlugRenameSideEffects,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
-            requestWordPressRenames,
             runSupplementalLocalRenames,
             waitForWordPressSlugRenameFinished,
         ],
@@ -4521,6 +4652,69 @@ export default function SeoArticleEditor({
             deleteBlock(blockId, { skipConfirm: true });
         },
         [deleteBlock],
+    );
+
+    const removeSupplementalImage = useCallback(
+        (row) => {
+            const src = String(row?.src ?? '').trim();
+            if (!src) {
+                return;
+            }
+
+            const origin = String(row?.origin ?? '').trim();
+            const blockId = String(row?.blockId || row?.block_id || '').trim();
+            if (blockId) {
+                removeImageBlock(row);
+
+                return;
+            }
+
+            setSupplementalImages((prev) =>
+                (Array.isArray(prev) ? prev : []).filter((item) => {
+                    const itemSrc = String(item?.src ?? '').trim();
+                    const itemOrigin = String(item?.origin ?? '').trim();
+                    const itemBlockId = String(item?.blockId || item?.block_id || '').trim();
+
+                    if (itemBlockId) {
+                        return true;
+                    }
+
+                    if (itemSrc !== src) {
+                        return true;
+                    }
+
+                    if (origin && itemOrigin && itemOrigin !== origin) {
+                        return true;
+                    }
+
+                    return false;
+                }),
+            );
+
+            if (supportsProductGallery && (origin === 'gallery' || origin === 'featured')) {
+                removeProductAlbumItem(articleId, src);
+                if (loadProductAlbum(articleId).length === 0) {
+                    clearFeaturedImageStorage(articleId);
+                    window.dispatchEvent(
+                        new CustomEvent('seo-featured-image-cleared', {
+                            detail: { articleId: Number(articleId) },
+                        }),
+                    );
+                }
+            } else if (origin === 'featured') {
+                clearFeaturedImageStorage(articleId);
+                window.dispatchEvent(
+                    new CustomEvent('seo-featured-image-cleared', {
+                        detail: { articleId: Number(articleId) },
+                    }),
+                );
+            }
+
+            setImagesReloadKey((key) => key + 1);
+            queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
+            scheduleAutosave();
+        },
+        [articleId, removeImageBlock, scheduleAutosave, supportsProductGallery],
     );
 
     useEffect(() => {
@@ -6000,14 +6194,22 @@ export default function SeoArticleEditor({
         window.addEventListener('article-post-images-synced', onPostImagesSynced);
         window.addEventListener('article-supplemental-images-synced', onSupplementalImagesSynced);
 
-        const onRequestEditorImagesCatalog = () => {
-            const images = buildMergedEditorImagesForPicker(blocksRef.current, supplementalImages);
+        const publishEditorImagesCatalog = ({ autoSync = false } = {}) => {
+            const images = buildMergedEditorImagesForPicker(
+                blocksRef.current,
+                supplementalImagesRef.current,
+            );
             window.dispatchEvent(
                 new CustomEvent('seo-editor-images-catalog', {
-                    detail: { images, tab: 'article' },
+                    detail: { images, tab: 'article', autoSync },
                 }),
             );
         };
+
+        publishEditorImagesCatalogRef.current = (autoSync = true) =>
+            publishEditorImagesCatalog({ autoSync });
+
+        const onRequestEditorImagesCatalog = () => publishEditorImagesCatalog();
 
         window.addEventListener('seo-request-editor-images-catalog', onRequestEditorImagesCatalog);
 
@@ -6189,11 +6391,12 @@ export default function SeoArticleEditor({
 
         window.addEventListener('seo-editor-image-generate-request', onImageGenerateRequest);
 
-        const persistSelectedMediaBlock = (blockId, content, image) => {
+        const persistSelectedMediaBlock = (blockId, content, image, blockType = 'image') => {
             const nextBlocks = blocksRef.current.map((block) =>
                 block.id === blockId
                     ? {
                           ...block,
+                          type: blockType,
                           content,
                           image,
                       }
@@ -6210,6 +6413,15 @@ export default function SeoArticleEditor({
                 });
                 setSaveStatus('saved');
             }
+        };
+
+        const syncWpPickerSelectionToImagesTab = (pickerTab) => {
+            if (String(pickerTab ?? '').trim() !== 'original') {
+                return;
+            }
+
+            setImagesReloadKey((key) => key + 1);
+            publishEditorImagesCatalog({ autoSync: true });
         };
 
         const onEditorBlockImageSelected = (event) => {
@@ -6255,7 +6467,9 @@ export default function SeoArticleEditor({
                     blockId,
                     `<figure class="wp-block-video"><video controls src="${safeUrl}"></video></figure>`,
                     video,
+                    'video',
                 );
+                syncWpPickerSelectionToImagesTab(event.detail?.pickerTab);
                 return;
             }
 
@@ -6276,7 +6490,8 @@ export default function SeoArticleEditor({
                 wpSrc: url,
             };
             const html = renderImageFigure(image);
-            persistSelectedMediaBlock(blockId, html, image);
+            persistSelectedMediaBlock(blockId, html, image, 'image');
+            syncWpPickerSelectionToImagesTab(event.detail?.pickerTab);
         };
 
         window.addEventListener('editor-block-image-selected', onEditorBlockImageSelected);
@@ -7667,6 +7882,13 @@ export default function SeoArticleEditor({
 
                 return next;
             });
+
+            if (String(event.detail?.pickerTab ?? '').trim() === 'original') {
+                queueMicrotask(() => {
+                    publishEditorImagesCatalogRef.current?.();
+                    setImagesReloadKey((key) => key + 1);
+                });
+            }
         };
 
         const onRemoved = (event) => {
@@ -7835,12 +8057,18 @@ export default function SeoArticleEditor({
     return (
         <div className="seo-article-editor-root">
             <EditorBusyOverlay
-                visible={imageRenameBusy}
-                title={t('editor_renaming_wp_images')}
+                visible={imageRenameBusy || quickFixSlugAllBusy}
+                title={
+                    quickFixSlugAllBusy
+                        ? t('editor_quick_fix_slug_all_busy')
+                        : t('editor_renaming_wp_images')
+                }
                 message={
-                    imageRenameBusyCount > 0
-                        ? t('editor_renaming_wp_images_body', { count: imageRenameBusyCount })
-                        : t('editor_please_wait')
+                    quickFixSlugAllBusy
+                        ? t('editor_please_wait')
+                        : imageRenameBusyCount > 0
+                          ? t('editor_renaming_wp_images_body', { count: imageRenameBusyCount })
+                          : t('editor_please_wait')
                 }
             />
             <div className="seo-article-editor-workspace">
@@ -8347,6 +8575,7 @@ export default function SeoArticleEditor({
                     onQuickFixAltTitleAll={quickFixAltTitleAllImages}
                     onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
                     onRemoveImage={removeImageBlock}
+                    onRemoveSupplementalImage={removeSupplementalImage}
                     onAltTitleChange={handleImageAltTitleChange}
                     onNotify={(payload) => {
                         window.dispatchEvent(
@@ -8380,7 +8609,8 @@ export default function SeoArticleEditor({
                 mode={generateImageModalTarget === 'product-gallery' ? 'product-gallery' : 'editor'}
                 productCategoryOptions={productCategoryOptions}
                 articleId={articleId}
-                productGalleryUrls={productGalleryUrls}
+                siteId={siteId}
+                productGalleryItems={productGalleryItems}
             />
                 </div>
             </div>

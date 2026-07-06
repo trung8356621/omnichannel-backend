@@ -1,4 +1,5 @@
 import React from 'react';
+import { t } from '../utils/i18n';
 
 export function scoreTone(score) {
     if (score >= 80) {
@@ -17,11 +18,14 @@ function SerpScoreBadge({ score, device = 'desktop', className = '' }) {
         return null;
     }
 
+    const rounded = Math.round(Number(score));
+    const label = t('google_serp_score_label', { score: rounded });
+
     return (
         <span
             className={`google-serp-score-badge google-serp-score-badge--${device} ${scoreTone(Number(score))} ${className}`.trim()}
-            aria-label={`Điểm SEO ${Math.round(Number(score))}`}
-            title={`Điểm SEO ${Math.round(Number(score))}`}
+            aria-label={label}
+            title={label}
         />
     );
 }
@@ -83,9 +87,9 @@ export default function GoogleSerpSnippetPreview({
     const urlScore = scores?.slug ?? null;
     const descScore = scores?.description ?? null;
 
-    const titleText = String(title ?? '').trim() !== '' ? String(title).trim() : 'Tiêu đề SEO sẽ hiển thị ở đây';
+    const titleText = String(title ?? '').trim() !== '' ? String(title).trim() : t('google_serp_title_placeholder');
     const urlText = String(url ?? '').trim() !== '' ? String(url).trim() : 'www.example.com';
-    const descText = String(description ?? '').trim() !== '' ? String(description).trim() : 'Mô tả meta sẽ hiển thị tại đây.';
+    const descText = String(description ?? '').trim() !== '' ? String(description).trim() : t('google_serp_desc_placeholder');
 
     const snippetClassName = [
         'google-serp-snippet',
@@ -101,8 +105,8 @@ export default function GoogleSerpSnippetPreview({
         ? {
               type: 'button',
               onClick,
-              title: 'Chỉnh sửa trường SEO',
-              'aria-label': 'Chỉnh sửa trường SEO',
+              title: t('google_serp_edit_fields'),
+              'aria-label': t('google_serp_edit_fields'),
           }
         : {};
 

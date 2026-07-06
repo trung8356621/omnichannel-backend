@@ -8,6 +8,7 @@ import ArticleDomainWidgetsSidebar from './components/ArticleDomainWidgetsSideba
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
+import '../css/image-splitter.css';
 import './utils/seoLocalMediaUpload';
 import {
     readArticleMediaPickerCache,
@@ -38,8 +39,6 @@ import {
     loadWpCategoryIds,
     saveWpCategoryIds,
 } from './utils/articleWpCategoriesStorage';
-import { buildMediaImageEditorUrl } from './utils/seoMediaApi';
-
 installArticleAutosaveLock();
 
 window.normalizeArticleSlug = normalizeArticleSlug;
@@ -75,11 +74,11 @@ window.__seoPersistProductAlbumDraft = persistProductAlbumDraftToServer;
 window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction(action, wire) {
     const normalizedAction = action === 'sync' ? 'sync' : 'save';
 
-    window.dispatchEvent(
-        new CustomEvent('article-wordpress-sync-lock', { detail: { action: normalizedAction } }),
-    );
-    window.__seoArticleHeavyActionOverlay?.show(normalizedAction);
-    window.__seoArticleAutosaveLock?.set('article-heavy-action', true);
+    if (!window.__seoArticleHeavyActionOverlay?.locked) {
+        window.__seoBeginArticleHeavyActionClient?.(normalizedAction);
+    }
+
+    await window.__seoYieldForHeavyActionPaint?.();
 
     try {
         const collect = window.__seoCollectEditorHeavyBundle;
@@ -119,9 +118,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
             product_album: productAlbum,
         });
     } catch (error) {
-        window.__seoArticleHeavyActionOverlay?.hide?.();
-        window.__seoArticleAutosaveLock?.set('article-heavy-action', false);
-        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+        window.__seoEndArticleHeavyActionClient?.();
         throw error;
     }
 };
@@ -207,23 +204,6 @@ window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
             }
 
             return `${count} ảnh · Ảnh đầu là đại diện · Kéo thả để đổi vị trí`;
-        },
-        openSplitter(seoMediaId) {
-            const mediaId = Number(seoMediaId ?? 0);
-            if (mediaId <= 0) {
-                return;
-            }
-
-            try {
-                sessionStorage.setItem(`seo-product-gallery-split-return-${this.articleId}`, window.location.href);
-            } catch {
-                /* ignore */
-            }
-
-            const url = buildMediaImageEditorUrl({ seoMediaId: mediaId, tab: 'splitter' });
-            if (url) {
-                window.location.assign(url);
-            }
         },
     };
 };

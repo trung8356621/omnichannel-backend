@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Monitor, Smartphone, X } from 'lucide-react';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { normalizeArticleSlug } from '../utils/articleSlugUtils';
@@ -8,16 +9,17 @@ import {
     slugLengthMeterClass,
     slugLengthMeterPercent,
 } from '../utils/googleSerpLineScores';
+import { t } from '../utils/i18n';
 import GoogleSerpSnippetPreview from './GoogleSerpSnippetPreview';
 
 function previewTitle(preview) {
     const title = String(preview?.title ?? '').trim();
-    return title !== '' ? title : 'Tiêu đề SEO sẽ hiển thị ở đây';
+    return title !== '' ? title : t('google_serp_title_placeholder');
 }
 
 function previewDescription(preview) {
     const description = String(preview?.description ?? '').trim();
-    return description !== '' ? description : 'Mô tả meta sẽ hiển thị tại đây.';
+    return description !== '' ? description : t('google_serp_desc_placeholder');
 }
 
 function previewUrl(preview, fallbackUrl = '#') {
@@ -57,13 +59,13 @@ function buildLiveDisplayUrl(slugPrefix, slug, slugSuffix, fallbackUrl) {
 
 function PreviewDeviceToggle({ device, onChange }) {
     return (
-        <div className="google-serp-device-toggle" role="group" aria-label="Chế độ xem trước">
+        <div className="google-serp-device-toggle" role="group" aria-label={t('google_serp_device_toggle')}>
             <button
                 type="button"
                 className={`google-serp-device-toggle__btn${device === 'desktop' ? ' is-active' : ''}`}
                 onClick={() => onChange('desktop')}
                 title="Desktop"
-                aria-label="Xem trước desktop"
+                aria-label={t('google_serp_preview_desktop')}
                 aria-pressed={device === 'desktop'}
             >
                 <Monitor size={16} strokeWidth={1.75} aria-hidden />
@@ -73,7 +75,7 @@ function PreviewDeviceToggle({ device, onChange }) {
                 className={`google-serp-device-toggle__btn${device === 'mobile' ? ' is-active' : ''}`}
                 onClick={() => onChange('mobile')}
                 title="Mobile"
-                aria-label="Xem trước mobile"
+                aria-label={t('google_serp_preview_mobile')}
                 aria-pressed={device === 'mobile'}
             >
                 <Smartphone size={16} strokeWidth={1.75} aria-hidden />
@@ -268,8 +270,8 @@ export default function ArticleGoogleSerpPreview({
             window.dispatchEvent(
                 new CustomEvent('seo-article-editor-notify', {
                     detail: {
-                        title: 'Không lưu được trường SEO',
-                        body: error?.message ?? 'Thử lại sau.',
+                        title: t('google_serp_save_failed'),
+                        body: error?.message ?? t('google_serp_try_again'),
                         status: 'danger',
                     },
                 }),
@@ -279,13 +281,120 @@ export default function ArticleGoogleSerpPreview({
         }
     };
 
+    const modalContent = modalOpen ? (
+        <div className="seo-google-preview-modal" role="dialog" aria-modal="true" aria-labelledby="seo-google-preview-modal-title">
+            <button type="button" className="seo-google-preview-modal__backdrop" onClick={closeModal} aria-label={t('google_serp_close')} />
+            <div className="seo-google-preview-modal__panel">
+                <div className="seo-google-preview-modal__header">
+                    <h3 id="seo-google-preview-modal-title">{t('google_serp_edit_fields')}</h3>
+                    <button type="button" className="seo-google-preview-modal__close" onClick={closeModal} aria-label={t('google_serp_close')}>
+                        <X size={18} aria-hidden />
+                    </button>
+                </div>
+                <div className="seo-google-preview-modal__body">
+                    <div className="seo-google-preview-modal__preview-section">
+                        <div className="seo-google-preview-modal__preview-head">
+                            <h4>{t('google_serp_preview_heading')}</h4>
+                            <PreviewDeviceToggle device={device} onChange={setDevice} />
+                        </div>
+                        <GoogleSerpSnippetPreview {...modalPreviewProps} variant="modal" />
+                    </div>
+
+                    <div className="seo-google-preview-modal__field">
+                        <div className="seo-google-preview-modal__label-row">
+                            <label htmlFor="seo-google-preview-focus-keyword">{t('google_serp_focus_keyword')}</label>
+                            <span>{t('google_serp_chars', { count: draftFocusKeyword.trim().length })}</span>
+                        </div>
+                        <input
+                            id="seo-google-preview-focus-keyword"
+                            type="text"
+                            value={draftFocusKeyword}
+                            onChange={(event) => setDraftFocusKeyword(event.target.value)}
+                            className="seo-google-preview-modal__input"
+                            placeholder={t('google_serp_focus_keyword_placeholder')}
+                        />
+                    </div>
+
+                    <div className="seo-google-preview-modal__field">
+                        <div className="seo-google-preview-modal__label-row">
+                            <label htmlFor="seo-google-preview-description">{t('google_serp_meta_description')}</label>
+                            <span>{descriptionLength} / 160</span>
+                        </div>
+                        <textarea
+                            id="seo-google-preview-description"
+                            value={draftDescription}
+                            onChange={(event) => setDraftDescription(event.target.value)}
+                            rows={5}
+                            className="seo-google-preview-modal__textarea"
+                            placeholder={t('google_serp_meta_description_placeholder')}
+                        />
+                        <div className="seo-google-preview-modal__meter" aria-hidden="true">
+                            <div
+                                className={`seo-google-preview-modal__meter-fill${
+                                    descriptionLength > 160
+                                        ? ' is-over'
+                                        : descriptionLength >= 120
+                                          ? ' is-good'
+                                          : ' is-warn'
+                                }`}
+                                style={{ width: `${Math.min(100, Math.round((descriptionLength / 160) * 100))}%` }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="seo-google-preview-modal__field">
+                        <div className="seo-google-preview-modal__label-row">
+                            <label htmlFor="seo-google-preview-slug">{t('google_serp_permalink')}</label>
+                            <span>{slugLength} / {SLUG_LENGTH_MAX}</span>
+                        </div>
+                        <div className="seo-google-preview-modal__slug-row">
+                            {slugPrefixDisplay !== '' ? (
+                                <span className="seo-google-preview-modal__slug-prefix">{slugPrefixDisplay}</span>
+                            ) : null}
+                            <input
+                                id="seo-google-preview-slug"
+                                type="text"
+                                value={draftSlug}
+                                onChange={(event) => setDraftSlug(normalizeArticleSlug(event.target.value))}
+                                className="seo-google-preview-modal__input seo-google-preview-modal__slug-input"
+                                placeholder={t('google_serp_permalink_placeholder')}
+                            />
+                            {slugSuffix !== '' ? (
+                                <span className="seo-google-preview-modal__slug-suffix">{slugSuffix}</span>
+                            ) : null}
+                        </div>
+                        <div className="seo-google-preview-modal__meter" aria-hidden="true">
+                            <div
+                                className={`seo-google-preview-modal__meter-fill${slugLengthMeterClass(slugLength)}`}
+                                style={{ width: `${slugLengthMeterPercent(slugLength)}%` }}
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div className="seo-google-preview-modal__footer">
+                    <button type="button" className="seo-google-preview-modal__btn" onClick={closeModal} disabled={saving}>
+                        {t('cancel')}
+                    </button>
+                    <button
+                        type="button"
+                        className="seo-google-preview-modal__btn is-primary"
+                        onClick={saveSeoMeta}
+                        disabled={saving}
+                    >
+                        {saving ? t('google_serp_saving') : t('google_serp_save')}
+                    </button>
+                </div>
+            </div>
+        </div>
+    ) : null;
+
     return (
         <>
-            <aside className="seo-article-editor-google-preview-rail" aria-label="Xem trước Google">
+            <aside className="seo-article-editor-google-preview-rail" aria-label={t('google_serp_preview_rail_label')}>
                 <div className="wp-postbox wp-seo-preview-box">
                     <div className="wp-postbox-header">
                         <div className="wp-seo-preview-header-title">
-                            <h2>Xem trước Google</h2>
+                            <h2>{t('google_serp_preview_heading')}</h2>
                         </div>
                         <PreviewDeviceToggle device={device} onChange={setDevice} />
                     </div>
@@ -300,112 +409,7 @@ export default function ArticleGoogleSerpPreview({
                 </div>
             </aside>
 
-            {modalOpen ? (
-                <div className="seo-google-preview-modal" role="dialog" aria-modal="true" aria-labelledby="seo-google-preview-modal-title">
-                    <button type="button" className="seo-google-preview-modal__backdrop" onClick={closeModal} aria-label="Đóng" />
-                    <div className="seo-google-preview-modal__panel">
-                        <div className="seo-google-preview-modal__header">
-                            <h3 id="seo-google-preview-modal-title">Chỉnh sửa trường SEO</h3>
-                            <button type="button" className="seo-google-preview-modal__close" onClick={closeModal} aria-label="Đóng">
-                                <X size={18} aria-hidden />
-                            </button>
-                        </div>
-                        <div className="seo-google-preview-modal__body">
-                            <div className="seo-google-preview-modal__preview-section">
-                                <div className="seo-google-preview-modal__preview-head">
-                                    <h4>Xem trước Google</h4>
-                                    <PreviewDeviceToggle device={device} onChange={setDevice} />
-                                </div>
-                                <GoogleSerpSnippetPreview {...modalPreviewProps} variant="modal" />
-                            </div>
-
-                            <div className="seo-google-preview-modal__field">
-                                <div className="seo-google-preview-modal__label-row">
-                                    <label htmlFor="seo-google-preview-focus-keyword">Từ khóa chính</label>
-                                    <span>{draftFocusKeyword.trim().length} ký tự</span>
-                                </div>
-                                <input
-                                    id="seo-google-preview-focus-keyword"
-                                    type="text"
-                                    value={draftFocusKeyword}
-                                    onChange={(event) => setDraftFocusKeyword(event.target.value)}
-                                    className="seo-google-preview-modal__input"
-                                    placeholder="Nhập từ khóa chính cho bài viết..."
-                                />
-                            </div>
-
-                            <div className="seo-google-preview-modal__field">
-                                <div className="seo-google-preview-modal__label-row">
-                                    <label htmlFor="seo-google-preview-description">Thẻ mô tả</label>
-                                    <span>{descriptionLength} / 160</span>
-                                </div>
-                                <textarea
-                                    id="seo-google-preview-description"
-                                    value={draftDescription}
-                                    onChange={(event) => setDraftDescription(event.target.value)}
-                                    rows={5}
-                                    className="seo-google-preview-modal__textarea"
-                                    placeholder="Mô tả ngắn để hiển thị trên kết quả tìm kiếm..."
-                                />
-                                <div className="seo-google-preview-modal__meter" aria-hidden="true">
-                                    <div
-                                        className={`seo-google-preview-modal__meter-fill${
-                                            descriptionLength > 160
-                                                ? ' is-over'
-                                                : descriptionLength >= 120
-                                                  ? ' is-good'
-                                                  : ' is-warn'
-                                        }`}
-                                        style={{ width: `${Math.min(100, Math.round((descriptionLength / 160) * 100))}%` }}
-                                    />
-                                </div>
-                            </div>
-
-                            <div className="seo-google-preview-modal__field">
-                                <div className="seo-google-preview-modal__label-row">
-                                    <label htmlFor="seo-google-preview-slug">Liên kết cố định</label>
-                                    <span>{slugLength} / {SLUG_LENGTH_MAX}</span>
-                                </div>
-                                <div className="seo-google-preview-modal__slug-row">
-                                    {slugPrefixDisplay !== '' ? (
-                                        <span className="seo-google-preview-modal__slug-prefix">{slugPrefixDisplay}</span>
-                                    ) : null}
-                                    <input
-                                        id="seo-google-preview-slug"
-                                        type="text"
-                                        value={draftSlug}
-                                        onChange={(event) => setDraftSlug(normalizeArticleSlug(event.target.value))}
-                                        className="seo-google-preview-modal__input seo-google-preview-modal__slug-input"
-                                        placeholder="ten-lien-ket-co-dinh"
-                                    />
-                                    {slugSuffix !== '' ? (
-                                        <span className="seo-google-preview-modal__slug-suffix">{slugSuffix}</span>
-                                    ) : null}
-                                </div>
-                                <div className="seo-google-preview-modal__meter" aria-hidden="true">
-                                    <div
-                                        className={`seo-google-preview-modal__meter-fill${slugLengthMeterClass(slugLength)}`}
-                                        style={{ width: `${slugLengthMeterPercent(slugLength)}%` }}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                        <div className="seo-google-preview-modal__footer">
-                            <button type="button" className="seo-google-preview-modal__btn" onClick={closeModal} disabled={saving}>
-                                Hủy
-                            </button>
-                            <button
-                                type="button"
-                                className="seo-google-preview-modal__btn is-primary"
-                                onClick={saveSeoMeta}
-                                disabled={saving}
-                            >
-                                {saving ? 'Đang lưu…' : 'Lưu SEO'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            ) : null}
+            {modalContent && typeof document !== 'undefined' ? createPortal(modalContent, document.body) : null}
         </>
     );
 }

@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExternalLink, Link2, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
-import { collectImagesFromBlocks } from '../utils/articleImagesUtils';
+import {
+    assignInArticleQuickFixIndices,
+    collectImagesFromBlocks,
+    filterSupplementalDuplicatesOfBlockRows,
+} from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
 import { t } from '../utils/i18n';
 import {
@@ -241,6 +245,7 @@ function ImageRow({
     onQuickFixSlug,
     onQuickFixAltTitle,
     onRemoveImage,
+    onRemoveSupplementalImage,
     onAltTitleChange,
     canQuickFix = false,
     onNotify,
@@ -249,6 +254,7 @@ function ImageRow({
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
     const canPatchInEditor = Boolean(row.blockId);
+    const canRemove = canPatchInEditor || Boolean(onRemoveSupplementalImage);
     const slugText = (row.slug || '').trim();
     const showActions = canProcessArticleImage(row);
     const busy = openingEditor || applyingWatermark;
@@ -483,12 +489,21 @@ function ImageRow({
                         <button
                             type="button"
                             className="seo-article-images-delete-btn"
-                            disabled={busy || !canPatchInEditor}
-                            onClick={() => onRemoveImage?.(row)}
+                            disabled={busy || !canRemove}
+                            onClick={() => {
+                                if (canPatchInEditor) {
+                                    onRemoveImage?.(row);
+                                    return;
+                                }
+
+                                onRemoveSupplementalImage?.(row);
+                            }}
                             title={
                                 canPatchInEditor
                                     ? t('image_tab_remove_hint')
-                                    : t('image_tab_remove_no_block')
+                                    : canRemove
+                                      ? t('image_tab_remove_supplemental_hint')
+                                      : t('image_tab_remove_no_block')
                             }
                         >
                             <Trash2 size={14} />
@@ -555,6 +570,7 @@ export default function ArticleImagesTab({
     onQuickFixAltTitleAll,
     onQuickFixAltTitleOne,
     onRemoveImage,
+    onRemoveSupplementalImage,
     onAltTitleChange,
     onNotify,
 }) {
@@ -599,6 +615,7 @@ export default function ArticleImagesTab({
         };
 
         const normalizedRows = [
+            ...blockImages,
             ...(Array.isArray(extraImages)
                 ? extraImages
                       .map((row, index) => {
@@ -618,13 +635,13 @@ export default function ArticleImagesTab({
                               title: String(row?.title || '').trim(),
                               caption: String(row?.caption || '').trim(),
                               align: String(row?.align || 'none').trim(),
+                              origin: String(row?.origin ?? '').trim(),
                               originLabel: String(row?.originLabel || row?.origin_label || '').trim(),
                               excludeQuickFix: Boolean(row?.excludeQuickFix ?? row?.exclude_quick_fix),
                           };
                       })
                       .filter(Boolean)
                 : []),
-            ...blockImages,
         ];
 
         const merged = [];
@@ -652,10 +669,7 @@ export default function ArticleImagesTab({
             merged[index] = mergeRow(merged[index], row);
         });
 
-        return merged.map((row, index) => ({
-            ...row,
-            quickFixIndex: index + 1,
-        }));
+        return assignInArticleQuickFixIndices(filterSupplementalDuplicatesOfBlockRows(merged));
     }, [blockImages, extraImages]);
     const [aiJobs, setAiJobs] = useState([]);
     const lastJumpTokenRef = useRef(null);
@@ -839,6 +853,7 @@ export default function ArticleImagesTab({
                         onQuickFixSlug={onQuickFixSlugOne}
                         onQuickFixAltTitle={onQuickFixAltTitleOne}
                         onRemoveImage={onRemoveImage}
+                        onRemoveSupplementalImage={onRemoveSupplementalImage}
                         onAltTitleChange={onAltTitleChange}
                         canQuickFix={canQuickFix}
                         onNotify={onNotify}

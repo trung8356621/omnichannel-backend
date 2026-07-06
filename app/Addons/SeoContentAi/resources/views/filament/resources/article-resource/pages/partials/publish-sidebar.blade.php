@@ -57,6 +57,7 @@
                 editingPublishAt: false,
                 _backup: null,
                 pageActionLocked: false,
+                activeHeavyAction: null,
 
                 init() {
                     this.publishIso = this.buildIso();
@@ -72,8 +73,12 @@
                         publish_minute: this.publishMinute,
                     });
 
-                    const lockPage = () => {
+                    const lockPage = (event) => {
                         this.pageActionLocked = true;
+                        const action = event?.detail?.action;
+                        if (action === 'save' || action === 'sync') {
+                            this.activeHeavyAction = action;
+                        }
                     };
                     const unlockPage = () => {
                         if (window.__seoArticleHeavyActionOverlay?.persistUntilUnload) {
@@ -81,6 +86,7 @@
                         }
 
                         this.pageActionLocked = false;
+                        this.activeHeavyAction = null;
                     };
 
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
@@ -271,9 +277,8 @@
                         return;
                     }
 
-                    window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
-                        detail: { action: 'save' },
-                    }));
+                    this.activeHeavyAction = 'save';
+                    window.__seoBeginArticleHeavyActionClient?.('save');
 
                     try {
                         if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
@@ -287,7 +292,8 @@
                         }
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
-                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+                        this.activeHeavyAction = null;
+                        window.__seoEndArticleHeavyActionClient?.();
                     }
                 },
 
@@ -296,17 +302,18 @@
                         return;
                     }
 
+                    this.activeHeavyAction = 'sync';
+                    window.__seoBeginArticleHeavyActionClient?.('sync');
+
                     try {
                         if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
                             const allowed = await window.__seoEnsureCategoriesBeforeSync();
                             if (! allowed) {
+                                this.activeHeavyAction = null;
+                                window.__seoEndArticleHeavyActionClient?.();
                                 return;
                             }
                         }
-
-                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-lock', {
-                            detail: { action: 'sync' },
-                        }));
 
                         if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
                             await window.__seoExecuteHeavyArticleAction('sync', this.$wire);
@@ -320,7 +327,8 @@
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
                         console.warn('Đồng bộ WordPress thất bại ở client', error);
-                        window.dispatchEvent(new CustomEvent('article-wordpress-sync-unlock'));
+                        this.activeHeavyAction = null;
+                        window.__seoEndArticleHeavyActionClient?.();
                     }
                 },
             };
@@ -569,45 +577,64 @@
             <button
                 type="button"
                 x-on:click="requestSave()"
-                wire:loading.attr="disabled"
-                wire:target="requestSaveArticle,requestSyncToWordPress"
                 x-bind:disabled="isPublishActionDisabled()"
-                class="seo-publish-icon-btn is-primary @if ($articleHeavyActionBusy && $articleHeavyAction === 'save') is-busy @endif"
+                x-bind:class="{
+                    'seo-publish-icon-btn': true,
+                    'is-primary': true,
+                    'is-busy': pageActionLocked && activeHeavyAction === 'save',
+                }"
                 x-bind:title="saveButtonTitle()"
                 x-bind:aria-label="saveButtonTitle()"
-                @if ($articleHeavyActionBusy) aria-busy="true" @endif
+                x-bind:aria-busy="pageActionLocked && activeHeavyAction === 'save' ? 'true' : 'false'"
             >
-                @if ($articleHeavyActionBusy && $articleHeavyAction === 'save')
-                    <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
-                @else
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 21v-8H7v8M7 3v5h8" />
-                    </svg>
-                @endif
+                <span
+                    x-show="pageActionLocked && activeHeavyAction === 'save'"
+                    x-cloak
+                    class="seo-publish-icon-btn__spinner"
+                    aria-hidden="true"
+                ></span>
+                <svg
+                    x-show="!(pageActionLocked && activeHeavyAction === 'save')"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    aria-hidden="true"
+                >
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 21v-8H7v8M7 3v5h8" />
+                </svg>
             </button>
 
             @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                 <button
                     type="button"
                     x-on:click="requestSync()"
-                    wire:loading.attr="disabled"
-                    wire:target="requestSaveArticle,requestSyncToWordPress"
                     x-bind:disabled="isPublishActionDisabled()"
-                    class="seo-publish-icon-btn @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync') is-busy @endif"
+                    x-bind:class="{
+                        'seo-publish-icon-btn': true,
+                        'is-busy': pageActionLocked && activeHeavyAction === 'sync',
+                    }"
                     title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
                     aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
-                    @if ($articleHeavyActionBusy) aria-busy="true" @endif
+                    x-bind:aria-busy="pageActionLocked && activeHeavyAction === 'sync' ? 'true' : 'false'"
                 >
-                    @if ($articleHeavyActionBusy && $articleHeavyAction === 'sync')
-                        <span class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
-                    @else
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
-                        </svg>
-                    @endif
+                    <span
+                        x-show="pageActionLocked && activeHeavyAction === 'sync'"
+                        x-cloak
+                        class="seo-publish-icon-btn__spinner"
+                        aria-hidden="true"
+                    ></span>
+                    <svg
+                        x-show="!(pageActionLocked && activeHeavyAction === 'sync')"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        aria-hidden="true"
+                    >
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
+                    </svg>
                 </button>
             @endif
 

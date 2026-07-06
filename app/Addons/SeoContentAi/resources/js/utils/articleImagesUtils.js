@@ -10,6 +10,7 @@ import {
     resolveFullWordPressImageUrl,
     toPreviewImageUrl,
 } from './wordpressImageUrl';
+import { loadProductAlbum, saveProductAlbum } from './articleProductAlbumStorage';
 
 export function slugFromUrl(src) {
     if (!src) return '';
@@ -66,6 +67,86 @@ function normalizeSrcKey(src) {
     } catch {
         return String(src).toLowerCase();
     }
+}
+
+export function hasArticleImageBlockId(row) {
+    return String(row?.blockId ?? row?.block_id ?? '').trim() !== '';
+}
+
+export function articleImageIdentityKey(row) {
+    const wpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+    const seoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+    const srcKey = normalizeSrcKey(String(row?.src ?? '').trim());
+
+    if (wpId > 0) {
+        return `wp:${wpId}`;
+    }
+
+    if (seoId > 0) {
+        return `seo:${seoId}`;
+    }
+
+    if (srcKey) {
+        return `src:${srcKey}`;
+    }
+
+    return '';
+}
+
+/** Ẩn ảnh đại diện/album trùng identity với ảnh đã có trong block (tránh 404 sau Fix slug all). */
+export function filterSupplementalDuplicatesOfBlockRows(rows) {
+    const blockKeys = new Set();
+
+    rows.forEach((row) => {
+        if (!hasArticleImageBlockId(row)) {
+            return;
+        }
+
+        const key = articleImageIdentityKey(row);
+        if (key) {
+            blockKeys.add(key);
+        }
+    });
+
+    return rows.filter((row) => {
+        if (hasArticleImageBlockId(row)) {
+            return true;
+        }
+
+        const key = articleImageIdentityKey(row);
+
+        return key === '' || !blockKeys.has(key);
+    });
+}
+
+/** Slug -1, -2… chỉ theo thứ tự ảnh trong bài (block), không tính supplemental. */
+export function assignInArticleQuickFixIndices(rows) {
+    let ordinal = 0;
+
+    return rows.map((row) => {
+        if (!hasArticleImageBlockId(row)) {
+            return { ...row, quickFixIndex: 0 };
+        }
+
+        ordinal += 1;
+
+        return { ...row, quickFixIndex: ordinal };
+    });
+}
+
+export function buildQuickFixIndexByBlockId(rows) {
+    const indexByBlockId = {};
+
+    rows.forEach((row) => {
+        const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+        const quickFixIndex = Number(row?.quickFixIndex ?? 0);
+
+        if (blockId && quickFixIndex > 0) {
+            indexByBlockId[blockId] = quickFixIndex;
+        }
+    });
+
+    return indexByBlockId;
 }
 
 function normalizePreferredWpUrl(meta, image) {
@@ -1009,3 +1090,112 @@ export function buildMergedEditorImagesForPicker(blocks, supplementalImages = []
 }
 
 export { extractImagesFromHtml };
+
+/**
+ * Đồng bộ supplemental (ảnh đại diện/album) từ block sau đổi slug — match theo seo_media_id / wp_attachment_id.
+ */
+export function syncSupplementalRowsFromBlockImages(supplementalRows, blocks) {
+    const blockImages = collectImagesFromBlocks(blocks);
+    const bySeoId = new Map();
+    const byWpId = new Map();
+
+    blockImages.forEach((img) => {
+        const seoId = Number(img.seoMediaId ?? img.seo_media_id ?? 0);
+        const wpId = Number(img.wpAttachmentId ?? img.wp_attachment_id ?? 0);
+        if (seoId > 0) {
+            bySeoId.set(seoId, img);
+        }
+        if (wpId > 0) {
+            byWpId.set(wpId, img);
+        }
+    });
+
+    return (Array.isArray(supplementalRows) ? supplementalRows : []).map((row) => {
+        if (String(row?.blockId ?? row?.block_id ?? '').trim() !== '') {
+            return row;
+        }
+
+        const seoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+        const wpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+        const match =
+            (seoId > 0 ? bySeoId.get(seoId) : null) ?? (wpId > 0 ? byWpId.get(wpId) : null);
+
+        if (!match) {
+            return row;
+        }
+
+        const nextSrc = String(match.src ?? '').trim();
+        if (!nextSrc) {
+            return row;
+        }
+
+        const isLocal = isLocalSeoMediaSrc(nextSrc);
+
+        return {
+            ...row,
+            src: nextSrc,
+            slug: String(match.slug ?? row.slug ?? '').trim() || row.slug,
+            seoMediaId: Number(match.seoMediaId ?? match.seo_media_id ?? seoId) || row.seoMediaId,
+            wpAttachmentId: Number(match.wpAttachmentId ?? match.wp_attachment_id ?? wpId) || row.wpAttachmentId,
+            wpSrc: isLocal ? String(row.wpSrc ?? row.wp_url ?? '').trim() : nextSrc,
+            wp_url: isLocal ? String(row.wp_url ?? '').trim() : nextSrc,
+            localSrc: isLocal ? nextSrc : String(row.localSrc ?? row.local_src ?? '').trim(),
+            local_src: isLocal ? nextSrc : String(row.local_src ?? '').trim(),
+        };
+    });
+}
+
+/**
+ * Cập nhật URL album sản phẩm theo id (seo_media / wp) sau rename — không phụ thuộc URL cũ.
+ */
+export function syncProductAlbumUrlsFromBlockImages(articleId, blocks) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return [];
+    }
+
+    const album = loadProductAlbum(id);
+    if (album.length === 0) {
+        return [];
+    }
+
+    const blockImages = collectImagesFromBlocks(blocks);
+    const bySeoId = new Map();
+    const byWpId = new Map();
+
+    blockImages.forEach((img) => {
+        const seoId = Number(img.seoMediaId ?? img.seo_media_id ?? 0);
+        const wpId = Number(img.wpAttachmentId ?? img.wp_attachment_id ?? 0);
+        if (seoId > 0) {
+            bySeoId.set(seoId, img);
+        }
+        if (wpId > 0) {
+            byWpId.set(wpId, img);
+        }
+    });
+
+    const updated = album.map((item) => {
+        const itemId = Number(item.id ?? 0);
+        if (itemId <= 0) {
+            return item;
+        }
+
+        const match = bySeoId.get(itemId) ?? byWpId.get(itemId);
+        if (!match) {
+            return item;
+        }
+
+        const nextUrl = String(match.src ?? '').trim();
+        if (!nextUrl || nextUrl === String(item.url ?? '').trim()) {
+            return item;
+        }
+
+        return {
+            ...item,
+            id: itemId,
+            url: nextUrl,
+        };
+    });
+
+    return saveProductAlbum(id, updated);
+}

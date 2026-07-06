@@ -47,6 +47,7 @@ export default function ImageSplitterApp({
     fallbackImageUrl = '',
     splitPayload = null,
     canDeleteOriginal = true,
+    onSplitSaved = null,
 }) {
     const resultPaneRef = useRef(null);
     const previewRef = useRef(null);
@@ -410,6 +411,17 @@ export default function ImageSplitterApp({
             setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));
 
             const galleryItems = Array.isArray(data.product_gallery_items) ? data.product_gallery_items : [];
+
+            if (typeof onSplitSaved === 'function') {
+                onSplitSaved({
+                    saved: data.saved ?? [],
+                    deletedOriginal: !!data.deleted_original,
+                    product_gallery_items: galleryItems,
+                    article_id: effectiveArticleId,
+                });
+                return;
+            }
+
             const returnUrl =
                 effectiveArticleId > 0
                     ? sessionStorage.getItem(`seo-product-gallery-split-return-${effectiveArticleId}`)
