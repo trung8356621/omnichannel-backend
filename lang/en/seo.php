@@ -6,9 +6,8 @@ return [
     'heading' => 'Need at least 2 H2 headings in the article.',
     'heading.pass' => 'Content structure has sufficient H2 headings (+:points).',
 
-    'length' => 'Content is too short (under 600 words, 0 points).',
-    'length.partial' => 'Content length is average (:count words, +:points/:max points). Aim for over 1200 words.',
-    'length.pass' => 'Content length is optimal (:count words, +:points).',
+    'length' => 'Content length below target (:count/:target words, 0 points).',
+    'length.pass' => 'Content length meets target (:count/:target words, +:points).',
 
     'image_ratio' => 'No images or poor text-to-image ratio (ideal 250–450 words per image). Missing ALT tags reduce the score.',
     'image_ratio.pass' => 'Text-to-image ratio is ideal (:ratio words/image, +:points).',

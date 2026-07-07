@@ -50,6 +50,24 @@ final class ArticleWordPressSyncFlagService
     {
         $this->clearLocalEditPending($article);
         $this->clearDataOutOfSync($article);
+        $this->clearBodyMediaSyncPending($article);
+    }
+
+    public const META_BODY_MEDIA_SYNC_PENDING = 'wp_body_media_sync_pending';
+
+    public function markBodyMediaSyncPending(SeoArticle $article): void
+    {
+        $this->setFlag($article, self::META_BODY_MEDIA_SYNC_PENDING, true);
+    }
+
+    public function clearBodyMediaSyncPending(SeoArticle $article): void
+    {
+        $this->setFlag($article, self::META_BODY_MEDIA_SYNC_PENDING, false);
+    }
+
+    public function hasBodyMediaSyncPending(SeoArticle $article): bool
+    {
+        return $this->readFlag($article, self::META_BODY_MEDIA_SYNC_PENDING);
     }
 
     public function hasLocalEditorContent(SeoArticle $article): bool

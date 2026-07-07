@@ -162,8 +162,26 @@ attachExistingMember(int $ownerId, User $existing): Kiểm tra conflict rồi up
 | Method | Path | Mô tả |
 |--------|------|-------|
 | GET | `/api/seo/team/config` | Config upload + `can_use_ai` |
-| GET | `/api/seo/team/messages` | Danh sách messages (có hỗ trợ unread_summary, after_id pagination) |
+| GET | `/api/seo/team/messages` | SSE stream tin nhắn mới (`after_id` / `last_id`); `?unread_summary=1` trả JSON badge |
 | POST | `/api/seo/team/messages` | Tạo message mới (text + file đính kèm) |
+
+### 2.5 Real-time transport (SSE)
+
+Team chat **không còn HTTP polling** mỗi 4 giây. Client dùng `EventSource` tới `GET /api/seo/team/messages?after_id={lastId}` (middleware session giữ nguyên).
+
+**Server (`TeamMessageController::index`):**
+- `?unread_summary=1` → JSON `{ unread_count, latest_message_id, owner_id }` (badge launcher, không đổi).
+- Không có `unread_summary` → `StreamedResponse` `text/event-stream`:
+  - `after_id=0`: đẩy tối đa 50 tin lịch sử qua `data: {...}\n\n`, sau đó `event: history_end` kèm `config` / `can_use_ai`.
+  - Vòng lặp: poll DB mỗi ~500ms, gửi tin `id > cursor`, heartbeat comment `:` mỗi 2 giây.
+  - Headers: `Cache-Control: no-cache`, `Connection: keep-alive`, `X-Accel-Buffering: no`.
+
+**Client (`global-ai-chat.blade.php`):**
+- `refreshTeamUnreadOnInit()` vẫn `fetch` với `unread_summary`.
+- `EventSource(teamMessagesUrl + '?after_id=' + lastId)` thay `setInterval` polling.
+- `onmessage` → `handleIncomingTeamMessage()` (merge UI / badge / notification).
+- `history_end` → tắt loading, áp config khi mở tab Team (`loadTeamMessages` reconnect `after_id=0`).
+- `POST /api/seo/team/messages` (gửi tin) không đổi.
 
 **File model:** `App\Models\TeamMessage` (table `team_messages`, connection `mysql`)
 - Columns: `owner_id`, `user_id`, `message`, `attachment_path/name/mime/size`, timestamps

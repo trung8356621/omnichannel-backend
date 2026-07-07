@@ -119,12 +119,16 @@ export function filterSupplementalDuplicatesOfBlockRows(rows) {
     });
 }
 
-/** Slug -1, -2… chỉ theo thứ tự ảnh trong bài (block), không tính supplemental. */
+/** Slug -1, -2… chỉ theo thứ tự ảnh trong bài (block), bỏ qua ảnh Except. */
 export function assignInArticleQuickFixIndices(rows) {
     let ordinal = 0;
 
     return rows.map((row) => {
         if (!hasArticleImageBlockId(row)) {
+            return { ...row, quickFixIndex: 0 };
+        }
+
+        if (row?.excludeQuickFix) {
             return { ...row, quickFixIndex: 0 };
         }
 
@@ -248,6 +252,11 @@ export function enrichBlocksWithPostImages(blocks, postImages) {
             alt: image.alt || meta.alt || '',
             title: image.title || meta.title || '',
             caption: image.caption || meta.caption || '',
+            excludeQuickFix: Boolean(
+                image.excludeQuickFix ??
+                    meta.exclude_quick_fix ??
+                    meta.excludeQuickFix,
+            ),
         };
 
         return {
@@ -559,9 +568,19 @@ export function quickFixSlugIndexForBlock(images, blockId) {
         return 0;
     }
 
-    const rowIndex = images.findIndex((row) => row.blockId === targetId);
+    let ordinal = 0;
+    for (const row of images) {
+        if (row?.excludeQuickFix) {
+            continue;
+        }
 
-    return rowIndex >= 0 ? rowIndex + 1 : 0;
+        ordinal += 1;
+        if (String(row?.blockId ?? '').trim() === targetId) {
+            return ordinal;
+        }
+    }
+
+    return 0;
 }
 
 export function appendCacheBustToSrc(src, cacheKey = Date.now()) {
@@ -847,12 +866,14 @@ export function finalizeBlocksAfterWpRename(blocks, renamedItems, keyword = '') 
 
     if (base) {
         const images = collectImagesFromBlocks(result);
-        images.forEach((row, index) => {
-            if (row.wpAttachmentId) {
+        let ordinal = 0;
+        images.forEach((row) => {
+            if (row.wpAttachmentId || row.excludeQuickFix) {
                 return;
             }
 
-            const slug = imageSlugFromKeyword(phrase, index + 1);
+            ordinal += 1;
+            const slug = imageSlugFromKeyword(phrase, ordinal);
             result = applyImagePatchToBlocks(result, row.blockId, { slug });
         });
     }
@@ -874,6 +895,125 @@ export function bustAllImageBlockSrc(blocks, cacheKey = Date.now()) {
         const nextImage = {
             ...image,
             src: appendCacheBustToSrc(image.src, cacheKey),
+        };
+
+        return {
+            ...block,
+            image: nextImage,
+            content: renderImageFigure(nextImage),
+        };
+    });
+}
+
+function localSlugRenameItemKey(item) {
+    const id = Number(item?.seo_media_id ?? 0);
+    if (id > 0) {
+        return `id:${id}`;
+    }
+
+    const src = normalizeSrcKey(String(item?.src ?? '').trim());
+    if (src) {
+        return `src:${src}`;
+    }
+
+    const blockId = String(item?.block_id ?? '').trim();
+    return blockId ? `block:${blockId}` : '';
+}
+
+/**
+ * Rename hàng loạt slug ảnh local: pha 1 → slug tạm (tránh đè file), pha 2 → slug đích.
+ *
+ * @param {Array<{seo_media_id?: number|null, src: string, new_slug: string, old_slug?: string, block_id?: string}>} items
+ * @param {{ renameById: Function, renameByUrl: Function }} adapters
+ * @returns {Promise<Array<{seo_media_id: number|null, src: string, new_slug: string, old_slug: string, block_id: string, data: {id?: number, slug: string, url: string}}>>}
+ */
+export async function executeSeoMediaSlugRenamesTwoPhase(items, { renameById, renameByUrl }) {
+    const queue = (Array.isArray(items) ? items : [])
+        .map((item) => ({
+            seo_media_id: Number(item?.seo_media_id ?? 0) > 0 ? Number(item.seo_media_id) : null,
+            src: String(item?.src ?? '').trim(),
+            new_slug: String(item?.new_slug ?? '').trim(),
+            old_slug: String(item?.old_slug ?? '').trim(),
+            block_id: String(item?.block_id ?? '').trim(),
+        }))
+        .filter((item) => item.new_slug !== '' && item.src !== '');
+
+    if (!queue.length) {
+        return [];
+    }
+
+    const tempToken = `seo-ren-${Date.now()}`;
+    const interim = new Map();
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const item = queue[index];
+        const tempSlug = `${tempToken}-${index + 1}`;
+        const id = Number(item.seo_media_id ?? 0);
+        const data =
+            id > 0
+                ? await renameById(id, tempSlug)
+                : await renameByUrl(item.src, tempSlug, { seoMediaId: id > 0 ? id : null });
+
+        interim.set(localSlugRenameItemKey(item), {
+            item,
+            data,
+            src: String(data?.url ?? item.src).trim(),
+            id: Number(data?.id ?? id ?? 0) || 0,
+        });
+    }
+
+    const results = [];
+    for (const item of queue) {
+        const state = interim.get(localSlugRenameItemKey(item));
+        if (!state) {
+            continue;
+        }
+
+        const resolvedId = state.id;
+        const data =
+            resolvedId > 0
+                ? await renameById(resolvedId, item.new_slug)
+                : await renameByUrl(state.src, item.new_slug, {
+                      seoMediaId: resolvedId > 0 ? resolvedId : null,
+                  });
+
+        results.push({
+            ...item,
+            data,
+        });
+    }
+
+    return results;
+}
+
+/**
+ * Gắn URL/slug mới vào đúng block ảnh sau rename local (theo blockId).
+ */
+export function applyLocalSlugRenameResultToBlocks(blocks, blockId, result) {
+    const targetId = String(blockId ?? '').trim();
+    if (!targetId || !result?.data) {
+        return blocks;
+    }
+
+    const { data } = result;
+    const resolvedSeoId = Number(data.id ?? result.seo_media_id ?? 0);
+
+    return blocks.map((block) => {
+        if (block.type !== 'image' || block.id !== targetId) {
+            return block;
+        }
+
+        const image = block.image ?? parseImageFromBlockContent(block.content);
+        if (!image?.src) {
+            return block;
+        }
+
+        const nextImage = {
+            ...image,
+            slug: data.slug,
+            src: data.url,
+            seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
+            originalSlug: result.old_slug ?? '',
         };
 
         return {
@@ -978,6 +1118,7 @@ export function buildPostImagesIndex(blocks) {
         title: row.title,
         caption: row.caption,
         align: row.align,
+        exclude_quick_fix: row.excludeQuickFix ? 1 : 0,
         local_src: row.localSrc ?? (isLocalSeoMediaSrc(row.src) ? row.src : ''),
     }));
 }

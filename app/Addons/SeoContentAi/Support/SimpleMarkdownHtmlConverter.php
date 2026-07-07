@@ -280,6 +280,7 @@ final class SimpleMarkdownHtmlConverter
             $inline = $this->parseMetaDescriptionLine($trimmed);
             if ($inline !== '') {
                 $metaDescription = $inline;
+                $index = $this->skipPostMetaDescriptionSeparators($lines, $index + 1) - 1;
 
                 continue;
             }
@@ -306,7 +307,7 @@ final class SimpleMarkdownHtmlConverter
                 $metaDescription = trim(implode(' ', $parts));
             }
 
-            $index = $cursor - 1;
+            $index = $this->skipPostMetaDescriptionSeparators($lines, $cursor) - 1;
         }
 
         return [
@@ -385,6 +386,27 @@ final class SimpleMarkdownHtmlConverter
     private function isHorizontalRule(string $line): bool
     {
         return preg_match('/^-{3,}\s*$/u', $line) === 1;
+    }
+
+    /**
+     * Bỏ dòng trống và --- ngay sau khối Meta Description (tránh <hr> đầu body).
+     *
+     * @param  list<string>  $lines
+     */
+    private function skipPostMetaDescriptionSeparators(array $lines, int $startIndex): int
+    {
+        $lineCount = count($lines);
+
+        for ($index = $startIndex; $index < $lineCount; $index++) {
+            $trimmed = trim($lines[$index]);
+            if ($trimmed === '' || $this->isHorizontalRule($trimmed)) {
+                continue;
+            }
+
+            break;
+        }
+
+        return $index;
     }
 
     /**

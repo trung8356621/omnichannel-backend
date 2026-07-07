@@ -20,6 +20,13 @@ import { loadFaqDraft } from './utils/articleEditorStorage';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
+    buildArticleEditorApiPayload,
+    finishArticleEditorApiAction,
+    notifyEditorFromApi,
+    saveArticleViaApi,
+    syncArticleToWordPressViaApi,
+} from './utils/articleEditorApi';
+import {
     loadFeaturedImage,
     persistFeaturedImageDraftToServer,
     saveFeaturedImage,
@@ -32,6 +39,7 @@ import {
     removeProductAlbumItem,
     reorderProductAlbum,
     saveProductAlbum,
+    syncProductAlbumToServer,
 } from './utils/articleProductAlbumStorage';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
 import {
@@ -93,35 +101,112 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         }
 
         const articleId = Number(editorBundle?.articleId ?? 0);
-        const featured = window.__seoFeaturedImageStorage?.load?.(articleId) ?? null;
-        const productAlbum = window.__seoProductAlbumStorage?.load?.(articleId) ?? null;
-        const faqsFromEditor =
-            typeof window.__seoCollectArticleFaqs === 'function' ? window.__seoCollectArticleFaqs() : null;
-        const faqsFromBundle = Array.isArray(editorBundle?.faqs) ? editorBundle.faqs : null;
-        const faqsFromDraft = articleId > 0 ? loadFaqDraft(articleId) : null;
-        const faqsPayload = Array.isArray(faqsFromEditor)
-            ? faqsFromEditor
-            : Array.isArray(faqsFromBundle)
-              ? faqsFromBundle
-              : Array.isArray(faqsFromDraft)
-                ? faqsFromDraft
-                : [];
+        if (!Number.isFinite(articleId) || articleId <= 0) {
+            throw new Error('Không xác định được ID bài viết.');
+        }
 
-        await wire.executeHeavyArticleAction({
-            action: normalizedAction,
-            html,
-            seo_analysis: editorBundle?.seoAnalysis ?? null,
-            faqs: faqsPayload,
-            publish_box: window.__seoPublishBoxSnapshot?.() ?? null,
-            category_ids: window.__seoPublishCategoriesSnapshot?.() ?? null,
-            featured_image: featured,
-            product_album: productAlbum,
-        });
+        const siteId = Number(
+            document.getElementById('seo-article-meta')?.textContent
+                ? JSON.parse(document.getElementById('seo-article-meta').textContent)?.site_id
+                : 0,
+        );
+
+        const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
+
+        if (normalizedAction === 'sync') {
+            window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
+                'Đang đồng bộ với WordPress — vui lòng chờ…',
+            );
+            const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
+            if (result.notification) {
+                notifyEditorFromApi(wire, result.notification);
+            }
+            finishArticleEditorApiAction(result, articleId, siteId, 'sync');
+        } else {
+            window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
+            const result = await saveArticleViaApi(articleId, apiPayload);
+            if (result.notification) {
+                notifyEditorFromApi(wire, result.notification);
+            }
+            finishArticleEditorApiAction(result, articleId, siteId, 'save');
+            window.__seoResetPublishTabPrimed?.();
+        }
     } catch (error) {
         window.__seoEndArticleHeavyActionClient?.();
         throw error;
     }
 };
+
+/**
+ * Lưu / đồng bộ qua REST (dùng từ Alpine editor-html-collected).
+ *
+ * @param {'save'|'sync'} action
+ * @param {object|null|undefined} wire
+ * @param {{ html?: string, seoAnalysis?: object|null, articleId?: number }} [editorDetail]
+ */
+async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
+    const normalizedAction = action === 'sync' ? 'sync' : 'save';
+
+    if (!window.__seoArticleHeavyActionOverlay?.locked) {
+        window.__seoBeginArticleHeavyActionClient?.(normalizedAction);
+    }
+
+    await window.__seoYieldForHeavyActionPaint?.();
+
+    const html = String(editorDetail.html ?? '').trim();
+    if (!html) {
+        window.__seoEndArticleHeavyActionClient?.();
+        throw new Error('Không thu thập được nội dung bài viết.');
+    }
+
+    const articleId = Number(editorDetail.articleId ?? 0);
+    if (!Number.isFinite(articleId) || articleId <= 0) {
+        window.__seoEndArticleHeavyActionClient?.();
+        throw new Error('Không xác định được ID bài viết.');
+    }
+
+    let siteId = 0;
+    try {
+        const metaEl = document.getElementById('seo-article-meta');
+        const meta = metaEl?.textContent?.trim() ? JSON.parse(metaEl.textContent) : {};
+        siteId = Number(meta?.site_id ?? 0);
+    } catch {
+        siteId = 0;
+    }
+
+    const editorBundle = {
+        articleId,
+        html,
+        seoAnalysis: editorDetail.seoAnalysis ?? null,
+    };
+
+    const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
+
+    try {
+        if (normalizedAction === 'sync') {
+            window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
+                'Đang đồng bộ với WordPress — vui lòng chờ…',
+            );
+            const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
+            if (result.notification) {
+                notifyEditorFromApi(wire, result.notification);
+            }
+            finishArticleEditorApiAction(result, articleId, siteId, 'sync');
+        } else {
+            window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
+            const result = await saveArticleViaApi(articleId, apiPayload);
+            if (result.notification) {
+                notifyEditorFromApi(wire, result.notification);
+            }
+            finishArticleEditorApiAction(result, articleId, siteId, 'save');
+        }
+    } catch (error) {
+        window.__seoEndArticleHeavyActionClient?.();
+        throw error;
+    }
+}
+
+window.__seoRunArticleEditorApiAction = runArticleEditorApiAction;
 
 window.seoProductAlbumBoxData = function seoProductAlbumBoxData(articleId) {
     const id = Number(articleId ?? 0);
@@ -227,6 +312,7 @@ window.addEventListener('message', (event) => {
     }
 
     storage.append(articleId, galleryItems);
+    syncProductAlbumToServer(articleId);
 });
 
 /** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */

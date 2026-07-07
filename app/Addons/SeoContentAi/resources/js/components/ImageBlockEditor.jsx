@@ -183,10 +183,12 @@ export default function ImageBlockEditor({
     siteId = null,
     supportsProductGallery = false,
     imagesLocked = false,
+    onArmOutsideClickGuard = null,
 }) {
     const [editingMeta, setEditingMeta] = useState(false);
     const [pasteUploading, setPasteUploading] = useState(false);
     const [importLoading, setImportLoading] = useState(false);
+    const [pickerInteractionReady, setPickerInteractionReady] = useState(false);
     const toolbarRef = useRef(null);
     const emptyFrameRef = useRef(null);
     const generatePromptAtRef = useRef(0);
@@ -325,6 +327,31 @@ export default function ImageBlockEditor({
     );
 
     useEffect(() => {
+        if (!isActive || image) {
+            setPickerInteractionReady(false);
+
+            return undefined;
+        }
+
+        setPickerInteractionReady(false);
+        let cancelled = false;
+        let frameId = 0;
+
+        frameId = window.requestAnimationFrame(() => {
+            window.requestAnimationFrame(() => {
+                if (!cancelled) {
+                    setPickerInteractionReady(true);
+                }
+            });
+        });
+
+        return () => {
+            cancelled = true;
+            window.cancelAnimationFrame(frameId);
+        };
+    }, [block.id, image, isActive]);
+
+    useEffect(() => {
         if (!isActive) {
             return undefined;
         }
@@ -335,9 +362,28 @@ export default function ImageBlockEditor({
 
         window.addEventListener('paste', onWindowPaste, true);
 
+        return () => {
+            window.removeEventListener('paste', onWindowPaste, true);
+        };
+    }, [handleEmptyFramePaste, isActive]);
+
+    const isTypingTarget = (target) =>
+        Boolean(
+            target?.closest?.(
+                'input, textarea, [contenteditable="true"], [contenteditable=""], .ProseMirror',
+            ),
+        );
+
+    useEffect(() => {
+        if (!isActive || image || !pickerInteractionReady) {
+            return undefined;
+        }
+
         const focusTimer = window.setTimeout(() => {
             const frame = emptyFrameRef.current;
-            if (!frame) return;
+            if (!frame) {
+                return;
+            }
 
             const activeEl = document.activeElement;
             if (
@@ -348,13 +394,12 @@ export default function ImageBlockEditor({
             }
 
             frame.focus({ preventScroll: true });
-        }, 0);
+        }, 120);
 
         return () => {
-            window.removeEventListener('paste', onWindowPaste, true);
             window.clearTimeout(focusTimer);
         };
-    }, [isActive, handleEmptyFramePaste]);
+    }, [block.id, image, isActive, pickerInteractionReady]);
 
     const handlePreviewClick = (e) => {
         if (e.target.closest('a')) {
@@ -366,15 +411,14 @@ export default function ImageBlockEditor({
             onShiftMerge(block.id);
             return;
         }
+        onArmOutsideClickGuard?.(360);
         onActivate();
     };
 
-    const isTypingTarget = (target) =>
-        Boolean(
-            target?.closest?.(
-                'input, textarea, [contenteditable="true"], [contenteditable=""], .ProseMirror',
-            ),
-        );
+    const handlePreviewMouseDown = (e) => {
+        e.stopPropagation();
+        onArmOutsideClickGuard?.(360);
+    };
 
     const copyCurrentImage = useCallback(
         async (notify = true) => {
@@ -628,6 +672,7 @@ export default function ImageBlockEditor({
                         <p className="seo-image-block-paste-hint">{t('paste_hint')}</p>
                     )}
                     <ImageBlockPickerBox
+                        interactionReady={pickerInteractionReady}
                         onOpenMediaLibrary={(event) => {
                             event?.preventDefault?.();
                             event?.stopPropagation?.();
@@ -660,6 +705,7 @@ export default function ImageBlockEditor({
         return (
             <div
                 className="seo-block-preview seo-block-image-empty-preview p-3 -mx-1 rounded border border-dashed border-gray-300 dark:border-slate-600 cursor-pointer text-center text-sm text-gray-500"
+                onMouseDown={imagesLocked ? undefined : handlePreviewMouseDown}
                 onClick={imagesLocked ? undefined : handlePreviewClick}
                 onKeyDown={(e) => {
                     if (imagesLocked) {

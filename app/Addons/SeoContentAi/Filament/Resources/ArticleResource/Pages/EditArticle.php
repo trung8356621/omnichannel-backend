@@ -38,6 +38,7 @@ use App\Addons\SeoContentAi\Services\ArticlePolylangSyncService;
 use App\Addons\SeoContentAi\Services\ArticlePostImagesService;
 use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
+use App\Addons\SeoContentAi\Services\ArticleScheduleReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
@@ -153,6 +154,15 @@ class EditArticle extends SeoEditRecord
 
     /** @var 'save'|'sync'|null */
     public ?string $articleHeavyAction = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $wpSyncContext = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $wpSyncPrepared = null;
+
+    /** @var array<string, mixed>|null */
+    public ?array $wpSyncDecoded = null;
 
     public bool $quickReviewsJobPending = false;
 
@@ -723,6 +733,8 @@ class EditArticle extends SeoEditRecord
         $service->healTaxonomyMetaFromWordPress($this->record);
         $this->record->refresh();
         $this->restoreArticleBodyFromWordPressCacheIfMissing();
+        app(ArticleScheduleReconcileService::class)->reconcileForEditor($this->record);
+        $this->record->refresh();
 
         $flags = app(ArticleWordPressSyncFlagService::class);
 
@@ -1958,12 +1970,35 @@ class EditArticle extends SeoEditRecord
 
     public function getPublishWhenLabel(): string
     {
+        if ((string) $this->articleStatus !== 'scheduled') {
+            return '';
+        }
+
         $publishedAt = $this->resolvePublishAtForEditor();
         if ($publishedAt === null) {
             return 'Not scheduled';
         }
 
         return $this->formatWpScheduleLabel($publishedAt);
+    }
+
+    public function shouldShowPublishScheduleRow(): bool
+    {
+        return app(ArticleScheduleReconcileService::class)
+            ->shouldShowScheduleLabel((string) $this->articleStatus);
+    }
+
+    public function getPublishedAtSidebarLabel(): ?string
+    {
+        if (! app(ArticleScheduleReconcileService::class)
+            ->shouldShowPublishedAtLabel((string) $this->articleStatus, $this->record->published_at)) {
+            return null;
+        }
+
+        /** @var Carbon $publishedAt */
+        $publishedAt = $this->record->published_at;
+
+        return $this->formatWpScheduleLabel($publishedAt->copy()->timezone(config('app.timezone')));
     }
 
     public function getVisibilityLabel(): string
@@ -2055,6 +2090,7 @@ class EditArticle extends SeoEditRecord
         $this->productGallery = $localMedia->saveProductAlbumLocal($this->record, $album);
         $this->featuredImageUrl = $this->productGallery[0]['url'] ?? $this->featuredImageUrl;
         $this->record->refresh();
+        $this->syncProductGalleryToEditor();
 
         $this->skipRender();
 
@@ -2196,7 +2232,8 @@ class EditArticle extends SeoEditRecord
             $seoAnalysis = is_array($bundle['seo_analysis'] ?? null) ? $bundle['seo_analysis'] : null;
 
             if ($action === 'sync') {
-                $this->syncArticleToWordPress($html, $seoAnalysis);
+                // Các bước WordPress chạy tuần tự từ JS (__seoRunWordPressPhasedSync).
+                return;
             } else {
                 $this->persistArticleLocal($html, $seoAnalysis);
             }
@@ -2261,7 +2298,7 @@ class EditArticle extends SeoEditRecord
         );
     }
 
-    private function cancelHeavyArticleAction(): void
+    public function cancelHeavyArticleAction(): void
     {
         $this->articleHeavyActionBusy = false;
         $this->articleHeavyAction = null;
@@ -2948,6 +2985,269 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
+     * Bước 1: Lưu local + phân tích SEO (chưa gọi WordPress).
+     *
+     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     */
+    public function syncWpPhaseSaveLocal(string $html, ?array $seoAnalysis = null): array
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
+        try {
+            $syncService = app(WordPressArticleSyncService::class);
+            $article = $this->record->fresh();
+            $skipCheck = $syncService->shouldSkipSaveLocalPhase($article, $html, $seoAnalysis);
+
+            if ($skipCheck['skip']) {
+                $this->wpSyncContext = null;
+                $this->wpSyncPrepared = null;
+                $this->wpSyncDecoded = null;
+
+                return [
+                    'success' => true,
+                    'message' => 'Bỏ qua lưu local — nội dung/SEO/ảnh đại diện chưa thay đổi.',
+                    'step' => 'save_local',
+                    'step_detail' => 'skipped=1, reason='.(string) ($skipCheck['reason'] ?? 'unchanged'),
+                    'skipped' => true,
+                ];
+            }
+
+            $html = $this->persistArticleLocalSilent($html);
+            $slug = Str::slug($this->articleSlug);
+
+            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+                app(SeoAnalyzerService::class)->persistClientAnalysis(
+                    $this->record->fresh(),
+                    $html,
+                    $seoAnalysis,
+                );
+            } else {
+                app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+                    $this->record->fresh(),
+                    $html,
+                    trim($this->articleTitle),
+                    $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+                    trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
+                );
+            }
+
+            $syncService->storeLocalSaveFingerprint($this->record->fresh(), $html, $seoAnalysis);
+
+            $this->wpSyncContext = null;
+            $this->wpSyncPrepared = null;
+            $this->wpSyncDecoded = null;
+
+            return [
+                'success' => true,
+                'message' => 'Đã lưu bản nháp Laravel.',
+                'step' => 'save_local',
+                'step_detail' => 'article_id='.(int) $this->record->id,
+            ];
+        } catch (\Throwable $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+                'step' => 'save_local',
+            ];
+        }
+    }
+
+    /**
+     * Bước 2: Liên kết WP + đồng bộ ảnh trong HTML (upload/WebP).
+     *
+     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     */
+    public function syncWpPhasePreparePayload(): array
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
+        $syncService = app(WordPressArticleSyncService::class);
+        $article = $this->record->fresh();
+        $seoOverride = $this->resolveLivewireSeoPayloadForWordPress();
+
+        $ensure = $syncService->ensureWordPressPostForArticle($article, $seoOverride);
+        if (! ($ensure['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($ensure['message'] ?? 'Không liên kết được WordPress.'),
+                'step' => 'prepare_payload',
+            ];
+        }
+
+        $article = $article->fresh() ?? $article;
+        $context = $syncService->resolveEditorSyncContext($article);
+        if (! ($context['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($context['message'] ?? 'Không lấy được context WordPress.'),
+                'step' => 'prepare_payload',
+            ];
+        }
+
+        $prepared = $syncService->prepareEditorSyncPayload($article, $seoOverride);
+        $mediaCount = count($prepared['synced_local_media_ids'] ?? []);
+        $mediaErrors = is_array($prepared['local_media_sync_errors'] ?? null)
+            ? $prepared['local_media_sync_errors']
+            : [];
+
+        $this->wpSyncContext = $context;
+        $this->wpSyncPrepared = $prepared;
+        $this->wpSyncDecoded = null;
+
+        $detail = (string) ($ensure['step_detail'] ?? '');
+        if ($mediaCount > 0) {
+            $detail .= ($detail !== '' ? ', ' : '').'ảnh_sync='.$mediaCount;
+        }
+        if ($mediaErrors !== []) {
+            $detail .= ($detail !== '' ? ', ' : '').'ảnh_lỗi='.count($mediaErrors);
+        }
+        if ($prepared['skip_editor_sync'] ?? false) {
+            $detail .= ($detail !== '' ? ', ' : '').'editor_sync_skip=1';
+        }
+
+        $article->loadMissing('site');
+        if ($article->site instanceof Site) {
+            $optimization = app(SeoImageOptimizationService::class);
+            $config = $optimization->resolveForSite((int) $article->site->id);
+            if ((bool) $config->auto_convert_webp && ! $optimization->canEncodeWebp()) {
+                $detail .= ($detail !== '' ? ', ' : '').'webp_encode=unavailable';
+            }
+        }
+
+        return [
+            'success' => true,
+            'message' => $mediaCount > 0
+                ? "Đã đồng bộ {$mediaCount} ảnh trong nội dung lên WordPress."
+                : 'Đã chuẩn bị payload (không có ảnh local cần upload).',
+            'step' => 'prepare_payload',
+            'step_detail' => $detail,
+            'warnings' => $mediaErrors,
+        ];
+    }
+
+    /**
+     * Bước 3: POST editor-sync (nội dung + FAQ + SEO meta).
+     *
+     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     */
+    public function syncWpPhaseEditorSync(): array
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
+        if (! is_array($this->wpSyncContext) || ! is_array($this->wpSyncPrepared)) {
+            return [
+                'success' => false,
+                'message' => 'Thiếu dữ liệu chuẩn bị — tải lại trang và thử lại.',
+                'step' => 'editor_sync',
+            ];
+        }
+
+        $syncService = app(WordPressArticleSyncService::class);
+        $article = $this->record->fresh();
+        $result = $syncService->executeEditorSyncRequest($article, $this->wpSyncContext, $this->wpSyncPrepared);
+
+        if (! ($result['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($result['message'] ?? 'editor-sync thất bại.'),
+                'step' => 'editor_sync',
+                'step_detail' => (string) ($result['step_detail'] ?? ''),
+            ];
+        }
+
+        $this->wpSyncDecoded = is_array($result['decoded'] ?? null) ? $result['decoded'] : [];
+
+        $message = (string) ($result['message'] ?? 'Đã gửi nội dung lên WordPress.');
+        if ($result['skipped'] ?? false) {
+            $message = (string) ($result['message'] ?? 'Đã bỏ qua editor-sync.');
+        }
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'step' => 'editor_sync',
+            'step_detail' => (string) ($result['step_detail'] ?? ''),
+        ];
+    }
+
+    /**
+     * Bước 4–5: Ảnh đại diện/album, WebP backfill, permalink, hoàn tất.
+     *
+     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     */
+    public function syncWpPhaseFinalize(): array
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
+        if (! is_array($this->wpSyncPrepared) || ! is_array($this->wpSyncDecoded)) {
+            return [
+                'success' => false,
+                'message' => 'Thiếu phản hồi editor-sync — tải lại trang và thử lại.',
+                'step' => 'finalize',
+            ];
+        }
+
+        try {
+            $syncService = app(WordPressArticleSyncService::class);
+            $article = $this->record->fresh();
+
+            $result = $syncService->completeEditorSyncResponse(
+                $article,
+                $this->wpSyncPrepared,
+                $this->wpSyncDecoded,
+            );
+
+            $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
+
+            if (! ($result['success'] ?? false)) {
+                $this->cancelHeavyArticleAction();
+
+                return [
+                    'success' => false,
+                    'message' => (string) ($result['message'] ?? 'Hoàn tất đồng bộ thất bại.'),
+                    'step' => 'finalize',
+                ];
+            }
+
+            $remoteIdentity = app(WordPressArticleContentService::class)
+                ->refreshSlugAndPermalinkFromWordPress($article->fresh());
+            $syncBody = (string) ($result['message'] ?? '');
+            if (! ($remoteIdentity['success'] ?? false)) {
+                $syncBody .= ' Chưa tải lại được slug/permalink mới nhất từ WordPress.';
+            }
+            if (! empty($result['faq_extract_debug'])) {
+                $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
+                $syncBody = ($headingText !== ''
+                    ? 'Sync completed but 0 FAQ extracted (detected heading: "'.$headingText.'"). Check FAQ debug block.'
+                    : 'Sync completed but 0 FAQ extracted - check FAQ debug block.').' '.$syncBody;
+            }
+
+            Notification::make()
+                ->title('WordPress synced')
+                ->body($syncBody)
+                ->success()
+                ->send();
+
+            $this->wpSyncContext = null;
+            $this->wpSyncPrepared = null;
+            $this->wpSyncDecoded = null;
+
+            $this->finishHeavyArticleActionWithReload(clearLocalState: true);
+
+            return [
+                'success' => true,
+                'message' => $syncBody,
+                'step' => 'finalize',
+                'step_detail' => (string) ($result['step_detail'] ?? ''),
+            ];
+        } catch (\Throwable $exception) {
+            $this->cancelHeavyArticleAction();
+
+            throw $exception;
+        }
+    }
+
+    /**
      * Lưu Laravel rồi đẩy lên WordPress.
      */
     public function syncArticleToWordPress(string $html, ?array $seoAnalysis = null): void
@@ -2977,24 +3277,7 @@ class EditArticle extends SeoEditRecord
             $syncService = app(WordPressArticleSyncService::class);
             $article = $this->record->fresh();
 
-            if ((int) ($article->wp_post_id ?? 0) <= 0) {
-                $created = $syncService->createForArticle($article);
-                if (! ($created['success'] ?? false)) {
-                    Notification::make()
-                        ->title('Không thể đăng bài mới lên WordPress')
-                        ->body((string) ($created['message'] ?? 'WordPress không tạo được bài viết.'))
-                        ->danger()
-                        ->send();
-
-                    $this->cancelHeavyArticleAction();
-
-                    return;
-                }
-
-                $article = $article->fresh();
-            }
-
-            $result = $syncService->syncForArticle(
+            $result = $syncService->publishForArticle(
                 $article,
                 $this->resolveLivewireSeoPayloadForWordPress(),
             );
@@ -3362,11 +3645,14 @@ class EditArticle extends SeoEditRecord
     {
         $editorSettings = app(ArticleEditorHistoryService::class)->getSettings();
         $featuredSnippetThresholds = app(SeoPromptSettingsService::class)->getFeaturedSnippetThresholds();
+        $promptSettings = app(SeoPromptSettingsService::class);
 
         return [
             ...$editorSettings,
             'wiki_trust_domains' => $editorSettings['wiki_trust_domains'],
             'featured_snippet_thresholds' => $featuredSnippetThresholds,
+            'article_length_product' => $promptSettings->resolveArticleLengthTarget('product'),
+            'article_length_default' => $promptSettings->resolveArticleLengthTarget('article'),
             'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
             'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
@@ -3458,7 +3744,7 @@ class EditArticle extends SeoEditRecord
     /**
      * Cấu hình JS cho modal chọn ảnh (upload thư viện nội bộ).
      *
-     * @return array{articleId: int, siteId: int, endpoint: string, wordPressLinked: bool, i18n: array<string, string>}
+     * @return array{articleId: int, siteId: int, endpoint: string, wordPressLinked: bool, defaultSearchKeyword: string, i18n: array<string, string>}
      */
     public function getArticleMediaPickerPayload(): array
     {
@@ -3468,6 +3754,9 @@ class EditArticle extends SeoEditRecord
             'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
             'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
+            'defaultSearchKeyword' => trim($this->focusKeyword) !== ''
+                ? trim($this->focusKeyword)
+                : (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? ''),
             'i18n' => [
                 'upload_success_one' => __('seo-content-ai::filament.media_tools.upload_success_one'),
                 'upload_success_many' => __('seo-content-ai::filament.media_tools.upload_success_many'),
@@ -3909,7 +4198,20 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
-     * @return array{rendered: string, prompt_id: int, prompt_name: string, error?: string}
+     * @return array{
+     *     rendered: string,
+     *     prompt_id: int,
+     *     prompt_name: string,
+     *     post_processing: array{
+     *         split_enabled: bool,
+     *         split_rows: int,
+     *         split_columns: int,
+     *         resize_enabled: bool,
+     *         resize_width: int|null,
+     *         resize_height: int|null,
+     *     },
+     *     error?: string,
+     * }
      */
     public function previewGenerateArticleImagePrompt(
         string $userBrief,

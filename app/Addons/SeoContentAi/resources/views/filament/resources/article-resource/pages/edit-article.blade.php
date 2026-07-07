@@ -50,16 +50,10 @@
                     title.setAttribute('data-heavy-action-title', '');
 
                     const message = document.createElement('span');
-                    message.textContent = 'Vui lòng chờ — không chỉnh sửa cho đến khi trang tải lại xong.';
+                    message.setAttribute('data-heavy-action-message', '');
+                    message.textContent = 'Vui lòng chờ — không chỉnh sửa cho đến khi hoàn tất.';
 
-                    const skeleton = document.createElement('div');
-                    skeleton.className = 'seo-article-sync-overlay__skeleton';
-                    skeleton.setAttribute('aria-hidden', 'true');
-                    for (let index = 0; index < 3; index += 1) {
-                        skeleton.appendChild(document.createElement('i'));
-                    }
-
-                    panel.append(spinner, title, message, skeleton);
+                    panel.append(spinner, title, message);
                     overlay.appendChild(panel);
                     document.body.appendChild(overlay);
                 }
@@ -69,6 +63,13 @@
                     title.textContent = this.action === 'save'
                         ? 'Đang cập nhật bài viết'
                         : 'Đang đồng bộ với WordPress';
+                }
+
+                const message = overlay.querySelector('[data-heavy-action-message]');
+                if (message) {
+                    message.textContent = this.action === 'save'
+                        ? 'Đang lưu nội dung — vui lòng chờ…'
+                        : 'Đang đồng bộ với WordPress — vui lòng chờ…';
                 }
 
                 document.documentElement.classList.add('seo-article-sync-locked');
@@ -100,6 +101,13 @@
                             this.show(this.action ?? 'sync');
                         }
                     }, 150);
+                }
+            },
+            setStatusMessage(text) {
+                const overlay = document.getElementById(this.id);
+                const message = overlay?.querySelector('[data-heavy-action-message]');
+                if (message && text) {
+                    message.textContent = String(text);
                 }
             },
             hide() {
@@ -154,6 +162,15 @@
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
             });
         };
+
+        window.__seoRunWordPressPhasedSync = async function runWordPressSync(wire, payload = {}) {
+            const articleId = @js((int) $record->getKey());
+            await window.__seoRunArticleEditorApiAction?.('sync', wire, {
+                html: payload.html ?? '',
+                seoAnalysis: payload.seoAnalysis ?? null,
+                articleId,
+            });
+        };
 </script>
 @endonce
 
@@ -188,8 +205,12 @@
             galleryPickerSelectedItems: {},
             galleryPickerAnchorKey: null,
             pickerWasOpened: false,
+            pickerCustomTabs: [],
+            pickerDisplayImages: [],
+            pickerMoveMenu: { open: false, x: 0, y: 0, image: null },
             init() {
                 this.syncFeaturedImageDraft();
+                this.loadPickerCustomTabs();
                 if (window.__seoArticleHeavyActionOverlay?.locked) {
                     this.syncPageLocked = true;
                     this.heavyPageAction = window.__seoArticleHeavyActionOverlay.action ?? 'sync';
@@ -344,8 +365,152 @@
                 if (this.pickerTab === 'local') {
                     return 'Tìm slug, alt, tên file (Laravel)…';
                 }
+                if (this.isCustomPickerTab()) {
+                    return 'Tìm slug, alt, caption (WP search tab)…';
+                }
 
                 return 'Tìm slug, alt, caption (WP search)…';
+            },
+            customTabsApi() {
+                return window.__seoArticleMediaPickerCustomTabs || {};
+            },
+            isCustomPickerTab(tab = this.pickerTab) {
+                const api = this.customTabsApi();
+
+                return api.isCustomTab ? api.isCustomTab(tab) : String(tab || '').startsWith('custom:');
+            },
+            customTabIdFromPickerTab(tab = this.pickerTab) {
+                const api = this.customTabsApi();
+
+                return api.customTabIdFromPickerTab
+                    ? api.customTabIdFromPickerTab(tab)
+                    : String(tab || '').replace(/^custom:/, '');
+            },
+            resolveCustomTab(tabId = this.customTabIdFromPickerTab()) {
+                const id = String(tabId || '').trim();
+                if (id === '') {
+                    return null;
+                }
+
+                return (Array.isArray(this.pickerCustomTabs) ? this.pickerCustomTabs : [])
+                    .find((row) => String(row?.id || '') === id) || null;
+            },
+            loadPickerCustomTabs() {
+                const api = this.customTabsApi();
+                this.pickerCustomTabs = api.loadTabs?.(this.articleId) ?? [];
+            },
+            defaultPickerSearchKeyword() {
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+
+                return String(picker.defaultSearchKeyword || '').trim();
+            },
+            stagedCountForTab(tabId) {
+                const api = this.customTabsApi();
+
+                return api.countStagedImages?.(this.articleId, tabId) ?? 0;
+            },
+            refreshPickerDisplayImages() {
+                if (!this.isCustomPickerTab()) {
+                    this.pickerDisplayImages = Array.isArray(this.pickerImages) ? [...this.pickerImages] : [];
+
+                    return;
+                }
+
+                const tabId = this.customTabIdFromPickerTab();
+                const staged = this.customTabsApi().loadStagedImages?.(this.articleId, tabId) ?? [];
+                const stagedKeys = new Set(staged.map((row) => String(row.picker_key || '')));
+                const fetched = (Array.isArray(this.pickerImages) ? this.pickerImages : [])
+                    .filter((row) => !stagedKeys.has(String(row.picker_key || '')));
+
+                this.pickerDisplayImages = [...staged, ...fetched];
+            },
+            promptAddCustomPickerTab() {
+                if (!this.pickerWordPressLinked()) {
+                    this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi tạo tab tìm kiếm.';
+
+                    return;
+                }
+
+                const defaultKeyword = this.defaultPickerSearchKeyword();
+                const keyword = window.prompt('Từ khóa tìm kiếm WordPress:', defaultKeyword);
+                if (keyword === null) {
+                    return;
+                }
+
+                const normalized = String(keyword || '').trim();
+                if (normalized === '') {
+                    return;
+                }
+
+                const api = this.customTabsApi();
+                const created = api.addTab?.(this.articleId, normalized);
+                if (!created?.id) {
+                    return;
+                }
+
+                this.loadPickerCustomTabs();
+                this.switchPickerTab(`custom:${created.id}`);
+            },
+            async removeCustomPickerTab(tabId) {
+                const id = String(tabId || '').trim();
+                if (id === '') {
+                    return;
+                }
+
+                if (!window.confirm('Xóa tab tìm kiếm này và ảnh đã chuyển tạm trong tab?')) {
+                    return;
+                }
+
+                const activeCustomId = this.isCustomPickerTab() ? this.customTabIdFromPickerTab() : '';
+                this.customTabsApi().removeTab?.(this.articleId, id);
+                this.loadPickerCustomTabs();
+
+                if (activeCustomId === id) {
+                    await this.switchPickerTab('original');
+                }
+            },
+            openPickerMoveMenu(image, event) {
+                if (!image || this.pickerTab !== 'original') {
+                    return;
+                }
+
+                if ((Array.isArray(this.pickerCustomTabs) ? this.pickerCustomTabs : []).length === 0) {
+                    window.alert('Chưa có tab tìm kiếm. Nhấn + sau tab Gốc (WP) để tạo tab.');
+
+                    return;
+                }
+
+                const rect = event?.currentTarget?.getBoundingClientRect?.();
+                this.pickerMoveMenu = {
+                    open: true,
+                    x: Math.max(8, Number(rect?.right || event?.clientX || 0) - 180),
+                    y: Math.max(8, Number(rect?.bottom || event?.clientY || 0) + 6),
+                    image,
+                };
+            },
+            closePickerMoveMenu() {
+                this.pickerMoveMenu = { open: false, x: 0, y: 0, image: null };
+            },
+            movePickerImageToCustomTab(tabId) {
+                const image = this.pickerMoveMenu?.image;
+                const id = String(tabId || '').trim();
+                if (!image || id === '') {
+                    this.closePickerMoveMenu();
+
+                    return;
+                }
+
+                this.customTabsApi().stageImage?.(this.articleId, id, image);
+                this.loadPickerCustomTabs();
+
+                if (this.isCustomPickerTab() && this.customTabIdFromPickerTab() === id) {
+                    this.refreshPickerDisplayImages();
+                }
+
+                this.closePickerMoveMenu();
+            },
+            pickerMoveMenuStyle() {
+                return `left:${Number(this.pickerMoveMenu?.x || 0)}px;top:${Number(this.pickerMoveMenu?.y || 0)}px;`;
             },
             schedulePickerSearch() {
                 this.pickerSearching = true;
@@ -367,9 +532,13 @@
                     return;
                 }
 
-                if (this.pickerTab === 'original' && !this.pickerWordPressLinked()) {
+                const isCustomTab = this.isCustomPickerTab();
+                const apiTab = isCustomTab ? 'original' : this.pickerTab;
+
+                if (apiTab === 'original' && !this.pickerWordPressLinked()) {
                     this.pickerImages = [];
                     this.pickerCatalog = [];
+                    this.pickerDisplayImages = [];
                     this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi chọn ảnh WordPress.';
                     this.pickerLoading = false;
                     this.pickerSearching = false;
@@ -383,6 +552,15 @@
 
                 if (
                     !skipCache
+                    && this.pickerSearchQuery.trim() !== ''
+                    && this.tryHydratePickerFromCache(this.pickerTab, this.pickerPage || 1)
+                ) {
+                    return;
+                }
+
+                if (
+                    !skipCache
+                    && !isCustomTab
                     && this.pickerSearchQuery.trim() === ''
                     && this.tryHydratePickerFromCache(this.pickerTab, this.pickerPage || 1)
                 ) {
@@ -400,7 +578,7 @@
                     }
 
                     const url = new URL(endpoint, window.location.origin);
-                    url.searchParams.set('tab', this.pickerTab);
+                    url.searchParams.set('tab', apiTab);
                     url.searchParams.set('page', String(this.pickerPage || 1));
                     if (this.pickerSearchQuery.trim() !== '') {
                         url.searchParams.set('search', this.pickerSearchQuery.trim());
@@ -418,10 +596,15 @@
                         throw new Error(detail?.error || `Media picker failed with status ${response.status}`);
                     }
 
+                    if (isCustomTab) {
+                        detail.tab = this.pickerTab;
+                    }
+
                     this.applyPickerPayload(detail);
                     this.persistPickerCacheFromFetch(detail);
                 } catch (error) {
                     this.pickerImages = [];
+                    this.pickerDisplayImages = [];
                     this.pickerError = error?.message || 'Không tải được thư viện media.';
                 } finally {
                     this.pickerLoading = false;
@@ -429,6 +612,10 @@
                 }
             },
             isPickerCacheableTab(tab) {
+                if (this.isCustomPickerTab(tab)) {
+                    return true;
+                }
+
                 const cacheApi = window.__seoArticleMediaPickerCache;
 
                 if (cacheApi?.isCacheableTab) {
@@ -452,6 +639,7 @@
                     this.pickerCatalog = Array.isArray(detail.images) ? detail.images : [];
                 }
                 this.pickerImages = Array.isArray(detail.images) ? detail.images : [];
+                this.refreshPickerDisplayImages();
                 this.savePickerSession();
             },
             tryHydratePickerFromCache(tab, page) {
@@ -459,7 +647,35 @@
                     return false;
                 }
 
-                if (this.pickerSearchQuery.trim() !== '') {
+                const search = this.pickerSearchQuery.trim();
+                if (this.isCustomPickerTab(tab)) {
+                    if (search === '') {
+                        return false;
+                    }
+                } else if (search !== '') {
+                    return false;
+                }
+
+                if (this.isCustomPickerTab(tab)) {
+                    const tabId = this.customTabIdFromPickerTab(tab);
+                    const cached = this.customTabsApi().readFetchCache?.(
+                        this.articleId,
+                        tabId,
+                        page,
+                        search,
+                    );
+                    if (!cached) {
+                        return false;
+                    }
+
+                    this.applyPickerPayload(cached);
+                    this.pickerLoading = false;
+                    this.pickerSearching = false;
+
+                    return true;
+                }
+
+                if (search !== '') {
                     return false;
                 }
 
@@ -485,12 +701,30 @@
                 return true;
             },
             persistPickerCacheFromFetch(detail) {
-                if (this.pickerSearchQuery.trim() !== '') {
+                const tab = detail?.tab ?? this.pickerTab;
+                if (!this.isPickerCacheableTab(tab)) {
                     return;
                 }
 
-                const tab = detail?.tab ?? this.pickerTab;
-                if (!this.isPickerCacheableTab(tab)) {
+                const search = this.pickerSearchQuery.trim();
+                if (this.isCustomPickerTab(tab)) {
+                    if (search === '') {
+                        return;
+                    }
+
+                    const tabId = this.customTabIdFromPickerTab(tab);
+                    this.customTabsApi().writeFetchCache?.(
+                        this.articleId,
+                        tabId,
+                        Number(detail?.page || this.pickerPage || 1),
+                        search,
+                        detail,
+                    );
+
+                    return;
+                }
+
+                if (search !== '') {
                     return;
                 }
 
@@ -532,6 +766,7 @@
 
                 const offset = (this.pickerPage - 1) * perPage;
                 this.pickerImages = rows.slice(offset, offset + perPage);
+                this.refreshPickerDisplayImages();
                 this.savePickerSession();
             },
             loadArticleTabFromEditor({ preservePage = false } = {}) {
@@ -591,13 +826,33 @@
                     return;
                 }
 
+                if (this.isCustomPickerTab(tab) && !this.pickerWordPressLinked()) {
+                    this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi dùng tab tìm kiếm.';
+
+                    return;
+                }
+
                 this.pickerTab = tab;
-                this.pickerSearchQuery = '';
                 this.pickerCatalog = [];
                 this.pickerImages = [];
+                this.pickerDisplayImages = [];
                 this.pickerPage = 1;
                 this.pickerSearching = false;
                 this.clearGalleryPickerSelection();
+                this.closePickerMoveMenu();
+
+                if (this.isCustomPickerTab(tab)) {
+                    const customTab = this.resolveCustomTab(this.customTabIdFromPickerTab(tab));
+                    if (!customTab) {
+                        await this.switchPickerTab('original');
+
+                        return;
+                    }
+
+                    this.pickerSearchQuery = String(customTab.keyword || '').trim();
+                } else {
+                    this.pickerSearchQuery = '';
+                }
 
                 if (tab === 'article') {
                     await this.loadArticleTabFromEditor();
@@ -630,7 +885,7 @@
                 }
 
                 const prevPage = this.pickerPage - 1;
-                if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, prevPage)) {
+                if (this.tryHydratePickerFromCache(this.pickerTab, prevPage)) {
                     return;
                 }
 
@@ -651,7 +906,7 @@
                 }
 
                 const nextPage = this.pickerPage + 1;
-                if (this.pickerSearchQuery.trim() === '' && this.tryHydratePickerFromCache(this.pickerTab, nextPage)) {
+                if (this.tryHydratePickerFromCache(this.pickerTab, nextPage)) {
                     return;
                 }
 
@@ -707,6 +962,12 @@
 
                     this.pickerPage = Math.max(1, Number(session.page) || 1);
                     this.pickerSearchQuery = String(session.search ?? '');
+                    if (this.isCustomPickerTab() && this.pickerSearchQuery.trim() === '') {
+                        const customTab = this.resolveCustomTab(this.customTabIdFromPickerTab());
+                        if (customTab?.keyword) {
+                            this.pickerSearchQuery = String(customTab.keyword);
+                        }
+                    }
                     this.pickerTotalPages = Math.max(1, Number(session.totalPages) || 1);
 
                     return true;
@@ -727,6 +988,7 @@
 
                 if (this.pickerWasOpened || (Array.isArray(this.pickerImages) && this.pickerImages.length > 0)) {
                     this.clearGalleryPickerSelection();
+                    this.refreshPickerDisplayImages();
                     this.mediaModalOpen = true;
                     window.__seoArticleAutosaveLock?.set('media-picker-modal', true);
 
@@ -965,13 +1227,35 @@
                 fn(detail);
             };
             if (detail.target === 'sync') {
-                runAfterMediaDrafts((d) => $wire.syncArticleToWordPress(d.html ?? '', d.seoAnalysis ?? null));
+                runAfterMediaDrafts(async (d) => {
+                    try {
+                        await window.__seoRunArticleEditorApiAction?.('sync', $wire, {
+                            html: d.html ?? '',
+                            seoAnalysis: d.seoAnalysis ?? null,
+                            articleId,
+                        });
+                    } catch (error) {
+                        $wire.cancelHeavyArticleAction?.();
+                        unlockPageAfterHeavyActionFailure();
+                    }
+                });
             } else if (detail.target === 'generate-faq') {
                 runAfterMediaDrafts((d) => $wire.generateArticleFaqs(d.html ?? ''));
             } else if (detail.target === 'quick-translate') {
                 runAfterMediaDrafts((d) => $wire.quickTranslateLinkedArticle(d.html ?? ''));
             } else {
-                runAfterMediaDrafts((d) => $wire.persistArticleLocal(d.html ?? '', d.seoAnalysis ?? null));
+                runAfterMediaDrafts(async (d) => {
+                    try {
+                        await window.__seoRunArticleEditorApiAction?.('save', $wire, {
+                            html: d.html ?? '',
+                            seoAnalysis: d.seoAnalysis ?? null,
+                            articleId,
+                        });
+                    } catch (error) {
+                        $wire.cancelHeavyArticleAction?.();
+                        unlockPageAfterHeavyActionFailure();
+                    }
+                });
             }
         "
         x-on:generate-article-faqs.window="$wire.requestGenerateArticleFaqs()"
@@ -1389,6 +1673,38 @@
                     >
                         Gốc (WP)
                     </button>
+                    <template x-for="customTab in pickerCustomTabs" x-bind:key="customTab.id">
+                        <button
+                            type="button"
+                            class="seo-article-media-modal__tab seo-article-media-modal__tab--custom"
+                            x-bind:class="{ 'is-active': pickerTab === ('custom:' + customTab.id) }"
+                            x-on:click="switchPickerTab('custom:' + customTab.id)"
+                            x-bind:title="customTab.keyword"
+                        >
+                            <span class="seo-article-media-modal__tab-label" x-text="customTab.label || customTab.keyword"></span>
+                            <span
+                                class="seo-article-media-modal__tab-badge"
+                                x-show="stagedCountForTab(customTab.id) > 0"
+                                x-text="stagedCountForTab(customTab.id)"
+                            ></span>
+                            <span
+                                type="button"
+                                class="seo-article-media-modal__tab-remove"
+                                x-on:click.stop="removeCustomPickerTab(customTab.id)"
+                                title="Xóa tab"
+                                aria-label="Xóa tab"
+                            >×</span>
+                        </button>
+                    </template>
+                    <button
+                        type="button"
+                        class="seo-article-media-modal__tab seo-article-media-modal__tab--add"
+                        x-on:click="promptAddCustomPickerTab()"
+                        x-show="pickerWordPressLinked()"
+                        x-cloak
+                        title="Thêm tab tìm kiếm WordPress"
+                        aria-label="Thêm tab tìm kiếm WordPress"
+                    >+</button>
                     <button
                         type="button"
                         class="seo-article-media-modal__tab"
@@ -1472,7 +1788,7 @@
 
                 <div class="seo-article-media-modal__body">
                     <div
-                        x-show="pickerLoading && pickerImages.length === 0"
+                        x-show="pickerLoading && pickerDisplayImages.length === 0"
                         x-cloak
                         class="seo-article-media-modal__skeleton-grid"
                         aria-busy="true"
@@ -1485,12 +1801,12 @@
 
                     <div
                         class="seo-article-media-modal__results"
-                        x-show="!pickerLoading || pickerImages.length > 0"
+                        x-show="!pickerLoading || pickerDisplayImages.length > 0"
                         x-cloak
-                        x-bind:class="{ 'is-busy': pickerSearching || (pickerLoading && pickerImages.length > 0) }"
+                        x-bind:class="{ 'is-busy': pickerSearching || (pickerLoading && pickerDisplayImages.length > 0) }"
                     >
                         <div
-                            x-show="pickerSearching || (pickerLoading && pickerImages.length > 0)"
+                            x-show="pickerSearching || (pickerLoading && pickerDisplayImages.length > 0)"
                             x-cloak
                             class="seo-article-media-modal__overlay"
                             aria-busy="true"
@@ -1505,56 +1821,99 @@
                         </div>
 
                         <p
-                            x-show="!pickerSearching && !pickerLoading && pickerImages.length === 0 && !pickerError"
+                            x-show="!pickerSearching && !pickerLoading && pickerDisplayImages.length === 0 && !pickerError"
                             class="seo-article-media-modal__empty"
                             x-text="pickerTab === 'article'
                                 ? 'Chưa có media trong nội dung bài viết.'
-                                : 'Không có media trong thư viện.'"
+                                : (isCustomPickerTab()
+                                    ? 'Không có ảnh cho từ khóa này.'
+                                    : 'Không có media trong thư viện.')"
                         ></p>
 
-                        <div class="seo-article-media-modal__grid" x-show="pickerImages.length > 0">
-                            <template x-for="image in pickerImages" :key="image.picker_key">
-                                <button
-                                    type="button"
-                                    class="seo-article-media-modal__item"
-                                    x-bind:data-picker-key="image.picker_key"
-                                    x-bind:data-picker-wp="image.wp_attachment_id"
-                                    x-bind:data-picker-seo="image.seo_media_id"
-                                    x-bind:data-picker-url="image.url"
-                                    x-bind:data-picker-alt="image.alt"
-                                    x-bind:data-picker-slug="image.slug"
-                                    x-bind:data-picker-media-type="image.media_type"
-                                    x-bind:class="{ 'is-selected': mediaModalMode === 'gallery' && isGalleryPickerSelected(image.picker_key) }"
-                                    x-on:mousedown.shift.prevent
-                                    x-on:click="handlePickerImageClick($event, image, $el)"
-                                    x-on:dragstart.prevent
-                                    style="user-select: none;"
-                                >
-                                    <span
-                                        class="seo-article-media-modal__thumb seo-article-media-modal__thumb--video"
-                                        x-show="image.media_type === 'video'"
-                                        aria-hidden="true"
-                                    >▶</span>
-                                    <img
-                                        x-show="image.media_type !== 'video'"
-                                        class="seo-article-media-modal__thumb"
-                                        x-bind:src="image.thumb_url || image.url"
-                                        x-bind:alt="image.alt || image.slug || ''"
-                                        loading="lazy"
-                                        decoding="async"
-                                        draggable="false"
-                                        width="300"
-                                        height="300"
-                                    />
-                                    <span
-                                        class="seo-article-media-modal__slug"
-                                        x-show="image.slug"
-                                        x-text="image.slug"
-                                    ></span>
-                                </button>
+                        <div class="seo-article-media-modal__grid" x-show="pickerDisplayImages.length > 0">
+                            <template x-for="image in pickerDisplayImages" x-bind:key="image.picker_key">
+                                <div class="seo-article-media-modal__item-wrap">
+                                    <button
+                                        type="button"
+                                        class="seo-article-media-modal__item"
+                                        x-bind:class="{
+                                            'is-selected': mediaModalMode === 'gallery' && isGalleryPickerSelected(image.picker_key),
+                                            'is-staged': image.staged === true,
+                                        }"
+                                        x-bind:data-picker-key="image.picker_key"
+                                        x-bind:data-picker-wp="image.wp_attachment_id"
+                                        x-bind:data-picker-seo="image.seo_media_id"
+                                        x-bind:data-picker-url="image.url"
+                                        x-bind:data-picker-alt="image.alt"
+                                        x-bind:data-picker-slug="image.slug"
+                                        x-bind:data-picker-media-type="image.media_type"
+                                        x-on:mousedown.shift.prevent
+                                        x-on:click="handlePickerImageClick($event, image, $el)"
+                                        x-on:dragstart.prevent
+                                        style="user-select: none;"
+                                    >
+                                        <span
+                                            class="seo-article-media-modal__thumb seo-article-media-modal__thumb--video"
+                                            x-show="image.media_type === 'video'"
+                                            aria-hidden="true"
+                                        >▶</span>
+                                        <img
+                                            x-show="image.media_type !== 'video'"
+                                            class="seo-article-media-modal__thumb"
+                                            x-bind:src="image.thumb_url || image.url"
+                                            x-bind:alt="image.alt || image.slug || ''"
+                                            loading="lazy"
+                                            decoding="async"
+                                            draggable="false"
+                                            width="300"
+                                            height="300"
+                                        />
+                                        <span
+                                            class="seo-article-media-modal__staged-badge"
+                                            x-show="image.staged === true"
+                                        >Đã chuyển</span>
+                                        <span
+                                            class="seo-article-media-modal__slug"
+                                            x-show="image.slug"
+                                            x-text="image.slug"
+                                        ></span>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="seo-article-media-modal__item-move"
+                                        x-show="pickerTab === 'original' && image.staged !== true"
+                                        x-on:click.stop="openPickerMoveMenu(image, $event)"
+                                        title="Chuyển vào tab tìm kiếm"
+                                        aria-label="Chuyển vào tab tìm kiếm"
+                                    >↗</button>
+                                </div>
                             </template>
                         </div>
                     </div>
+                </div>
+
+                <div
+                    x-show="pickerMoveMenu.open"
+                    x-cloak
+                    class="seo-article-media-modal__move-menu"
+                    x-bind:style="pickerMoveMenuStyle()"
+                    x-on:click.outside="closePickerMoveMenu()"
+                >
+                    <p class="seo-article-media-modal__move-menu-title">Chuyển vào tab</p>
+                    <template x-for="customTab in pickerCustomTabs" x-bind:key="'move-' + customTab.id">
+                        <button
+                            type="button"
+                            class="seo-article-media-modal__move-menu-item"
+                            x-on:click="movePickerImageToCustomTab(customTab.id)"
+                        >
+                            <span x-text="customTab.label || customTab.keyword"></span>
+                            <span
+                                class="seo-article-media-modal__tab-badge"
+                                x-show="stagedCountForTab(customTab.id) > 0"
+                                x-text="stagedCountForTab(customTab.id)"
+                            ></span>
+                        </button>
+                    </template>
                 </div>
 
                 <div class="seo-article-media-modal__pagination" x-show="pickerTotalPages > 1" x-cloak>

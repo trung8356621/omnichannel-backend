@@ -111,11 +111,6 @@ final class PromptPostProcessingApplyService
             $baseSlug = 'image';
         }
 
-        $extension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
-        if ($extension === 'jpeg') {
-            $extension = 'jpg';
-        }
-
         $siteId = (int) ($media->site_id ?? 0) > 0 ? (int) $media->site_id : null;
         $article = $this->resolveArticle($media);
         $cellWidth = intdiv($origWidth, $cols);
@@ -156,7 +151,7 @@ final class PromptPostProcessingApplyService
 
                 $slugSeed = sprintf('%s-%d-%d', $baseSlug, $row + 1, $col + 1);
 
-                $saved = $this->storeNewPiece($binary, $extension, $siteId, $article, $slugSeed, $media);
+                $saved = $this->storeNewPiece($binary, 'png', $siteId, $article, $slugSeed, $media);
                 $pieces[] = $saved;
             }
         }

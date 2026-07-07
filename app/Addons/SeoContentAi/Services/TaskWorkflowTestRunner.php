@@ -381,6 +381,18 @@ final class TaskWorkflowTestRunner
                     $this->refreshWorkflowSeoScore($state, $output);
                 }
 
+                if (
+                    $output !== ''
+                    && $result->status === 'completed'
+                    && $this->isProductGalleryPromptNode($nodeId, $prompt, $edges)
+                    && $this->isProductWorkflowContext($context, $state)
+                ) {
+                    $workflowArticle = $this->resolveWorkflowArticle($context, $state);
+                    if ($workflowArticle instanceof SeoArticle) {
+                        $this->persistProductGalleryUrlsFromOutput($workflowArticle, $output);
+                    }
+                }
+
                 if ($this->shouldMergeOutlineToSave($node) && trim($output) !== '') {
                     // «Viết bài theo dàn ý»: output đã là bài hoàn chỉnh (H1 + body + meta + FAQ)
                     //   → đẩy thẳng markdown bài viết cho action lưu vào body.
@@ -1511,6 +1523,27 @@ final class TaskWorkflowTestRunner
                 ['meta_value' => $loaiSanPham],
             );
         }
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $edges
+     */
+    private function persistProductGalleryUrlsFromOutput(SeoArticle $article, string $output): int
+    {
+        $added = 0;
+
+        foreach ($this->extractGalleryImageUrls($output) as $url) {
+            $media = $this->resolveSeoMediaFromUrl($url);
+            if (! $media instanceof SeoMedia) {
+                continue;
+            }
+
+            if (app(ArticleMediaLocalService::class)->appendGeneratedImageToProductAlbum($article, $media, $url)) {
+                $added++;
+            }
+        }
+
+        return $added;
     }
 
     /**

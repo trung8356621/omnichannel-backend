@@ -10,7 +10,9 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use App\Services\SeoEngineService;
@@ -453,6 +455,9 @@ final class ArticlesOptimal extends SeoPanelPage
                 'meta_description' => $this->resolveMetaDescription($article),
                 'slug' => (string) ($article->slug ?? ''),
                 'domain' => (string) ($article->site?->domain ?? ''),
+                'article_length_target' => app(SeoPromptSettingsService::class)->resolveArticleLengthTarget(
+                    ArticlePostTypeResolver::resolve($article),
+                ),
             ],
         );
 

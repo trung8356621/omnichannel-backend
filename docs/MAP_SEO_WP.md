@@ -96,6 +96,55 @@ flowchart TB
 
 **Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `ArticlesOptimal.demoteToDraft`, `SeoProjectApprovalService.approveLinkedProject`.
 
+### Đăng bài mới — tránh bài trùng / `post_content` trắng
+
+Luồng cũ (trước fix): `createForArticle` → `POST /posts` (chỉ title/slug/status) tạo bài **rỗng**, sau đó `syncForArticle` → `editor-sync` đẩy nội dung. Nếu hai request song song (double-click, workflow + editor) hoặc `editor-sync` lỗi trước khi `wp_post_id` kịp lưu → **hai bài WP** (một trống, một đầy đủ).
+
+| Thành phần | Hành vi sau fix |
+|------------|-----------------|
+| `WordPressArticleSyncService::publishForArticle()` | Cache lock theo `article_id`; gọi `createForArticle` + `syncForArticle` tuần tự |
+| `createForArticle()` | Gửi kèm `post_content`, `faqs`, `seo`, `category_ids` (plugin **≥ 1.0.49**) |
+| Plugin `handle_create_post` | Ghi `post_content` ngay `wp_insert_post`; FAQ/SEO/category qua `apply_supplementary_sync_fields` |
+| Plugin **&lt; 1.0.49** | Vẫn tạo bài rỗng nếu chưa nâng cấp — **nên đồng bộ plugin** trên mọi site |
+
+`EditArticle.syncArticleToWordPress` gọi `publishForArticle()` thay vì tách `create` + `sync`.
+
+### Lên lịch đăng bài (Laravel cron, không WP `future`)
+
+Khi `articles.status = scheduled`, outbound sync gửi WP **`draft`** (xem `resolveWordPressStatusPayload`). Cron `seo:publish-scheduled-articles` (mỗi phút) gọi `ScheduledArticlePublishRunner` → `publishScheduledArticle()` → editor-sync `status=publish`. Chi tiết luồng editor: [MAP_SEO_EDITOR.md §2.6](MAP_SEO_EDITOR.md).
+
+### Plugin WP — tắt WP-Cron & sửa «Lịch trình bị bỏ lỡ»
+
+Repo: `wp-seo-ai` (`omi-seo-ai-bridge.php`). Trang admin: `/wp-admin/admin.php?page=omi-seo-ai`.
+
+| Thành phần | File | Vai trò |
+|------------|------|---------|
+| Tắt WP-Cron | `includes/class-wp-cron-disabler.php` | `remove_action('init','wp_cron')` + chặn `pre_schedule_event` / `pre_reschedule_event` — lịch mới do Laravel, không spawn cron trên request |
+| Sửa lỡ lịch | `includes/class-missed-schedule-fixer.php` | Query `post_status=future` + `post_date_gmt <= now` (post/product) → `wp_update_post(status=publish)` |
+| UI | `views/welcome.php` | Bảng **Bài viết (link) \| Trạng thái \| Giờ lên lịch**; nút «Đăng tất cả» / «Đăng ngay» từng dòng |
+
+**Luồng xử lý bài cũ bị `future` trên WP:**
+
+```mermaid
+flowchart LR
+    subgraph WP_Admin["WP Admin page=omi-seo-ai"]
+        LIST["Missed_Schedule_Fixer::list_missed_posts()"]
+        BTN["Đăng tất cả / Đăng ngay"]
+    end
+
+    subgraph Fix["publish_post()"]
+        SUP["Laravel_Push_Sync::suppress(true)"]
+        PUB["wp_update_post status=publish"]
+    end
+
+    LIST --> BTN --> SUP --> PUB
+```
+
+- Khi đăng thủ công trên WP, `Laravel_Push_Sync` bị suppress để tránh push ngược không cần thiết.
+- Bài mới từ Laravel **không** tạo `future` trên WP nữa — chỉ còn legacy `future` cần dọn qua UI này.
+
+**Lưu ý hosting:** Server vẫn cần `php artisan schedule:run` (Laravel) để đăng bài theo lịch SEO. WP-Cron tắt không thay thế cron hệ thống Laravel.
+
 ### ExternalPluginRegistry
 
 Core hub đọc `services.config.external_plugins`. Trong addon: `GeneralDomain.php`, `WordPressPluginWidget.php`, `WordPressPluginDomainsOverviewService.php` — slug `omi-seo-ai-bridge`.
@@ -111,6 +160,52 @@ Các Livewire methods trong `EditArticle`:
 - `updateAttachmentMetaOnWordPress(array)` — cập nhật alt text + title của WP media
 
 Luồng: Alpine event `seo-rename-attachment-slugs` / `seo-update-attachment-meta` → Livewire → `WordPressArticleAttachmentService` → WP REST API.
+
+---
+
+## 2.5.1 Đồng bộ media local → WordPress
+
+**Hub:** `WordPressLocalMediaSyncService.php` · Chi tiết encode/WebP: [MAP_SEO_MEDIA.md §Trace đồng bộ WP](MAP_SEO_MEDIA.md)
+
+```mermaid
+flowchart TB
+    subgraph syncHtml["syncHtml (trong prepareEditorSyncPayload)"]
+        A["extractLocalSeoMediaImageRefs<br/>ưu tiên data-seo-media-id"]
+        B["syncMedia — mỗi seo_media.id 1 lần"]
+        C["applyWpUrlsToSeoMediaImages<br/>patch src, không re-import"]
+    end
+
+    subgraph syncMedia["syncMedia"]
+        P["prepareWordPressUploadFile"]
+        R["replace-binary nếu wp_attachment_id hợp lệ"]
+        I["import nếu mới / replace fail"]
+        STALE["ID còn DB nhưng WP đã xóa → clear ID → import"]
+    end
+
+    subgraph finalize["completeEditorSyncResponse"]
+        F1["pushPendingMediaToWordPress — featured/gallery"]
+        F2["syncDirtyLocalMediaForArticle"]
+        F3["syncWebpBackfillMediaForArticle<br/>chỉ khi sibling .webp OK"]
+    end
+
+    A --> B --> C
+    B --> syncMedia
+    P --> R --> I
+    STALE --> I
+    finalize --> F1 & F2 & F3
+```
+
+| REST endpoint (plugin) | Khi dùng |
+|------------------------|----------|
+| `POST …/attachments/import` | Ảnh chưa có trên WP, hoặc attachment cũ đã mất |
+| `POST …/attachments/{id}/replace-binary` | Đã có `wp_attachment_id` + URL WP còn sống |
+| `POST …/attachments/{id}/delete` | Sau `reimportWebpRetiringOldAttachment` (replace giữ URL JPG) |
+
+**Plugin `omi-seo-ai-bridge` ≥ 1.0.50:** `class-attachment-binary-replacer.php` đổi extension file sang `.webp` khi mime `image/webp`.
+
+**Tránh file WP thừa:** Không backfill WebP khi upload thực tế là JPEG `-wp-upload.jpg` (`needsWordPressWebpBackfill` = false). Mỗi lượt `syncHtml` dedupe theo `seo_media.id`. Xem log: `WordPress attachment đã bị xóa trên WP — import mới`, `WordPress upload fallback: ảnh đã nén dưới ngưỡng`.
+
+**Ảnh local:** Sync **không** chuyển `seo_media.status` sang `trash`. Xóa disk chỉ khi duyệt bài (Reviewed).
 
 ---
 
@@ -145,6 +240,8 @@ Widget quản lý release của WP plugin `omi-seo-ai-bridge`:
 Hub: Services/WordPressArticleSyncService.php → syncForArticle().
 HTTP: Services/WordPressArticleContentService.php (buildEditorSyncUrl).
 Media: Services/WordPressLocalMediaSyncService.php, ArticleMediaLocalService.php.
+Upload encode: Services/SeoImageOptimizationService.php (prepareWordPressUploadFile, fallback 100KB).
+Plugin binary replace: wp-seo-ai/includes/class-attachment-binary-replacer.php (≥ 1.0.50).
 Attachment: Services/WordPressArticleAttachmentService.php.
 Entry UI: Filament/Resources/ArticleResource/Pages/EditArticle.php.
 Plugin manifest: app/Services/ExternalPlugin/ExternalPluginRegistry.php (omi-seo-ai-bridge).
@@ -165,6 +262,14 @@ DB bootstrap: SeoDatabaseConnectionService.bootstrapBySiteId().
 ```
 Sync status widget: Filament/Widgets/WpSyncStatusTable.php.
 Plugin release widget: Filament/Widgets/WpPluginReleaseWidget.php.
+```
+
+### Plugin WP — cron & missed schedule
+
+```
+WP-Cron off: wp-seo-ai/includes/class-wp-cron-disabler.php.
+Missed schedule UI: views/welcome.php + includes/class-missed-schedule-fixer.php.
+Admin: /wp-admin/admin.php?page=omi-seo-ai.
 ```
 
 **Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — `executeHeavyArticleAction`, `syncArticleToWordPress`, `renameAttachmentSlugsOnWordPress`, `updateAttachmentMetaOnWordPress`, Livewire collect HTML.

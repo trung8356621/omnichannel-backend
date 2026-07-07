@@ -8,6 +8,7 @@ import {
     appendProductAlbumItems,
     loadProductAlbum,
     normalizeProductAlbumItem,
+    syncProductAlbumToServer,
 } from '../utils/articleProductAlbumStorage';
 import { t } from '../utils/i18n';
 
@@ -78,6 +79,25 @@ function requestPromptPreview(detail) {
     );
 }
 
+function normalizePostProcessing(raw) {
+    const source = raw != null && typeof raw === 'object' ? raw : {};
+
+    return {
+        split_enabled: Boolean(source.split_enabled),
+        split_rows: Math.max(1, Math.min(12, Number.parseInt(String(source.split_rows ?? 3), 10) || 3)),
+        split_columns: Math.max(1, Math.min(12, Number.parseInt(String(source.split_columns ?? 2), 10) || 2)),
+        resize_enabled: Boolean(source.resize_enabled),
+        resize_width:
+            source.resize_width === null || source.resize_width === undefined || source.resize_width === ''
+                ? null
+                : Number.parseInt(String(source.resize_width), 10) || null,
+        resize_height:
+            source.resize_height === null || source.resize_height === undefined || source.resize_height === ''
+                ? null
+                : Number.parseInt(String(source.resize_height), 10) || null,
+    };
+}
+
 /**
  * @param {{
  *   open: boolean,
@@ -113,6 +133,7 @@ export default function GenerateImageModal({
     const [submitting, setSubmitting] = useState(false);
     const [renderedPrompt, setRenderedPrompt] = useState('');
     const [renderedPromptMeta, setRenderedPromptMeta] = useState({ promptId: 0, promptName: '' });
+    const [postProcessing, setPostProcessing] = useState(() => normalizePostProcessing({}));
     const [promptPreviewLoading, setPromptPreviewLoading] = useState(false);
     const [promptPreviewError, setPromptPreviewError] = useState('');
     const [galleryItems, setGalleryItems] = useState([]);
@@ -166,6 +187,7 @@ export default function GenerateImageModal({
             setSubmitting(false);
             setRenderedPrompt('');
             setRenderedPromptMeta({ promptId: 0, promptName: '' });
+            setPostProcessing(normalizePostProcessing({}));
             setPromptPreviewError('');
             setPendingMediaId(null);
             setGenerationError('');
@@ -275,6 +297,7 @@ export default function GenerateImageModal({
                 promptId: Number(detail.prompt_id ?? detail.promptId ?? 0) || 0,
                 promptName: String(detail.prompt_name ?? detail.promptName ?? ''),
             });
+            setPostProcessing(normalizePostProcessing(detail.post_processing ?? detail.postProcessing ?? {}));
         };
 
         const onImageGenerated = (event) => {
@@ -386,6 +409,10 @@ export default function GenerateImageModal({
                         appended.map((row) => normalizeGalleryPreviewItem(row, { connected: true })).filter(Boolean),
                     ),
                 );
+            }
+
+            if (numericArticleId > 0) {
+                syncProductAlbumToServer(numericArticleId);
             }
 
             setSelectedSplitUrl('');
@@ -599,7 +626,7 @@ export default function GenerateImageModal({
                 )}
             </section>
 
-            {selectedSplitItem && Number(selectedSplitItem.id) > 0 ? (
+            {selectedSplitItem && Number(selectedSplitItem.id) > 0 && postProcessing.split_enabled ? (
                 <section className="seo-generate-image-modal__preview-section seo-generate-image-modal__split-section">
                     <h4 className="seo-generate-image-modal__preview-heading">{t('split_grid')}</h4>
                     <p className="seo-generate-image-modal__helper">{t('generate_image_split_keep_original_hint')}</p>
@@ -608,6 +635,10 @@ export default function GenerateImageModal({
                         articleId={numericArticleId > 0 ? numericArticleId : null}
                         seoMediaId={selectedSplitItem.id}
                         imageUrl={selectedSplitItem.url}
+                        variant="gallery"
+                        defaultRows={postProcessing.split_rows}
+                        defaultCols={postProcessing.split_columns}
+                        autoSaveOnSplit
                         canDeleteOriginal={false}
                         onSplitSaved={handleSplitSaved}
                     />

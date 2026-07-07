@@ -6,24 +6,19 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
-use App\Addons\SeoContentAi\Support\SeoImageResizeMath;
+use App\Addons\SeoContentAi\Support\SeoImagePipeline;
 use App\Models\Site;
-use App\Support\ImageDriverResolver;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Intervention\Image\Format;
-use Intervention\Image\Interfaces\ImageInterface;
-use Intervention\Image\Laravel\Facades\Image;
 
 final class SeoMediaResizeService
 {
-    private const UPSCALE_SHARPEN_LEVEL = 8;
-
     public function __construct(
         private readonly SeoMediaProcessingHistoryService $processingHistory,
         private readonly WordPressMediaWatermarkService $wpMedia,
         private readonly SeoImageOptimizationService $optimization,
         private readonly SeoMediaStorageService $mediaStorage,
+        private readonly SeoImagePipeline $imagePipeline,
     ) {}
 
     /**
@@ -191,7 +186,7 @@ final class SeoMediaResizeService
                 return [
                     'success' => false,
                     'url' => $url,
-                    'message' => 'Không tải được ảnh từ WordPress (HTTP ' . $response->status() . ').',
+                    'message' => 'Không tải được ảnh từ WordPress (HTTP '.$response->status().').',
                 ];
             }
 
@@ -283,159 +278,17 @@ final class SeoMediaResizeService
             return $this->failedAbsoluteResize($absolutePath);
         }
 
-        $extension = $this->normalizeExtension(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
-
-        if ($this->tryResizeWithImagick($absolutePath, $extension, $width, $height)) {
-            [$outWidth, $outHeight] = $this->readImageDimensions($absolutePath);
-
-            return [
-                'applied' => true,
-                'absolute_path' => $absolutePath,
-                'width' => $outWidth,
-                'height' => $outHeight,
-            ];
-        }
-
-        return $this->resizeWithIntervention($absolutePath, $extension, $width, $height);
-    }
-
-    private function tryResizeWithImagick(
-        string $absolutePath,
-        string $extension,
-        ?int $width,
-        ?int $height,
-    ): bool {
-        if (! ImageDriverResolver::shouldUseNativeImagickPipeline()) {
-            return false;
-        }
-
-        try {
-            $imagick = new \Imagick($absolutePath);
-            $origWidth = $imagick->getImageWidth();
-            $origHeight = $imagick->getImageHeight();
-            $dimensions = SeoImageResizeMath::outputDimensions($origWidth, $origHeight, $width, $height);
-            $outWidth = $dimensions['width'];
-            $outHeight = $dimensions['height'];
-
-            if ($extension === 'png') {
-                $imagick->setImageAlphaChannel(\Imagick::ALPHACHANNEL_ACTIVATE);
-            }
-
-            $steps = SeoImageResizeMath::progressiveUpscaleSteps($origWidth, $origHeight, $outWidth, $outHeight);
-            foreach ($steps as $step) {
-                $imagick->resizeImage(
-                    $step['width'],
-                    $step['height'],
-                    \Imagick::FILTER_LANCZOS,
-                    1,
-                );
-            }
-
-            if (SeoImageResizeMath::isUpscale($origWidth, $origHeight, $outWidth, $outHeight)) {
-                $imagick->unsharpMaskImage(1, 0.5, 1.0, 0.05);
-            }
-
-            if ($extension === 'png') {
-                $imagick->setImageFormat('png');
-                $imagick->setOption('png:compression-level', '3');
-            } else {
-                $imagick->setImageCompressionQuality(ImageDriverResolver::ENCODE_QUALITY);
-            }
-
-            $imagick->writeImage($absolutePath);
-            $imagick->clear();
-            $imagick->destroy();
-
-            return true;
-        } catch (\Throwable $exception) {
-            logger()->error(
-                'Imagick resize failed, falling back to Intervention Image.',
-                [
-                    'path' => $absolutePath,
-                    'message' => $exception->getMessage(),
-                ],
-            );
-
-            return false;
-        }
-    }
-
-    /**
-     * @return array{applied: bool, absolute_path: string, width: int, height: int}
-     */
-    private function resizeWithIntervention(
-        string $absolutePath,
-        string $extension,
-        ?int $width,
-        ?int $height,
-    ): array {
-        try {
-            $image = Image::decodePath($absolutePath);
-            $origWidth = $image->width();
-            $origHeight = $image->height();
-            $dimensions = SeoImageResizeMath::outputDimensions($origWidth, $origHeight, $width, $height);
-            $outWidth = $dimensions['width'];
-            $outHeight = $dimensions['height'];
-
-            $steps = SeoImageResizeMath::progressiveUpscaleSteps($origWidth, $origHeight, $outWidth, $outHeight);
-            foreach ($steps as $step) {
-                $image->resize(width: $step['width'], height: $step['height']);
-            }
-
-            if (SeoImageResizeMath::isUpscale($origWidth, $origHeight, $outWidth, $outHeight)) {
-                $image->sharpen(self::UPSCALE_SHARPEN_LEVEL);
-            }
-
-            $encoded = $this->encodeImage($image, $extension);
-            file_put_contents($absolutePath, $encoded);
-
-            return [
-                'applied' => true,
-                'absolute_path' => $absolutePath,
-                'width' => $image->width(),
-                'height' => $image->height(),
-            ];
-        } catch (\Throwable $exception) {
-            logger()->error(
-                'Intervention Image resize failed.',
-                [
-                    'path' => $absolutePath,
-                    'driver' => ImageDriverResolver::driverName(),
-                    'message' => $exception->getMessage(),
-                ],
-            );
-
+        $result = $this->imagePipeline->resizeFile($absolutePath, $width, $height);
+        if (! $result['applied']) {
             return $this->failedAbsoluteResize($absolutePath);
         }
-    }
 
-    private function encodeImage(ImageInterface $image, string $extension): string
-    {
-        $format = match ($extension) {
-            'webp' => Format::WEBP,
-            'png' => Format::PNG,
-            'gif' => Format::GIF,
-            default => Format::JPEG,
-        };
-
-        if ($extension === 'png') {
-            return (string) $image->encodeUsingFormat($format);
-        }
-
-        return (string) $image->encodeUsingFormat($format, quality: ImageDriverResolver::ENCODE_QUALITY);
-    }
-
-    /**
-     * @return array{0: int, 1: int}
-     */
-    private function readImageDimensions(string $absolutePath): array
-    {
-        $size = @getimagesize($absolutePath);
-        if (! is_array($size)) {
-            return [0, 0];
-        }
-
-        return [(int) ($size[0] ?? 0), (int) ($size[1] ?? 0)];
+        return [
+            'applied' => true,
+            'absolute_path' => $absolutePath,
+            'width' => $result['width'],
+            'height' => $result['height'],
+        ];
     }
 
     private function createTempImagePath(string $prefix, string $extension): string
@@ -450,7 +303,7 @@ final class SeoMediaResizeService
             mkdir($dir, 0755, true);
         }
 
-        return $dir . DIRECTORY_SEPARATOR . $prefix . '-' . uniqid('', true) . '.' . $extension;
+        return $dir.DIRECTORY_SEPARATOR.$prefix.'-'.uniqid('', true).'.'.$extension;
     }
 
     private function extensionFromUrl(string $url): string
@@ -511,6 +364,6 @@ final class SeoMediaResizeService
 
         $separator = str_contains($url, '?') ? '&' : '?';
 
-        return $url . $separator . 't=' . time();
+        return $url.$separator.'t='.time();
     }
 }

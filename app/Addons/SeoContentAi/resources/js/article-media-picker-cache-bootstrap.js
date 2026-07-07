@@ -4,12 +4,39 @@ import {
     writeArticleMediaPickerCache,
     isArticleMediaPickerCacheableTab,
 } from './utils/articleMediaPickerCache';
+import {
+    isCustomPickerTab,
+    customTabIdFromPickerTab,
+    pickerTabFromCustomId,
+    loadCustomPickerTabs,
+    addCustomPickerTab,
+    removeCustomPickerTab,
+    loadStagedPickerImages,
+    stagePickerImageToTab,
+    countStagedPickerImages,
+    readCustomTabFetchCache,
+    writeCustomTabFetchCache,
+} from './utils/articleMediaPickerCustomTabs';
 import { createSeoWorkspaceMediaPicker } from './utils/seoWorkspaceMediaPicker';
 
 window.__seoArticleMediaPickerCache = {
     read: readArticleMediaPickerCache,
     write: writeArticleMediaPickerCache,
     isCacheableTab: isArticleMediaPickerCacheableTab,
+};
+
+window.__seoArticleMediaPickerCustomTabs = {
+    isCustomTab: isCustomPickerTab,
+    customTabIdFromPickerTab,
+    pickerTabFromCustomId,
+    loadTabs: loadCustomPickerTabs,
+    addTab: addCustomPickerTab,
+    removeTab: removeCustomPickerTab,
+    loadStagedImages: loadStagedPickerImages,
+    stageImage: stagePickerImageToTab,
+    countStagedImages: countStagedPickerImages,
+    readFetchCache: readCustomTabFetchCache,
+    writeFetchCache: writeCustomTabFetchCache,
 };
 
 function registerSeoWorkspaceMediaPicker() {

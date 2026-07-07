@@ -341,17 +341,9 @@ function resolveFaqsForScoring(html, faqs) {
 
 function applyCategoryResult(category, messages, good, errors, warnings, reasonKeys) {
     const message = resolveScoringMessage(category.key, messages, category.params ?? {});
-    const isPartial = category.key === 'seo.length.partial';
 
-    if (category.passed && !isPartial) {
+    if (category.passed) {
         good.push(message);
-
-        return;
-    }
-
-    if (isPartial) {
-        warnings.push(message);
-        reasonKeys.push(category.key);
 
         return;
     }
@@ -378,35 +370,32 @@ function scoreHeading(html) {
     };
 }
 
-function scoreLength(html) {
+function resolveArticleLengthTarget(postType, settings = {}) {
+    const normalized = String(postType ?? '').trim();
+    const isProduct = normalized === 'product';
+    const raw = isProduct ? settings.article_length_product : settings.article_length_default;
+    const fallback = isProduct ? 1000 : 2000;
+    const parsed = Number.parseInt(String(raw ?? ''), 10);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function scoreLength(html, targetWords = 2000) {
+    const target = Math.max(1, Number(targetWords) || 2000);
     const wordCount = countWords(html);
-
-    if (wordCount < 600) {
-        return {
-            max: MAX_LENGTH,
-            earned: 0,
-            passed: false,
-            key: 'seo.length',
-            params: { count: wordCount, points: 0, max: MAX_LENGTH },
-        };
-    }
-
-    if (wordCount <= 1200) {
-        return {
-            max: MAX_LENGTH,
-            earned: 10,
-            passed: false,
-            key: 'seo.length.partial',
-            params: { count: wordCount, points: 10, max: MAX_LENGTH },
-        };
-    }
+    const passed = wordCount >= target;
 
     return {
         max: MAX_LENGTH,
-        earned: MAX_LENGTH,
-        passed: true,
-        key: 'seo.length.pass',
-        params: { count: wordCount, points: MAX_LENGTH },
+        earned: passed ? MAX_LENGTH : 0,
+        passed,
+        key: passed ? 'seo.length.pass' : 'seo.length',
+        params: {
+            count: wordCount,
+            target,
+            points: passed ? MAX_LENGTH : 0,
+            max: MAX_LENGTH,
+        },
     };
 }
 
@@ -476,6 +465,7 @@ function computeUnifiedScore({
     faqs,
     wikiTrustDomains,
     scoringMessages,
+    articleLengthTarget = 2000,
 }) {
     const keyword = normalizeFocusKeyword(focusKeyword);
     const good = [];
@@ -489,7 +479,7 @@ function computeUnifiedScore({
 
     const categories = {
         heading: scoreHeading(content),
-        length: scoreLength(content),
+        length: scoreLength(content, articleLengthTarget),
         image_ratio: scoreTextToImage(content),
         wiki_trust: scoreWikiTrust(extractedLinks, wikiTrustDomains),
         faq_schema: scoreFaqSchema(content, faqs),
@@ -530,6 +520,8 @@ export function computeSeoAnalysis({
     faqs = [],
     wikiTrustDomains = DEFAULT_WIKI_TRUST_DOMAINS,
     scoringMessages = {},
+    postType = 'article',
+    articleLengthSettings = {},
 } = {}) {
     const keyword = normalizeFocusKeyword(focusKeyword);
     const content = String(html ?? '');
@@ -560,6 +552,7 @@ export function computeSeoAnalysis({
         faqs,
         wikiTrustDomains,
         scoringMessages,
+        articleLengthTarget: resolveArticleLengthTarget(postType, articleLengthSettings),
     });
 }
 

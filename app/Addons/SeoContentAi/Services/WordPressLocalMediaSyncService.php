@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Models\Site;
 use Illuminate\Support\Facades\Http;
@@ -32,25 +33,45 @@ final class WordPressLocalMediaSyncService
         }
 
         $syncedMediaIds = [];
+        $syncedThisPass = [];
         $errors = [];
         $updatedHtml = $html;
 
-        foreach ($this->extractLocalSeoMediaUrls($html) as $originalUrl) {
+        foreach ($this->extractLocalSeoMediaImageRefs($html) as $ref) {
             try {
-                $path = $this->urlToSeoMediaPath($originalUrl);
-                if ($path === '') {
+                $originalUrl = trim((string) ($ref['url'] ?? ''));
+                $refMediaId = (int) ($ref['seo_media_id'] ?? 0);
+
+                $media = null;
+                if ($refMediaId > 0) {
+                    $media = SeoMedia::query()->whereKey($refMediaId)->first();
+                }
+
+                if (! $media instanceof SeoMedia && $originalUrl !== '') {
+                    $path = $this->urlToSeoMediaPath($originalUrl);
+                    if ($path !== '') {
+                        $media = SeoMedia::query()->where('path', $path)->orderByDesc('id')->first();
+                    }
+                }
+
+                if (! $media instanceof SeoMedia) {
+                    if ($originalUrl !== '') {
+                        $errors[] = "Không tìm thấy seo_media cho URL {$originalUrl}.";
+                    }
+
                     continue;
                 }
 
-                $media = SeoMedia::query()->where('path', $path)->orderByDesc('id')->first();
-                if (! $media instanceof SeoMedia) {
-                    $errors[] = "Không tìm thấy seo_media cho URL {$originalUrl}.";
+                $mediaId = (int) $media->id;
+                if ($mediaId <= 0 || isset($syncedThisPass[$mediaId])) {
                     continue;
                 }
 
                 $result = $this->syncMedia($article, $media);
+                $syncedThisPass[$mediaId] = true;
                 if (! $result['success']) {
                     $errors[] = $result['message'];
+
                     continue;
                 }
 
@@ -61,24 +82,32 @@ final class WordPressLocalMediaSyncService
                 $wpUrl = trim($result['wp_url']);
                 if ($wpUrl === '') {
                     $errors[] = "Ảnh #{$media->id}: không lấy được URL WordPress để thay src.";
+
                     continue;
                 }
 
-                $updatedHtml = str_replace($originalUrl, $wpUrl, $updatedHtml);
+                if ($originalUrl !== '') {
+                    $updatedHtml = str_replace($originalUrl, $wpUrl, $updatedHtml);
+                }
             } catch (Throwable $exception) {
                 Log::warning('WordPress syncHtml URL replace failed', [
                     'article_id' => $article->id,
-                    'url' => $originalUrl,
+                    'url' => $ref['url'] ?? '',
                     'error' => $exception->getMessage(),
                 ]);
-                $errors[] = "Lỗi sync URL {$originalUrl}: {$exception->getMessage()}";
+                $errors[] = 'Lỗi sync URL '.($ref['url'] ?? '').': '.$exception->getMessage();
             }
         }
 
-        $byId = $this->applyWpUrlsToSeoMediaImages($article, $updatedHtml);
+        $byId = $this->applyWpUrlsToSeoMediaImages($article, $updatedHtml, $syncedThisPass);
         $updatedHtml = $byId['html'];
         $syncedMediaIds = array_merge($syncedMediaIds, $byId['synced_media_ids']);
         $errors = array_merge($errors, $byId['errors']);
+
+        $backfill = $this->syncWebpBackfillMediaForArticle($article, $syncedMediaIds);
+        $updatedHtml = $this->applyUrlReplacements($updatedHtml, $backfill['url_map']);
+        $syncedMediaIds = array_merge($syncedMediaIds, $backfill['synced_media_ids']);
+        $errors = array_merge($errors, $backfill['errors']);
 
         return [
             'html' => $updatedHtml,
@@ -147,7 +176,9 @@ final class WordPressLocalMediaSyncService
     }
 
     /**
-     * @param list<int> $mediaIds
+     * @deprecated Ảnh local chỉ xóa khi duyệt bài (ArticleResource::markArticleReviewed). Không gọi sau đồng bộ WP.
+     *
+     * @param  list<int>  $mediaIds
      */
     public function markSyncedLocalMediaAsTrash(array $mediaIds): int
     {
@@ -210,6 +241,7 @@ final class WordPressLocalMediaSyncService
                 $result = $this->syncMedia($article, $media);
                 if (! ($result['success'] ?? false)) {
                     $errors[] = (string) ($result['message'] ?? ("Ảnh #{$media->id}: đồng bộ thất bại."));
+
                     continue;
                 }
 
@@ -226,64 +258,160 @@ final class WordPressLocalMediaSyncService
     }
 
     /**
+     * Ép chuyển WebP các ảnh đã có wp_attachment_id nhưng URL WordPress vẫn PNG/JPG.
+     *
+     * @param  list<int>  $skipMediaIds
+     * @return array{synced_media_ids: list<int>, url_map: array<string, string>, errors: list<string>}
+     */
+    public function syncWebpBackfillMediaForArticle(SeoArticle $article, array $skipMediaIds = []): array
+    {
+        $articleId = (int) ($article->id ?? 0);
+        if ($articleId <= 0) {
+            return [
+                'synced_media_ids' => [],
+                'url_map' => [],
+                'errors' => [],
+            ];
+        }
+
+        $article->loadMissing('site', 'articleMetas');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return [
+                'synced_media_ids' => [],
+                'url_map' => [],
+                'errors' => ['Không tìm thấy site của bài viết để backfill WebP.'],
+            ];
+        }
+
+        $optimization = app(SeoImageOptimizationService::class);
+        $config = $optimization->resolveForSite((int) $site->id);
+        if (! (bool) $config->auto_convert_webp) {
+            return [
+                'synced_media_ids' => [],
+                'url_map' => [],
+                'errors' => [],
+            ];
+        }
+
+        $skip = array_fill_keys(array_values(array_unique(array_filter(array_map(
+            static fn ($id): int => (int) $id,
+            $skipMediaIds,
+        ), static fn (int $id): bool => $id > 0))), true);
+
+        $errors = [];
+        $syncedMediaIds = [];
+        $urlMap = [];
+
+        $html = trim((string) ($article->body ?? ''));
+        if ($html === '') {
+            $html = trim((string) ($article->articleMetas->firstWhere('meta_key', 'wp_post_content')?->meta_value ?? ''));
+        }
+        $mediaIdsFromHtml = $this->extractSeoMediaIdsFromHtml($html);
+
+        $rows = SeoMedia::query()
+            ->where('site_id', (int) $site->id)
+            ->where(function ($query) use ($articleId, $mediaIdsFromHtml): void {
+                $query->where('article_id', $articleId);
+                if ($mediaIdsFromHtml !== []) {
+                    $query->orWhereIn('id', $mediaIdsFromHtml);
+                }
+            })
+            ->whereNotNull('wp_attachment_id')
+            ->where('wp_attachment_id', '>', 0)
+            ->where(function ($query): void {
+                $query->whereNull('status')
+                    ->orWhere('status', 'completed');
+            })
+            ->orderBy('id')
+            ->get();
+
+        foreach ($rows as $media) {
+            $mediaId = (int) $media->id;
+            if ($mediaId <= 0 || isset($skip[$mediaId])) {
+                continue;
+            }
+
+            $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+            if ($path === '' || ! Storage::disk('public')->exists($path)) {
+                continue;
+            }
+
+            $absolutePath = Storage::disk('public')->path($path);
+            $attachmentId = (int) ($media->wp_attachment_id ?? 0);
+            $oldUrl = $attachmentId > 0
+                ? $this->fetchWordPressAttachmentUrl($site, $attachmentId)
+                : '';
+
+            if (! $optimization->needsWordPressWebpBackfill($config, $absolutePath, $oldUrl !== '' ? $oldUrl : null)) {
+                continue;
+            }
+
+            $this->forgetMediaCache($mediaId);
+
+            try {
+                $result = $this->syncMedia($article, $media);
+                if (! ($result['success'] ?? false)) {
+                    $errors[] = (string) ($result['message'] ?? "Ảnh #{$mediaId}: backfill WebP thất bại.");
+
+                    continue;
+                }
+
+                if ($result['seo_media_id'] !== null) {
+                    $syncedMediaIds[] = (int) $result['seo_media_id'];
+                }
+
+                $newUrl = trim((string) ($result['wp_url'] ?? ''));
+                if ($oldUrl !== '' && $newUrl !== '' && $oldUrl !== $newUrl) {
+                    $urlMap[$oldUrl] = $newUrl;
+                } elseif (
+                    $newUrl !== ''
+                    && ! $optimization->isWebpUrl($newUrl)
+                    && (bool) $config->auto_convert_webp
+                ) {
+                    $errors[] = "Ảnh #{$mediaId}: WordPress vẫn trả URL không phải WebP ({$newUrl}) — kiểm tra plugin ≥ 1.0.50 và Imagick/GD hỗ trợ WebP.";
+                }
+            } catch (Throwable $exception) {
+                $errors[] = "Ảnh #{$mediaId}: {$exception->getMessage()}";
+            }
+        }
+
+        return [
+            'synced_media_ids' => array_values(array_unique($syncedMediaIds)),
+            'url_map' => $urlMap,
+            'errors' => array_values(array_unique(array_filter($errors))),
+        ];
+    }
+
+    public function forgetMediaCache(int $mediaId): void
+    {
+        if ($mediaId > 0) {
+            unset($this->cache[$mediaId]);
+        }
+    }
+
+    /**
      * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}
      */
     private function syncMedia(SeoArticle $article, SeoMedia $media): array
     {
-        $mediaId = (int) $media->id;
-        if (isset($this->cache[$mediaId])) {
-            return $this->cache[$mediaId];
-        }
-
         $article->loadMissing('site');
         $site = $article->site;
+        $media = $this->hydrateMediaUsageForArticle($media, $article);
+        $mediaId = (int) $media->id;
+
         if (! $site instanceof Site) {
-            return $this->cache[$mediaId] = [
+            return $this->rememberMediaSyncResult($mediaId, null, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
                 'message' => "Ảnh #{$mediaId}: thiếu thông tin site.",
-            ];
+            ]);
         }
 
-        $media = $this->hydrateMediaUsageForArticle($media, $article);
-        $mediaId = (int) $media->id;
-
-        $existingAttachmentId = (int) ($media->wp_attachment_id ?? 0);
-        $existingWpUrl = '';
-        if ($existingAttachmentId > 0) {
-            $existingWpUrl = $this->fetchWordPressAttachmentUrl($site, $existingAttachmentId);
-            if ($existingWpUrl === '') {
-                Log::warning('WordPress attachment URL missing, fallback to replace/import', [
-                    'article_id' => $article->id,
-                    'seo_media_id' => $mediaId,
-                    'wp_attachment_id' => $existingAttachmentId,
-                ]);
-            }
-        }
-
-        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
-        if ($writeToken === '') {
-            return $this->cache[$mediaId] = [
-                'success' => false,
-                'attachment_id' => 0,
-                'wp_url' => '',
-                'seo_media_id' => $mediaId,
-                'message' => "Ảnh #{$mediaId}: thiếu migration token.",
-            ];
-        }
-
-        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
-        if ($base === '') {
-            return $this->cache[$mediaId] = [
-                'success' => false,
-                'attachment_id' => 0,
-                'wp_url' => '',
-                'seo_media_id' => $mediaId,
-                'message' => "Ảnh #{$mediaId}: không xác định được URL WordPress.",
-            ];
-        }
+        $optimization = app(SeoImageOptimizationService::class);
+        $config = $optimization->resolveForSite((int) $site->id);
 
         $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
         if ($path === '' || ! Storage::disk('public')->exists($path)) {
@@ -295,40 +423,78 @@ final class WordPressLocalMediaSyncService
             }
         }
 
-        if ($path === '' || ! Storage::disk('public')->exists($path)) {
-            return $this->cache[$mediaId] = [
+        $absolutePath = $path !== '' && Storage::disk('public')->exists($path)
+            ? Storage::disk('public')->path($path)
+            : '';
+
+        $existingAttachmentId = (int) ($media->wp_attachment_id ?? 0);
+        $existingWpUrl = '';
+        if ($existingAttachmentId > 0) {
+            $existingWpUrl = $this->fetchWordPressAttachmentUrl($site, $existingAttachmentId);
+            if ($existingWpUrl === '') {
+                Log::warning('WordPress attachment đã bị xóa trên WP — import mới.', [
+                    'article_id' => $article->id,
+                    'seo_media_id' => $mediaId,
+                    'wp_attachment_id' => $existingAttachmentId,
+                ]);
+                $media->update([
+                    'wp_attachment_id' => null,
+                    'wp_synced_at' => null,
+                ]);
+                $existingAttachmentId = 0;
+            }
+        }
+
+        $cached = $this->resolveCachedMediaSyncResult($mediaId, $config, $absolutePath, $existingWpUrl);
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $writeToken = trim((string) ($site->getMeta('seo_migration_token') ?? ''));
+        if ($writeToken === '') {
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
-                'message' => "Ảnh #{$mediaId}: không tìm thấy file local.",
-            ];
+                'message' => "Ảnh #{$mediaId}: thiếu migration token.",
+            ]);
         }
 
-        $absolutePath = Storage::disk('public')->path($path);
-        $optimization = app(SeoImageOptimizationService::class);
-        if (! $optimization->isValidImageFile($absolutePath)) {
-            return $this->cache[$mediaId] = [
+        $base = app(WordPressArticleContentService::class)->getPermalinkBase($site);
+        if ($base === '') {
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
-                'message' => "Ảnh #{$mediaId}: file ảnh local hỏng hoặc rỗng (kiểm tra lại file trên disk).",
-            ];
+                'message' => "Ảnh #{$mediaId}: không xác định được URL WordPress.",
+            ]);
         }
 
-        $uploadFile = $optimization->prepareWordPressUploadFile(
-            $absolutePath,
-            $optimization->resolveForSite((int) $site->id),
-        );
+        if ($absolutePath === '' || ! $optimization->isValidImageFile($absolutePath)) {
+            return $this->rememberMediaSyncResult($mediaId, $config, [
+                'success' => false,
+                'attachment_id' => 0,
+                'wp_url' => '',
+                'seo_media_id' => $mediaId,
+                'message' => "Ảnh #{$mediaId}: không tìm thấy file local hoặc file ảnh hỏng.",
+            ]);
+        }
+
+        $uploadFile = $optimization->prepareWordPressUploadFile($absolutePath, $config);
         if ($uploadFile === null) {
-            return $this->cache[$mediaId] = [
+            $detail = (bool) $config->auto_convert_webp
+                ? 'Không tạo được WebP và không nén được ảnh dưới 100KB.'
+                : 'Không chuẩn bị được file upload.';
+
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
-                'message' => "Ảnh #{$mediaId}: không chuẩn bị được file upload.",
-            ];
+                'message' => "Ảnh #{$mediaId}: {$detail}",
+            ]);
         }
 
         $uploadPath = (string) ($uploadFile['path'] ?? $absolutePath);
@@ -341,16 +507,18 @@ final class WordPressLocalMediaSyncService
                 @unlink($uploadPath);
             }
 
-            return $this->cache[$mediaId] = [
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
                 'message' => "Ảnh #{$mediaId}: đọc file upload thất bại.",
-            ];
+            ]);
         }
 
         $response = null;
+        $altText = trim((string) ($media->alt_text ?? ''));
+        $slug = (string) ($media->slug ?? '');
 
         if ($existingAttachmentId > 0) {
             try {
@@ -360,7 +528,7 @@ final class WordPressLocalMediaSyncService
                     ->attach('file', $binary, basename($uploadPath), [
                         'Content-Type' => $uploadMime,
                     ])
-                    ->post($base . '/wp-json/omi-seo-ai/v1/attachments/' . $existingAttachmentId . '/replace-binary');
+                    ->post($base.'/wp-json/omi-seo-ai/v1/attachments/'.$existingAttachmentId.'/replace-binary');
 
                 if ($replaceResponse->successful()) {
                     $replaceBody = $replaceResponse->json();
@@ -374,18 +542,46 @@ final class WordPressLocalMediaSyncService
                         && ($replaceBody['success'] ?? false)
                         && $replaceUrl !== ''
                     ) {
-                        $media->update([
-                            'wp_attachment_id' => $existingAttachmentId,
-                            'wp_synced_at' => now(),
-                        ]);
+                        if (
+                            (bool) $config->auto_convert_webp
+                            && $uploadMime === 'image/webp'
+                            && ! $optimization->isWebpUrl($replaceUrl)
+                        ) {
+                            $reimported = $this->reimportWebpRetiringOldAttachment(
+                                $media,
+                                $writeToken,
+                                $base,
+                                $binary,
+                                basename($uploadPath),
+                                $uploadMime,
+                                $existingAttachmentId,
+                                $slug,
+                                $altText,
+                            );
+                            if ($reimported !== null) {
+                                return $this->rememberMediaSyncResult($mediaId, $config, $reimported);
+                            }
 
-                        return $this->cache[$mediaId] = [
-                            'success' => true,
-                            'attachment_id' => $existingAttachmentId,
-                            'wp_url' => $replaceUrl,
-                            'seo_media_id' => (int) $media->id,
-                            'message' => '',
-                        ];
+                            Log::warning('WordPress replace kept non-WebP URL; reimport WebP fallback failed.', [
+                                'article_id' => $article->id,
+                                'seo_media_id' => $mediaId,
+                                'wp_attachment_id' => $existingAttachmentId,
+                                'wp_url' => $replaceUrl,
+                            ]);
+                        } else {
+                            $media->update([
+                                'wp_attachment_id' => $existingAttachmentId,
+                                'wp_synced_at' => now(),
+                            ]);
+
+                            return $this->rememberMediaSyncResult($mediaId, $config, [
+                                'success' => true,
+                                'attachment_id' => $existingAttachmentId,
+                                'wp_url' => $replaceUrl,
+                                'seo_media_id' => (int) $media->id,
+                                'message' => '',
+                            ]);
+                        }
                     }
                 }
             } catch (Throwable $exception) {
@@ -399,16 +595,13 @@ final class WordPressLocalMediaSyncService
         }
 
         try {
-            $altText = trim((string) ($media->alt_text ?? ''));
-            $slug = (string) ($media->slug ?? '');
-
             $response = Http::timeout(120)
                 ->acceptJson()
                 ->withToken($writeToken)
                 ->attach('file', $binary, basename($uploadPath), [
                     'Content-Type' => $uploadMime,
                 ])
-                ->post($base . '/wp-json/omi-seo-ai/v1/attachments/import', [
+                ->post($base.'/wp-json/omi-seo-ai/v1/attachments/import', [
                     'slug' => $slug,
                     'title' => $altText !== '' ? $altText : $slug,
                     'alt_text' => $altText !== '' ? $altText : $slug,
@@ -420,13 +613,13 @@ final class WordPressLocalMediaSyncService
                 'error' => $exception->getMessage(),
             ]);
 
-            return $this->cache[$mediaId] = [
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
                 'message' => "Ảnh #{$mediaId}: không kết nối được WordPress ({$exception->getMessage()}).",
-            ];
+            ]);
         } finally {
             if ($cleanupTemp && is_file($uploadPath)) {
                 @unlink($uploadPath);
@@ -436,13 +629,13 @@ final class WordPressLocalMediaSyncService
         if (! $response->successful()) {
             $message = (string) ($response->json('message') ?? $response->body());
 
-            return $this->cache[$mediaId] = [
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
                 'message' => "Ảnh #{$mediaId}: WordPress lỗi HTTP {$response->status()} ({$message}).",
-            ];
+            ]);
         }
 
         $body = $response->json();
@@ -454,22 +647,22 @@ final class WordPressLocalMediaSyncService
         if (! is_array($body) || ! ($body['success'] ?? false) || $attachmentId <= 0 || $wpUrl === '') {
             $message = is_array($body) ? (string) ($body['message'] ?? 'Phản hồi không hợp lệ.') : 'Phản hồi không hợp lệ.';
             if ($existingAttachmentId > 0 && $existingWpUrl !== '') {
-                return $this->cache[$mediaId] = [
+                return $this->rememberMediaSyncResult($mediaId, $config, [
                     'success' => true,
                     'attachment_id' => $existingAttachmentId,
                     'wp_url' => $existingWpUrl,
                     'seo_media_id' => $mediaId,
                     'message' => '',
-                ];
+                ]);
             }
 
-            return $this->cache[$mediaId] = [
+            return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
                 'attachment_id' => 0,
                 'wp_url' => '',
                 'seo_media_id' => $mediaId,
                 'message' => "Ảnh #{$mediaId}: {$message}",
-            ];
+            ]);
         }
 
         $media->update([
@@ -477,13 +670,185 @@ final class WordPressLocalMediaSyncService
             'wp_synced_at' => now(),
         ]);
 
-        return $this->cache[$mediaId] = [
+        return $this->rememberMediaSyncResult($mediaId, $config, [
             'success' => true,
             'attachment_id' => $attachmentId,
             'wp_url' => $wpUrl,
             'seo_media_id' => (int) $media->id,
             'message' => '',
+        ]);
+    }
+
+    /**
+     * @param  array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}  $result
+     * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}
+     */
+    private function rememberMediaSyncResult(
+        int $mediaId,
+        ?SeoImageOptimizationSetting $config,
+        array $result,
+    ): array {
+        $optimization = app(SeoImageOptimizationService::class);
+        $wpUrl = trim((string) ($result['wp_url'] ?? ''));
+
+        if (
+            $config instanceof SeoImageOptimizationSetting
+            && (bool) $config->auto_convert_webp
+            && ($result['success'] ?? false)
+            && $wpUrl !== ''
+            && ! $optimization->isWebpUrl($wpUrl)
+        ) {
+            Log::warning('WordPress media sync succeeded but URL is not WebP; cache skipped for retry.', [
+                'seo_media_id' => $mediaId,
+                'wp_url' => $wpUrl,
+            ]);
+
+            return $result;
+        }
+
+        $this->cache[$mediaId] = $result;
+
+        return $result;
+    }
+
+    /**
+     * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}|null
+     */
+    private function resolveCachedMediaSyncResult(
+        int $mediaId,
+        SeoImageOptimizationSetting $config,
+        string $absolutePath,
+        string $existingWpUrl,
+    ): ?array {
+        if (! isset($this->cache[$mediaId])) {
+            return null;
+        }
+
+        $cached = $this->cache[$mediaId];
+        $cachedUrl = trim((string) ($cached['wp_url'] ?? ''));
+        $referenceUrl = $cachedUrl !== '' ? $cachedUrl : $existingWpUrl;
+
+        if (
+            $absolutePath !== ''
+            && ($cached['success'] ?? false)
+            && app(SeoImageOptimizationService::class)->needsWordPressWebpBackfill(
+                $config,
+                $absolutePath,
+                $referenceUrl !== '' ? $referenceUrl : null,
+            )
+        ) {
+            unset($this->cache[$mediaId]);
+
+            return null;
+        }
+
+        return $cached;
+    }
+
+    /**
+     * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}|null
+     */
+    private function reimportWebpRetiringOldAttachment(
+        SeoMedia $media,
+        string $writeToken,
+        string $base,
+        string $binary,
+        string $uploadFilename,
+        string $uploadMime,
+        int $oldAttachmentId,
+        string $slug,
+        string $altText,
+    ): ?array {
+        if ($oldAttachmentId <= 0 || $uploadMime !== 'image/webp') {
+            return null;
+        }
+
+        try {
+            $importResponse = Http::timeout(120)
+                ->acceptJson()
+                ->withToken($writeToken)
+                ->attach('file', $binary, $uploadFilename, [
+                    'Content-Type' => $uploadMime,
+                ])
+                ->post($base.'/wp-json/omi-seo-ai/v1/attachments/import', [
+                    'slug' => $slug !== '' ? $slug : pathinfo($uploadFilename, PATHINFO_FILENAME),
+                    'title' => $altText !== '' ? $altText : ($slug !== '' ? $slug : $uploadFilename),
+                    'alt_text' => $altText !== '' ? $altText : ($slug !== '' ? $slug : $uploadFilename),
+                ]);
+        } catch (Throwable $exception) {
+            Log::warning('WordPress WebP reimport failed', [
+                'seo_media_id' => (int) $media->id,
+                'old_attachment_id' => $oldAttachmentId,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if (! $importResponse->successful()) {
+            return null;
+        }
+
+        $body = $importResponse->json();
+        if (! is_array($body) || ! ($body['success'] ?? false)) {
+            return null;
+        }
+
+        $newAttachmentId = (int) ($body['attachment_id'] ?? 0);
+        $newUrl = trim((string) ($body['url'] ?? ''));
+        if ($newAttachmentId <= 0 || $newUrl === '') {
+            return null;
+        }
+
+        $this->deleteWordPressAttachment($writeToken, $base, $oldAttachmentId);
+
+        $media->update([
+            'wp_attachment_id' => $newAttachmentId,
+            'wp_synced_at' => now(),
+        ]);
+
+        return [
+            'success' => true,
+            'attachment_id' => $newAttachmentId,
+            'wp_url' => $newUrl,
+            'seo_media_id' => (int) $media->id,
+            'message' => '',
         ];
+    }
+
+    private function deleteWordPressAttachment(string $writeToken, string $base, int $attachmentId): void
+    {
+        if ($attachmentId <= 0) {
+            return;
+        }
+
+        try {
+            Http::timeout(30)
+                ->acceptJson()
+                ->withToken($writeToken)
+                ->post($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId.'/delete');
+        } catch (Throwable $exception) {
+            Log::warning('WordPress delete attachment failed after WebP reimport', [
+                'attachment_id' => $attachmentId,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function extractSeoMediaIdsFromHtml(string $html): array
+    {
+        $html = trim($html);
+        if ($html === '' || ! preg_match_all('/\bdata-seo-media-id\s*=\s*["\']?(\d+)["\']?/i', $html, $matches)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_filter(array_map(
+            static fn (string $id): int => (int) $id,
+            $matches[1] ?? [],
+        ), static fn (int $id): bool => $id > 0)));
     }
 
     private function hydrateMediaUsageForArticle(SeoMedia $media, SeoArticle $article): SeoMedia
@@ -540,9 +905,10 @@ final class WordPressLocalMediaSyncService
     /**
      * Gán src WordPress cho thẻ img có data-seo-media-id (kể cả src rỗng / localhost bị WP gỡ).
      *
+     * @param  array<int, bool>  $alreadySyncedMediaIds
      * @return array{html: string, synced_media_ids: list<int>, errors: list<string>}
      */
-    private function applyWpUrlsToSeoMediaImages(SeoArticle $article, string $html): array
+    private function applyWpUrlsToSeoMediaImages(SeoArticle $article, string $html, array $alreadySyncedMediaIds = []): array
     {
         $syncedMediaIds = [];
         $errors = [];
@@ -564,20 +930,51 @@ final class WordPressLocalMediaSyncService
                 continue;
             }
 
-            if (! $this->imageTagNeedsWpSrc($tag)) {
-                continue;
-            }
-
             try {
                 $media = SeoMedia::query()->whereKey($seoMediaId)->first();
                 if (! $media instanceof SeoMedia) {
                     $errors[] = "Không tìm thấy seo_media #{$seoMediaId} trong data-seo-media-id.";
+
                     continue;
+                }
+
+                if (! $this->imageTagNeedsResync($article, $tag, $media)) {
+                    continue;
+                }
+
+                if (isset($alreadySyncedMediaIds[$seoMediaId])) {
+                    $cached = $this->cache[$seoMediaId] ?? null;
+                    if (
+                        is_array($cached)
+                        && ($cached['success'] ?? false)
+                        && trim((string) ($cached['wp_url'] ?? '')) !== ''
+                        && (int) ($cached['attachment_id'] ?? 0) > 0
+                    ) {
+                        $wpUrl = trim((string) $cached['wp_url']);
+                        $attachmentId = (int) $cached['attachment_id'];
+                        $newTag = $this->patchImageTagWithWpSrc($tag, $wpUrl, $attachmentId);
+                        if ($newTag !== $tag) {
+                            $replacements[$offset] = ['length' => strlen($tag), 'tag' => $newTag];
+                        }
+                    }
+
+                    continue;
+                }
+
+                $this->forgetMediaCache($seoMediaId);
+
+                $oldUrl = $this->extractImageSrcFromTag($tag);
+                if ($oldUrl === '' && (int) ($media->wp_attachment_id ?? 0) > 0) {
+                    $article->loadMissing('site');
+                    if ($article->site instanceof Site) {
+                        $oldUrl = $this->fetchWordPressAttachmentUrl($article->site, (int) $media->wp_attachment_id);
+                    }
                 }
 
                 $result = $this->syncMedia($article, $media);
                 if (! $result['success']) {
                     $errors[] = $result['message'];
+
                     continue;
                 }
 
@@ -589,7 +986,12 @@ final class WordPressLocalMediaSyncService
                 $attachmentId = (int) ($result['attachment_id'] ?? 0);
                 if ($wpUrl === '' || $attachmentId <= 0) {
                     $errors[] = "Ảnh #{$seoMediaId}: thiếu URL WordPress sau sync.";
+
                     continue;
+                }
+
+                if ($oldUrl !== '' && $oldUrl !== $wpUrl) {
+                    $replacements['__urls__'][$oldUrl] = $wpUrl;
                 }
 
                 $newTag = $this->patchImageTagWithWpSrc($tag, $wpUrl, $attachmentId);
@@ -614,9 +1016,15 @@ final class WordPressLocalMediaSyncService
             ];
         }
 
-        krsort($replacements);
-        foreach ($replacements as $offset => $item) {
-            $html = substr_replace($html, $item['tag'], $offset, $item['length']);
+        $urlMap = is_array($replacements['__urls__'] ?? null) ? $replacements['__urls__'] : [];
+        unset($replacements['__urls__']);
+        $html = $this->applyUrlReplacements($html, $urlMap);
+
+        if ($replacements !== []) {
+            krsort($replacements);
+            foreach ($replacements as $offset => $item) {
+                $html = substr_replace($html, $item['tag'], $offset, $item['length']);
+            }
         }
 
         return [
@@ -624,6 +1032,14 @@ final class WordPressLocalMediaSyncService
             'synced_media_ids' => $syncedMediaIds,
             'errors' => $errors,
         ];
+    }
+
+    /**
+     * @param  array<string, string>  $urlMap
+     */
+    public function replaceUrlsInHtml(string $html, array $urlMap): string
+    {
+        return $this->applyUrlReplacements($html, $urlMap);
     }
 
     private function imageTagNeedsWpSrc(string $tag): bool
@@ -644,6 +1060,70 @@ final class WordPressLocalMediaSyncService
         return $this->isLocalSeoMediaSrc($src);
     }
 
+    private function imageTagNeedsResync(SeoArticle $article, string $tag, SeoMedia $media): bool
+    {
+        if ($this->imageTagNeedsWpSrc($tag)) {
+            return true;
+        }
+
+        $article->loadMissing('site');
+        $site = $article->site;
+        if (! $site instanceof Site) {
+            return false;
+        }
+
+        $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+        if ($path === '' || ! Storage::disk('public')->exists($path)) {
+            return false;
+        }
+
+        $optimization = app(SeoImageOptimizationService::class);
+        $config = $optimization->resolveForSite((int) $site->id);
+        $existingWpUrl = $this->extractImageSrcFromTag($tag);
+        if ($existingWpUrl === '' && (int) ($media->wp_attachment_id ?? 0) > 0) {
+            $existingWpUrl = $this->fetchWordPressAttachmentUrl($site, (int) $media->wp_attachment_id);
+        }
+
+        return $optimization->needsWordPressWebpBackfill(
+            $config,
+            Storage::disk('public')->path($path),
+            $existingWpUrl !== '' ? $existingWpUrl : null,
+        );
+    }
+
+    private function extractImageSrcFromTag(string $tag): string
+    {
+        if (! preg_match('/\bsrc\s*=\s*(["\']?)([^"\'>\s]*)\1/i', $tag, $srcMatch)) {
+            return '';
+        }
+
+        return trim(html_entity_decode((string) ($srcMatch[2] ?? ''), ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+    }
+
+    /**
+     * @param  array<string, string>  $urlMap
+     */
+    private function applyUrlReplacements(string $html, array $urlMap): string
+    {
+        if ($html === '' || $urlMap === []) {
+            return $html;
+        }
+
+        uksort($urlMap, static fn (string $left, string $right): int => strlen($right) <=> strlen($left));
+
+        foreach ($urlMap as $oldUrl => $newUrl) {
+            $oldUrl = trim($oldUrl);
+            $newUrl = trim($newUrl);
+            if ($oldUrl === '' || $newUrl === '' || $oldUrl === $newUrl) {
+                continue;
+            }
+
+            $html = str_replace($oldUrl, $newUrl, $html);
+        }
+
+        return $html;
+    }
+
     private function isLocalSeoMediaSrc(string $src): bool
     {
         return preg_match('#/storage/uploads/seo_media/|uploads/seo_media/#i', $src) === 1;
@@ -653,37 +1133,37 @@ final class WordPressLocalMediaSyncService
     {
         $wpUrl = trim($wpUrl);
         $escapedUrl = htmlspecialchars($wpUrl, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $wpClass = 'wp-image-' . $attachmentId;
+        $wpClass = 'wp-image-'.$attachmentId;
 
         if (preg_match('/\bsrc\s*=/i', $tag) === 1) {
             if (preg_match('/\bsrc\s*=\s*("|\')/i', $tag) === 1) {
-                $tag = (string) preg_replace('/\bsrc\s*=\s*("|\')[^"\']*\1/i', 'src="' . $escapedUrl . '"', $tag, 1);
+                $tag = (string) preg_replace('/\bsrc\s*=\s*("|\')[^"\']*\1/i', 'src="'.$escapedUrl.'"', $tag, 1);
             } else {
-                $tag = (string) preg_replace('/\bsrc\s*=\s*[^\s>]+/i', 'src="' . $escapedUrl . '"', $tag, 1);
+                $tag = (string) preg_replace('/\bsrc\s*=\s*[^\s>]+/i', 'src="'.$escapedUrl.'"', $tag, 1);
             }
         } else {
-            $tag = preg_replace('/<img\b/i', '<img src="' . $escapedUrl . '"', $tag, 1) ?? $tag;
+            $tag = preg_replace('/<img\b/i', '<img src="'.$escapedUrl.'"', $tag, 1) ?? $tag;
         }
 
         if (preg_match('/\bclass\s*=\s*("|\')([^"\']*)\1/i', $tag, $classMatch)) {
             $classes = trim((string) ($classMatch[2] ?? ''));
-            if (! preg_match('/\b' . preg_quote($wpClass, '/') . '\b/', $classes)) {
-                $classes = trim($classes . ' ' . $wpClass);
+            if (! preg_match('/\b'.preg_quote($wpClass, '/').'\b/', $classes)) {
+                $classes = trim($classes.' '.$wpClass);
             }
             $tag = (string) preg_replace(
                 '/\bclass\s*=\s*("|\')[^"\']*\1/i',
-                'class="' . htmlspecialchars($classes, ENT_QUOTES | ENT_HTML5, 'UTF-8') . '"',
+                'class="'.htmlspecialchars($classes, ENT_QUOTES | ENT_HTML5, 'UTF-8').'"',
                 $tag,
                 1,
             );
         } else {
-            $tag = preg_replace('/<img\b/i', '<img class="' . $wpClass . '"', $tag, 1) ?? $tag;
+            $tag = preg_replace('/<img\b/i', '<img class="'.$wpClass.'"', $tag, 1) ?? $tag;
         }
 
         if (preg_match('/\bdata-id\s*=/i', $tag) === 1) {
-            $tag = (string) preg_replace('/\bdata-id\s*=\s*("|\')[^"\']*\1/i', 'data-id="' . $attachmentId . '"', $tag, 1);
+            $tag = (string) preg_replace('/\bdata-id\s*=\s*("|\')[^"\']*\1/i', 'data-id="'.$attachmentId.'"', $tag, 1);
         } else {
-            $tag = preg_replace('/<img\b/i', '<img data-id="' . $attachmentId . '"', $tag, 1) ?? $tag;
+            $tag = preg_replace('/<img\b/i', '<img data-id="'.$attachmentId.'"', $tag, 1) ?? $tag;
         }
 
         return $tag;
@@ -716,12 +1196,13 @@ final class WordPressLocalMediaSyncService
                     $request = $request->withToken($token);
                 }
 
-                $response = $request->get($base . '/wp-json/wp/v2/media/' . $attachmentId);
+                $response = $request->get($base.'/wp-json/wp/v2/media/'.$attachmentId);
             } catch (Throwable $exception) {
                 Log::warning('WordPress attachment URL fetch failed', [
                     'attachment_id' => $attachmentId,
                     'error' => $exception->getMessage(),
                 ]);
+
                 continue;
             }
 
@@ -747,6 +1228,57 @@ final class WordPressLocalMediaSyncService
         }
 
         return '';
+    }
+
+    /**
+     * @return list<string>
+     */
+    /**
+     * @return list<array{url: string, seo_media_id: int}>
+     */
+    private function extractLocalSeoMediaImageRefs(string $html): array
+    {
+        $refs = [];
+        $seen = [];
+
+        if (preg_match_all('/<img\b[^>]*>/i', $html, $tags)) {
+            foreach ($tags[0] as $tag) {
+                $tag = (string) $tag;
+                $src = $this->extractImageSrcFromTag($tag);
+                if ($src === '' || ! $this->isLocalSeoMediaSrc($src)) {
+                    continue;
+                }
+
+                $seoMediaId = 0;
+                if (preg_match('/\bdata-seo-media-id\s*=\s*["\']?(\d+)["\']?/i', $tag, $idMatch)) {
+                    $seoMediaId = (int) ($idMatch[1] ?? 0);
+                }
+
+                $key = $seoMediaId > 0 ? 'id:'.$seoMediaId : 'url:'.$src;
+                if (isset($seen[$key])) {
+                    continue;
+                }
+                $seen[$key] = true;
+
+                $refs[] = [
+                    'url' => $src,
+                    'seo_media_id' => $seoMediaId,
+                ];
+            }
+        }
+
+        if ($refs !== []) {
+            return $refs;
+        }
+
+        foreach ($this->extractLocalSeoMediaUrls($html) as $url) {
+            $refs[] = [
+                'url' => $url,
+                'seo_media_id' => 0,
+            ];
+        }
+
+        return $refs;
     }
 
     /**
@@ -790,4 +1322,3 @@ final class WordPressLocalMediaSyncService
         return ltrim(substr($path, strlen('/storage/')), '/');
     }
 }
-

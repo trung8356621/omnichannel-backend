@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
+use Illuminate\Support\Facades\Storage;
 
 final class ArticleMediaLocalService
 {
@@ -23,6 +24,16 @@ final class ArticleMediaLocalService
     {
         $url = trim($url);
         if ($attachmentId <= 0 || $url === '') {
+            return;
+        }
+
+        $article->loadMissing('articleMetas');
+        $existingUrl = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_FEATURED_URL)?->meta_value ?? ''));
+        $existingId = (int) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+
+        if ($existingUrl === $url && $existingId === $attachmentId) {
             return;
         }
 
@@ -140,6 +151,55 @@ final class ArticleMediaLocalService
         ];
 
         return $this->saveProductAlbumLocal($article, $album);
+    }
+
+    /**
+     * @param  array<string, string>  $urlMap
+     */
+    public function applyWordPressUrlMap(SeoArticle $article, array $urlMap): int
+    {
+        if ($urlMap === []) {
+            return 0;
+        }
+
+        $article->loadMissing('articleMetas');
+        $updated = 0;
+
+        $featuredUrl = trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_FEATURED_URL)?->meta_value ?? ''));
+        if ($featuredUrl !== '' && isset($urlMap[$featuredUrl])) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => self::META_FEATURED_URL],
+                ['meta_value' => $urlMap[$featuredUrl]],
+            );
+            $updated++;
+        }
+
+        $gallery = $this->resolveGallery($article);
+        $galleryChanged = false;
+        foreach ($gallery as $index => $item) {
+            $url = trim((string) ($item['url'] ?? ''));
+            if ($url === '' || ! isset($urlMap[$url])) {
+                continue;
+            }
+
+            $gallery[$index]['url'] = $urlMap[$url];
+            $galleryChanged = true;
+        }
+
+        if ($galleryChanged) {
+            $ids = array_map(static fn (array $item): int => (int) ($item['id'] ?? 0), $gallery);
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => self::META_PRODUCT_GALLERY],
+                ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
+            );
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => self::META_PRODUCT_GALLERY_IDS],
+                ['meta_value' => json_encode($ids, JSON_UNESCAPED_UNICODE)],
+            );
+            $updated++;
+        }
+
+        return $updated;
     }
 
     public function resolveLocalRefIdFromImageUrl(int $siteId, string $url): int
@@ -374,6 +434,7 @@ final class ArticleMediaLocalService
                     if (filled($resolved['message'] ?? null)) {
                         $syncErrors[] = (string) $resolved['message'];
                     }
+
                     continue;
                 }
 
@@ -454,7 +515,56 @@ final class ArticleMediaLocalService
     {
         $article->loadMissing('articleMetas');
 
-        return trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_MEDIA_PENDING_SYNC)?->meta_value ?? '')) === '1';
+        if (trim((string) ($article->articleMetas->firstWhere('meta_key', self::META_MEDIA_PENDING_SYNC)?->meta_value ?? '')) === '1') {
+            return true;
+        }
+
+        return $this->featuredNeedsWordPressWebpPush($article);
+    }
+
+    private function featuredNeedsWordPressWebpPush(SeoArticle $article): bool
+    {
+        $article->loadMissing('site', 'articleMetas');
+        $site = $article->site;
+        if ($site === null) {
+            return false;
+        }
+
+        $optimization = app(SeoImageOptimizationService::class);
+        $config = $optimization->resolveForSite((int) $site->id);
+        if (! (bool) $config->auto_convert_webp) {
+            return false;
+        }
+
+        $featuredRefId = (int) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        if ($featuredRefId <= 0) {
+            return false;
+        }
+
+        $featuredUrl = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_FEATURED_URL)?->meta_value ?? ''));
+        if ($featuredUrl !== '' && $optimization->isWebpUrl($featuredUrl)) {
+            return false;
+        }
+
+        $media = SeoMedia::query()->whereKey($featuredRefId)->first();
+        if (! $media instanceof SeoMedia) {
+            return false;
+        }
+
+        $path = ltrim(str_replace('\\', '/', (string) ($media->path ?? '')), '/');
+        if ($path === '' || ! Storage::disk('public')->exists($path)) {
+            return false;
+        }
+
+        $absolutePath = Storage::disk('public')->path($path);
+
+        return $optimization->needsWordPressWebpBackfill(
+            $config,
+            $absolutePath,
+            $featuredUrl !== '' ? $featuredUrl : null,
+        );
     }
 
     /**
@@ -506,5 +616,50 @@ final class ArticleMediaLocalService
     private function clearMediaPendingSync(SeoArticle $article): void
     {
         $article->articleMetas()->where('meta_key', self::META_MEDIA_PENDING_SYNC)->delete();
+    }
+
+    public function linkSeoMediaToArticle(SeoMedia $media, SeoArticle $article): void
+    {
+        $updates = [];
+        $siteId = (int) ($article->site_id ?? 0);
+        $articleId = (int) ($article->id ?? 0);
+
+        if ($siteId > 0 && (int) ($media->site_id ?? 0) <= 0) {
+            $updates['site_id'] = $siteId;
+        }
+
+        if ($articleId > 0) {
+            $articleIds = SeoMedia::normalizeArticleIds($media->article_id);
+            if (! in_array($articleId, $articleIds, true)) {
+                $articleIds[] = $articleId;
+                $updates['article_id'] = array_values(array_unique($articleIds));
+            }
+        }
+
+        if ($updates !== []) {
+            $media->update($updates);
+        }
+    }
+
+    public function appendGeneratedImageToProductAlbum(
+        SeoArticle $article,
+        SeoMedia $media,
+        ?string $url = null,
+    ): bool {
+        if ((string) ($article->type ?? '') !== 'product') {
+            return false;
+        }
+
+        $url = trim($url ?? $media->publicUrl());
+        if ($url === '' || (int) $media->id <= 0) {
+            return false;
+        }
+
+        $this->linkSeoMediaToArticle($media, $article);
+        $article->unsetRelation('articleMetas');
+        $beforeCount = count($this->resolveProductAlbum($article));
+        $after = $this->appendProductAlbumLocal($article, (int) $media->id, $url);
+
+        return count($after) > $beforeCount;
     }
 }

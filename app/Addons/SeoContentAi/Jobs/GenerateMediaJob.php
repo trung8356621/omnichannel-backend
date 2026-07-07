@@ -8,7 +8,9 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
+use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptResultLinkService;
@@ -154,6 +156,10 @@ class GenerateMediaJob implements ShouldQueue
             }
 
             $media = $media->fresh();
+            if ($this->toolType === 'image' && $media instanceof SeoMedia) {
+                $this->persistProductGalleryLinkIfNeeded($media);
+            }
+
             if ($articleId > 0 && $media instanceof SeoMedia) {
                 $article = SeoArticle::query()->find($articleId);
                 if ($article instanceof SeoArticle) {
@@ -199,5 +205,30 @@ class GenerateMediaJob implements ShouldQueue
             'status' => 'failed',
             'error_message' => mb_substr($message, 0, 1000),
         ]);
+    }
+
+    private function persistProductGalleryLinkIfNeeded(SeoMedia $media): void
+    {
+        if (trim((string) ($media->editor_block_id ?? '')) !== ArticleEditorMediaAiService::PRODUCT_GALLERY_EDITOR_BLOCK_ID) {
+            return;
+        }
+
+        $articleId = (int) ($media->firstArticleId() ?? 0);
+        if ($articleId <= 0) {
+            return;
+        }
+
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        try {
+            app(ArticleMediaLocalService::class)->appendGeneratedImageToProductAlbum($article, $media);
+        } catch (Throwable $exception) {
+            logger()->warning(
+                "GenerateMediaJob product gallery link failed [media_id={$this->seoMediaId}]: {$exception->getMessage()}",
+            );
+        }
     }
 }

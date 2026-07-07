@@ -6,17 +6,19 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoImageOptimizationSetting;
+use App\Addons\SeoContentAi\Support\SeoImagePipeline;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Intervention\Image\Format;
-use Intervention\Image\Laravel\Facades\Image;
 
 class SeoImageOptimizationService
 {
+    public const WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES = 102400;
+
     public function __construct(
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly SeoMediaPathAllocator $mediaPaths,
+        private readonly SeoImagePipeline $imagePipeline,
     ) {}
 
     public function resolveForSite(?int $siteId): SeoImageOptimizationSetting
@@ -35,7 +37,7 @@ class SeoImageOptimizationService
             ->whereNull('site_id')
             ->first();
 
-        return $global ?? new SeoImageOptimizationSetting();
+        return $global ?? new SeoImageOptimizationSetting;
     }
 
     /**
@@ -54,28 +56,46 @@ class SeoImageOptimizationService
         } else {
             $slug = Str::slug($originalName) !== ''
                 ? Str::slug($originalName)
-                : 'img-' . time();
+                : 'img-'.time();
         }
 
         if ($slug === '') {
-            $slug = 'img-' . time();
+            $slug = 'img-'.time();
         }
 
-        $extension = $config->auto_convert_webp
-            ? 'webp'
-            : $this->normalizeExtension($originalExtension);
+        $extension = $this->normalizeExtension($originalExtension);
 
         $allocated = $this->mediaPaths->allocate($slug, $extension);
         $slug = $allocated['slug'];
         $filename = $allocated['filename'];
         $relativePath = $allocated['relative_path'];
 
-        $image = Image::decodePath($file->getRealPath());
-        $this->applyConfiguredDimensionLimits($image, $config);
+        $tempPath = $this->createTempImagePath('upload', $extension);
+        try {
+            $sourcePath = $file->getRealPath();
+            if ($sourcePath === false || ! is_file($sourcePath)) {
+                throw new \RuntimeException('Không đọc được file upload.');
+            }
 
-        $quality = max(10, min(100, (int) $config->quality));
-        $format = $this->formatForExtension($extension);
-        $encoded = $image->encodeUsingFormat($format, quality: $quality);
+            if (! copy($sourcePath, $tempPath)) {
+                throw new \RuntimeException('Không sao chép được file upload.');
+            }
+
+            $this->applyConfiguredDimensionLimitsToPath($tempPath, $config);
+            $quality = max(10, min(100, (int) $config->quality));
+            if (! $this->imagePipeline->encodeFile($tempPath, $extension, $quality)) {
+                throw new \RuntimeException('Không encode được ảnh upload.');
+            }
+
+            $binary = file_get_contents($tempPath);
+            if (! is_string($binary) || $binary === '') {
+                throw new \RuntimeException('Ảnh upload rỗng sau xử lý.');
+            }
+        } finally {
+            if (is_file($tempPath)) {
+                @unlink($tempPath);
+            }
+        }
 
         $altText = $this->buildAltText($config, $article, $slug);
 
@@ -84,7 +104,7 @@ class SeoImageOptimizationService
             'filename' => $filename,
             'relative_path' => $relativePath,
             'alt_text' => $altText,
-            'binary' => (string) $encoded,
+            'binary' => $binary,
         ];
     }
 
@@ -126,23 +146,97 @@ class SeoImageOptimizationService
         return $extension;
     }
 
-    private function formatForExtension(string $extension): Format
-    {
-        return match ($extension) {
-            'webp' => Format::WEBP,
-            'jpg', 'jpeg' => Format::JPEG,
-            'gif' => Format::GIF,
-            default => Format::PNG,
-        };
-    }
-
     public function isWebpPath(string $path): bool
     {
         return strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'webp';
     }
 
+    public function isWebpUrl(string $url): bool
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return false;
+        }
+
+        $path = parse_url($url, PHP_URL_PATH);
+
+        return is_string($path) && $this->isWebpPath($path);
+    }
+
+    public function canEncodeWebp(): bool
+    {
+        if (extension_loaded('imagick')) {
+            try {
+                return in_array('WEBP', \Imagick::queryFormats(), true);
+            } catch (\Throwable) {
+                // fall through
+            }
+        }
+
+        return function_exists('imagewebp');
+    }
+
     /**
-     * Tối ưu file trên đĩa (resize, nén, chuyển WebP). Bỏ qua nếu đã là .webp.
+     * Ảnh đã có trên WordPress nhưng URL chưa .webp — chỉ khi bản WebP local thật sự dùng được.
+     * Không ép backfill khi đã fallback JPEG tối ưu (tránh import trùng attachment).
+     */
+    public function needsWordPressWebpBackfill(
+        SeoImageOptimizationSetting $config,
+        string $absolutePath,
+        ?string $existingWpUrl = null,
+    ): bool {
+        if (! (bool) $config->auto_convert_webp) {
+            return false;
+        }
+
+        if (! is_file($absolutePath) || ! $this->isValidImageFile($absolutePath)) {
+            return false;
+        }
+
+        if ($existingWpUrl !== null && $existingWpUrl !== '' && $this->isWebpUrl($existingWpUrl)) {
+            return false;
+        }
+
+        if ($this->hasPersistentOptimizedUploadFallback($absolutePath)) {
+            return false;
+        }
+
+        if ($this->isWebpPath($absolutePath)) {
+            return false;
+        }
+
+        return $this->hasUsableLocalWebpCopy($absolutePath);
+    }
+
+    public function hasPersistentOptimizedUploadFallback(string $absolutePath): bool
+    {
+        $optimizedPath = $this->resolveSiblingOptimizedUploadAbsolutePath($absolutePath, 'jpg');
+        $sourceMtime = @filemtime($absolutePath) ?: 0;
+
+        return is_file($optimizedPath)
+            && (@filemtime($optimizedPath) ?: 0) >= $sourceMtime
+            && $this->isValidImageFile($optimizedPath);
+    }
+
+    private function hasUsableLocalWebpCopy(string $absolutePath): bool
+    {
+        if (! $this->canEncodeWebp()) {
+            return false;
+        }
+
+        $webpPath = $this->resolveSiblingWebpAbsolutePath($absolutePath);
+        $sourceMtime = @filemtime($absolutePath) ?: 0;
+        if (! is_file($webpPath) || (@filemtime($webpPath) ?: 0) < $sourceMtime) {
+            return false;
+        }
+
+        $binary = @file_get_contents($webpPath);
+
+        return is_string($binary) && $this->isValidWebpBinary($binary);
+    }
+
+    /**
+     * Tối ưu file trên đĩa Laravel (resize, nén) — giữ nguyên định dạng, không chuyển WebP.
      *
      * @return array{applied: bool, absolute_path: string}
      */
@@ -153,7 +247,7 @@ class SeoImageOptimizationService
         }
 
         try {
-            $encoded = $this->encodeOptimizedImage($absolutePath, $config, (bool) $config->auto_convert_webp);
+            $encoded = $this->encodeOptimizedImage($absolutePath, $config, false);
         } catch (\Throwable) {
             return ['applied' => false, 'absolute_path' => $absolutePath];
         }
@@ -167,13 +261,11 @@ class SeoImageOptimizationService
             $currentExtension = 'jpg';
         }
 
-        $targetExtension = $config->auto_convert_webp
-            ? 'webp'
-            : $this->normalizeExtension($currentExtension);
+        $targetExtension = $this->normalizeExtension($currentExtension);
 
         $directory = dirname($absolutePath);
         $basename = pathinfo($absolutePath, PATHINFO_FILENAME);
-        $newAbsolutePath = $directory . DIRECTORY_SEPARATOR . $basename . '.' . $targetExtension;
+        $newAbsolutePath = $directory.DIRECTORY_SEPARATOR.$basename.'.'.$targetExtension;
 
         file_put_contents($newAbsolutePath, $encoded);
 
@@ -185,7 +277,245 @@ class SeoImageOptimizationService
     }
 
     /**
-     * Tối ưu tạm để upload WordPress: giữ JPEG/PNG (không WebP), không đổi file gốc trên disk.
+     * Tạo (hoặc tái sử dụng) bản WebP cạnh file gốc trên disk Laravel — không đổi file PNG/JPG gốc.
+     */
+    public function ensureLocalWebpCopy(string $absolutePath, SeoImageOptimizationSetting $config): ?string
+    {
+        if (! (bool) $config->auto_convert_webp) {
+            return null;
+        }
+
+        if ($this->isWebpPath($absolutePath)) {
+            return $absolutePath;
+        }
+
+        if (! $this->canEncodeWebp() || ! $this->isValidImageFile($absolutePath)) {
+            return null;
+        }
+
+        $webpPath = $this->resolveSiblingWebpAbsolutePath($absolutePath);
+        $sourceMtime = @filemtime($absolutePath) ?: 0;
+        if (
+            is_file($webpPath)
+            && (@filemtime($webpPath) ?: 0) >= $sourceMtime
+            && $this->isValidImageFile($webpPath)
+            && $this->isWebpPath($webpPath)
+        ) {
+            return $webpPath;
+        }
+
+        $sourceTemp = $this->copyToTempWorkspace($absolutePath);
+        if ($sourceTemp === null) {
+            return null;
+        }
+
+        $outputTemp = $this->createTempImagePath('wp-webp', 'webp');
+        $quality = max(10, min(100, (int) $config->quality));
+
+        try {
+            $this->applyConfiguredDimensionLimitsToPath($sourceTemp, $config);
+
+            if (! $this->imagePipeline->encodeSourceToPath($sourceTemp, $outputTemp, 'webp', $quality)) {
+                logger()->warning('Local WebP encode failed.', [
+                    'path' => $absolutePath,
+                    'driver' => $this->imagePipeline->lastDriver(),
+                    'can_encode_webp' => $this->canEncodeWebp(),
+                ]);
+
+                return null;
+            }
+
+            $encoded = file_get_contents($outputTemp);
+        } catch (\Throwable $exception) {
+            logger()->warning('Local WebP encode failed.', [
+                'path' => $absolutePath,
+                'message' => $exception->getMessage(),
+                'driver' => $this->imagePipeline->lastDriver(),
+            ]);
+
+            return null;
+        } finally {
+            if (is_file($sourceTemp)) {
+                @unlink($sourceTemp);
+            }
+            if (is_file($outputTemp)) {
+                @unlink($outputTemp);
+            }
+        }
+
+        if (! is_string($encoded) || ! $this->isValidWebpBinary($encoded)) {
+            logger()->warning('Local WebP output invalid.', [
+                'path' => $absolutePath,
+                'driver' => $this->imagePipeline->lastDriver(),
+            ]);
+
+            return null;
+        }
+
+        $directory = dirname($webpPath);
+        if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
+            return null;
+        }
+
+        if (@file_put_contents($webpPath, $encoded) === false) {
+            return null;
+        }
+
+        return $webpPath;
+    }
+
+    public function resolveSiblingWebpAbsolutePath(string $absolutePath): string
+    {
+        $directory = dirname($absolutePath);
+        $basename = pathinfo($absolutePath, PATHINFO_FILENAME);
+
+        return $directory.DIRECTORY_SEPARATOR.$basename.'.webp';
+    }
+
+    public function resolveSiblingWebpRelativePath(string $relativePath): string
+    {
+        $relativePath = ltrim(str_replace('\\', '/', $relativePath), '/');
+        $directory = pathinfo($relativePath, PATHINFO_DIRNAME);
+        $basename = pathinfo($relativePath, PATHINFO_FILENAME);
+
+        if ($directory === '' || $directory === '.') {
+            return $basename.'.webp';
+        }
+
+        return $directory.'/'.$basename.'.webp';
+    }
+
+    /**
+     * Bản JPEG/PNG tối ưu cạnh file gốc — dùng khi WebP thất bại, mục tiêu ≤ 100KB cho upload WordPress.
+     */
+    public function ensureLocalOptimizedUploadCopy(
+        string $absolutePath,
+        SeoImageOptimizationSetting $config,
+        int $maxBytes = self::WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES,
+    ): ?string {
+        if (! is_file($absolutePath) || ! $this->isValidImageFile($absolutePath)) {
+            return null;
+        }
+
+        $targetExtension = $this->resolveOptimizedUploadTargetExtension($absolutePath);
+        $optimizedPath = $this->resolveSiblingOptimizedUploadAbsolutePath($absolutePath, $targetExtension);
+        $sourceMtime = @filemtime($absolutePath) ?: 0;
+
+        if (
+            is_file($optimizedPath)
+            && (@filemtime($optimizedPath) ?: 0) >= $sourceMtime
+            && $this->isValidImageFile($optimizedPath)
+            && (int) filesize($optimizedPath) <= $maxBytes
+        ) {
+            return $optimizedPath;
+        }
+
+        $quality = max(15, min(100, (int) $config->quality));
+        $scaleFactor = 1.0;
+
+        for ($attempt = 0; $attempt < 14; $attempt++) {
+            $sourceTemp = $this->copyToTempWorkspace($absolutePath);
+            if ($sourceTemp === null) {
+                break;
+            }
+
+            $outputTemp = $this->createTempImagePath('wp-opt', $targetExtension);
+
+            try {
+                if ($scaleFactor < 1.0) {
+                    $this->applyScaleToPath($sourceTemp, $scaleFactor);
+                } else {
+                    $this->applyConfiguredDimensionLimitsToPath($sourceTemp, $config);
+                }
+
+                if (
+                    $this->imagePipeline->encodeSourceToPath($sourceTemp, $outputTemp, $targetExtension, $quality)
+                    && $this->isValidImageFile($outputTemp)
+                    && (int) filesize($outputTemp) <= $maxBytes
+                ) {
+                    $directory = dirname($optimizedPath);
+                    if (! is_dir($directory) && ! @mkdir($directory, 0755, true) && ! is_dir($directory)) {
+                        return null;
+                    }
+
+                    if (@copy($outputTemp, $optimizedPath) || @file_put_contents($optimizedPath, (string) file_get_contents($outputTemp)) !== false) {
+                        logger()->info('WordPress upload fallback: ảnh đã nén dưới ngưỡng.', [
+                            'path' => $absolutePath,
+                            'optimized_path' => $optimizedPath,
+                            'bytes' => (int) filesize($optimizedPath),
+                            'max_bytes' => $maxBytes,
+                            'quality' => $quality,
+                            'scale' => round($scaleFactor, 2),
+                        ]);
+
+                        return $optimizedPath;
+                    }
+                }
+            } finally {
+                if (is_file($sourceTemp)) {
+                    @unlink($sourceTemp);
+                }
+                if (is_file($outputTemp)) {
+                    @unlink($outputTemp);
+                }
+            }
+
+            if ($quality > 20) {
+                $quality = max(15, $quality - 10);
+            } elseif ($scaleFactor > 0.35) {
+                $scaleFactor *= 0.88;
+                $quality = max(15, min(100, (int) $config->quality));
+            } else {
+                break;
+            }
+        }
+
+        return null;
+    }
+
+    public function resolveSiblingOptimizedUploadAbsolutePath(string $absolutePath, string $targetExtension): string
+    {
+        $directory = dirname($absolutePath);
+        $basename = pathinfo($absolutePath, PATHINFO_FILENAME);
+        $targetExtension = $this->normalizeExtension($targetExtension);
+
+        return $directory.DIRECTORY_SEPARATOR.$basename.'-wp-upload.'.$targetExtension;
+    }
+
+    private function resolveOptimizedUploadTargetExtension(string $absolutePath): string
+    {
+        $extension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
+        if ($extension === 'jpeg') {
+            $extension = 'jpg';
+        }
+
+        return in_array($extension, ['jpg', 'jpeg'], true) ? 'jpg' : 'jpg';
+    }
+
+    private function applyScaleToPath(string $absolutePath, float $scaleFactor): void
+    {
+        if ($scaleFactor >= 1.0 || $scaleFactor <= 0.0 || ! is_file($absolutePath)) {
+            return;
+        }
+
+        $size = @getimagesize($absolutePath);
+        if (! is_array($size)) {
+            return;
+        }
+
+        $width = (int) ($size[0] ?? 0);
+        $height = (int) ($size[1] ?? 0);
+        if ($width <= 0 || $height <= 0) {
+            return;
+        }
+
+        $newWidth = max(1, (int) round($width * $scaleFactor));
+        $newHeight = max(1, (int) round($height * $scaleFactor));
+        $this->imagePipeline->resizeFile($absolutePath, $newWidth, $newHeight);
+    }
+
+    /**
+     * File dùng khi upload WordPress: bản WebP local persistent nếu bật convert, ngược lại file gốc.
      *
      * @return array{path: string, temporary: bool, mime: string}|null
      */
@@ -195,61 +525,99 @@ class SeoImageOptimizationService
             return null;
         }
 
-        try {
-            $encoded = $this->encodeOptimizedImage($absolutePath, $config, false);
-        } catch (\Throwable) {
-            return [
+        if ((bool) $config->auto_convert_webp) {
+            $webpPath = $this->ensureLocalWebpCopy($absolutePath, $config);
+            if ($webpPath !== null) {
+                return [
+                    'path' => $webpPath,
+                    'temporary' => false,
+                    'mime' => 'image/webp',
+                ];
+            }
+
+            logger()->warning('Không tạo được bản WebP local — thử fallback nén <100KB.', [
                 'path' => $absolutePath,
-                'temporary' => false,
-                'mime' => $this->mimeFromPath($absolutePath),
-            ];
-        }
+                'can_encode_webp' => $this->canEncodeWebp(),
+            ]);
 
-        if ($encoded === null) {
-            return [
+            $optimizedPath = $this->ensureLocalOptimizedUploadCopy($absolutePath, $config);
+            if ($optimizedPath !== null) {
+                return [
+                    'path' => $optimizedPath,
+                    'temporary' => false,
+                    'mime' => $this->mimeFromPath($optimizedPath),
+                ];
+            }
+
+            if ((int) filesize($absolutePath) <= self::WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES) {
+                return $this->fallbackWordPressUploadFile(
+                    $absolutePath,
+                    'WebP thất bại; dùng file gốc vì đã dưới 100KB.',
+                );
+            }
+
+            logger()->error('Không tạo được WebP và không nén được ảnh dưới 100KB.', [
                 'path' => $absolutePath,
-                'temporary' => false,
-                'mime' => $this->mimeFromPath($absolutePath),
-            ];
+                'bytes' => (int) filesize($absolutePath),
+            ]);
+
+            return null;
         }
 
-        $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
-        if ($currentExtension === 'jpeg') {
-            $currentExtension = 'jpg';
-        }
-        if ($currentExtension === 'webp') {
-            $currentExtension = 'jpg';
-        }
+        return $this->fallbackWordPressUploadFile($absolutePath);
+    }
 
-        $targetExtension = $this->normalizeExtension($currentExtension);
-        $tempBase = tempnam(sys_get_temp_dir(), 'seo_wp_upload_');
-        if ($tempBase === false) {
-            return [
-                'path' => $absolutePath,
-                'temporary' => false,
-                'mime' => $this->mimeFromPath($absolutePath),
-            ];
-        }
-
-        @unlink($tempBase);
-        $tempPath = $tempBase . '.' . $targetExtension;
-        file_put_contents($tempPath, $encoded);
-
-        if (! $this->isValidImageFile($tempPath)) {
-            @unlink($tempPath);
-
-            return [
-                'path' => $absolutePath,
-                'temporary' => false,
-                'mime' => $this->mimeFromPath($absolutePath),
-            ];
+    /**
+     * @return array{path: string, temporary: bool, mime: string}
+     */
+    private function fallbackWordPressUploadFile(string $absolutePath, ?string $reason = null): array
+    {
+        if ($reason !== null) {
+            logger()->warning($reason, ['path' => $absolutePath]);
         }
 
         return [
-            'path' => $tempPath,
-            'temporary' => true,
-            'mime' => $this->mimeFromPath($tempPath),
+            'path' => $absolutePath,
+            'temporary' => false,
+            'mime' => $this->mimeFromPath($absolutePath),
         ];
+    }
+
+    private function isValidWebpBinary(string $binary): bool
+    {
+        if (strlen($binary) < 16) {
+            return false;
+        }
+
+        return strncmp($binary, 'RIFF', 4) === 0 && substr($binary, 8, 4) === 'WEBP';
+    }
+
+    private function copyToTempWorkspace(string $absolutePath): ?string
+    {
+        $extension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'png');
+        if ($extension === 'jpeg') {
+            $extension = 'jpg';
+        }
+
+        $tempPath = $this->createTempImagePath('wp-source', $this->normalizeExtension($extension));
+        if (! copy($absolutePath, $tempPath)) {
+            return null;
+        }
+
+        return $tempPath;
+    }
+
+    private function createSystemTempPath(string $prefix, string $extension): ?string
+    {
+        $extension = $this->normalizeExtension($extension);
+        $tempBase = tempnam(sys_get_temp_dir(), $prefix);
+        if ($tempBase === false) {
+            return null;
+        }
+
+        @unlink($tempBase);
+
+        return $tempBase.'.'.$extension;
     }
 
     public function isValidImageFile(string $absolutePath): bool
@@ -276,23 +644,29 @@ class SeoImageOptimizationService
         SeoImageOptimizationSetting $config,
         bool $convertToWebp,
     ): ?string {
-        $image = Image::decodePath($absolutePath);
-        $this->applyConfiguredDimensionLimits($image, $config);
+        if (! is_file($absolutePath)) {
+            return null;
+        }
 
-        $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'jpg');
+        $this->applyConfiguredDimensionLimitsToPath($absolutePath, $config);
+
+        $currentExtension = strtolower(pathinfo($absolutePath, PATHINFO_EXTENSION) ?: 'png');
         if ($currentExtension === 'jpeg') {
             $currentExtension = 'jpg';
         }
 
         $targetExtension = $convertToWebp
             ? 'webp'
-            : $this->normalizeExtension($currentExtension === 'webp' ? 'jpg' : $currentExtension);
+            : $this->normalizeExtension($currentExtension === 'webp' ? 'png' : $currentExtension);
 
         $quality = max(10, min(100, (int) $config->quality));
-        $format = $this->formatForExtension($targetExtension);
-        $encoded = (string) $image->encodeUsingFormat($format, quality: $quality);
+        if (! $this->imagePipeline->encodeFile($absolutePath, $targetExtension, $quality)) {
+            return null;
+        }
 
-        return strlen($encoded) >= 256 ? $encoded : null;
+        $encoded = file_get_contents($absolutePath);
+
+        return is_string($encoded) && strlen($encoded) >= 256 ? $encoded : null;
     }
 
     public function absoluteToPublicRelative(string $absolutePath): string
@@ -319,32 +693,47 @@ class SeoImageOptimizationService
     }
 
     /**
-     * Chỉ giới hạn một chiều: width hoặc height (không scaleDown cả hai — tránh méo/cắt).
+     * Giới hạn một chiều qua pipeline Imagick/GD (file trên đĩa).
      */
-    public function applyConfiguredDimensionLimits(mixed $image, SeoImageOptimizationSetting $config): void
+    private function applyConfiguredDimensionLimitsToPath(string $absolutePath, SeoImageOptimizationSetting $config): void
     {
-        if (! $config->limit_dimensions) {
+        if (! $config->limit_dimensions || ! is_file($absolutePath)) {
             return;
         }
 
         $maxWidth = max(0, (int) $config->max_width);
         $maxHeight = max(0, (int) $config->max_height);
 
-        if ($maxWidth > 0 && $maxHeight <= 0) {
-            $image->scaleDown(width: max(1, $maxWidth));
+        $limitByWidth = $maxWidth > 0 && $maxHeight <= 0;
+        $limitByHeight = $maxHeight > 0 && $maxWidth <= 0;
 
+        if ($maxWidth > 0 && $maxHeight > 0) {
+            $limitByWidth = true;
+            $limitByHeight = false;
+        }
+
+        if (! $limitByWidth && ! $limitByHeight) {
             return;
         }
 
-        if ($maxHeight > 0 && $maxWidth <= 0) {
-            $image->scaleDown(height: max(1, $maxHeight));
+        $this->imagePipeline->applyMaxDimensions(
+            $absolutePath,
+            $maxWidth,
+            $maxHeight,
+            $limitByWidth,
+            $limitByHeight,
+        );
+    }
 
-            return;
+    private function createTempImagePath(string $prefix, string $extension): string
+    {
+        $extension = $this->normalizeExtension($extension);
+        $dir = storage_path('app/temp/seo-image-optimize');
+        if (! is_dir($dir)) {
+            mkdir($dir, 0755, true);
         }
 
-        if ($maxWidth > 0) {
-            $image->scaleDown(width: max(1, $maxWidth));
-        }
+        return $dir.DIRECTORY_SEPARATOR.$prefix.'-'.uniqid('', true).'.'.$extension;
     }
 
     /**
@@ -364,33 +753,43 @@ class SeoImageOptimizationService
 
         $seed = $slugSeed !== null && trim($slugSeed) !== ''
             ? Str::slug($slugSeed)
-            : 'img-' . time();
+            : 'img-'.time();
 
         if ($config->clean_filename) {
             $slug = Str::slug($seed);
         } else {
-            $slug = Str::slug($seed) !== '' ? Str::slug($seed) : 'img-' . time();
+            $slug = Str::slug($seed) !== '' ? Str::slug($seed) : 'img-'.time();
         }
 
         if ($slug === '') {
-            $slug = 'img-' . time();
+            $slug = 'img-'.time();
         }
 
-        $extension = $config->auto_convert_webp
-            ? 'webp'
-            : $this->normalizeExtension($originalExtension);
+        $extension = $this->normalizeExtension($originalExtension);
 
         $allocated = $this->mediaPaths->allocate($slug, $extension);
         $slug = $allocated['slug'];
         $filename = $allocated['filename'];
         $relativePath = $allocated['relative_path'];
 
-        $image = Image::decodeBinary($binary);
-        $this->applyConfiguredDimensionLimits($image, $config);
+        $tempPath = $this->createTempImagePath('binary', $extension);
+        try {
+            file_put_contents($tempPath, $binary);
+            $this->applyConfiguredDimensionLimitsToPath($tempPath, $config);
+            $quality = max(10, min(100, (int) $config->quality));
+            if (! $this->imagePipeline->encodeFile($tempPath, $extension, $quality)) {
+                throw new \RuntimeException('Không encode được ảnh binary.');
+            }
 
-        $quality = max(10, min(100, (int) $config->quality));
-        $format = $this->formatForExtension($extension);
-        $encoded = $image->encodeUsingFormat($format, quality: $quality);
+            $encoded = file_get_contents($tempPath);
+            if (! is_string($encoded) || $encoded === '') {
+                throw new \RuntimeException('Ảnh binary rỗng sau xử lý.');
+            }
+        } finally {
+            if (is_file($tempPath)) {
+                @unlink($tempPath);
+            }
+        }
 
         $altText = $this->buildAltText($config, $article, $slug);
 
@@ -399,7 +798,7 @@ class SeoImageOptimizationService
             'filename' => $filename,
             'relative_path' => $relativePath,
             'alt_text' => $altText,
-            'binary' => (string) $encoded,
+            'binary' => $encoded,
         ];
     }
 }

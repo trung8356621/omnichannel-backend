@@ -31,26 +31,29 @@ final class SeoEngineServiceTest extends TestCase
         $this->assertNotContains('seo.heading', $result['reason_keys']);
     }
 
-    public function test_length_scoring_partial_and_full(): void
+    public function test_length_scoring_uses_article_length_target(): void
     {
         $engine = app(SeoEngineService::class);
-        $words600 = implode(' ', array_fill(0, 600, 'word'));
-        $words1300 = implode(' ', array_fill(0, 1300, 'word'));
+        $words900 = implode(' ', array_fill(0, 900, 'word'));
+        $words1100 = implode(' ', array_fill(0, 1100, 'word'));
 
-        $partial = $engine->analyzeHtml("<p>{$words600}</p>", 'keyword', [], [
+        $belowTarget = $engine->analyzeHtml("<p>{$words900}</p>", 'keyword', [], [
             'seo_title' => 'keyword',
             'meta_description' => 'keyword',
             'slug' => 'keyword',
+            'article_length_target' => 1000,
         ]);
-        $full = $engine->analyzeHtml("<p>{$words1300}</p>", 'keyword', [], [
+        $meetsTarget = $engine->analyzeHtml("<p>{$words1100}</p>", 'keyword', [], [
             'seo_title' => 'keyword',
             'meta_description' => 'keyword',
             'slug' => 'keyword',
+            'article_length_target' => 1000,
         ]);
 
-        $this->assertSame(10, $partial['breakdown']['length']['earned'] ?? 0);
-        $this->assertContains('seo.length.partial', $partial['reason_keys']);
-        $this->assertSame(15, $full['breakdown']['length']['earned'] ?? 0);
+        $this->assertSame(0, $belowTarget['breakdown']['length']['earned'] ?? 0);
+        $this->assertContains('seo.length', $belowTarget['reason_keys']);
+        $this->assertSame(15, $meetsTarget['breakdown']['length']['earned'] ?? 0);
+        $this->assertNotContains('seo.length', $meetsTarget['reason_keys']);
     }
 
     public function test_text_to_image_ideal_ratio_scores_fifteen(): void
@@ -161,6 +164,7 @@ HTML;
             'seo_title' => 'keyword title',
             'meta_description' => 'keyword meta',
             'slug' => 'keyword-slug',
+            'article_length_target' => 1200,
         ]);
 
         $this->assertLessThanOrEqual(100, $result['seo_score']);

@@ -47,6 +47,7 @@ import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
 import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
 import {
     appendProductAlbumItems,
+    syncProductAlbumToServer,
     loadProductAlbum,
     normalizeProductAlbumList,
     removeProductAlbumItem,
@@ -56,6 +57,7 @@ import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
     applyImagePatchToBlocks,
+    applyLocalSlugRenameResultToBlocks,
     applyQuickFixAltTitleToBlock,
     applyQuickFixAltTitleToBlocks,
     applyQuickFixSlugToBlock,
@@ -68,6 +70,7 @@ import {
     filterSupplementalDuplicatesOfBlockRows,
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
+    executeSeoMediaSlugRenamesTwoPhase,
     finalizeBlocksAfterWpRename,
     enrichBlocksWithPostImages,
     imageSlugFromKeyword,
@@ -79,7 +82,6 @@ import {
 } from '../utils/articleImagesUtils';
 import {
     confirmSlugRename,
-    dispatchWordPressSlugRename,
 } from '../utils/imageSlugRenameConfirm';
 import { dispatchWordPressAttachmentMetaUpdate } from '../utils/imageAttachmentMetaUpdate';
 import {
@@ -1770,6 +1772,7 @@ function BlockEditor({
     outlineHeadingsLocked = false,
     isSectionHeadingBlock = false,
     onOutlineHeadingCommand,
+    onArmOutsideClickGuard,
 }) {
     const blockHtml = displayContent ?? block.content;
     const isFaqShortcodeBlock = block.type === 'text' && isFaqPlaceholderHtml(blockHtml);
@@ -1791,6 +1794,7 @@ function BlockEditor({
                 siteId={siteId}
                 supportsProductGallery={supportsProductGallery}
                 imagesLocked={introImagesLocked}
+                onArmOutsideClickGuard={onArmOutsideClickGuard}
             />
         );
     }
@@ -2468,6 +2472,7 @@ export default function SeoArticleEditor({
     tempMergeRef.current = tempMerge;
     const blockFlushRef = useRef(null);
     const activeBlockIdRef = useRef(null);
+    const blockOutsideClickGuardUntilRef = useRef(0);
     const linkScrollTokenRef = useRef(0);
     const intraSelectionRef = useRef({ text: '', html: '' });
     const focusedOutlineHeadingRef = useRef(null);
@@ -2542,12 +2547,20 @@ export default function SeoArticleEditor({
             faqs: resolveArticleFaqsSnapshot(),
             wikiTrustDomains,
             scoringMessages,
+            postType: articleType,
+            articleLengthSettings: {
+                article_length_product: editorSettings?.article_length_product,
+                article_length_default: editorSettings?.article_length_default,
+            },
         });
 
         applySeoAnalysisResult(result);
     }, [
         applySeoAnalysisResult,
         articleTitle,
+        articleType,
+        editorSettings?.article_length_default,
+        editorSettings?.article_length_product,
         focusKeyword,
         getExportHtml,
         resolveArticleFaqsSnapshot,
@@ -2782,6 +2795,10 @@ export default function SeoArticleEditor({
         blockFlushRef.current?.();
     }, []);
 
+    const armBlockOutsideClickGuard = useCallback((ms = 220) => {
+        blockOutsideClickGuardUntilRef.current = Date.now() + ms;
+    }, []);
+
     const selectPlainTextInBlock = useCallback((blockId, text, occurrenceIndex = 0, onSelected) => {
         const maxAttempts = 30;
 
@@ -2915,12 +2932,37 @@ export default function SeoArticleEditor({
             } else {
                 setBlocks(updater);
             }
+
+            if (patch && Object.prototype.hasOwnProperty.call(patch, 'excludeQuickFix')) {
+                setImagesReloadKey((key) => key + 1);
+                scheduleAutosave();
+            }
         },
-        [updateBlocksWithoutHistory],
+        [scheduleAutosave, updateBlocksWithoutHistory],
     );
 
     const requestWordPressRenames = useCallback((items) => {
-        dispatchWordPressSlugRename(items);
+        if (!items?.length) {
+            return;
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-rename-attachment-slugs-loading', {
+                detail: { count: items.length },
+            }),
+        );
+
+        callEditArticleLivewire('renameAttachmentSlugsOnWordPress', items).catch((error) => {
+            window.dispatchEvent(
+                new CustomEvent('seo-attachment-slugs-rename-finished', {
+                    detail: {
+                        success: false,
+                        renamed: [],
+                        message: error?.message ?? t('editor_try_again_later'),
+                    },
+                }),
+            );
+        });
     }, []);
 
     const renameLocalMediaByUrl = useCallback(
@@ -3151,48 +3193,48 @@ export default function SeoArticleEditor({
             });
 
             return (async () => {
-                for (const item of uniqueLocalRenames) {
-                    try {
-                        const newSlug = String(item.new_slug ?? '').trim();
-                        const src = String(item.src ?? '').trim();
-                        const id = Number(item.seo_media_id ?? 0);
-                        if (!newSlug || !src) {
-                            continue;
-                        }
+                try {
+                    const results = await executeSeoMediaSlugRenamesTwoPhase(uniqueLocalRenames, {
+                        renameById: renameSeoMedia,
+                        renameByUrl: (src, slug, opts) => renameLocalMediaByUrl(src, slug, opts),
+                    });
 
-                        const data =
-                            id > 0
-                                ? await renameSeoMedia(id, newSlug)
-                                : await renameLocalMediaByUrl(src, newSlug, { seoMediaId: id > 0 ? id : null });
+                    for (const result of results) {
+                        const resolvedId = Number(result?.data?.id ?? result?.seo_media_id ?? 0);
+                        const oldSrc = normalizeImageSrcKey(result?.src);
 
                         const matchedRow = supplementalOnlyRows.find((row) => {
                             const rowId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
                             const rowSrc = normalizeImageSrcKey(row?.src);
+
                             return (
-                                (id > 0 && rowId === id) ||
-                                normalizeImageSrcKey(src) === rowSrc
+                                (resolvedId > 0 && rowId === resolvedId) ||
+                                (oldSrc !== '' && rowSrc === oldSrc)
                             );
                         });
 
-                        if (matchedRow) {
-                            patchSupplementalImageRow(matchedRow, {
-                                slug: data.slug,
-                                src: data.url,
-                                seoMediaId: data.id ?? id,
-                            });
+                        if (!matchedRow) {
+                            continue;
                         }
-                    } catch (error) {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_rename_image_slug'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
+
+                        patchSupplementalImageRow(matchedRow, {
+                            slug: result.data.slug,
+                            src: result.data.url,
+                            seoMediaId: resolvedId > 0 ? resolvedId : matchedRow.seoMediaId,
+                        });
                     }
+                } catch (error) {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: t('editor_cannot_rename_image_slug'),
+                                body: error?.message ?? t('editor_try_again_later'),
+                                status: 'danger',
+                            },
+                        }),
+                    );
                 }
+
                 setImagesReloadKey((k) => k + 1);
             })();
         },
@@ -3264,60 +3306,30 @@ export default function SeoArticleEditor({
             }
 
             if (localRenameCount > 0) {
-                tasks.push(
-                    (async () => {
-                        for (const item of preview.localRenameQueue) {
+                const blockRenames = (preview.localRenameQueue ?? []).filter(
+                    (item) => String(item?.block_id ?? '').trim() !== '',
+                );
+
+                if (blockRenames.length > 0) {
+                    tasks.push(
+                        (async () => {
                             try {
-                                const newSlug = String(item.new_slug ?? '').trim();
-                                const src = String(item.src ?? '').trim();
-                                const blockId = String(item.block_id ?? '').trim();
-                                const id = Number(item.seo_media_id ?? 0);
+                                const results = await executeSeoMediaSlugRenamesTwoPhase(blockRenames, {
+                                    renameById: renameSeoMedia,
+                                    renameByUrl: (src, slug, opts) =>
+                                        renameLocalMediaByUrl(src, slug, opts),
+                                });
 
-                                if (!newSlug || !src || !blockId) {
-                                    continue;
+                                for (const result of results) {
+                                    const blockId = String(result?.block_id ?? '').trim();
+                                    if (!blockId) {
+                                        continue;
+                                    }
+
+                                    setBlocks((prev) =>
+                                        applyLocalSlugRenameResultToBlocks(prev, blockId, result),
+                                    );
                                 }
-
-                                const data = id > 0
-                                    ? await renameSeoMedia(id, newSlug)
-                                    : await renameLocalMediaByUrl(src, newSlug, { seoMediaId: id > 0 ? id : null });
-
-                                const oldSrc = normalizeImageSrcKey(src);
-                                const resolvedSeoId = Number(data.id ?? id ?? 0);
-                                setBlocks((prev) =>
-                                    prev.map((block) => {
-                                        if (block.type !== 'image') {
-                                            return block;
-                                        }
-
-                                        const image = block.image ?? parseImageFromBlockContent(block.content);
-                                        if (!image?.src) {
-                                            return block;
-                                        }
-
-                                        const imageSeoId = Number(image.seoMediaId ?? image.seo_media_id ?? 0);
-                                        const imageSrc = normalizeImageSrcKey(image.src);
-                                        const matched =
-                                            (resolvedSeoId > 0 && imageSeoId > 0 && imageSeoId === resolvedSeoId) ||
-                                            (resolvedSeoId <= 0 && oldSrc !== '' && imageSrc === oldSrc);
-                                        if (!matched) {
-                                            return block;
-                                        }
-
-                                        const nextImage = {
-                                            ...image,
-                                            slug: data.slug,
-                                            src: data.url,
-                                            seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
-                                            originalSlug: item.old_slug ?? '',
-                                        };
-
-                                        return {
-                                            ...block,
-                                            image: nextImage,
-                                            content: renderImageFigure(nextImage),
-                                        };
-                                    }),
-                                );
                             } catch (error) {
                                 window.dispatchEvent(
                                     new CustomEvent('seo-article-editor-notify', {
@@ -3329,11 +3341,11 @@ export default function SeoArticleEditor({
                                     }),
                                 );
                             }
-                        }
 
-                        setImagesReloadKey((k) => k + 1);
-                    })(),
-                );
+                            setImagesReloadKey((k) => k + 1);
+                        })(),
+                    );
+                }
             }
 
             return tasks.length > 0 ? Promise.all(tasks) : Promise.resolve();
@@ -3426,6 +3438,10 @@ export default function SeoArticleEditor({
 
             let supplementalOrdinal = blockEligibleCount;
             supplementalOnlyRows.forEach((row) => {
+                if (row?.excludeQuickFix) {
+                    return;
+                }
+
                 supplementalOrdinal += 1;
                 const enriched = { ...row, quickFixIndex: supplementalOrdinal };
                 const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword);
@@ -3471,7 +3487,6 @@ export default function SeoArticleEditor({
             }
 
             setQuickFixSlugAllBusy(true);
-            window.__seoBeginArticleHeavyActionClient?.('save');
 
             await new Promise((resolve) => {
                 window.requestAnimationFrame(() => resolve());
@@ -3538,17 +3553,23 @@ export default function SeoArticleEditor({
 
             setBlocks(preview.blocks);
 
-            sourceRows.forEach((row) => {
+            sourceRows
+                .filter((row) => !row?.excludeQuickFix)
+                .forEach((row) => {
                 patchSupplementalImageRow(row, { alt: keyword, title: keyword });
             });
 
-            supplementalOutcomes.forEach(({ row, outcome }) => {
+            supplementalOutcomes
+                .filter(({ row }) => !row?.excludeQuickFix)
+                .forEach(({ row, outcome }) => {
                 patchSupplementalImageRow(row, outcome.patch);
             });
 
             const pushedWp = new Set();
             const pushedSeo = new Set();
-            sourceRows.forEach((row) => {
+            sourceRows
+                .filter((row) => !row?.excludeQuickFix)
+                .forEach((row) => {
                 const { seoMediaId, wpAttachmentId } = buildAltTitleMetaUpdatePayload(row, keyword);
 
                 if (seoMediaId > 0 && !pushedSeo.has(seoMediaId)) {
@@ -4778,6 +4799,14 @@ export default function SeoArticleEditor({
         return () => window.removeEventListener('seo-editor-intra-selection', onIntra);
     }, [activeTab, activeBlockId, blocks, tempMerge, articleId]);
 
+    const clearOutlineFocus = useCallback(() => {
+        focusedOutlineHeadingRef.current = null;
+        setOutlineHeadingCommand({
+            token: Date.now(),
+            action: 'clear',
+        });
+    }, []);
+
     const syncOutlineFocusFromBlock = useCallback((block, action = 'focus') => {
         const meta = extractOutlineHeadingFromBlock(block);
         const headingId = outlineHeadingIdsByBlockIdRef.current.get(block?.id);
@@ -4831,6 +4860,7 @@ export default function SeoArticleEditor({
     const activateBlock = useCallback(
         (id) => {
             setInsertMenu(null);
+            armBlockOutsideClickGuard();
             const sectionId = sectionByBlockId.get(id);
             if (sectionId && collapsedSectionIds[sectionId]) {
                 setCollapsedSectionIds((prev) => ({ ...prev, [sectionId]: false }));
@@ -4838,11 +4868,14 @@ export default function SeoArticleEditor({
             if (tempMergeRef.current) {
                 clearTempMerge();
                 setGlobalEditor(null);
+                activeBlockIdRef.current = id;
                 setActiveBlockId(id);
                 if (outlineHasSavedHeadings) {
                     const block = blocksRef.current.find((item) => item.id === id);
-                    if (block) {
+                    if (block && (blockHasOutlineHeading(block) || isBlockOutlineSynced(block))) {
                         syncOutlineFocusFromBlock(block);
+                    } else {
+                        clearOutlineFocus();
                     }
                 }
                 return;
@@ -4851,20 +4884,26 @@ export default function SeoArticleEditor({
                 return;
             }
             commitActiveBlock();
+            activeBlockIdRef.current = id;
             setActiveBlockId(id);
             setGlobalEditor(null);
             if (outlineHasSavedHeadings) {
                 const block = blocksRef.current.find((item) => item.id === id);
-                if (block) {
+                if (block && (blockHasOutlineHeading(block) || isBlockOutlineSynced(block))) {
                     syncOutlineFocusFromBlock(block);
+                } else {
+                    clearOutlineFocus();
                 }
             }
         },
         [
             activeBlockId,
+            armBlockOutsideClickGuard,
+            clearOutlineFocus,
             collapsedSectionIds,
             commitActiveBlock,
             clearTempMerge,
+            isBlockOutlineSynced,
             outlineHasSavedHeadings,
             sectionByBlockId,
             syncOutlineFocusFromBlock,
@@ -4917,10 +4956,26 @@ export default function SeoArticleEditor({
             });
 
             setInsertMenu(null);
+            activeBlockIdRef.current = newId;
             setActiveBlockId(newId);
             setGlobalEditor(null);
+            if (type === 'image') {
+                armBlockOutsideClickGuard(360);
+            } else {
+                armBlockOutsideClickGuard();
+            }
+            if (outlineHasSavedHeadings) {
+                clearOutlineFocus();
+            }
         },
-        [commitActiveBlock, isIntroBlockId, notifyIntroNoImages],
+        [
+            armBlockOutsideClickGuard,
+            clearOutlineFocus,
+            commitActiveBlock,
+            isIntroBlockId,
+            notifyIntroNoImages,
+            outlineHasSavedHeadings,
+        ],
     );
 
     const insertHtmlBlockRelative = useCallback(
@@ -5077,6 +5132,8 @@ export default function SeoArticleEditor({
                 },
             }),
         );
+
+        syncProductAlbumToServer(articleId);
 
         return true;
     }, [articleId]);
@@ -6272,6 +6329,18 @@ export default function SeoArticleEditor({
         window.addEventListener('seo-editor-slug-updated', handleEditorSlugUpdated);
 
         const handleClickOutside = (e) => {
+            if (Date.now() < blockOutsideClickGuardUntilRef.current) {
+                return;
+            }
+
+            const activeId = String(activeBlockIdRef.current ?? '').trim();
+            if (activeId !== '') {
+                const activeSlot = e.target.closest(`[data-seo-block-id="${activeId}"]`);
+                if (activeSlot) {
+                    return;
+                }
+            }
+
             // Không đóng block nếu đang focus vào input/textarea bên trong block image hoặc picker
             const activeEl = document.activeElement;
             if (
@@ -6316,6 +6385,13 @@ export default function SeoArticleEditor({
                 e.target.closest('.seo-image-meta-panel') ||
                 e.target.closest('.block-editor-text-block') ||
                 e.target.closest('.seo-image-toolbar') ||
+                e.target.closest('.block-image-active') ||
+                e.target.closest('.seo-block-image-empty-preview') ||
+                e.target.closest('.seo-outline-panel') ||
+                e.target.closest('.seo-article-editor-outline-rail') ||
+                e.target.closest('.seo-article-media-modal') ||
+                e.target.closest('.seo-generate-image-modal') ||
+                e.target.closest('.seo-generate-image-modal-backdrop') ||
                 e.target.tagName === 'INPUT' ||
                 e.target.tagName === 'TEXTAREA' ||
                 e.target.closest('[contenteditable]')
@@ -6333,8 +6409,12 @@ export default function SeoArticleEditor({
             }
 
             blockFlushRef.current?.();
+            activeBlockIdRef.current = null;
             setActiveBlockId(null);
             setGlobalEditor(null);
+            if (outlineHasSavedHeadings) {
+                clearOutlineFocus();
+            }
         };
 
         document.addEventListener('mousedown', handleClickOutside);
@@ -6805,6 +6885,8 @@ export default function SeoArticleEditor({
         startMediaStatusPolling,
         clearMediaPolling,
         isDismissedEditorImageMedia,
+        clearOutlineFocus,
+        outlineHasSavedHeadings,
     ]);
 
     useEffect(() => {
@@ -8514,6 +8596,7 @@ export default function SeoArticleEditor({
                                                                 }
                                                                 isSectionHeadingBlock={sectionHeadingBlockIds.has(block.id)}
                                                                 onOutlineHeadingCommand={handleOutlineHeadingFromEditor}
+                                                                onArmOutsideClickGuard={armBlockOutsideClickGuard}
                                                                 onDelete={() => deleteBlock(block.id)}
                                                                 canDeleteBlock={blocks.length > 1}
                                                             />

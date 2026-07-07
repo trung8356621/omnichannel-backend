@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
@@ -29,6 +30,7 @@ class SeoAnalyzerService
         private readonly KeywordPersistenceService $keywordPersistence,
         private readonly WorkflowParserService $workflowParser,
         private readonly SeoEngineService $seoEngine,
+        private readonly SeoPromptSettingsService $promptSettings,
     ) {}
 
     /**
@@ -335,6 +337,9 @@ class SeoAnalyzerService
                 'meta_description' => $metaDescription,
                 'slug' => $slug,
                 'domain' => $domain,
+                'article_length_target' => $this->promptSettings->resolveArticleLengthTarget(
+                    ArticlePostTypeResolver::resolve($article),
+                ),
             ],
         );
 

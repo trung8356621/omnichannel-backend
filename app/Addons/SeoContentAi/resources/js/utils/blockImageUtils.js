@@ -104,6 +104,8 @@ function parseImageFromFigure(fig, id) {
         wpAttachmentId: parseWpAttachmentIdFromImg(img),
         seoMediaId: parseSeoMediaIdFromImg(img),
         isProcessing: fig.hasAttribute('data-ai-processing'),
+        excludeQuickFix:
+            fig.hasAttribute('data-exclude-quick-fix') || img.hasAttribute('data-exclude-quick-fix'),
     };
 }
 
@@ -136,6 +138,9 @@ function parseImageFromImg(img, id) {
         isProcessing:
             img.hasAttribute('data-ai-processing') ||
             Boolean(img.closest('[data-ai-processing]')),
+        excludeQuickFix:
+            img.hasAttribute('data-exclude-quick-fix') ||
+            Boolean(img.closest('[data-exclude-quick-fix]')),
     };
 }
 
@@ -373,6 +378,7 @@ export function renderImageFigure(image) {
         image.wpAttachmentId ? `data-id="${Math.round(image.wpAttachmentId)}"` : '',
         image.seoMediaId ? `data-seo-media-id="${Math.round(image.seoMediaId)}"` : '',
         isProcessing ? 'data-ai-processing="1"' : '',
+        image.excludeQuickFix ? 'data-exclude-quick-fix="1"' : '',
         'draggable="false"',
     ]
         .filter(Boolean)
@@ -391,7 +397,7 @@ export function renderImageFigure(image) {
 
     return `<figure class="${figureClasses}" data-node="article-image"${
         isProcessing ? ' data-ai-processing="1"' : ''
-    }${style}><img ${imgAttrs} />${processingLabel}${caption}</figure>`;
+    }${image.excludeQuickFix ? ' data-exclude-quick-fix="1"' : ''}${style}><img ${imgAttrs} />${processingLabel}${caption}</figure>`;
 }
 
 function escapeAttr(value) {

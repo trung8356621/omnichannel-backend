@@ -30,8 +30,8 @@
                 <label class="seo-image-opt__check">
                     <input type="checkbox" wire:model="data.auto_convert_webp" />
                     <span>
-                        <strong>Automatically convert to WebP</strong>
-                        <small>Recommended to improve page speed and Google PageSpeed score</small>
+                        <strong>Convert to WebP when syncing to WordPress</strong>
+                        <small>Local Laravel library keeps the original format (JPEG/PNG). WebP conversion runs on WordPress upload only.</small>
                     </span>
                 </label>
 

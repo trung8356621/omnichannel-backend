@@ -1,3 +1,5 @@
+import { callEditArticleLivewire } from './articleEditorLivewire';
+
 const albumKey = (articleId) => `seo_product_album_list_${articleId}`;
 
 export function normalizeProductAlbumItem(item) {
@@ -166,6 +168,24 @@ export function persistProductAlbumDraftToServer(articleId, wire) {
     const items = loadProductAlbum(id);
 
     return wire.persistProductAlbumFromClient(items);
+}
+
+export function syncProductAlbumToServer(articleId) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return Promise.resolve([]);
+    }
+
+    const items = loadProductAlbum(id);
+    if (items.length === 0) {
+        return Promise.resolve([]);
+    }
+
+    return callEditArticleLivewire('persistProductAlbumFromClient', items).catch((error) => {
+        console.warn('Không đồng bộ album sản phẩm lên server', error);
+
+        return [];
+    });
 }
 
 export function clearProductAlbumStorage(articleId) {

@@ -28,11 +28,21 @@ final class SeoImageResizeMathTest extends TestCase
         $this->assertGreaterThan(1, count($steps));
     }
 
-    public function test_downscale_returns_single_step(): void
+    public function test_downscale_returns_single_step_for_small_ratio(): void
     {
-        $steps = SeoImageResizeMath::progressiveUpscaleSteps(1200, 800, 600, 400);
+        $steps = SeoImageResizeMath::progressiveScaleSteps(1200, 800, 600, 400);
 
         $this->assertCount(1, $steps);
         $this->assertSame(['width' => 600, 'height' => 400], $steps[0]);
+    }
+
+    public function test_large_downscale_uses_multiple_steps(): void
+    {
+        $steps = SeoImageResizeMath::progressiveScaleSteps(4000, 3000, 800, 600);
+
+        $this->assertGreaterThan(1, count($steps));
+        $last = $steps[array_key_last($steps)];
+        $this->assertSame(800, $last['width']);
+        $this->assertSame(600, $last['height']);
     }
 }

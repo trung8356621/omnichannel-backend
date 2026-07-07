@@ -13,13 +13,21 @@ use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
 final class WordPressArticleSyncService
 {
+    private const EDITOR_SYNC_HTTP_TIMEOUT_SECONDS = 120;
+
+    public const META_WP_EDITOR_SYNC_FINGERPRINT = 'wp_editor_sync_fingerprint';
+
+    public const META_WP_LOCAL_SAVE_FINGERPRINT = 'wp_local_save_fingerprint';
+
     public function __construct(
         private readonly WordPressArticleTimestampService $timestampService,
     ) {}
@@ -27,9 +35,10 @@ final class WordPressArticleSyncService
     /**
      * Tạo post/product mới trên WordPress và liên kết lại với bản ghi Laravel.
      *
+     * @param  array<string, mixed>|null  $editorPayload  post_content, faqs, seo, category_ids (plugin ≥ 1.0.49)
      * @return array{success: bool, message: string, wp_post_id?: int, permalink?: string}
      */
-    public function createForArticle(SeoArticle $article): array
+    public function createForArticle(SeoArticle $article, ?array $editorPayload = null): array
     {
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
@@ -81,17 +90,30 @@ final class WordPressArticleSyncService
         $postType = $resolvedPostType === SeoProjectTask::POST_TYPE_PRODUCT ? 'product' : 'post';
 
         try {
-            $response = Http::timeout(30)
+            $requestBody = [
+                'title' => trim((string) ($article->title ?? '')),
+                // Luôn gửi slug từ focus keyword — không để WordPress tự sinh slug từ tiêu đề.
+                'slug' => $this->resolveSlugForNewPost($article),
+                ...$this->resolveWordPressStatusPayload($article),
+                'post_type' => $postType,
+            ];
+            if (is_array($editorPayload)) {
+                foreach (['post_content', 'faqs', 'seo', 'category_ids'] as $field) {
+                    if (! array_key_exists($field, $editorPayload)) {
+                        continue;
+                    }
+                    $value = $editorPayload[$field];
+                    if ($value === null || $value === '' || $value === []) {
+                        continue;
+                    }
+                    $requestBody[$field] = $value;
+                }
+            }
+
+            $response = Http::timeout(self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS)
                 ->acceptJson()
                 ->withToken($writeToken)
-                ->post($base.'/wp-json/omi-seo-ai/v1/posts', [
-                    'title' => trim((string) ($article->title ?? '')),
-                    // Luôn gửi slug từ focus keyword — không để WordPress tự sinh slug từ tiêu đề.
-                    'slug' => $this->resolveSlugForNewPost($article),
-                    'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
-                    'post_date' => $this->formatPostDateForWordPress($article),
-                    'post_type' => $postType,
-                ]);
+                ->post($base.'/wp-json/omi-seo-ai/v1/posts', $requestBody);
 
             if (! $response->successful()) {
                 return [
@@ -154,6 +176,48 @@ final class WordPressArticleSyncService
                 'success' => false,
                 'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
+        }
+    }
+
+    /**
+     * Tạo (nếu chưa có wp_post_id) rồi đồng bộ nội dung lên WordPress trong một lock — tránh race tạo bài trùng.
+     *
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     * @return array<string, mixed>
+     */
+    public function publishForArticle(SeoArticle $article, ?array $seoOverride = null): array
+    {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
+        $lock = Cache::lock('seo-wp-publish-article-'.(int) $article->id, 120);
+
+        try {
+            $lock->block(30);
+        } catch (LockTimeoutException) {
+            return [
+                'success' => false,
+                'message' => 'Hết thời gian chờ đồng bộ WordPress. Vui lòng thử lại.',
+            ];
+        }
+
+        try {
+            $article = $article->fresh() ?? $article;
+
+            if ((int) ($article->wp_post_id ?? 0) <= 0) {
+                $prepared = $this->buildEditorSyncPayload($article, $seoOverride);
+                $created = $this->createForArticle($article, $prepared['request_payload']);
+                if (! ($created['success'] ?? false)) {
+                    return $created;
+                }
+
+                $article = $article->fresh() ?? $article;
+            }
+
+            return $this->syncForArticle($article, $seoOverride);
+        } finally {
+            $lock->release();
         }
     }
 
@@ -371,16 +435,394 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $writeToken = (string) $context['write_token'];
-        $url = (string) $context['url'];
-        $wpPostId = (int) ($context['wp_post_id'] ?? 0);
+        $prepared = $this->prepareEditorSyncPayload($article, $seoOverride);
+        if (($prepared['request_payload'] ?? []) === [] && ($prepared['local_media_sync_errors'] ?? []) !== []) {
+            return [
+                'success' => false,
+                'message' => implode(' | ', $prepared['local_media_sync_errors']),
+            ];
+        }
 
+        $httpResult = $this->executeEditorSyncRequest($article, $context, $prepared);
+        if (! ($httpResult['success'] ?? false)) {
+            return $httpResult;
+        }
+
+        return $this->completeEditorSyncResponse(
+            $article,
+            $prepared,
+            is_array($httpResult['decoded'] ?? null) ? $httpResult['decoded'] : [],
+        );
+    }
+
+    /**
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     * @return array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }
+     */
+    public function prepareEditorSyncPayload(SeoArticle $article, ?array $seoOverride = null, array $syncOptions = []): array
+    {
+        return $this->buildEditorSyncPayload($article, $seoOverride, $syncOptions);
+    }
+
+    /**
+     * @param  array{success: bool, write_token?: string, url?: string, wp_post_id?: int, message?: string}  $context
+     * @param  array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }  $prepared
+     * @return array{success: bool, message: string, decoded?: array<string, mixed>, step_detail?: string}
+     */
+    public function executeEditorSyncRequest(SeoArticle $article, array $context, array $prepared): array
+    {
+        if ($prepared['skip_editor_sync'] ?? false) {
+            return [
+                'success' => true,
+                'message' => 'Bỏ qua editor-sync — nội dung/FAQ/SEO đã khớp WordPress (chưa chỉnh sửa local).',
+                'decoded' => $this->buildSkippedEditorSyncDecoded($article),
+                'step_detail' => 'skipped=1, reason='.(string) ($prepared['skip_editor_sync_reason'] ?? 'unchanged'),
+                'skipped' => true,
+            ];
+        }
+
+        $writeToken = (string) ($context['write_token'] ?? '');
+        $url = (string) ($context['url'] ?? '');
+        $wpPostId = (int) ($context['wp_post_id'] ?? 0);
+        $payload = $prepared['request_payload'];
+
+        try {
+            $response = Http::timeout(self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS)
+                ->acceptJson()
+                ->withToken($writeToken)
+                ->post($url, $payload);
+
+            if (! $response->successful()) {
+                $message = WordPressRestResponseParser::formatHttpErrorMessage(
+                    $response->status(),
+                    $response,
+                );
+
+                Log::warning('WordPress article sync failed', [
+                    'article_id' => $article->id,
+                    'wp_post_id' => $wpPostId,
+                    'status' => $response->status(),
+                    'body' => $response->body(),
+                ]);
+
+                return [
+                    'success' => false,
+                    'message' => $message,
+                    'step_detail' => 'HTTP '.$response->status(),
+                ];
+            }
+
+            $decoded = $response->json();
+            if (! is_array($decoded) || ! ($decoded['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($decoded['message'] ?? 'WordPress từ chối đồng bộ.'),
+                ];
+            }
+
+            return [
+                'success' => true,
+                'message' => (string) ($decoded['message'] ?? 'Đã đồng bộ nội dung lên WordPress.'),
+                'decoded' => $decoded,
+                'step_detail' => 'wp_post_id='.$wpPostId,
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress article sync exception', [
+                'article_id' => $article->id,
+                'wp_post_id' => $wpPostId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+                'step_detail' => $url,
+            ];
+        }
+    }
+
+    /**
+     * @param  array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }  $prepared
+     * @param  array<string, mixed>  $decoded
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     faq_count?: int,
+     *     faq_extract_debug?: array<string, mixed>|null,
+     *     post_type?: string,
+     *     post_type_changed?: bool,
+     *     step_detail?: string
+     * }
+     */
+    public function completeEditorSyncResponse(SeoArticle $article, array $prepared, array $decoded, array $syncOptions = []): array
+    {
+        $deferFinalizeMedia = (bool) ($syncOptions['defer_finalize_media'] ?? false);
+        $skipFeaturedMediaPush = (bool) ($syncOptions['skip_featured_media_push'] ?? false);
+        $postContent = (string) ($prepared['post_content'] ?? '');
+        $faqs = is_array($prepared['faqs'] ?? null) ? $prepared['faqs'] : [];
+        $faqExtractDebug = $prepared['faq_extract_debug'] ?? null;
+        $wpTaxonomy = $prepared['wp_taxonomy'] ?? null;
+        $localMediaSyncErrors = is_array($prepared['local_media_sync_errors'] ?? null)
+            ? $prepared['local_media_sync_errors']
+            : [];
+        $syncedLocalMediaIds = is_array($prepared['synced_local_media_ids'] ?? null)
+            ? array_values(array_filter(array_map(static fn ($id): int => (int) $id, $prepared['synced_local_media_ids'])))
+            : [];
+
+        $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
+        $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
+        $remotePostType = null;
+
+        if ($wpTaxonomy === null) {
+            $requestedPostType = ArticlePostTypeResolver::resolve($article) === SeoProjectTask::POST_TYPE_PRODUCT
+                ? 'product'
+                : 'post';
+            $remotePostType = strtolower(trim((string) ($decoded['post_type'] ?? $requestedPostType)));
+            if (! in_array($remotePostType, ['post', 'product'], true)) {
+                $remotePostType = $requestedPostType;
+            }
+
+            $article->update([
+                'type' => $remotePostType === 'product' ? 'product' : 'article',
+            ]);
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_post_type'],
+                ['meta_value' => $remotePostType],
+            );
+        }
+        if ($remoteSlug !== '') {
+            $article->update(['slug' => $remoteSlug]);
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_slug'],
+                ['meta_value' => $remoteSlug],
+            );
+        }
+        if ($remotePermalink !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_permalink'],
+                ['meta_value' => $remotePermalink],
+            );
+            app(ArticlePendingInternalLinkService::class)->resolveForMainArticle($article->fresh());
+        }
+
+        $this->storeWpPostContentMeta($article, $postContent);
+        if ($postContent !== '' && trim((string) ($article->body ?? '')) !== $postContent) {
+            $article->update(['body' => $postContent]);
+        }
+
+        $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
+        $virtualCount = (int) ($decoded['virtual_count'] ?? 0);
+        if ($virtualCount > 0) {
+            $message .= ' Đã đồng bộ '.$virtualCount.' review ảo.';
+        }
+        $virtualError = trim((string) ($decoded['virtual_comments_error'] ?? ''));
+        if ($virtualError !== '') {
+            $message .= ' Review chưa lưu: '.mb_substr($virtualError, 0, 200);
+        }
+
+        $mediaPush = ['attempted' => false, 'success' => true, 'message' => '', 'synced_local_media_ids' => []];
+        if (! $skipFeaturedMediaPush) {
+            $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
+        }
+
+        $dirtySync = ['synced' => 0, 'errors' => []];
+        $webpBackfill = ['synced_media_ids' => [], 'errors' => [], 'url_map' => []];
+        $localMediaSync = app(WordPressLocalMediaSyncService::class);
+
+        if (! $deferFinalizeMedia) {
+            $dirtySync = $localMediaSync->syncDirtyLocalMediaForArticle($article->fresh());
+            $webpBackfill = $localMediaSync->syncWebpBackfillMediaForArticle($article->fresh(), $syncedLocalMediaIds);
+        }
+        $syncedFromPending = is_array($mediaPush['synced_local_media_ids'] ?? null)
+            ? array_values(array_filter(array_map(
+                static fn ($id): int => (int) $id,
+                $mediaPush['synced_local_media_ids'],
+            )))
+            : [];
+        $syncedLocalMediaIds = array_values(array_unique(array_merge(
+            $syncedLocalMediaIds,
+            $syncedFromPending,
+            is_array($webpBackfill['synced_media_ids'] ?? null) ? $webpBackfill['synced_media_ids'] : [],
+        )));
+
+        $webpUrlMap = is_array($webpBackfill['url_map'] ?? null) ? $webpBackfill['url_map'] : [];
+        if ($webpUrlMap !== []) {
+            $articleFresh = $article->fresh();
+            if ($articleFresh instanceof SeoArticle) {
+                $updatedBody = $localMediaSync->replaceUrlsInHtml((string) ($articleFresh->body ?? ''), $webpUrlMap);
+                if ($updatedBody !== (string) ($articleFresh->body ?? '')) {
+                    $articleFresh->update(['body' => $updatedBody]);
+                    $postContent = $localMediaSync->replaceUrlsInHtml($postContent, $webpUrlMap);
+                    $this->storeWpPostContentMeta($articleFresh, $postContent);
+                }
+
+                app(ArticleMediaLocalService::class)->applyWordPressUrlMap($articleFresh, $webpUrlMap);
+            }
+        }
+
+        $stepDetails = [];
+        if (($webpBackfill['synced_media_ids'] ?? []) !== []) {
+            $webpCount = count($webpBackfill['synced_media_ids']);
+            $message .= " Đã chuyển {$webpCount} ảnh sang WebP trên WordPress.";
+            $stepDetails[] = "webp={$webpCount}";
+        }
+        if (($webpBackfill['errors'] ?? []) !== []) {
+            $message .= ' Một số ảnh WebP backfill chưa xong: '.mb_substr(implode(' | ', $webpBackfill['errors']), 0, 300);
+        }
+
+        if ($mediaPush['attempted']) {
+            if ($mediaPush['success']) {
+                $message .= ' Đã đẩy ảnh đại diện/album lên WordPress.';
+                $stepDetails[] = 'featured/album=ok';
+            } else {
+                $message .= ' Ảnh chưa đẩy được: '.mb_substr((string) $mediaPush['message'], 0, 200);
+            }
+        }
+        if (($dirtySync['synced'] ?? 0) > 0) {
+            $message .= ' Đã ghi đè '.(int) $dirtySync['synced'].' ảnh local đã chỉnh sửa lên WordPress.';
+            $stepDetails[] = 'dirty='.(int) $dirtySync['synced'];
+        }
+        if (($dirtySync['errors'] ?? []) !== []) {
+            $message .= ' Một số ảnh local chỉnh sửa chưa ghi đè được: '.mb_substr(implode(' | ', $dirtySync['errors']), 0, 300);
+        }
+        if ($localMediaSyncErrors !== []) {
+            $message .= ' Một số ảnh trong nội dung chưa sync được: '.mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
+        }
+
+        if ($syncedLocalMediaIds !== []) {
+            $updatedPromptMediaLinks = $this->syncPromptMediaLinksToWordPressUrls($article, $syncedLocalMediaIds);
+            if ($updatedPromptMediaLinks > 0) {
+                $message .= " Đã cập nhật {$updatedPromptMediaLinks} kết quả prompt sang URL ảnh WordPress.";
+            }
+
+            $restored = SeoMedia::query()
+                ->whereIn('id', $syncedLocalMediaIds)
+                ->where('status', 'trash')
+                ->update([
+                    'status' => 'completed',
+                    'error_message' => null,
+                ]);
+            if ($restored > 0) {
+                $stepDetails[] = 'media_restored='.$restored;
+            }
+
+            $stepDetails[] = 'media_synced='.count($syncedLocalMediaIds);
+        }
+
+        if ($wpTaxonomy === null) {
+            $article->update(['body' => null]);
+        }
+        app(ArticleWordPressSyncFlagService::class)->clearAll($article);
+        $this->timestampService->sync($article, $decoded);
+
+        if ((string) ($article->status ?? '') === 'scheduled') {
+            $message .= ' WordPress giữ bản nháp — Laravel sẽ tự đăng khi đến giờ lên lịch.';
+        }
+
+        $this->storeEditorSyncFingerprint($article->fresh(), $prepared);
+        $this->storeLocalSaveFingerprint(
+            $article->fresh(),
+            (string) ($prepared['post_content'] ?? (string) ($article->body ?? '')),
+            null,
+        );
+
+        return [
+            'success' => true,
+            'message' => $message,
+            'faq_count' => count($faqs),
+            'faq_extract_debug' => $faqExtractDebug,
+            'post_type' => $wpTaxonomy === null ? $remotePostType : null,
+            'post_type_changed' => $wpTaxonomy === null
+                ? (bool) ($decoded['post_type_changed'] ?? false)
+                : false,
+            'step_detail' => implode(', ', $stepDetails),
+        ];
+    }
+
+    /**
+     * Đảm bảo bài đã có wp_post_id (tạo mới trên WP nếu cần).
+     *
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     * @return array{success: bool, message: string, step_detail?: string, created?: bool}
+     */
+    public function ensureWordPressPostForArticle(SeoArticle $article, ?array $seoOverride = null, array $syncOptions = []): array
+    {
+        if ((int) ($article->wp_post_id ?? 0) > 0) {
+            return [
+                'success' => true,
+                'message' => 'Đã có wp_post_id #'.(int) $article->wp_post_id,
+                'step_detail' => 'wp_post_id='.(int) $article->wp_post_id,
+                'created' => false,
+            ];
+        }
+
+        $prepared = $this->prepareEditorSyncPayload($article, $seoOverride, $syncOptions);
+        $created = $this->createForArticle($article, $prepared['request_payload']);
+        if (! ($created['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($created['message'] ?? 'Không tạo được bài trên WordPress.'),
+            ];
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Đã tạo bài WordPress #'.(int) ($created['wp_post_id'] ?? 0),
+            'step_detail' => 'wp_post_id='.(int) ($created['wp_post_id'] ?? 0),
+            'created' => true,
+        ];
+    }
+
+    /**
+     * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
+     * @return array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }
+     */
+    private function buildEditorSyncPayload(SeoArticle $article, ?array $seoOverride = null, array $syncOptions = []): array
+    {
+        $deferInlineMedia = (bool) ($syncOptions['defer_inline_media_sync'] ?? false);
         $article->loadMissing('site');
         $site = $article->site;
         if (! $site instanceof Site) {
             return [
-                'success' => false,
-                'message' => 'Không tìm thấy tên miền của bài viết.',
+                'request_payload' => [],
+                'post_content' => '',
+                'faqs' => [],
+                'faq_extract_debug' => null,
+                'wp_taxonomy' => null,
+                'local_media_sync_errors' => ['Không tìm thấy tên miền của bài viết.'],
+                'synced_local_media_ids' => [],
             ];
         }
 
@@ -392,28 +834,30 @@ final class WordPressArticleSyncService
             $postContent = app(ArticleCtaPlaceholderService::class)->replaceInHtml($postContent, $site);
             $postContent = app(WorkflowParserService::class)->removeFaqAndAppendShortcodeFromContent($postContent);
             $postContent = app(ArticlePostContentFaqPlaceholder::class)->normalizeForWordPress($postContent);
-            try {
-                $localMediaSync = app(WordPressLocalMediaSyncService::class)->syncHtml($article, $postContent);
-            } catch (Throwable $mediaException) {
-                Log::warning('WordPress local media sync exception', [
-                    'article_id' => $article->id,
-                    'error' => $mediaException->getMessage(),
-                ]);
-                $localMediaSync = [
-                    'html' => $postContent,
-                    'errors' => ['Lỗi đồng bộ ảnh local: '.$mediaException->getMessage()],
-                ];
+            if (! $deferInlineMedia) {
+                try {
+                    $localMediaSync = app(WordPressLocalMediaSyncService::class)->syncHtml($article, $postContent);
+                } catch (Throwable $mediaException) {
+                    Log::warning('WordPress local media sync exception', [
+                        'article_id' => $article->id,
+                        'error' => $mediaException->getMessage(),
+                    ]);
+                    $localMediaSync = [
+                        'html' => $postContent,
+                        'errors' => ['Lỗi đồng bộ ảnh local: '.$mediaException->getMessage()],
+                    ];
+                }
+                $postContent = (string) ($localMediaSync['html'] ?? $postContent);
+                $localMediaSyncErrors = is_array($localMediaSync['errors'] ?? null)
+                    ? $localMediaSync['errors']
+                    : [];
+                $syncedLocalMediaIds = is_array($localMediaSync['synced_media_ids'] ?? null)
+                    ? array_values(array_filter(array_map(
+                        static fn ($id): int => (int) $id,
+                        $localMediaSync['synced_media_ids'],
+                    )))
+                    : [];
             }
-            $postContent = (string) ($localMediaSync['html'] ?? $postContent);
-            $localMediaSyncErrors = is_array($localMediaSync['errors'] ?? null)
-                ? $localMediaSync['errors']
-                : [];
-            $syncedLocalMediaIds = is_array($localMediaSync['synced_media_ids'] ?? null)
-                ? array_values(array_filter(array_map(
-                    static fn ($id): int => (int) $id,
-                    $localMediaSync['synced_media_ids'],
-                )))
-                : [];
         }
 
         $faqs = $article->resolveFaqs();
@@ -455,8 +899,7 @@ final class WordPressArticleSyncService
             $payload = [
                 'title' => (string) ($article->title ?? ''),
                 'slug' => (string) ($article->slug ?? ''),
-                'status' => $this->mapStatusForWordPress((string) ($article->status ?? 'draft')),
-                'post_date' => $this->formatPostDateForWordPress($article),
+                ...$this->resolveWordPressStatusPayload($article),
                 'post_type' => $requestedPostType,
                 'post_content' => $postContent !== '' ? $postContent : null,
                 'faqs' => $faqs,
@@ -469,165 +912,239 @@ final class WordPressArticleSyncService
             }
         }
 
-        try {
-            $response = Http::timeout(45)
-                ->acceptJson()
-                ->withToken($writeToken)
-                ->post($url, $payload);
+        $prepared = [
+            'request_payload' => $payload,
+            'post_content' => $postContent,
+            'faqs' => $faqs,
+            'faq_extract_debug' => $faqExtractDebug,
+            'wp_taxonomy' => $wpTaxonomy,
+            'local_media_sync_errors' => $localMediaSyncErrors,
+            'synced_local_media_ids' => $syncedLocalMediaIds,
+            'defer_inline_media_sync' => $deferInlineMedia,
+        ];
 
-            if (! $response->successful()) {
-                $message = WordPressRestResponseParser::formatHttpErrorMessage(
-                    $response->status(),
-                    $response,
-                );
+        $skipCheck = $this->shouldSkipEditorSyncRequest($article, $prepared);
 
-                Log::warning('WordPress article sync failed', [
-                    'article_id' => $article->id,
-                    'wp_post_id' => $wpPostId,
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                ]);
+        return [
+            ...$prepared,
+            'skip_editor_sync' => $skipCheck['skip'],
+            'skip_editor_sync_reason' => $skipCheck['reason'],
+        ];
+    }
 
-                return [
-                    'success' => false,
-                    'message' => $message,
-                ];
-            }
-
-            $decoded = $response->json();
-            if (! is_array($decoded) || ! ($decoded['success'] ?? false)) {
-                return [
-                    'success' => false,
-                    'message' => (string) ($decoded['message'] ?? 'WordPress từ chối đồng bộ.'),
-                ];
-            }
-
-            $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
-            $remotePermalink = trim((string) ($decoded['permalink'] ?? ''));
-
-            if ($wpTaxonomy === null) {
-                $requestedPostType = ArticlePostTypeResolver::resolve($article) === SeoProjectTask::POST_TYPE_PRODUCT
-                    ? 'product'
-                    : 'post';
-                $remotePostType = strtolower(trim((string) ($decoded['post_type'] ?? $requestedPostType)));
-                if (! in_array($remotePostType, ['post', 'product'], true)) {
-                    $remotePostType = $requestedPostType;
-                }
-
-                $article->update([
-                    'type' => $remotePostType === 'product' ? 'product' : 'article',
-                ]);
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_post_type'],
-                    ['meta_value' => $remotePostType],
-                );
-            }
-            if ($remoteSlug !== '') {
-                $article->update(['slug' => $remoteSlug]);
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_slug'],
-                    ['meta_value' => $remoteSlug],
-                );
-            }
-            if ($remotePermalink !== '') {
-                $article->articleMetas()->updateOrCreate(
-                    ['meta_key' => 'wp_permalink'],
-                    ['meta_value' => $remotePermalink],
-                );
-                app(ArticlePendingInternalLinkService::class)->resolveForMainArticle($article->fresh());
-            }
-
-            $this->storeWpPostContentMeta($article, $postContent);
-            if ($postContent !== '' && trim((string) ($article->body ?? '')) !== $postContent) {
-                // Sau khi sync, body Laravel dùng URL WordPress để tránh quay lại URL local.
-                $article->update(['body' => $postContent]);
-            }
-
-            $message = (string) ($decoded['message'] ?? 'Đã đồng bộ lên WordPress.');
-            $virtualCount = (int) ($decoded['virtual_count'] ?? 0);
-            if ($virtualCount > 0) {
-                $message .= ' Đã đồng bộ '.$virtualCount.' review ảo.';
-            }
-            $virtualError = trim((string) ($decoded['virtual_comments_error'] ?? ''));
-            if ($virtualError !== '') {
-                $message .= ' Review chưa lưu: '.mb_substr($virtualError, 0, 200);
-            }
-            $mediaPush = app(ArticleMediaLocalService::class)->pushPendingMediaToWordPress($article->fresh());
-            $dirtySync = app(WordPressLocalMediaSyncService::class)->syncDirtyLocalMediaForArticle($article->fresh());
-            $syncedFromPending = is_array($mediaPush['synced_local_media_ids'] ?? null)
-                ? array_values(array_filter(array_map(
-                    static fn ($id): int => (int) $id,
-                    $mediaPush['synced_local_media_ids'],
-                )))
-                : [];
-            $syncedLocalMediaIds = array_values(array_unique(array_merge(
-                $syncedLocalMediaIds,
-                $syncedFromPending,
-            )));
-
-            if ($mediaPush['attempted']) {
-                if ($mediaPush['success']) {
-                    $message .= ' Đã đẩy ảnh đại diện/album lên WordPress.';
-                } else {
-                    $message .= ' Ảnh chưa đẩy được: '.mb_substr((string) $mediaPush['message'], 0, 200);
-                }
-            }
-            if (($dirtySync['synced'] ?? 0) > 0) {
-                $message .= ' Đã ghi đè '.(int) $dirtySync['synced'].' ảnh local đã chỉnh sửa lên WordPress.';
-            }
-            if (($dirtySync['errors'] ?? []) !== []) {
-                $message .= ' Một số ảnh local chỉnh sửa chưa ghi đè được: '.mb_substr(implode(' | ', $dirtySync['errors']), 0, 300);
-            }
-            if ($localMediaSyncErrors !== []) {
-                $message .= ' Một số ảnh trong nội dung chưa sync được: '.mb_substr(implode(' | ', $localMediaSyncErrors), 0, 300);
-            }
-
-            if ($syncedLocalMediaIds !== []) {
-                $updatedPromptMediaLinks = $this->syncPromptMediaLinksToWordPressUrls($article, $syncedLocalMediaIds);
-                if ($updatedPromptMediaLinks > 0) {
-                    $message .= " Đã cập nhật {$updatedPromptMediaLinks} kết quả prompt sang URL ảnh WordPress.";
-                }
-
-                $trashed = app(WordPressLocalMediaSyncService::class)->markSyncedLocalMediaAsTrash($syncedLocalMediaIds);
-                if ($trashed > 0) {
-                    $message .= " Đã gắn cờ trash {$trashed} ảnh local đã đồng bộ.";
-                }
-            }
-
-            if ($wpTaxonomy === null) {
-                $article->update(['body' => null]);
-            }
-            app(ArticleWordPressSyncFlagService::class)->clearAll($article);
-            $this->timestampService->sync($article, $decoded);
-
-            return [
-                'success' => true,
-                'message' => $message,
-                'faq_count' => count($faqs),
-                'faq_extract_debug' => $faqExtractDebug,
-                'post_type' => $wpTaxonomy === null ? ($remotePostType ?? null) : null,
-                'post_type_changed' => $wpTaxonomy === null
-                    ? (bool) ($decoded['post_type_changed'] ?? false)
-                    : false,
-            ];
-        } catch (Throwable $e) {
-            Log::warning('WordPress article sync exception', [
-                'article_id' => $article->id,
-                'wp_post_id' => $wpPostId,
-                'error' => $e->getMessage(),
-            ]);
-
-            return [
-                'success' => false,
-                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
-            ];
+    /**
+     * @param  array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }  $prepared
+     * @return array{skip: bool, reason: string}
+     */
+    public function shouldSkipSaveLocalPhase(SeoArticle $article, string $html, ?array $seoAnalysis = null): array
+    {
+        if (app(ArticleWordPressSyncFlagService::class)->hasLocalEditPending($article)) {
+            return ['skip' => false, 'reason' => 'local_edit_pending'];
         }
+
+        $article->loadMissing('articleMetas');
+        $storedFingerprint = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_WP_LOCAL_SAVE_FINGERPRINT)?->meta_value ?? ''));
+        $currentFingerprint = $this->localSaveFingerprint($article, $html, $seoAnalysis);
+
+        if ($storedFingerprint !== '' && hash_equals($storedFingerprint, $currentFingerprint)) {
+            return ['skip' => true, 'reason' => 'fingerprint_match'];
+        }
+
+        $existingBody = trim((string) ($article->body ?? ''));
+        $incomingBody = trim(app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html));
+
+        if (
+            $storedFingerprint === ''
+            && $existingBody !== ''
+            && $this->normalizeEditorSyncContent($existingBody) === $this->normalizeEditorSyncContent($incomingBody)
+        ) {
+            return ['skip' => true, 'reason' => 'body_match'];
+        }
+
+        return ['skip' => false, 'reason' => 'changed'];
+    }
+
+    public function storeLocalSaveFingerprint(SeoArticle $article, string $html, ?array $seoAnalysis = null): void
+    {
+        $fingerprint = $this->localSaveFingerprint($article->fresh(), $html, $seoAnalysis);
+        if ($fingerprint === '') {
+            return;
+        }
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_WP_LOCAL_SAVE_FINGERPRINT],
+            ['meta_value' => $fingerprint],
+        );
+    }
+
+    private function localSaveFingerprint(SeoArticle $article, string $html, ?array $seoAnalysis = null): string
+    {
+        $article->loadMissing('articleMetas');
+        $html = trim(app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html));
+
+        $featuredUrl = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_URL)?->meta_value ?? ''));
+        $featuredId = (int) ($article->articleMetas
+            ->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
+        $galleryRaw = (string) ($article->articleMetas
+            ->firstWhere('meta_key', ArticleMediaLocalService::META_PRODUCT_GALLERY_IDS)?->meta_value ?? '');
+
+        $canonical = [
+            'body' => $this->normalizeEditorSyncContent($html),
+            'title' => trim((string) ($article->title ?? '')),
+            'slug' => trim((string) ($article->slug ?? '')),
+            'seo' => is_array($seoAnalysis) ? $this->normalizeSeoAnalysisFingerprint($seoAnalysis) : null,
+            'featured' => [
+                'url' => $featuredUrl,
+                'id' => $featuredId,
+            ],
+            'gallery_ids' => $galleryRaw !== '' ? json_decode($galleryRaw, true) : [],
+        ];
+
+        return hash('sha256', json_encode($canonical, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    /**
+     * @param  array<string, mixed>  $seoAnalysis
+     * @return array<string, mixed>
+     */
+    private function normalizeSeoAnalysisFingerprint(array $seoAnalysis): array
+    {
+        return [
+            'score' => $seoAnalysis['score'] ?? null,
+            'meta_description' => trim((string) ($seoAnalysis['meta_description'] ?? '')),
+            'focus_keyword' => trim((string) ($seoAnalysis['focus_keyword'] ?? '')),
+        ];
+    }
+
+    public function shouldSkipEditorSyncRequest(SeoArticle $article, array $prepared): array
+    {
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+        if ($wpPostId <= 0) {
+            return ['skip' => false, 'reason' => 'missing_wp_post_id'];
+        }
+
+        if (app(ArticleWordPressSyncFlagService::class)->hasLocalEditPending($article)) {
+            return ['skip' => false, 'reason' => 'local_edit_pending'];
+        }
+
+        if (($prepared['local_media_sync_errors'] ?? []) !== []) {
+            return ['skip' => false, 'reason' => 'media_sync_errors'];
+        }
+
+        $article->loadMissing('articleMetas');
+        $storedFingerprint = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', self::META_WP_EDITOR_SYNC_FINGERPRINT)?->meta_value ?? ''));
+        $currentFingerprint = $this->editorSyncFingerprint($prepared);
+
+        if ($storedFingerprint !== '' && hash_equals($storedFingerprint, $currentFingerprint)) {
+            return ['skip' => true, 'reason' => 'fingerprint_match'];
+        }
+
+        $cachedContent = trim((string) ($article->articleMetas
+            ->firstWhere('meta_key', 'wp_post_content')?->meta_value ?? ''));
+        $preparedContent = trim((string) ($prepared['post_content'] ?? ''));
+
+        if (
+            $storedFingerprint === ''
+            && $cachedContent !== ''
+            && $this->normalizeEditorSyncContent($cachedContent) === $this->normalizeEditorSyncContent($preparedContent)
+        ) {
+            return ['skip' => true, 'reason' => 'wp_post_content_match'];
+        }
+
+        return ['skip' => false, 'reason' => 'payload_changed'];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function buildSkippedEditorSyncDecoded(SeoArticle $article): array
+    {
+        $article->loadMissing('articleMetas');
+
+        return [
+            'success' => true,
+            'message' => 'editor-sync skipped',
+            'slug' => trim((string) ($article->articleMetas->firstWhere('meta_key', 'wp_slug')?->meta_value ?? $article->slug ?? '')),
+            'permalink' => trim((string) ($article->articleMetas->firstWhere('meta_key', 'wp_permalink')?->meta_value ?? '')),
+            'post_type' => trim((string) ($article->articleMetas->firstWhere('meta_key', 'wp_post_type')?->meta_value ?? '')),
+            'skipped' => true,
+        ];
+    }
+
+    /**
+     * @param  array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     *     faq_extract_debug: array<string, mixed>|null,
+     *     wp_taxonomy: string|null,
+     *     local_media_sync_errors: array<int, string>,
+     *     synced_local_media_ids: array<int, int>
+     * }  $prepared
+     */
+    private function storeEditorSyncFingerprint(SeoArticle $article, array $prepared): void
+    {
+        $fingerprint = $this->editorSyncFingerprint($prepared);
+        if ($fingerprint === '') {
+            return;
+        }
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_WP_EDITOR_SYNC_FINGERPRINT],
+            ['meta_value' => $fingerprint],
+        );
+    }
+
+    /**
+     * @param  array{
+     *     request_payload: array<string, mixed>,
+     *     post_content: string,
+     *     faqs: array<int, array<string, string>>,
+     * }  $prepared
+     */
+    private function editorSyncFingerprint(array $prepared): string
+    {
+        $payload = is_array($prepared['request_payload'] ?? null) ? $prepared['request_payload'] : [];
+        $canonical = [
+            'title' => (string) ($payload['title'] ?? ''),
+            'slug' => (string) ($payload['slug'] ?? ''),
+            'status' => $payload['status'] ?? null,
+            'post_type' => $payload['post_type'] ?? null,
+            'post_content' => $this->normalizeEditorSyncContent((string) ($prepared['post_content'] ?? '')),
+            'faqs' => is_array($prepared['faqs'] ?? null) ? $prepared['faqs'] : [],
+            'seo' => is_array($payload['seo'] ?? null) ? $payload['seo'] : [],
+            'category_ids' => $payload['category_ids'] ?? null,
+            'parent_id' => $payload['parent_id'] ?? null,
+        ];
+
+        return hash('sha256', json_encode($canonical, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    private function normalizeEditorSyncContent(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return '';
+        }
+
+        return preg_replace('/\s+/u', ' ', $html) ?? $html;
     }
 
     /**
      * @return array{success: bool, message?: string, url?: string, write_token?: string, wp_post_id?: int}
      */
-    private function resolveEditorSyncContext(SeoArticle $article): array
+    public function resolveEditorSyncContext(SeoArticle $article): array
     {
         $wpPostId = (int) ($article->wp_post_id ?? 0);
         if ($wpPostId <= 0) {
@@ -691,14 +1208,123 @@ final class WordPressArticleSyncService
         return \Illuminate\Support\Str::slug((string) ($article->title ?? ''));
     }
 
+    /**
+     * Đăng bài đã đến giờ lên WordPress (cron Laravel). Giữ status=scheduled nếu WP thất bại để retry.
+     *
+     * @return array{success: bool, message: string}
+     */
+    public function publishScheduledArticle(SeoArticle $article): array
+    {
+        if ($blocked = $this->blockContentManagerWordPressSync()) {
+            return $blocked;
+        }
+
+        if ((string) ($article->status ?? '') !== 'scheduled') {
+            return [
+                'success' => false,
+                'message' => 'Bài không ở trạng thái scheduled.',
+            ];
+        }
+
+        if (! $article->published_at instanceof Carbon || $article->published_at->isFuture()) {
+            return [
+                'success' => false,
+                'message' => 'Chưa đến giờ đăng bài.',
+            ];
+        }
+
+        $context = $this->resolveEditorSyncContext($article);
+        if (! ($context['success'] ?? false)) {
+            return [
+                'success' => false,
+                'message' => (string) ($context['message'] ?? 'Không thể đăng bài lên WordPress.'),
+            ];
+        }
+
+        $payload = [
+            'status' => 'publish',
+            'post_date' => $this->formatPostDateForWordPress($article),
+        ];
+
+        try {
+            $response = Http::timeout(30)
+                ->acceptJson()
+                ->withToken((string) $context['write_token'])
+                ->post((string) $context['url'], array_filter(
+                    $payload,
+                    static fn (mixed $value): bool => $value !== null && $value !== '',
+                ));
+
+            if (! $response->successful()) {
+                return [
+                    'success' => false,
+                    'message' => WordPressRestResponseParser::formatHttpErrorMessage($response->status(), $response),
+                ];
+            }
+
+            $decoded = $response->json();
+            if (! is_array($decoded) || ! ($decoded['success'] ?? false)) {
+                return [
+                    'success' => false,
+                    'message' => (string) ($decoded['message'] ?? 'WordPress từ chối đăng bài.'),
+                ];
+            }
+
+            $article->update(['status' => 'published']);
+            $this->timestampService->sync($article->fresh(), $decoded);
+
+            return [
+                'success' => true,
+                'message' => (string) ($decoded['message'] ?? 'Đã đăng bài lên WordPress.'),
+            ];
+        } catch (Throwable $e) {
+            Log::warning('WordPress scheduled publish exception', [
+                'article_id' => $article->id,
+                'wp_post_id' => $context['wp_post_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
+            ];
+        }
+    }
+
     private function mapStatusForWordPress(string $status): string
     {
         return match ($status) {
             'published' => 'publish',
             'private' => 'private',
-            'scheduled' => 'future',
             default => 'draft',
         };
+    }
+
+    /**
+     * Trạng thái gửi lên WP khi đồng bộ. Scheduled → draft (không dùng WP future).
+     *
+     * @return array{status: string, post_date?: string|null}
+     */
+    private function resolveWordPressStatusPayload(SeoArticle $article): array
+    {
+        $status = (string) ($article->status ?? 'draft');
+
+        if ($status === 'scheduled') {
+            return [
+                'status' => 'draft',
+            ];
+        }
+
+        $payload = [
+            'status' => $this->mapStatusForWordPress($status),
+        ];
+
+        $postDate = $this->formatPostDateForWordPress($article);
+        if ($postDate !== null) {
+            $payload['post_date'] = $postDate;
+        }
+
+        return $payload;
     }
 
     private function formatPostDateForWordPress(SeoArticle $article): ?string

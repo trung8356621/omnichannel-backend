@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
+use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -142,7 +143,20 @@ final class ArticleEditorMediaAiService
     }
 
     /**
-     * @return array{rendered: string, prompt_id: int, prompt_name: string, error?: string}
+     * @return array{
+     *     rendered: string,
+     *     prompt_id: int,
+     *     prompt_name: string,
+     *     post_processing: array{
+     *         split_enabled: bool,
+     *         split_rows: int,
+     *         split_columns: int,
+     *         resize_enabled: bool,
+     *         resize_width: int|null,
+     *         resize_height: int|null,
+     *     },
+     *     error?: string,
+     * }
      */
     public function previewRenderedImagePrompt(
         SeoArticle $article,
@@ -197,6 +211,7 @@ final class ArticleEditorMediaAiService
                 'rendered' => '',
                 'prompt_id' => (int) $prompt->id,
                 'prompt_name' => (string) ($prompt->name ?? ''),
+                'post_processing' => PromptPostProcessing::fromPrompt($prompt),
                 'error' => $exception->getMessage(),
             ];
         }
@@ -205,6 +220,7 @@ final class ArticleEditorMediaAiService
             'rendered' => $rendered,
             'prompt_id' => (int) $prompt->id,
             'prompt_name' => (string) ($prompt->name ?? ''),
+            'post_processing' => PromptPostProcessing::fromPrompt($prompt),
         ];
     }
 

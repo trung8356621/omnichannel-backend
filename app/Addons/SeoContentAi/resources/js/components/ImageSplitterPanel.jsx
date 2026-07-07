@@ -8,6 +8,10 @@ export default function ImageSplitterPanel({
     wpAttachmentId = null,
     slug = '',
     imageUrl = '',
+    variant = 'full',
+    defaultRows = 3,
+    defaultCols = 2,
+    autoSaveOnSplit = false,
     splitPayload = null,
     canDeleteOriginal = true,
     onSplitSaved = null,
@@ -26,6 +30,10 @@ export default function ImageSplitterPanel({
                 seoMediaId={seoMediaId}
                 wpAttachmentId={wpAttachmentId}
                 slug={slug}
+                variant={variant}
+                defaultRows={defaultRows}
+                defaultCols={defaultCols}
+                autoSaveOnSplit={autoSaveOnSplit}
                 fallbackImageUrl={imageUrl}
                 splitPayload={splitPayload}
                 canDeleteOriginal={canDeleteOriginal}

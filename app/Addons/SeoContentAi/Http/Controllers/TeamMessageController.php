@@ -14,12 +14,12 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 final class TeamMessageController extends Controller
 {
     public function __construct(
         private readonly TeamChatAttachmentService $attachmentService,
-        private readonly TeamChatNotificationService $teamChatNotificationService,
     ) {}
 
     public function config(): JsonResponse
@@ -35,7 +35,7 @@ final class TeamMessageController extends Controller
         ]);
     }
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): JsonResponse|StreamedResponse
     {
         $ownerId = SeoAccessControl::accountOwnerId();
         if ($ownerId === null || $ownerId <= 0) {
@@ -63,33 +63,77 @@ final class TeamMessageController extends Controller
             ]);
         }
 
-        $afterId = max(0, (int) $request->query('after_id', 0));
+        $afterId = max(0, (int) $request->query('after_id', $request->query('last_id', 0)));
 
-        $baseQuery = TeamMessage::query()
-            ->where('owner_id', $ownerId)
-            ->with(['user:id,name,email']);
+        return new StreamedResponse(function () use ($ownerId, $afterId): void {
+            @ini_set('zlib.output_compression', '0');
+            @ini_set('output_buffering', 'off');
+            set_time_limit(0);
 
-        if ($afterId > 0) {
-            $rows = $baseQuery
-                ->where('id', '>', $afterId)
-                ->orderBy('id')
-                ->limit(100)
-                ->get();
-        } else {
-            $rows = $baseQuery
-                ->orderByDesc('id')
-                ->limit(50)
-                ->get()
-                ->reverse()
-                ->values();
-        }
+            while (ob_get_level() > 0) {
+                ob_end_flush();
+            }
 
-        return response()->json([
-            'messages' => $rows->map(fn (TeamMessage $message): array => $this->serializeMessage($message))->all(),
-            'current_user_id' => (int) auth()->id(),
-            'owner_id' => $ownerId,
-            'config' => $this->attachmentService->clientConfig(),
-            'can_use_ai' => ! SeoAccessControl::isContentManager(),
+            $cursorId = $afterId;
+            $sendHistoryEnd = $cursorId === 0;
+
+            if ($sendHistoryEnd) {
+                $historyRows = TeamMessage::query()
+                    ->where('owner_id', $ownerId)
+                    ->with(['user:id,name,email'])
+                    ->orderByDesc('id')
+                    ->limit(50)
+                    ->get()
+                    ->reverse()
+                    ->values();
+
+                foreach ($historyRows as $message) {
+                    $this->emitSseMessage($message);
+                    $cursorId = max($cursorId, (int) $message->id);
+                }
+
+                $this->emitSseEvent('history_end', [
+                    'owner_id' => $ownerId,
+                    'current_user_id' => (int) auth()->id(),
+                    'config' => $this->attachmentService->clientConfig(),
+                    'can_use_ai' => ! SeoAccessControl::isContentManager(),
+                ]);
+            }
+
+            $lastHeartbeatAt = microtime(true);
+
+            while (true) {
+                if (connection_aborted() !== 0) {
+                    break;
+                }
+
+                $newRows = TeamMessage::query()
+                    ->where('owner_id', $ownerId)
+                    ->where('id', '>', $cursorId)
+                    ->with(['user:id,name,email'])
+                    ->orderBy('id')
+                    ->limit(100)
+                    ->get();
+
+                foreach ($newRows as $message) {
+                    $this->emitSseMessage($message);
+                    $cursorId = (int) $message->id;
+                }
+
+                $now = microtime(true);
+                if ($now - $lastHeartbeatAt >= 2.0) {
+                    echo ':'."\n\n";
+                    $this->flushSseOutput();
+                    $lastHeartbeatAt = $now;
+                }
+
+                usleep(500_000);
+            }
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no',
         ]);
     }
 
@@ -142,7 +186,7 @@ final class TeamMessageController extends Controller
 
         $message->load(['user:id,name,email']);
 
-        $this->teamChatNotificationService->notifyWorkspaceMembers($message);
+        $this->notifyWorkspaceMembers($message);
 
         return response()->json([
             'success' => true,
@@ -167,6 +211,40 @@ final class TeamMessageController extends Controller
      *     is_mine: bool
      * }
      */
+    private function notifyWorkspaceMembers(TeamMessage $message): void
+    {
+        if (! class_exists(TeamChatNotificationService::class)) {
+            return;
+        }
+
+        app(TeamChatNotificationService::class)->notifyWorkspaceMembers($message);
+    }
+
+    private function emitSseMessage(TeamMessage $message): void
+    {
+        echo 'data: '.json_encode($this->serializeMessage($message), JSON_THROW_ON_ERROR)."\n\n";
+        $this->flushSseOutput();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function emitSseEvent(string $event, array $payload): void
+    {
+        echo 'event: '.$event."\n";
+        echo 'data: '.json_encode($payload, JSON_THROW_ON_ERROR)."\n\n";
+        $this->flushSseOutput();
+    }
+
+    private function flushSseOutput(): void
+    {
+        if (ob_get_level() > 0) {
+            ob_flush();
+        }
+
+        flush();
+    }
+
     private function serializeMessage(TeamMessage $message): array
     {
         $user = $message->user;

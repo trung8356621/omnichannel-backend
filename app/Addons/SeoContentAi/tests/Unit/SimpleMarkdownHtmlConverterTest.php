@@ -55,6 +55,28 @@ MD;
         $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
     }
 
+    public function test_prepare_import_strips_horizontal_rule_after_meta_description(): void
+    {
+        $markdown = <<<'MD'
+**Meta Description:** Mô tả SEO cho bài viết.
+
+---
+
+H1: Tiêu đề chính
+
+Đoạn nội dung.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Mô tả SEO cho bài viết.', $prepared['meta_description']);
+        $this->assertStringNotContainsString('---', $prepared['markdown']);
+
+        $htmlResult = $this->converter()->toHtmlWithMetadata($prepared['markdown']);
+        $this->assertStringNotContainsString('<hr>', $htmlResult['html']);
+        $this->assertStringContainsString('Đoạn nội dung', $htmlResult['html']);
+    }
+
     public function test_strip_meta_description_from_html_paragraph(): void
     {
         $html = '<p><b>Meta Description:</b> Dịch vụ may balo trẻ em Phonak cao cấp.</p><h2>Section</h2>';

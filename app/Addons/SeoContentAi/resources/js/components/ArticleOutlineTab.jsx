@@ -948,6 +948,14 @@ export default function ArticleOutlineTab({
         }
 
         const { level, headingText, headingId, action } = headingCommand;
+
+        if (action === 'clear') {
+            setActiveGroupId(null);
+            setActiveHeadingId(null);
+            setEditingHeadingId(null);
+            return;
+        }
+
         const match =
             headingId != null
                 ? findOutlineNodeById(tree, headingId)

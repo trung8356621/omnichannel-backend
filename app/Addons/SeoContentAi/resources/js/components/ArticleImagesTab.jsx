@@ -611,6 +611,12 @@ export default function ArticleImagesTab({
                 caption: String(next?.caption || '').trim() || String(current?.caption || '').trim(),
                 originLabel:
                     String(next?.originLabel || '').trim() || String(current?.originLabel || '').trim(),
+                excludeQuickFix: Boolean(
+                    next?.excludeQuickFix ??
+                        next?.exclude_quick_fix ??
+                        current?.excludeQuickFix ??
+                        current?.exclude_quick_fix,
+                ),
             };
         };
 

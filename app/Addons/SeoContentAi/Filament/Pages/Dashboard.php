@@ -13,6 +13,8 @@ use App\Addons\SeoContentAi\Filament\Widgets\SeoOverviewStats;
 use App\Addons\SeoContentAi\Filament\Widgets\SeoScoreChart;
 use App\Addons\SeoContentAi\Filament\Widgets\WpPluginReleaseWidget;
 use App\Addons\SeoContentAi\Filament\Widgets\WpSyncStatusTable;
+use App\Support\ImageDriverResolver;
+use Filament\Notifications\Notification;
 use Filament\Pages\Dashboard as BaseDashboard;
 
 class Dashboard extends BaseDashboard
@@ -30,6 +32,36 @@ class Dashboard extends BaseDashboard
     protected $listeners = [
         'seoGlobalSiteChanged' => '$refresh',
     ];
+
+    public function mount(): void
+    {
+        $this->notifyImageDriverStatus();
+    }
+
+    private function notifyImageDriverStatus(): void
+    {
+        if (ImageDriverResolver::supportsImagick()) {
+            return;
+        }
+
+        if (! ImageDriverResolver::supportsGd()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.dashboard.image_driver_missing_title'))
+                ->body(__('seo-content-ai::filament.dashboard.image_driver_missing_body'))
+                ->danger()
+                ->persistent()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.dashboard.imagick_missing_title'))
+            ->body(__('seo-content-ai::filament.dashboard.imagick_missing_body'))
+            ->warning()
+            ->persistent()
+            ->send();
+    }
 
     public function getTitle(): string
     {

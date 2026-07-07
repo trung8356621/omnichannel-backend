@@ -29,6 +29,8 @@
         'publishHour' => $publishHour,
         'publishMinute' => $publishMinute,
         'publishWhenLabel' => $this->getPublishWhenLabel(),
+        'showPublishScheduleRow' => $this->shouldShowPublishScheduleRow(),
+        'publishedAtSidebarLabel' => $this->getPublishedAtSidebarLabel(),
     ];
     $articleRevisionCount = app(\App\Addons\SeoContentAi\Services\SeoArticleRevisionService::class)
         ->countForArticle((int) $record->getKey());
@@ -49,6 +51,8 @@
                 publishHour: initial.publishHour ?? '',
                 publishMinute: initial.publishMinute ?? '',
                 publishWhenLabel: initial.publishWhenLabel ?? 'Not scheduled',
+                showPublishScheduleRow: initial.showPublishScheduleRow ?? false,
+                publishedAtSidebarLabel: initial.publishedAtSidebarLabel ?? null,
                 publishIso: '',
                 labels,
                 editingPostType: false,
@@ -187,6 +191,9 @@
 
                 applyStatus() {
                     this.visibility = this.status === 'private' ? 'private' : 'public';
+                    if (this.status !== 'scheduled') {
+                        this.publishWhenLabel = '';
+                    }
                     this.editingStatus = false;
                     this._backup = null;
                 },
@@ -481,9 +488,9 @@
                 </div>
             </div>
 
-            <div class="text-xs">
+            <div class="text-xs" x-show="status === 'scheduled'" x-cloak>
                 <span class="text-gray-500 dark:text-gray-400">Bài lên lịch:</span>
-                <strong class="text-gray-800 dark:text-gray-100" x-text="publishWhenLabel"></strong>
+                <strong class="text-gray-800 dark:text-gray-100" x-text="publishWhenLabel || 'Not scheduled'"></strong>
                 <button
                     type="button"
                     x-on:click="beginPublishAtEdit()"
@@ -505,6 +512,13 @@
                     </div>
                 </div>
             </div>
+
+            @if (filled($publishBoxInitial['publishedAtSidebarLabel'] ?? null))
+                <div class="text-xs">
+                    <span class="text-gray-500 dark:text-gray-400">Ngày đăng:</span>
+                    <strong class="text-gray-800 dark:text-gray-100">{{ $publishBoxInitial['publishedAtSidebarLabel'] }}</strong>
+                </div>
+            @endif
 
             @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                 <div class="text-xs">

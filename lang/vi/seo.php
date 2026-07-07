@@ -6,9 +6,8 @@ return [
     'heading' => 'Cần ít nhất 2 thẻ H2 trong bài viết.',
     'heading.pass' => 'Cấu trúc nội dung có đủ thẻ H2 (+:points).',
 
-    'length' => 'Nội dung quá ngắn (dưới 600 từ, 0 điểm).',
-    'length.partial' => 'Độ dài nội dung trung bình (:count từ, +:points/:max điểm). Nên trên 1200 từ.',
-    'length.pass' => 'Độ dài nội dung tối ưu (:count từ, +:points).',
+    'length' => 'Nội dung chưa đạt độ dài mục tiêu (:count/:target từ, 0 điểm).',
+    'length.pass' => 'Độ dài nội dung đạt mục tiêu (:count/:target từ, +:points).',
 
     'image_ratio' => 'Không có ảnh hoặc tỷ lệ chữ/ảnh chưa hợp lý (lý tưởng 250–450 từ/ảnh). Thiếu ALT sẽ bị trừ điểm.',
     'image_ratio.pass' => 'Mật độ ảnh lý tưởng (:ratio từ/ảnh, +:points).',

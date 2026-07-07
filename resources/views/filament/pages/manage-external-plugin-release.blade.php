@@ -72,15 +72,20 @@
                 @endif
             </x-filament::section>
 
-            <form wire:submit="publish" class="space-y-6">
+            <x-filament-panels::form wire:submit="publish">
                 {{ $this->form }}
 
-                <div class="flex justify-end">
-                    <x-filament::button type="submit" icon="heroicon-o-cloud-arrow-up">
+                <div class="mt-6 flex justify-end">
+                    <x-filament::button
+                        type="submit"
+                        icon="heroicon-o-cloud-arrow-up"
+                        wire:loading.attr="disabled"
+                        wire:target="publish"
+                    >
                         {{ __('seo-content-ai::filament.wp_plugin_release.publish_button') }}
                     </x-filament::button>
                 </div>
-            </form>
+            </x-filament-panels::form>
 
             @if (count($older) > 0)
                 <x-filament::section

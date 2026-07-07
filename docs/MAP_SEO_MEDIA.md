@@ -59,7 +59,11 @@ flowchart TB
 
     subgraph Services["Services Layer"]
         STORAGE["SeoMediaStorageService<br/>storeUpload, storeFromRemoteUrl"]
-        IMGOPT["SeoImageOptimizationService<br/>processUpload"]
+        IMGOPT["SeoImageOptimizationService<br/>processUpload, processBinary,<br/>prepareWordPressUploadFile"]
+        PIPELINE["SeoImagePipeline<br/>resize + encode<br/>Imagick native → Intervention"]
+        RESIZE["SeoMediaResizeService<br/>resizeLocal, resizeBinary"]
+        MATH["SeoImageResizeMath<br/>dimensions + progressive steps"]
+        DRIVER["ImageDriverResolver<br/>app/Support — imagick/gd"]
         WM_SVC["SeoWatermarkService<br/>applyToMediaIfEnabled"]
         SPLIT_SVC["SeoImageSplitterService"]
         URL_RES["SeoMediaUrlImportResolverService"]
@@ -92,6 +96,10 @@ flowchart TB
     UPLOAD --> STORAGE
     IMPORT --> URL_RES --> STORAGE
     STORAGE --> IMGOPT --> WM_SVC
+    IMGOPT --> PIPELINE
+    RESIZE --> PIPELINE
+    PIPELINE --> MATH
+    PIPELINE --> DRIVER
     STORAGE --> PATH
     SPLIT --> SPLIT_SVC --> STORAGE
     WM --> WM_SVC
@@ -104,7 +112,39 @@ flowchart TB
     HIST --> T_HIST
 ```
 
-**Trace MCP (`upload` outbound, depth 4):** `SeoMediaController.upload` → `SeoMediaStorageService.storeUpload` → `SeoImageOptimizationService.processUpload` → `SeoWatermarkService.applyToMediaIfEnabled` → `SeoMedia::create` qua `SeoMediaBuilder.where/update`.
+**Trace MCP (`upload` outbound, depth 4):** `SeoMediaController.upload` → `SeoMediaStorageService.storeUpload` → `SeoImageOptimizationService.processUpload` → `SeoImagePipeline.applyMaxDimensions` + `encodeFile` → `SeoWatermarkService.applyToMediaIfEnabled` → `SeoMedia::create` qua `SeoMediaBuilder.where/update`.
+
+**Trace resize (Media Library / workflow):** `SeoMediaLibraryImageActionService` hoặc `PromptPostProcessingApplyService` → `SeoMediaResizeService.resizeLocal|resizeBinary` → `SeoImagePipeline.resizeFile`.
+
+**Trace đồng bộ WP:** `WordPressArticleSyncService.prepareEditorSyncPayload` → `WordPressLocalMediaSyncService.syncHtml` → `syncMedia` → `SeoImageOptimizationService.prepareWordPressUploadFile` → `POST …/attachments/import` hoặc `…/replace-binary` (plugin **≥ 1.0.50** đổi extension sang `.webp` khi mime `image/webp`) — **không ghi đè file PNG/JPG gốc** trên disk Laravel.
+
+**File upload WordPress (`prepareWordPressUploadFile`):**
+
+| Thứ tự | Điều kiện | File upload | Ghi chú |
+|--------|-----------|-------------|---------|
+| 1 | `auto_convert_webp` + encode WebP OK | `{slug}.webp` cạnh file gốc | Persistent sibling; `encodeSourceToPath` ghi đúng extension |
+| 2 | WebP fail | `{slug}-wp-upload.jpg` ≤ **100KB** | `ensureLocalOptimizedUploadCopy` — giảm quality rồi scale |
+| 3 | WebP fail + không nén được < 100KB nhưng gốc < 100KB | File gốc | Log warning |
+| 4 | Còn lại | `null` → sync ảnh thất bại | |
+
+**`syncHtml` — tránh import trùng (mỗi lượt sync):**
+
+1. Quét `<img>` local → ưu tiên `data-seo-media-id` (không chỉ lookup theo `path`).
+2. Mỗi `seo_media.id` chỉ gọi `syncMedia` **một lần** trong lượt (`$syncedThisPass`).
+3. Vòng `applyWpUrlsToSeoMediaImages`: nếu ảnh đã sync trong lượt → chỉ patch `src` từ cache, **không** `forgetMediaCache` + re-import.
+
+**WebP backfill** (`syncWebpBackfillMediaForArticle`, sau `completeEditorSyncResponse`):
+
+Chỉ chạy khi **bản WebP local thật sự dùng được** (`hasUsableLocalWebpCopy`). **Không** backfill khi đã fallback JPEG (`hasPersistentOptimizedUploadFallback` — file `-wp-upload.jpg` tồn tại): tránh vòng lặp “URL WP là JPG → sync lại → import attachment mới” (nguyên nhân 3 file WP cho 2 ảnh bài).
+
+| Hàm | Khi nào `true` |
+|-----|----------------|
+| `needsWordPressWebpBackfill` | `auto_convert_webp` + file local hợp lệ + sibling `.webp` hợp lệ + URL WP chưa `.webp` + **không** có `-wp-upload.jpg` |
+| `hasPersistentOptimizedUploadFallback` | Sibling `-wp-upload.jpg` mới hơn hoặc bằng mtime file gốc |
+
+**Attachment WP đã xóa thủ công:** `syncMedia` thấy `wp_attachment_id > 0` nhưng `fetchWordPressAttachmentUrl` rỗng → clear `wp_attachment_id` / `wp_synced_at` → **import mới** (không cố `replace-binary` lên ID chết).
+
+**Ảnh local sau sync:** Không set `status=trash`. Chỉ xóa local khi **Reviewed** (`ArticleResource::markArticleReviewed` → `deleteLocalMediaForArticle`). Ảnh `trash` được restore `completed` khi sync lại.
 
 **Workspace Picker route** (`GET /api/seo/media/workspace-picker`): Xử lý bởi `WorkspaceMediaPickerController` riêng, không phải `SeoMediaController`.
 
@@ -114,18 +154,120 @@ flowchart TB
 
 ---
 
+## 2.1.1 Pipeline resize & encode ảnh
+
+Pipeline trung tâm cho mọi thao tác resize/encode trong addon SEO. Thay thế `Intervention::scaleDown()` trực tiếp — ưu tiên **native Imagick** (Lanczos, sRGB, progressive scale, unsharp mask), fallback **Intervention Image** (driver Imagick hoặc GD).
+
+```mermaid
+flowchart TB
+    subgraph Entry["Điểm gọi"]
+        UP["processUpload / processBinary"]
+        RL["resizeLocal / resizeBinary"]
+        WP["prepareWordPressUploadFile"]
+        LIM["applyMaxDimensions"]
+    end
+
+    subgraph Opt["SeoImageOptimizationService"]
+        CFG["SeoImageOptimizationSetting<br/>max_width/height, quality, auto_convert_webp"]
+    end
+
+    subgraph Pipe["SeoImagePipeline"]
+        DIM["SeoImageResizeMath<br/>outputDimensions, progressiveScaleSteps"]
+        TRY_I["tryResizeWithImagick / tryEncodeImagickSourceToPath"]
+        ENC_DST["encodeSourceToPath<br/>source → dest đúng extension"]
+        FALL["resizeWithIntervention / encode fallback"]
+    end
+
+    subgraph Driver["ImageDriverResolver (core)"]
+        IMAGICK["supportsImagick()"]
+        GD["supportsGd()"]
+        ENV["env IMAGE_DRIVER (optional)"]
+    end
+
+    subgraph Out["Kết quả"]
+        LOCAL["Disk local: PNG chủ đạo<br/>lossless, giữ alpha"]
+        WP_OUT["Upload WP: .webp hoặc -wp-upload.jpg<br/>sibling persistent, gốc không đổi"]
+    end
+
+    UP & LIM --> CFG --> Pipe
+    RL --> Pipe
+    WP --> CFG --> Pipe
+    Pipe --> DIM
+    TRY_I -->|"extension_loaded('imagick')"| IMAGICK
+    TRY_I -->|"catch Throwable"| FALL
+    FALL --> ENV --> IMAGICK & GD
+    UP & RL & LIM --> LOCAL
+    WP --> WP_OUT
+```
+
+| Thành phần | File | Vai trò |
+|------------|------|---------|
+| Pipeline | `Support/SeoImagePipeline.php` | `resizeFile`, `encodeFile`, `encodeSourceToPath`, `applyMaxDimensions`; log driver qua `lastDriver()` |
+| Toán resize | `Support/SeoImageResizeMath.php` | Một chiều (width **hoặc** height); upscale ~1.5×/bước; downscale >2× chia ~50%/bước |
+| Driver | `app/Support/ImageDriverResolver.php` | `supportsImagick()`, `supportsGd()`, `shouldUseNativeImagickPipeline()`; Intervention ưu tiên Imagick |
+| Tối ưu + upload | `Services/SeoImageOptimizationService.php` | `prepareWordPressUploadFile`, `ensureLocalWebpCopy`, `ensureLocalOptimizedUploadCopy`, `needsWordPressWebpBackfill`, `WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES` (102400) |
+| Resize thủ công | `Services/SeoMediaResizeService.php` | `resizeLocal` (ghi đè file `public`), `resizeBinary` (in-memory / workflow) |
+| Media Library UI | `Services/SeoMediaLibraryImageActionService.php` | Quick resize → `resizeLocal` |
+| Post-processing | `Services/PromptPostProcessingApplyService.php` | Resize ảnh AI / block → `resizeBinary` hoặc `resizeLocal` |
+| Sync WP | `Services/WordPressLocalMediaSyncService.php` | `syncHtml`, `syncMedia`, `syncWebpBackfillMediaForArticle`, `prepareWordPressUploadFile` trước khi push attachment |
+
+### Chiến lược định dạng
+
+| Giai đoạn | Định dạng | Ghi chú |
+|-----------|-----------|---------|
+| Lưu local (upload, import, save-edited, resize) | **PNG** chủ đạo | `normalizeExtension` fallback `png`; Imagick PNG compression level 3, quality 100 |
+| Đồng bộ WordPress | **WebP** khi encode OK | Sibling `{basename}.webp`. **Fallback:** `-wp-upload.jpg` ≤ 100KB. **Backfill:** chỉ khi sibling `.webp` hợp lệ; không backfill khi đã JPEG fallback. Plugin **≥ 1.0.50**. |
+| JPEG / GIF / WebP | Hỗ trợ khi nguồn yêu cầu | Encode quality từ `SeoImageOptimizationSetting.quality` (mặc định pipeline 95 qua `ImageDriverResolver::ENCODE_QUALITY`) |
+
+### Native Imagick (khi có extension)
+
+1. `setImageColorspace(SRGB)`; PNG bật alpha channel.
+2. `progressiveScaleSteps` — nhiều bước Lanczos thay vì một lần thu/phóng lớn.
+3. `unsharpMaskImage` sau upscale (mạnh) hoặc downscale nhẹ.
+4. `try/catch` — lỗi Imagick → log warning → Intervention fallback.
+
+### Fallback Intervention
+
+- Driver: `ImageDriverResolver::interventionDriverClass()` — Imagick nếu có, không thì GD.
+- Cùng progressive steps + `sharpen()` tương ứng upscale/downscale.
+- Không có imagick **và** gd → `RuntimeException` khi resolve driver.
+
+### Cảnh báo Dashboard
+
+`Filament/Pages/Dashboard.php` → `mount()` → `notifyImageDriverStatus()`:
+
+| Điều kiện | Mức | i18n key |
+|-----------|-----|----------|
+| Thiếu Imagick, còn GD | `warning` | `dashboard.imagick_missing_*` |
+| Không có imagick và gd | `danger` | `dashboard.image_driver_missing_*` |
+
+**Lưu ý hosting:** Imagick phải bật cho **PHP-FPM** (không chỉ CLI). `Imagick::queryFormats()` có `WEBP` nhưng thiếu `libwebp` runtime vẫn có thể fail encode → hệ thống tự fallback JPEG. Sau khi bật extension: `php artisan config:clear`.
+
+### Test liên quan
+
+| Test | Phạm vi |
+|------|---------|
+| `tests/Unit/SeoImageResizeMathTest.php` | `outputDimensions`, `progressiveUpscaleSteps`, `progressiveScaleSteps` |
+| `tests/Unit/ImageDriverResolverTest.php` | Driver preference, `hasAnyDriver` |
+| `tests/Unit/SeoImageOptimizationServiceTest.php` | WebP/JPEG fallback upload, `needsWordPressWebpBackfill`, `ensureLocalOptimizedUploadCopy`, không mutate file local |
+
+---
+
 ## Hướng dẫn prompt Cursor — Upload / thư viện / watermark
 
 ```
 Route: SeoPanelProvider.php prefix api/seo/media.
 Controller: Http/Controllers/SeoMediaController.php.
-Services: SeoMediaStorageService, SeoImageOptimizationService, SeoWatermarkService.
+Services: SeoMediaStorageService, SeoImageOptimizationService, SeoMediaResizeService, SeoWatermarkService.
+Pipeline: Support/SeoImagePipeline.php + Support/SeoImageResizeMath.php.
+Driver: app/Support/ImageDriverResolver.php (imagick/gd, env IMAGE_DRIVER).
 Model/Query: Models/SeoMedia.php + Models/SeoMediaBuilder.php (meta routing).
 Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx.
 Watermark batch: POST /api/seo/watermark/* → SeoWatermarkController.
-Image Optimization Settings: SeoImageOptimizationSetting model + services.
+Image Optimization Settings: SeoImageOptimizationSetting model + ImageOptimizationSettings page.
 AI Image Processing: ImageProcessingPage.php + /api/seo/media/prepare-editor.
 WP Media Backup: Models SeoWpMediaBackup, SeoWpMediaEditedPending.
+Dashboard: cảnh báo thiếu Imagick/GD khi mount Filament Dashboard.
 ```
 
 ### API surface (frontend)
@@ -200,7 +342,9 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 
 - **Page:** `Filament/Pages/ImageOptimizationSettings.php`
 - **Model:** `SeoImageOptimizationSetting` (table `seo_image_optimization_settings`)
-- Cấu hình: format ảnh (WebP/AVIF), quality, kích thước tối đa, auto-compression
+- Cấu hình: `auto_convert_webp`, `quality`, `limit_dimensions`, `max_width` / `max_height` (một chiều hoặc ưu tiên width khi cả hai > 0), `clean_filename`, `auto_alt_tag`
+- **Local:** upload/import qua `processUpload` / `processBinary` — giới hạn kích thước + encode PNG (pipeline)
+- **WordPress:** `prepareWordPressUploadFile` chỉ lúc sync — sibling `.webp` hoặc `-wp-upload.jpg` (≤ 100KB); không đổi file gốc `uploads/seo_media/*.png`
 
 ### Save Edited Image
 

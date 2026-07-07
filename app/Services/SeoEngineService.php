@@ -25,7 +25,7 @@ final class SeoEngineService
 
     /**
      * @param  list<array{question?: string, answer?: string}>  $faqsMeta
-     * @param  array{seo_title?: string, meta_description?: string, slug?: string, domain?: string}  $context
+     * @param  array{seo_title?: string, meta_description?: string, slug?: string, domain?: string, article_length_target?: int}  $context
      * @return array{
      *   seo_score: int,
      *   score: int,
@@ -71,10 +71,11 @@ final class SeoEngineService
         $totalScore += $heading['earned'];
         $this->applyCategoryResult($heading, $good, $errors, $warnings, $reasonKeys);
 
-        $length = $this->scoreLength($htmlContent);
+        $lengthTarget = max(1, (int) ($context['article_length_target'] ?? 2000));
+        $length = $this->scoreLength($htmlContent, $lengthTarget);
         $breakdown['length'] = $length;
         $totalScore += $length['earned'];
-        $this->applyCategoryResult($length, $good, $errors, $warnings, $reasonKeys, isPartial: $length['key'] === 'seo.length.partial');
+        $this->applyCategoryResult($length, $good, $errors, $warnings, $reasonKeys);
 
         $imageRatio = $this->scoreTextToImage($htmlContent);
         $breakdown['image_ratio'] = $imageRatio;
@@ -245,36 +246,22 @@ final class SeoEngineService
     /**
      * @return array{max: int, earned: int, passed: bool, key: string, params?: array<string, mixed>}
      */
-    private function scoreLength(string $html): array
+    private function scoreLength(string $html, int $targetWords): array
     {
         $wordCount = $this->countWords($html);
-
-        if ($wordCount < 600) {
-            return [
-                'max' => self::MAX_LENGTH,
-                'earned' => 0,
-                'passed' => false,
-                'key' => 'seo.length',
-                'params' => ['count' => $wordCount, 'points' => 0, 'max' => self::MAX_LENGTH],
-            ];
-        }
-
-        if ($wordCount <= 1200) {
-            return [
-                'max' => self::MAX_LENGTH,
-                'earned' => 10,
-                'passed' => false,
-                'key' => 'seo.length.partial',
-                'params' => ['count' => $wordCount, 'points' => 10, 'max' => self::MAX_LENGTH],
-            ];
-        }
+        $passed = $wordCount >= $targetWords;
 
         return [
             'max' => self::MAX_LENGTH,
-            'earned' => self::MAX_LENGTH,
-            'passed' => true,
-            'key' => 'seo.length.pass',
-            'params' => ['count' => $wordCount, 'points' => self::MAX_LENGTH],
+            'earned' => $passed ? self::MAX_LENGTH : 0,
+            'passed' => $passed,
+            'key' => $passed ? 'seo.length.pass' : 'seo.length',
+            'params' => [
+                'count' => $wordCount,
+                'target' => $targetWords,
+                'points' => $passed ? self::MAX_LENGTH : 0,
+                'max' => self::MAX_LENGTH,
+            ],
         ];
     }
 

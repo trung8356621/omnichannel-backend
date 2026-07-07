@@ -13,6 +13,8 @@ function resolveEditArticleWireId() {
     return nested?.getAttribute('wire:id') ?? null;
 }
 
+export { saveArticleViaApi, syncArticleToWordPressViaApi } from './articleEditorApi.js';
+
 export function callEditArticleLivewire(method, ...args) {
     if (typeof Livewire === 'undefined') {
         return Promise.reject(new Error('Livewire is not available'));

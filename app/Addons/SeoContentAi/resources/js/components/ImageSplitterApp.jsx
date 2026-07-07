@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LayoutGrid, Loader2 } from 'lucide-react';
 import { fetchSplitterSource, saveSplitPiecesToLibrary } from '../utils/seoMediaApi';
 import { t } from '../utils/i18n';
 
@@ -44,11 +45,18 @@ export default function ImageSplitterApp({
     wpAttachmentId = null,
     slug = '',
     embedded = false,
+    variant = 'full',
+    defaultRows = 3,
+    defaultCols = 2,
+    autoSaveOnSplit = false,
     fallbackImageUrl = '',
     splitPayload = null,
     canDeleteOriginal = true,
     onSplitSaved = null,
 }) {
+    const isGalleryVariant = variant === 'gallery';
+    const initialRows = clampInt(defaultRows, 1, 12);
+    const initialCols = clampInt(defaultCols, 1, 12);
     const resultPaneRef = useRef(null);
     const previewRef = useRef(null);
     const splitPayloadRef = useRef(splitPayload);
@@ -62,10 +70,10 @@ export default function ImageSplitterApp({
         resolvedArticleId: null,
     });
     const [imgNatural, setImgNatural] = useState({ width: 0, height: 0 });
-    const [rows, setRows] = useState(3);
-    const [cols, setCols] = useState(2);
-    const [verticalGuides, setVerticalGuides] = useState(() => buildEvenGuides(2));
-    const [horizontalGuides, setHorizontalGuides] = useState(() => buildEvenGuides(3));
+    const [rows, setRows] = useState(initialRows);
+    const [cols, setCols] = useState(initialCols);
+    const [verticalGuides, setVerticalGuides] = useState(() => buildEvenGuides(initialCols));
+    const [horizontalGuides, setHorizontalGuides] = useState(() => buildEvenGuides(initialRows));
     const [dragGuide, setDragGuide] = useState(null);
     const [pieces, setPieces] = useState([]);
     const [isSplitting, setIsSplitting] = useState(false);
@@ -132,6 +140,26 @@ export default function ImageSplitterApp({
     useEffect(() => {
         setHorizontalGuides(buildEvenGuides(rows));
     }, [rows]);
+
+    useEffect(() => {
+        if (!isGalleryVariant) {
+            return;
+        }
+
+        const nextRows = clampInt(defaultRows, 1, 12);
+        const nextCols = clampInt(defaultCols, 1, 12);
+        setRows(nextRows);
+        setCols(nextCols);
+        setVerticalGuides(buildEvenGuides(nextCols));
+        setHorizontalGuides(buildEvenGuides(nextRows));
+        setDragGuide(null);
+        setPieces((prev) => {
+            prev.forEach((piece) => URL.revokeObjectURL(piece.url));
+            return [];
+        });
+        setSaveMessage('');
+        setError('');
+    }, [isGalleryVariant, defaultRows, defaultCols, seoMediaId]);
 
     useEffect(() => {
         let cancelled = false;
@@ -229,7 +257,166 @@ export default function ImageSplitterApp({
         [verticalGuides, horizontalGuides],
     );
 
+    const buildPiecesFromImage = async () => {
+        const image = await loadImage(imageSrc);
+        const nextPieces = [];
+        const xBoundaries = [0, ...verticalGuides, 1]
+            .map((ratio) => Math.round(ratio * image.naturalWidth))
+            .sort((a, b) => a - b);
+        const yBoundaries = [0, ...horizontalGuides, 1]
+            .map((ratio) => Math.round(ratio * image.naturalHeight))
+            .sort((a, b) => a - b);
+
+        for (let r = 0; r < yBoundaries.length - 1; r += 1) {
+            for (let c = 0; c < xBoundaries.length - 1; c += 1) {
+                const x0 = xBoundaries[c];
+                const x1 = xBoundaries[c + 1];
+                const y0 = yBoundaries[r];
+                const y1 = yBoundaries[r + 1];
+
+                const width = Math.max(1, x1 - x0);
+                const height = Math.max(1, y1 - y0);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, x0, y0, width, height, 0, 0, width, height);
+
+                const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
+                if (!blob) continue;
+                const objectUrl = URL.createObjectURL(blob);
+                const index = r * (xBoundaries.length - 1) + c + 1;
+                nextPieces.push({
+                    id: `${Date.now()}-${r}-${c}-${Math.random()}`,
+                    row: r + 1,
+                    col: c + 1,
+                    width,
+                    height,
+                    blob,
+                    url: objectUrl,
+                    filename: `${imageName}-r${r + 1}-c${c + 1}-${index}.png`,
+                });
+            }
+        }
+
+        return nextPieces;
+    };
+
     const splitImage = async () => {
+        if (!hasImage) {
+            setError(t('splitter_no_source'));
+            return [];
+        }
+
+        setIsSplitting(true);
+        setError('');
+        setSaveMessage('');
+
+        try {
+            const nextPieces = await buildPiecesFromImage();
+            const addedCount = nextPieces.length;
+            setPieces((prev) => [...prev, ...nextPieces]);
+            setSaveMessage(t('splitter_added', { count: addedCount }));
+            return nextPieces;
+        } catch (e) {
+            setError(e.message || t('splitter_split_error'));
+            return [];
+        } finally {
+            setIsSplitting(false);
+        }
+    };
+
+    const performSave = async (piecesToSave) => {
+        if (!piecesToSave.length) {
+            return null;
+        }
+
+        if (!effectiveSiteId) {
+            setError(t('splitter_missing_site_id'));
+            return null;
+        }
+
+        if (canDeleteOriginal && !(sourceMeta.seoMediaId > 0)) {
+            setError(t('splitter_missing_seo_media_id'));
+            return null;
+        }
+
+        setIsSaving(true);
+        setError('');
+        setSaveMessage('');
+
+        try {
+            const data = await saveSplitPiecesToLibrary({
+                siteId: effectiveSiteId,
+                articleId: effectiveArticleId,
+                originalSeoMediaId: canDeleteOriginal ? sourceMeta.seoMediaId : null,
+                pieces: piecesToSave,
+            });
+
+            piecesToSave.forEach((piece) => URL.revokeObjectURL(piece.url));
+            setPieces((prev) => {
+                prev.forEach((piece) => URL.revokeObjectURL(piece.url));
+                return [];
+            });
+            setImageSrc('');
+            setImageName('image');
+            setImgNatural({ width: 0, height: 0 });
+            setSourceMeta({
+                seoMediaId: null,
+                wpAttachmentId: null,
+                resolvedSiteId: effectiveSiteId,
+                resolvedArticleId: effectiveArticleId,
+            });
+
+            setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));
+
+            const galleryItems = Array.isArray(data.product_gallery_items) ? data.product_gallery_items : [];
+
+            if (typeof onSplitSaved === 'function') {
+                onSplitSaved({
+                    saved: data.saved ?? [],
+                    deletedOriginal: !!data.deleted_original,
+                    product_gallery_items: galleryItems,
+                    article_id: effectiveArticleId,
+                });
+                return data;
+            }
+
+            const returnUrl =
+                effectiveArticleId > 0
+                    ? sessionStorage.getItem(`seo-product-gallery-split-return-${effectiveArticleId}`)
+                    : null;
+
+            if (window.opener) {
+                window.opener.postMessage(
+                    {
+                        type: 'seo-image-splitter-saved',
+                        saved: data.saved ?? [],
+                        deletedOriginal: !!data.deleted_original,
+                        product_gallery_items: galleryItems,
+                        article_id: effectiveArticleId,
+                    },
+                    window.location.origin,
+                );
+            } else if (returnUrl && galleryItems.length > 0) {
+                try {
+                    sessionStorage.removeItem(`seo-product-gallery-split-return-${effectiveArticleId}`);
+                } catch {
+                    /* ignore */
+                }
+                window.location.assign(returnUrl);
+            }
+
+            return data;
+        } catch (e) {
+            setError(e.message || t('splitter_save_error'));
+            return null;
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const splitAndSave = async () => {
         if (!hasImage) {
             setError(t('splitter_no_source'));
             return;
@@ -240,50 +427,13 @@ export default function ImageSplitterApp({
         setSaveMessage('');
 
         try {
-            const image = await loadImage(imageSrc);
-            const nextPieces = [];
-            const xBoundaries = [0, ...verticalGuides, 1]
-                .map((ratio) => Math.round(ratio * image.naturalWidth))
-                .sort((a, b) => a - b);
-            const yBoundaries = [0, ...horizontalGuides, 1]
-                .map((ratio) => Math.round(ratio * image.naturalHeight))
-                .sort((a, b) => a - b);
-
-            for (let r = 0; r < yBoundaries.length - 1; r += 1) {
-                for (let c = 0; c < xBoundaries.length - 1; c += 1) {
-                    const x0 = xBoundaries[c];
-                    const x1 = xBoundaries[c + 1];
-                    const y0 = yBoundaries[r];
-                    const y1 = yBoundaries[r + 1];
-
-                    const width = Math.max(1, x1 - x0);
-                    const height = Math.max(1, y1 - y0);
-                    const canvas = document.createElement('canvas');
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(image, x0, y0, width, height, 0, 0, width, height);
-
-                    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 1));
-                    if (!blob) continue;
-                    const objectUrl = URL.createObjectURL(blob);
-                    const index = r * (xBoundaries.length - 1) + c + 1;
-                    nextPieces.push({
-                        id: `${Date.now()}-${r}-${c}-${Math.random()}`,
-                        row: r + 1,
-                        col: c + 1,
-                        width,
-                        height,
-                        blob,
-                        url: objectUrl,
-                        filename: `${imageName}-r${r + 1}-c${c + 1}-${index}.png`,
-                    });
-                }
+            const nextPieces = await buildPiecesFromImage();
+            if (nextPieces.length === 0) {
+                setError(t('splitter_split_error'));
+                return;
             }
 
-            const addedCount = nextPieces.length;
-            setPieces((prev) => [...prev, ...nextPieces]);
-            setSaveMessage(t('splitter_added', { count: addedCount }));
+            await performSave(nextPieces);
         } catch (e) {
             setError(e.message || t('splitter_split_error'));
         } finally {
@@ -382,79 +532,127 @@ export default function ImageSplitterApp({
             return;
         }
 
-        setIsSaving(true);
-        setError('');
-        setSaveMessage('');
-
-        try {
-            const data = await saveSplitPiecesToLibrary({
-                siteId: effectiveSiteId,
-                articleId: effectiveArticleId,
-                originalSeoMediaId: canDeleteOriginal ? sourceMeta.seoMediaId : null,
-                pieces,
-            });
-
-            setPieces((prev) => {
-                prev.forEach((piece) => URL.revokeObjectURL(piece.url));
-                return [];
-            });
-            setImageSrc('');
-            setImageName('image');
-            setImgNatural({ width: 0, height: 0 });
-            setSourceMeta({
-                seoMediaId: null,
-                wpAttachmentId: null,
-                resolvedSiteId: effectiveSiteId,
-                resolvedArticleId: effectiveArticleId,
-            });
-
-            setSaveMessage(data.message ?? t('splitter_saved_default', { count: data.saved?.length ?? 0 }));
-
-            const galleryItems = Array.isArray(data.product_gallery_items) ? data.product_gallery_items : [];
-
-            if (typeof onSplitSaved === 'function') {
-                onSplitSaved({
-                    saved: data.saved ?? [],
-                    deletedOriginal: !!data.deleted_original,
-                    product_gallery_items: galleryItems,
-                    article_id: effectiveArticleId,
-                });
-                return;
-            }
-
-            const returnUrl =
-                effectiveArticleId > 0
-                    ? sessionStorage.getItem(`seo-product-gallery-split-return-${effectiveArticleId}`)
-                    : null;
-
-            if (window.opener) {
-                window.opener.postMessage(
-                    {
-                        type: 'seo-image-splitter-saved',
-                        saved: data.saved ?? [],
-                        deletedOriginal: !!data.deleted_original,
-                        product_gallery_items: galleryItems,
-                        article_id: effectiveArticleId,
-                    },
-                    window.location.origin,
-                );
-            } else if (returnUrl && galleryItems.length > 0) {
-                try {
-                    sessionStorage.removeItem(`seo-product-gallery-split-return-${effectiveArticleId}`);
-                } catch {
-                    /* ignore */
-                }
-                window.location.assign(returnUrl);
-                return;
-            }
-        } catch (e) {
-            setError(e.message || t('splitter_save_error'));
-        } finally {
-            setIsSaving(false);
-        }
+        await performSave(pieces);
     };
 
     const hasResults = pieces.length > 0;
+    const isBusy = isSplitting || isSaving;
+    const splitDisabled = !hasImage || isBusy || isLoadingSource;
+
+    const gridOverlay = hasImage ? (
+        <div className={`grid-preview${isGalleryVariant ? ' grid-preview--gallery' : ''}`} ref={previewRef}>
+            <img src={imageSrc} alt="Source" />
+            {gridLines.vertical.map((left, index) => (
+                <React.Fragment key={`v-${index}-${left}`}>
+                    <span className="grid-line v" style={{ left: `${left}%` }} />
+                    {!isGalleryVariant ? (
+                        <button
+                            type="button"
+                            className={`grid-line-handle v${dragGuide?.axis === 'x' && dragGuide?.index === index ? ' is-active' : ''}`}
+                            style={{ left: `${left}%` }}
+                            onMouseDown={(event) => {
+                                event.preventDefault();
+                                setDragGuide({ axis: 'x', index });
+                            }}
+                            aria-label={t('splitter_drag_col_handle')}
+                            title={t('splitter_drag_col_handle_title')}
+                        />
+                    ) : null}
+                </React.Fragment>
+            ))}
+            {gridLines.horizontal.map((top, index) => (
+                <React.Fragment key={`h-${index}-${top}`}>
+                    <span className="grid-line h" style={{ top: `${top}%` }} />
+                    {!isGalleryVariant ? (
+                        <button
+                            type="button"
+                            className={`grid-line-handle h${dragGuide?.axis === 'y' && dragGuide?.index === index ? ' is-active' : ''}`}
+                            style={{ top: `${top}%` }}
+                            onMouseDown={(event) => {
+                                event.preventDefault();
+                                setDragGuide({ axis: 'y', index });
+                            }}
+                            aria-label={t('splitter_drag_row_handle')}
+                            title={t('splitter_drag_row_handle_title')}
+                        />
+                    ) : null}
+                </React.Fragment>
+            ))}
+        </div>
+    ) : null;
+
+    if (isGalleryVariant) {
+        return (
+            <div
+                className={`seo-image-splitter seo-image-splitter--gallery${
+                    embedded ? ' seo-image-splitter--embedded' : ''
+                }`}
+            >
+                <div className="splitter-gallery-toolbar">
+                    <label>
+                        {t('splitter_rows')}
+                        <input
+                            type="number"
+                            min={1}
+                            max={12}
+                            value={rows}
+                            disabled={isBusy}
+                            onChange={(e) => {
+                                setRows(clampInt(e.target.value, 1, 12));
+                                setDragGuide(null);
+                            }}
+                        />
+                    </label>
+                    <label>
+                        {t('splitter_cols')}
+                        <input
+                            type="number"
+                            min={1}
+                            max={12}
+                            value={cols}
+                            disabled={isBusy}
+                            onChange={(e) => {
+                                setCols(clampInt(e.target.value, 1, 12));
+                                setDragGuide(null);
+                            }}
+                        />
+                    </label>
+                    <button
+                        type="button"
+                        className="splitter-icon-btn"
+                        disabled={splitDisabled}
+                        onClick={autoSaveOnSplit ? splitAndSave : splitImage}
+                        title={isBusy ? t('splitter_splitting') : t('splitter_split')}
+                        aria-label={t('splitter_split')}
+                    >
+                        {isBusy ? <Loader2 size={22} className="splitter-icon-btn__spinner" /> : <LayoutGrid size={22} />}
+                    </button>
+                </div>
+
+                <div className="splitter-gallery-preview">
+                    {isLoadingSource ? (
+                        <div className="empty-card">{t('splitter_loading_from_sources')}</div>
+                    ) : !hasImage ? (
+                        <div className="empty-card">{t('splitter_need_source_ids')}</div>
+                    ) : (
+                        gridOverlay
+                    )}
+                </div>
+
+                {imgNatural.width > 0 ? (
+                    <div className="hint">
+                        {t('splitter_source_size', { width: imgNatural.width, height: imgNatural.height })}
+                        {sourceMeta.seoMediaId ? ` · Laravel #${sourceMeta.seoMediaId}` : ''}
+                    </div>
+                ) : null}
+                {!effectiveSiteId && hasImage ? (
+                    <div className="hint">{t('splitter_missing_site_hint')}</div>
+                ) : null}
+                {saveMessage ? <div className="splitter-success">{saveMessage}</div> : null}
+                {error ? <div className="splitter-error">{error}</div> : null}
+            </div>
+        );
+    }
 
     return (
         <div
@@ -530,41 +728,7 @@ export default function ImageSplitterApp({
                             {t('splitter_need_source_ids')}
                         </div>
                     ) : (
-                        <div className="grid-preview" ref={previewRef}>
-                            <img src={imageSrc} alt="Source" />
-                            {gridLines.vertical.map((left, index) => (
-                                <React.Fragment key={`v-${index}-${left}`}>
-                                    <span className="grid-line v" style={{ left: `${left}%` }} />
-                                    <button
-                                        type="button"
-                                        className={`grid-line-handle v${dragGuide?.axis === 'x' && dragGuide?.index === index ? ' is-active' : ''}`}
-                                        style={{ left: `${left}%` }}
-                                        onMouseDown={(event) => {
-                                            event.preventDefault();
-                                            setDragGuide({ axis: 'x', index });
-                                        }}
-                                        aria-label={t('splitter_drag_col_handle')}
-                                        title={t('splitter_drag_col_handle_title')}
-                                    />
-                                </React.Fragment>
-                            ))}
-                            {gridLines.horizontal.map((top, index) => (
-                                <React.Fragment key={`h-${index}-${top}`}>
-                                    <span className="grid-line h" style={{ top: `${top}%` }} />
-                                    <button
-                                        type="button"
-                                        className={`grid-line-handle h${dragGuide?.axis === 'y' && dragGuide?.index === index ? ' is-active' : ''}`}
-                                        style={{ top: `${top}%` }}
-                                        onMouseDown={(event) => {
-                                            event.preventDefault();
-                                            setDragGuide({ axis: 'y', index });
-                                        }}
-                                        aria-label={t('splitter_drag_row_handle')}
-                                        title={t('splitter_drag_row_handle_title')}
-                                    />
-                                </React.Fragment>
-                            ))}
-                        </div>
+                        gridOverlay
                     )}
                 </div>
 

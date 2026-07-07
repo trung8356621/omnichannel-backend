@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi;
 use App\Addons\SeoContentAi\Console\BackfillPromptResultLinksCommand;
 use App\Addons\SeoContentAi\Console\CleanCtaKeywordsCommand;
 use App\Addons\SeoContentAi\Console\ExtractOldArticleTocsCommand;
+use App\Addons\SeoContentAi\Console\PublishScheduledArticlesCommand;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
@@ -14,6 +15,7 @@ use App\Addons\SeoContentAi\Observers\SeoArticleObserver;
 use App\Addons\SeoContentAi\Observers\SeoProjectObserver;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Services\TeamChatAttachmentService;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Notifications\DatabaseNotification;
 use Illuminate\Routing\Router;
@@ -30,6 +32,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
         $this->app->singleton(PromptMediaStorageService::class);
         $this->app->singleton(SeoDatabaseConnectionService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Services\SeoDatabaseBackupService::class);
+        $this->app->singleton(TeamChatAttachmentService::class);
     }
 
     public function boot(): void
@@ -54,6 +57,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 BackfillPromptResultLinksCommand::class,
                 CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
+                PublishScheduledArticlesCommand::class,
             ]);
         }
 
@@ -77,6 +81,17 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 ->monthlyOn(1, '00:10')
                 ->name($name)
                 ->withoutOverlapping();
+
+            $publishScheduledName = 'seo-content-ai:publish-scheduled-articles';
+            $publishScheduledRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $publishScheduledName);
+            if (! $publishScheduledRegistered) {
+                $schedule
+                    ->command(PublishScheduledArticlesCommand::class)
+                    ->everyMinute()
+                    ->name($publishScheduledName)
+                    ->withoutOverlapping();
+            }
         });
     }
 

@@ -179,6 +179,7 @@ export function ImageBlockPickerBox({
     onGenerateRequest,
     onImportFromUrl,
     importLoading = false,
+    interactionReady = true,
 }) {
     const [mode, setMode] = useState('actions');
     const [prompt, setPrompt] = useState('');
@@ -186,19 +187,35 @@ export function ImageBlockPickerBox({
     const [generateKind, setGenerateKind] = useState('image');
     const importInputRef = useRef(null);
     const generateTextareaRef = useRef(null);
+    const actionsDisabled = !interactionReady || importLoading;
+
+    const stopPickerPointer = (event) => {
+        event.stopPropagation();
+        if (!interactionReady) {
+            event.preventDefault();
+        }
+    };
 
     // Auto-focus vào input/textarea mỗi khi mode chuyển
     useEffect(() => {
+        if (!interactionReady) {
+            return;
+        }
+
         if (mode === 'import') {
             importInputRef.current?.focus();
         } else if (mode === 'generate') {
             generateTextareaRef.current?.focus();
         }
-    }, [mode]);
+    }, [interactionReady, mode]);
 
     if (mode === 'import') {
         return (
-            <div className="seo-image-block-picker">
+            <div
+                className="seo-image-block-picker"
+                onMouseDown={stopPickerPointer}
+                onPointerDown={stopPickerPointer}
+            >
                 <button type="button" className="seo-image-block-picker__back" onMouseDown={(e) => e.stopPropagation()} onClick={() => setMode('actions')}>
                     ← Back
                 </button>
@@ -238,7 +255,11 @@ export function ImageBlockPickerBox({
 
     if (mode === 'generate') {
         return (
-            <div className="seo-image-block-picker seo-image-block-picker--generate">
+            <div
+                className="seo-image-block-picker seo-image-block-picker--generate"
+                onMouseDown={stopPickerPointer}
+                onPointerDown={stopPickerPointer}
+            >
                 <p className="seo-image-block-picker__title">{t('compose_placeholder')}</p>
                 <div className="seo-image-block-picker__actions">
                     <button
@@ -286,12 +307,24 @@ export function ImageBlockPickerBox({
     }
 
     return (
-        <div className="seo-image-block-picker seo-image-block-picker--row">
+        <div
+            className={`seo-image-block-picker seo-image-block-picker--row${actionsDisabled ? ' is-booting' : ''}`}
+            onMouseDown={stopPickerPointer}
+            onPointerDown={stopPickerPointer}
+        >
             <button
                 type="button"
                 className="seo-image-block-picker__choice"
-                onMouseDown={(e) => e.preventDefault()}
+                disabled={actionsDisabled}
+                onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }}
                 onClick={(e) => {
+                    if (actionsDisabled) {
+                        return;
+                    }
+
                     e.preventDefault();
                     e.stopPropagation();
                     onOpenMediaLibrary(e);
@@ -299,14 +332,41 @@ export function ImageBlockPickerBox({
             >
                 {t('image_block_label')}/{t('generate_video')}
             </button>
-            <button type="button" className="seo-image-block-picker__choice is-secondary" onMouseDown={(e) => e.preventDefault()} onClick={() => setMode('generate')}>
+            <button
+                type="button"
+                className="seo-image-block-picker__choice is-secondary"
+                disabled={actionsDisabled}
+                onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }}
+                onClick={(e) => {
+                    if (actionsDisabled) {
+                        return;
+                    }
+
+                    e.stopPropagation();
+                    setMode('generate');
+                }}
+            >
                 {t('generate_image')}/{t('generate_video')}
             </button>
             <button
                 type="button"
                 className="seo-image-block-picker__choice is-secondary"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setMode('import')}
+                disabled={actionsDisabled}
+                onMouseDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }}
+                onClick={(e) => {
+                    if (actionsDisabled) {
+                        return;
+                    }
+
+                    e.stopPropagation();
+                    setMode('import');
+                }}
             >
                 Quick download
             </button>

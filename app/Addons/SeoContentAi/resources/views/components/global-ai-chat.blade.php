@@ -49,7 +49,8 @@
         lastTeamMessageId: 0,
         lastReadTeamMessageId: 0,
         teamUnreadCount: 0,
-        pollTimer: null,
+        teamEventSource: null,
+        teamSseAfterId: null,
         workspaceChatI18n: @js($workspaceChatI18n),
         currentUserId: @js($currentUserId),
         storageKey: @js($storageKey),
@@ -82,8 +83,11 @@
                 this.activeTab = 'team';
             }
 
-            this.refreshTeamUnreadOnInit();
-            this.startTeamPolling();
+            this.refreshTeamUnreadOnInit().then(() => {
+                if (this.lastTeamMessageId > 0) {
+                    this.startTeamSse(this.lastTeamMessageId);
+                }
+            });
             this.requestBrowserNotificationPermission();
 
             this._onGlobalAiChatImageSelected = (event) => {
@@ -93,7 +97,7 @@
         },
 
         destroy() {
-            this.stopTeamPolling();
+            this.stopTeamSse();
             if (this._onGlobalAiChatImageSelected) {
                 window.removeEventListener('seo-global-ai-chat-image-selected', this._onGlobalAiChatImageSelected);
             }
@@ -159,16 +163,112 @@
             }
         },
 
-        startTeamPolling() {
-            this.stopTeamPolling();
-            this.pollTimer = window.setInterval(() => this.pollTeamActivity(), 4000);
+        startTeamSse(afterId = null) {
+            const resolvedAfterId = afterId !== null
+                ? Math.max(0, Number(afterId) || 0)
+                : Math.max(0, this.lastTeamMessageId);
+
+            if (this.teamEventSource && this.teamSseAfterId === resolvedAfterId) {
+                return;
+            }
+
+            this.connectTeamSse(resolvedAfterId);
         },
 
-        stopTeamPolling() {
-            if (this.pollTimer) {
-                window.clearInterval(this.pollTimer);
-                this.pollTimer = null;
+        connectTeamSse(afterId) {
+            this.stopTeamSse();
+            this.teamSseAfterId = afterId;
+
+            const url = `${this.teamMessagesUrl}?after_id=${afterId}`;
+            const source = new EventSource(url);
+            this.teamEventSource = source;
+
+            source.addEventListener('history_end', (event) => {
+                try {
+                    const data = JSON.parse(event.data || '{}');
+                    if (data.config) {
+                        this.teamChatConfig = data.config;
+                    }
+                    if (typeof data.can_use_ai === 'boolean') {
+                        this.canUseAiChat = data.can_use_ai;
+                    }
+                    if (Number(data.owner_id) > 0) {
+                        this.workspaceOwnerId = Number(data.owner_id);
+                    }
+                } catch (error) {
+                    console.error(error);
+                }
+
+                this.teamLoading = false;
+                this.markTeamAsRead();
+                this.scrollTeamToBottom();
+            });
+
+            source.onmessage = (event) => {
+                if (! event?.data) {
+                    return;
+                }
+
+                try {
+                    const item = JSON.parse(event.data);
+                    this.handleIncomingTeamMessage(item);
+                } catch (error) {
+                    console.error(error);
+                }
+            };
+
+            source.onerror = () => {
+                if (source.readyState === EventSource.CLOSED) {
+                    this.stopTeamSse();
+                }
+            };
+        },
+
+        stopTeamSse() {
+            if (this.teamEventSource) {
+                this.teamEventSource.close();
+                this.teamEventSource = null;
             }
+
+            this.teamSseAfterId = null;
+        },
+
+        handleIncomingTeamMessage(item) {
+            if (! item || ! Number(item.id)) {
+                return;
+            }
+
+            if (Number(item.owner_id) > 0) {
+                this.workspaceOwnerId = Number(item.owner_id);
+            }
+
+            const viewingTeam = this.openChat && this.activeTab === 'team';
+
+            if (viewingTeam) {
+                const beforeCount = this.teamMessages.length;
+                this.mergeTeamMessages([item]);
+
+                if (this.teamMessages.length > beforeCount) {
+                    this.scrollTeamToBottom();
+                }
+
+                this.markTeamAsRead();
+                return;
+            }
+
+            const id = Number(item.id) || 0;
+            if (! id || id <= this.lastTeamMessageId) {
+                return;
+            }
+
+            this.lastTeamMessageId = id;
+
+            if (! item.is_mine) {
+                this.teamUnreadCount++;
+                this.showTeamBrowserNotification(item);
+            }
+
+            this.persistTeamCursor();
         },
 
         markTeamAsRead() {
@@ -275,106 +375,10 @@
             this.teamMessages.sort((a, b) => Number(a.id) - Number(b.id));
         },
 
-        async loadTeamMessages() {
+        loadTeamMessages() {
             this.teamLoading = true;
-            try {
-                const response = await fetch(this.teamMessagesUrl, {
-                    headers: { Accept: 'application/json' },
-                    credentials: 'same-origin',
-                });
-                const data = await response.json();
-                if (! response.ok) {
-                    throw new Error(data.message || 'Không tải được tin nhắn nhóm.');
-                }
-
-                this.teamMessages = Array.isArray(data.messages) ? data.messages : [];
-                if (data.config) {
-                    this.teamChatConfig = data.config;
-                }
-                if (typeof data.can_use_ai === 'boolean') {
-                    this.canUseAiChat = data.can_use_ai;
-                }
-                if (Number(data.owner_id) > 0) {
-                    this.workspaceOwnerId = Number(data.owner_id);
-                }
-                this.lastTeamMessageId = this.teamMessages.reduce(
-                    (max, item) => Math.max(max, Number(item.id) || 0),
-                    this.lastTeamMessageId,
-                );
-                if (this.lastTeamMessageId > 0) {
-                    this.persistTeamCursor();
-                }
-                this.markTeamAsRead();
-                this.scrollTeamToBottom();
-            } catch (error) {
-                console.error(error);
-            } finally {
-                this.teamLoading = false;
-            }
-        },
-
-        async pollTeamActivity() {
-            try {
-                const url = this.lastTeamMessageId > 0
-                    ? `${this.teamMessagesUrl}?after_id=${this.lastTeamMessageId}`
-                    : this.teamMessagesUrl;
-
-                const response = await fetch(url, {
-                    headers: { Accept: 'application/json' },
-                    credentials: 'same-origin',
-                });
-                const data = await response.json();
-                if (! response.ok) {
-                    return;
-                }
-
-                if (Number(data.owner_id) > 0) {
-                    this.workspaceOwnerId = Number(data.owner_id);
-                }
-
-                const incoming = Array.isArray(data.messages) ? data.messages : [];
-                const viewingTeam = this.openChat && this.activeTab === 'team';
-
-                if (viewingTeam) {
-                    const beforeCount = this.teamMessages.length;
-                    this.mergeTeamMessages(incoming);
-
-                    if (this.lastTeamMessageId <= 0 && incoming.length > 0) {
-                        this.lastTeamMessageId = incoming.reduce(
-                            (max, item) => Math.max(max, Number(item.id) || 0),
-                            0,
-                        );
-                        this.persistTeamCursor();
-                    }
-
-                    if (this.teamMessages.length > beforeCount) {
-                        this.scrollTeamToBottom();
-                    }
-
-                    this.markTeamAsRead();
-                    return;
-                }
-
-                incoming.forEach((item) => {
-                    const id = Number(item.id) || 0;
-                    if (! id || id <= this.lastTeamMessageId) {
-                        return;
-                    }
-
-                    this.lastTeamMessageId = id;
-
-                    if (! item.is_mine) {
-                        this.teamUnreadCount++;
-                        this.showTeamBrowserNotification(item);
-                    }
-                });
-
-                if (incoming.length > 0) {
-                    this.persistTeamCursor();
-                }
-            } catch (error) {
-                console.error(error);
-            }
+            this.teamMessages = [];
+            this.connectTeamSse(0);
         },
 
         async sendTeamMessage() {
@@ -1417,10 +1421,10 @@
                 </button>
             </div>
             <p class="seo-global-chat__hint" x-show="activeTab === 'team' && canUseAiChat">
-                Team chat đồng bộ qua HTTP polling. Gõ <code>@ai</code> hoặc bấm icon AI để chuyển sang Trợ lý AI. Hỗ trợ Ctrl+V ảnh và đính kèm file.
+                Team chat đồng bộ qua SSE (Server-Sent Events). Gõ <code>@ai</code> hoặc bấm icon AI để chuyển sang Trợ lý AI. Hỗ trợ Ctrl+V ảnh và đính kèm file.
             </p>
             <p class="seo-global-chat__hint" x-show="activeTab === 'team' && ! canUseAiChat">
-                Team chat đồng bộ qua HTTP polling. Hỗ trợ Ctrl+V ảnh và đính kèm file.
+                Team chat đồng bộ qua SSE (Server-Sent Events). Hỗ trợ Ctrl+V ảnh và đính kèm file.
             </p>
             <p class="seo-global-chat__hint" x-show="canUseAiChat && activeTab === 'ai'">
                 AI có thể đưa ra thông tin chưa chính xác. Hãy kiểm tra nội dung quan trọng.

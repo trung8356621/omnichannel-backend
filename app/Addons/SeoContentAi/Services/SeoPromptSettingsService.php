@@ -194,6 +194,29 @@ final class SeoPromptSettingsService
         return trim((string) $postType) === 'product';
     }
 
+    public function resolveArticleLengthTarget(?string $postType = null): int
+    {
+        $settings = $this->getSettings();
+        $isProduct = self::isProductPostType($postType);
+        $raw = $isProduct
+            ? (string) $settings[self::KEY_ARTICLE_LENGTH_PRODUCT]
+            : (string) $settings[self::KEY_ARTICLE_LENGTH_DEFAULT];
+        $fallback = $isProduct
+            ? (int) self::DEFAULT_ARTICLE_LENGTH_PRODUCT
+            : (int) self::DEFAULT_ARTICLE_LENGTH_DEFAULT;
+
+        return self::parseArticleLengthTarget($raw, $fallback);
+    }
+
+    public static function parseArticleLengthTarget(string $raw, int $fallback = 2000): int
+    {
+        if (preg_match('/(\d+)/', $raw, $matches) === 1) {
+            return max(1, (int) $matches[1]);
+        }
+
+        return max(1, $fallback);
+    }
+
     /**
      * @return list<string>
      */

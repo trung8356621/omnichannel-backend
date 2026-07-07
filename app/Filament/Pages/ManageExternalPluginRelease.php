@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\ExternalPlugin\ExternalPluginManifest;
 use App\Services\ExternalPlugin\ExternalPluginRegistry;
 use App\Services\ExternalPlugin\WordPressPluginReleaseService;
+use App\Services\ExternalPlugin\WordPressPluginUploadPathResolver;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Section;
 use Filament\Forms\Components\Select;
@@ -23,6 +24,8 @@ use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Validation\ValidationException;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 
 class ManageExternalPluginRelease extends Page implements HasForms
 {
@@ -102,10 +105,16 @@ class ManageExternalPluginRelease extends Page implements HasForms
                                 'application/zip',
                                 'application/x-zip-compressed',
                                 'application/octet-stream',
+                                'multipart/x-zip',
                             ])
                             ->maxSize(102400)
                             ->required()
-                            ->maxFiles(1),
+                            ->maxFiles(1)
+                            ->downloadable(false)
+                            ->openable(false)
+                            ->getUploadedFileNameForStorageUsing(
+                                static fn (TemporaryUploadedFile $file): string => $file->getClientOriginalName(),
+                            ),
                         TextInput::make('version')
                             ->label(__('seo-content-ai::filament.wp_plugin_release.version'))
                             ->helperText(__('seo-content-ai::filament.wp_plugin_release.version_hint'))
@@ -133,8 +142,20 @@ class ManageExternalPluginRelease extends Page implements HasForms
 
     public function publish(ExternalPluginRegistry $registry): void
     {
-        $state = $this->form->getState();
-        $uploadedPath = $this->resolveUploadedZipPath($state['plugin_zip'] ?? null);
+        try {
+            $state = $this->form->getState();
+        } catch (ValidationException $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.wp_plugin_release.publish_failed'))
+                ->body(collect($exception->errors())->flatten()->first() ?? '')
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $uploaded = $state['plugin_zip'] ?? $this->data['plugin_zip'] ?? null;
+        $uploadedPath = app(WordPressPluginUploadPathResolver::class)->resolve($uploaded);
 
         if ($uploadedPath === null) {
             Notification::make()
@@ -171,7 +192,7 @@ class ManageExternalPluginRelease extends Page implements HasForms
 
             return;
         } finally {
-            $this->cleanupUploadedZip($state['plugin_zip'] ?? null);
+            $this->cleanupUploadedZip($uploaded);
         }
 
         $this->refreshOverview($registry);
@@ -259,24 +280,6 @@ class ManageExternalPluginRelease extends Page implements HasForms
         }
 
         return WordPressPluginReleaseService::forManifest($manifest);
-    }
-
-    private function resolveUploadedZipPath(mixed $uploaded): ?string
-    {
-        if (is_array($uploaded)) {
-            $uploaded = reset($uploaded) ?: null;
-        }
-
-        if (! is_string($uploaded) || $uploaded === '') {
-            return null;
-        }
-
-        $disk = Storage::disk('local');
-        if (! $disk->exists($uploaded)) {
-            return null;
-        }
-
-        return $disk->path($uploaded);
     }
 
     private function cleanupUploadedZip(mixed $uploaded): void
