@@ -69,6 +69,14 @@
 - Add or update focused tests under `app/Addons/SeoContentAi/tests/Unit/` for service and parser behavior.
 - After changing addon JavaScript or CSS, verify the relevant Vite entry and run the frontend build.
 
+## Blade Select Boxes
+
+- Every `<select>` in Blade views must use the shared `<x-select>` component at `resources/views/components/select.blade.php`.
+- Do not write raw `<select>` elements or custom chevron CSS/SVG wrappers.
+- Pass `name`, `wire:model`, `x-model`, `id`, and layout classes through `<x-select>` attributes; put `<option>` elements in the slot.
+- Never add an extra arrow SVG outside `<x-select>` — the component already includes the chevron.
+- In SEO Content AI React code, use `SeoSelect`; in SEO Blade views, prefer `<x-select>` over ad-hoc selects.
+
 ## React And Vite
 
 - Follow the existing addon-local frontend layout. SEO Content AI assets live under `app/Addons/SeoContentAi/resources/`.

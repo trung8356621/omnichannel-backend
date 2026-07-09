@@ -20,7 +20,9 @@ use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
+use App\Addons\SeoContentAi\Filament\Pages\SeoQueueManager;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
+use App\Addons\SeoContentAi\Services\SeoQueueControlService;
 use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
@@ -104,6 +106,32 @@ class SeoPanelProvider extends PanelProvider
 
             SeoConnectionContext::applyUrlDefaults();
         });
+
+        FilamentView::registerRenderHook(
+            PanelsRenderHook::CONTENT_START,
+            function (): HtmlString {
+                if (! auth()->check()) {
+                    return new HtmlString('');
+                }
+
+                if (filament()->getCurrentPanel()?->getId() !== 'seo') {
+                    return new HtmlString('');
+                }
+
+                $queueControl = app(SeoQueueControlService::class);
+                if (! $queueControl->shouldShowOfflineAlertForCurrentOwner()) {
+                    return new HtmlString('');
+                }
+
+                return new HtmlString(
+                    view('seo-content-ai::components.global-queue-worker-alert', [
+                        'showAlert' => true,
+                        'queueStatus' => $queueControl->statusForCurrentOwner(),
+                        'queueManagerUrl' => SeoQueueManager::getUrl(),
+                    ])->render()
+                );
+            },
+        );
 
         FilamentView::registerRenderHook(
             'panels::global-search.after',

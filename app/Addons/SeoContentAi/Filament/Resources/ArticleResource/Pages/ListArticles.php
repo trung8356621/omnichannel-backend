@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleKeywordLinkReconcileService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\CreateArticlesFromTaskService;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
@@ -27,6 +28,8 @@ class ListArticles extends ListRecords
 
     public const TAB_CATEGORIES = 'categories';
 
+    public const TAB_QUEUE = 'queue';
+
     protected static string $resource = ArticleResource::class;
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
@@ -38,7 +41,7 @@ class ListArticles extends ListRecords
         parent::mount();
 
         $tab = request()->query('tab', self::TAB_POSTS);
-        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES], true)) {
+        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {
             $this->contentTab = $tab;
         }
 
@@ -57,6 +60,8 @@ class ListArticles extends ListRecords
 
         if ($tab === self::TAB_CATEGORIES) {
             unset($filters['category_id'], $filters['post_type']);
+        } elseif ($tab === self::TAB_QUEUE) {
+            unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type']);
         } else {
             unset($filters['taxonomy']);
         }
@@ -81,6 +86,10 @@ class ListArticles extends ListRecords
 
                 if ($this->contentTab === self::TAB_CATEGORIES) {
                     return ArticleResource::appendArticlesInCategoryCountSelect($query);
+                }
+
+                if ($this->contentTab === self::TAB_QUEUE) {
+                    return ArticleResource::appendWpSyncQueueMetaSelect($query);
                 }
 
                 return $query;
@@ -199,6 +208,68 @@ class ListArticles extends ListRecords
                 'score' => $score,
                 'keyword' => $phrase !== '' ? $phrase : __('seo-content-ai::filament.article_list.seo_keyword_empty'),
             ]))
+            ->success()
+            ->send();
+    }
+
+    public function retryArticleSyncQueue(int $articleId): void
+    {
+        $this->resyncArticleSyncQueue($articleId);
+    }
+
+    public function resyncArticleSyncQueue(int $articleId): void
+    {
+        abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
+
+        $article = ArticleResource::getEloquentQuery()->whereKey($articleId)->first();
+        if (! $article instanceof SeoArticle) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_failed'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $result = app(ArticleWpSyncQueueService::class)->resync($article);
+
+        if (! ($result['success'] ?? false)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_failed'))
+                ->body((string) ($result['message'] ?? ''))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_started'))
+            ->body((string) ($result['message'] ?? ''))
+            ->success()
+            ->send();
+    }
+
+    public function cancelArticleSyncQueue(int $articleId): void
+    {
+        abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
+
+        $article = ArticleResource::getEloquentQuery()->whereKey($articleId)->first();
+        if (! $article instanceof SeoArticle) {
+            return;
+        }
+
+        if (! app(ArticleWpSyncQueueService::class)->cancel($article)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.sync_queue_cancel_failed'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.sync_queue_cancelled'))
             ->success()
             ->send();
     }

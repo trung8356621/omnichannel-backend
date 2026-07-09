@@ -9,6 +9,18 @@ const ALIGN_CLASSES = {
     full: 'alignfull',
 };
 
+/** Mặc định khi chèn ảnh mới (media picker, paste, AI, import URL, …). */
+export const DEFAULT_IMAGE_INSERT_ALIGN = 'center';
+
+export function withDefaultImageInsertAlign(image = {}) {
+    const align = image.align;
+    if (align === undefined || align === null || align === '') {
+        return { ...image, align: DEFAULT_IMAGE_INSERT_ALIGN };
+    }
+
+    return image;
+}
+
 export const IMAGE_ALIGN_OPTIONS = [
     { id: 'none', labelKey: 'image_align_default' },
     { id: 'left', labelKey: 'toolbar_align_left' },
@@ -333,6 +345,8 @@ export function parseImageFromBlockContent(html) {
 }
 
 export function renderImageFigure(image) {
+    image = withDefaultImageInsertAlign(image);
+
     if (String(image?.mediaType ?? '').toLowerCase() === 'video') {
         const alignClass = figureClassForAlign(image.align);
         const figureClass = ['wp-block-video', alignClass].filter(Boolean).join(' ');

@@ -34,6 +34,7 @@
     ];
     $articleRevisionCount = app(\App\Addons\SeoContentAi\Services\SeoArticleRevisionService::class)
         ->countForArticle((int) $record->getKey());
+    $publishBoxInitial['revisionCount'] = $articleRevisionCount;
 @endphp
 
 @once
@@ -53,6 +54,9 @@
                 publishWhenLabel: initial.publishWhenLabel ?? 'Not scheduled',
                 showPublishScheduleRow: initial.showPublishScheduleRow ?? false,
                 publishedAtSidebarLabel: initial.publishedAtSidebarLabel ?? null,
+                revisionCount: Number(initial.revisionCount ?? 0),
+                savedAtLabel: '',
+                saveInFlight: false,
                 publishIso: '',
                 labels,
                 editingPostType: false,
@@ -75,7 +79,27 @@
                         publish_year: this.publishYear,
                         publish_hour: this.publishHour,
                         publish_minute: this.publishMinute,
+                        publish_immediately: window.__seoPublishSyncSnapshot?.()?.publish_immediately ?? true,
                     });
+
+                    window.__seoPublishBoxApplySchedule = (schedule) => {
+                        if (!schedule || typeof schedule !== 'object') {
+                            return;
+                        }
+
+                        this.publishDay = schedule.publishDay ?? this.publishDay;
+                        this.publishMonth = schedule.publishMonth ?? this.publishMonth;
+                        this.publishYear = schedule.publishYear ?? this.publishYear;
+                        this.publishHour = schedule.publishHour ?? this.publishHour;
+                        this.publishMinute = schedule.publishMinute ?? this.publishMinute;
+                        if (schedule.status) {
+                            this.status = schedule.status;
+                        }
+                        if (schedule.publishWhenLabel) {
+                            this.publishWhenLabel = schedule.publishWhenLabel;
+                        }
+                        this.publishIso = this.buildIso();
+                    };
 
                     const lockPage = (event) => {
                         this.pageActionLocked = true;
@@ -95,14 +119,64 @@
 
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
                     window.addEventListener('article-wordpress-sync-unlock', unlockPage);
+                    window.addEventListener('article-editor-save-started', () => {
+                        this.saveInFlight = true;
+                    });
+                    window.addEventListener('article-editor-save-finished', () => {
+                        this.saveInFlight = false;
+                        this.activeHeavyAction = null;
+                    });
+                    window.addEventListener('article-editor-save-patched', (event) => {
+                        this.applySavePatch(event?.detail ?? {});
+                    });
 
                     if (window.__seoArticleHeavyActionOverlay?.locked) {
                         lockPage();
                     }
                 },
 
+                applySavePatch(patch) {
+                    const box = patch?.publish_box ?? {};
+                    const article = patch?.article ?? {};
+
+                    if (article.status) {
+                        this.status = article.status;
+                    }
+                    if (article.post_type) {
+                        this.postType = article.post_type;
+                    }
+                    if (box.visibility) {
+                        this.visibility = box.visibility;
+                    }
+                    if (box.publish_day) {
+                        this.publishDay = box.publish_day;
+                    }
+                    if (box.publish_month) {
+                        this.publishMonth = box.publish_month;
+                    }
+                    if (box.publish_year) {
+                        this.publishYear = box.publish_year;
+                    }
+                    if (box.publish_hour) {
+                        this.publishHour = box.publish_hour;
+                    }
+                    if (box.publish_minute) {
+                        this.publishMinute = box.publish_minute;
+                    }
+
+                    this.publishWhenLabel = box.publish_when_label ?? this.publishWhenLabel;
+                    this.publishedAtSidebarLabel = box.published_at_sidebar_label ?? this.publishedAtSidebarLabel;
+                    this.showPublishScheduleRow = Boolean(box.show_publish_schedule_row ?? this.showPublishScheduleRow);
+                    this.savedAtLabel = box.saved_at_label ?? this.savedAtLabel;
+                    this.publishIso = this.buildIso();
+
+                    if (patch?.revision_count != null) {
+                        this.revisionCount = Number(patch.revision_count);
+                    }
+                },
+
                 isPublishActionDisabled() {
-                    return Boolean(this.$wire?.articleHeavyActionBusy) || this.pageActionLocked;
+                    return Boolean(this.$wire?.articleHeavyActionBusy) || this.pageActionLocked || this.saveInFlight;
                 },
 
                 postTypeLabel() {
@@ -284,86 +358,39 @@
                         return;
                     }
 
-                    this.activeHeavyAction = 'save';
-                    window.__seoBeginArticleHeavyActionClient?.('save');
-
                     try {
-                        if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
-                            await window.__seoExecuteHeavyArticleAction('save', this.$wire);
-                        } else {
-                            await this.pushToWire();
-                            if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
-                                await window.__seoPushPublishCategoriesToWire();
-                            }
-                            await this.$wire.requestSaveArticle();
+                        if (typeof window.__seoExecuteHeavyArticleAction !== 'function') {
+                            throw new Error('Editor chưa sẵn sàng — tải lại trang rồi thử lại.');
                         }
+
+                        await window.__seoExecuteHeavyArticleAction('save', null);
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
-                        this.activeHeavyAction = null;
                         window.__seoEndArticleHeavyActionClient?.();
+                        this.activeHeavyAction = null;
+                        this.saveInFlight = false;
+                        if (typeof window.FilamentNotification !== 'undefined') {
+                            new window.FilamentNotification()
+                                .title('Không lưu được bài viết')
+                                .body(error?.message ?? 'Lưu thất bại.')
+                                .danger()
+                                .send();
+                        }
                     }
                 },
 
-                async requestSync() {
-                    if (this.isPublishActionDisabled()) {
-                        return;
-                    }
-
-                    this.activeHeavyAction = 'sync';
-                    window.__seoBeginArticleHeavyActionClient?.('sync');
-
-                    try {
-                        if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
-                            const allowed = await window.__seoEnsureCategoriesBeforeSync();
-                            if (! allowed) {
-                                this.activeHeavyAction = null;
-                                window.__seoEndArticleHeavyActionClient?.();
-                                return;
-                            }
-                        }
-
-                        if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
-                            await window.__seoExecuteHeavyArticleAction('sync', this.$wire);
-                        } else {
-                            await this.pushToWire();
-                            if (typeof window.__seoPushPublishCategoriesToWire === 'function') {
-                                await window.__seoPushPublishCategoriesToWire();
-                            }
-                            await this.$wire.requestSyncToWordPress();
-                        }
-                        window.__seoResetPublishTabPrimed?.();
-                    } catch (error) {
-                        console.warn('Đồng bộ WordPress thất bại ở client', error);
-                        this.activeHeavyAction = null;
-                        window.__seoEndArticleHeavyActionClient?.();
-                    }
+                async openPublishTabForSync() {
+                    window.dispatchEvent(new CustomEvent('seo-sidebar-open-publish-tab'));
                 },
             };
         };
     </script>
 @endonce
 
-<div class="wp-postbox wp-publish-box">
-    <div class="wp-postbox-header">
-        <h2>Xuất bản</h2>
-        <a
-            href="{{ $this->getArticlePreviewUrl() }}"
-            target="_blank"
-            rel="noopener"
-            class="wp-publish-header-preview"
-            title="Xem trước bài viết (Ctrl+Shift+P)"
-        >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-                <circle cx="12" cy="12" r="3" stroke-width="1.75" />
-            </svg>
-            <span>Xem trước</span>
-        </a>
-    </div>
-    <div
-        class="wp-postbox-inside wp-publish-box__inside"
-        x-data="seoPublishBoxData(@js($publishBoxInitial), @js($publishBoxLabels))"
-    >
+<div
+    class="wp-publish-box__inside wp-publish-box__inside--article-info"
+    x-data="seoPublishBoxData(@js($publishBoxInitial), @js($publishBoxLabels))"
+>
         <div class="wp-publish-meta space-y-2">
             @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
                 <div class="text-xs" x-data="{ markdownImportOpen: false, markdownImportDraft: '' }">
@@ -424,7 +451,7 @@
                     Chỉnh sửa
                 </button>
                 <div class="mt-2 flex items-center gap-2" x-show="editingPostType" x-cloak>
-                    <select
+                    <x-select
                         x-model="postType"
                         class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
                     >
@@ -434,7 +461,7 @@
                             <option value="category">{{ __('seo-content-ai::filament.article_list.post_type_category') }}</option>
                             <option value="product_category">{{ __('seo-content-ai::filament.article_list.post_type_product_category') }}</option>
                         @endif
-                    </select>
+                    </x-select>
                     <button type="button" x-on:click="applyPostType()" class="text-sky-600 hover:underline">Đồng ý</button>
                     <button type="button" x-on:click="cancelEdit('PostType')" class="text-sky-600 hover:underline">Hủy</button>
                 </div>
@@ -451,7 +478,7 @@
                     Chỉnh sửa
                 </button>
                 <div class="mt-2 flex items-center gap-2" x-show="editingStatus" x-cloak>
-                    <select
+                    <x-select
                         x-model="status"
                         class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
                     >
@@ -459,7 +486,7 @@
                         <option value="published">Đã xuất bản</option>
                         <option value="scheduled">Đã lên lịch</option>
                         <option value="private">Riêng tư</option>
-                    </select>
+                    </x-select>
                     <button type="button" x-on:click="applyStatus()" class="text-sky-600 hover:underline">Đồng ý</button>
                     <button type="button" x-on:click="cancelEdit('Status')" class="text-sky-600 hover:underline">Hủy</button>
                 </div>
@@ -476,49 +503,28 @@
                     Chỉnh sửa
                 </button>
                 <div class="mt-2 flex items-center gap-2" x-show="editingVisibility" x-cloak>
-                    <select
+                    <x-select
                         x-model="visibility"
                         class="rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1"
                     >
                         <option value="public">Công khai</option>
                         <option value="private">Riêng tư</option>
-                    </select>
+                    </x-select>
                     <button type="button" x-on:click="applyVisibility()" class="text-sky-600 hover:underline">Đồng ý</button>
                     <button type="button" x-on:click="cancelEdit('Visibility')" class="text-sky-600 hover:underline">Hủy</button>
                 </div>
             </div>
 
-            <div class="text-xs" x-show="status === 'scheduled'" x-cloak>
-                <span class="text-gray-500 dark:text-gray-400">Bài lên lịch:</span>
-                <strong class="text-gray-800 dark:text-gray-100" x-text="publishWhenLabel || 'Not scheduled'"></strong>
-                <button
-                    type="button"
-                    x-on:click="beginPublishAtEdit()"
-                    class="ml-1 text-sky-600 hover:underline"
-                >
-                    Chỉnh sửa
-                </button>
-                <div class="mt-2 space-y-2" x-show="editingPublishAt" x-cloak>
-                    <input
-                        x-model="publishIso"
-                        x-on:change="applyPublishIso()"
-                        type="datetime-local"
-                        step="60"
-                        class="seo-publish-datetime-input rounded border-gray-300 dark:border-gray-600 dark:bg-gray-900 text-sm py-1.5 px-2"
-                    />
-                    <div class="flex items-center gap-2">
-                        <button type="button" x-on:click="applyPublishAt()" class="text-sky-600 hover:underline">Đồng ý</button>
-                        <button type="button" x-on:click="cancelEdit('PublishAt')" class="text-sky-600 hover:underline">Hủy</button>
-                    </div>
-                </div>
-            </div>
-
             @if (filled($publishBoxInitial['publishedAtSidebarLabel'] ?? null))
-                <div class="text-xs">
+                <div class="text-xs" x-show="publishedAtSidebarLabel" x-cloak>
                     <span class="text-gray-500 dark:text-gray-400">Ngày đăng:</span>
-                    <strong class="text-gray-800 dark:text-gray-100">{{ $publishBoxInitial['publishedAtSidebarLabel'] }}</strong>
+                    <strong class="text-gray-800 dark:text-gray-100" x-text="publishedAtSidebarLabel"></strong>
                 </div>
             @endif
+
+            <div class="text-xs text-emerald-700 dark:text-emerald-300" x-show="savedAtLabel" x-cloak>
+                <span x-text="savedAtLabel"></span>
+            </div>
 
             @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
                 <div class="text-xs">
@@ -568,7 +574,7 @@
                     title="Xem và so sánh các phiên bản đã lưu"
                     target="_blank"
                 >
-                    📋 Lịch sử chỉnh sửa ({{ $articleRevisionCount }})
+                    📋 Lịch sử chỉnh sửa (<span data-seo-revision-count>{{ $articleRevisionCount }}</span>)
                 </a>
                 @if ($articleRevisionCount > 0)
                     <button
@@ -595,20 +601,20 @@
                 x-bind:class="{
                     'seo-publish-icon-btn': true,
                     'is-primary': true,
-                    'is-busy': pageActionLocked && activeHeavyAction === 'save',
+                    'is-busy': saveInFlight,
                 }"
                 x-bind:title="saveButtonTitle()"
                 x-bind:aria-label="saveButtonTitle()"
-                x-bind:aria-busy="pageActionLocked && activeHeavyAction === 'save' ? 'true' : 'false'"
+                x-bind:aria-busy="saveInFlight ? 'true' : 'false'"
             >
                 <span
-                    x-show="pageActionLocked && activeHeavyAction === 'save'"
+                    x-show="saveInFlight"
                     x-cloak
                     class="seo-publish-icon-btn__spinner"
                     aria-hidden="true"
                 ></span>
                 <svg
-                    x-show="!(pageActionLocked && activeHeavyAction === 'save')"
+                    x-show="!saveInFlight"
                     viewBox="0 0 24 24"
                     fill="none"
                     stroke="currentColor"
@@ -618,39 +624,6 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 21v-8H7v8M7 3v5h8" />
                 </svg>
             </button>
-
-            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
-                <button
-                    type="button"
-                    x-on:click="requestSync()"
-                    x-bind:disabled="isPublishActionDisabled()"
-                    x-bind:class="{
-                        'seo-publish-icon-btn': true,
-                        'is-busy': pageActionLocked && activeHeavyAction === 'sync',
-                    }"
-                    title="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
-                    aria-label="{{ $record->wp_post_id ? 'Đồng bộ WordPress (Ctrl+Shift+S)' : 'Đăng bài viết mới lên WordPress (Ctrl+Shift+S)' }}"
-                    x-bind:aria-busy="pageActionLocked && activeHeavyAction === 'sync' ? 'true' : 'false'"
-                >
-                    <span
-                        x-show="pageActionLocked && activeHeavyAction === 'sync'"
-                        x-cloak
-                        class="seo-publish-icon-btn__spinner"
-                        aria-hidden="true"
-                    ></span>
-                    <svg
-                        x-show="!(pageActionLocked && activeHeavyAction === 'sync')"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        aria-hidden="true"
-                    >
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M16 16h5v5" />
-                    </svg>
-                </button>
-            @endif
 
             @php
                 $isContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
@@ -707,5 +680,4 @@
                 @endif
             @endif
         </div>
-    </div>
 </div>

@@ -28,6 +28,11 @@ function actionFingerprint(element) {
 }
 
 function findDeleteButton(slot) {
+    const custom = slot.querySelector('[data-seo-delete-article-btn]');
+    if (custom instanceof HTMLElement) {
+        return custom;
+    }
+
     const wireDelete = slot.querySelector('[wire\\:click*="delete" i]');
     if (wireDelete instanceof HTMLElement) {
         return wireDelete;
@@ -116,14 +121,18 @@ function normalizeToolbarLayout() {
     dedupeSlotChildren(slot);
 
     const debugButton = slot.querySelector('[data-seo-debug-md-import]');
+    const restoreButton = slot.querySelector('[data-seo-restore-wp-btn]');
     const deleteButton = findDeleteButton(slot);
     const shortcuts = slot.querySelector('[data-seo-shortcuts-wrap]');
 
     const middleButtons = [...slot.children].filter(
-        (child) => child !== debugButton && child !== deleteButton && child !== shortcuts,
+        (child) => child !== debugButton
+            && child !== restoreButton
+            && child !== deleteButton
+            && child !== shortcuts,
     );
 
-    [debugButton, ...middleButtons, shortcuts, deleteButton]
+    [debugButton, restoreButton, ...middleButtons, shortcuts, deleteButton]
         .filter(Boolean)
         .forEach((child) => slot.appendChild(child));
 }

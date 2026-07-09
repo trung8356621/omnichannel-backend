@@ -13,7 +13,9 @@ import {
     removeCustomPickerTab,
     loadStagedPickerImages,
     stagePickerImageToTab,
+    unstagePickerImageFromTab,
     countStagedPickerImages,
+    renameCustomPickerTab,
     readCustomTabFetchCache,
     writeCustomTabFetchCache,
 } from './utils/articleMediaPickerCustomTabs';
@@ -34,6 +36,8 @@ window.__seoArticleMediaPickerCustomTabs = {
     removeTab: removeCustomPickerTab,
     loadStagedImages: loadStagedPickerImages,
     stageImage: stagePickerImageToTab,
+    unstageImage: unstagePickerImageFromTab,
+    renameTab: renameCustomPickerTab,
     countStagedImages: countStagedPickerImages,
     readFetchCache: readCustomTabFetchCache,
     writeFetchCache: writeCustomTabFetchCache,

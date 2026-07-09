@@ -15,7 +15,7 @@
             <label for="keyword-workspace-site-filter" class="sr-only">
                 {{ __('seo-content-ai::filament.keyword.domain_filter_label') }}
             </label>
-            <select
+            <x-select
                 id="keyword-workspace-site-filter"
                 wire:model.live="keywordWorkspaceSiteId"
                 wire:loading.attr="disabled"
@@ -26,7 +26,7 @@
                 @foreach ($siteOptions as $siteId => $domainLabel)
                     <option value="{{ (int) $siteId }}">{{ $domainLabel }}</option>
                 @endforeach
-            </select>
+            </x-select>
         </div>
     @endif
 </div>

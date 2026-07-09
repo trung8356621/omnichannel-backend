@@ -17,7 +17,7 @@ use Livewire\Attributes\Url;
 
 class ImageProcessingPage extends Page
 {
-    public static function shouldRegisterNavigation(): bool
+    public static function shouldRegisterNavigation(array $parameters = []): bool
     {
         return ! SeoAccessControl::isContentManager();
     }

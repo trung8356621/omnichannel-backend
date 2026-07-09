@@ -39,6 +39,27 @@ final class TaskTestInputResolver
         }
     }
 
+    public function resolveFromRawInput(string $input): TaskTestContext
+    {
+        $input = trim($input);
+        if ($input === '') {
+            throw new \InvalidArgumentException('Nhập nội dung {{input}} để chạy thử.');
+        }
+
+        $preview = mb_strlen($input) > 48 ? mb_substr($input, 0, 48).'…' : $input;
+
+        return new TaskTestContext(
+            article: null,
+            isNewArticle: false,
+            matchedBy: null,
+            variables: [
+                'input' => $input,
+                'user_brief' => $input,
+            ],
+            summary: sprintf('Input test — «%s»', $preview),
+        );
+    }
+
     /**
      * @param  null|callable(Builder): void  $scopeArticles
      */

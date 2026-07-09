@@ -6,7 +6,7 @@
                     <label class="text-sm font-semibold text-gray-700 dark:text-gray-300" for="wm-auto-site">
                         Domain:
                     </label>
-                    <select
+                    <x-select
                         id="wm-auto-site"
                         wire:model.live="siteId"
                         class="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white"
@@ -15,7 +15,7 @@
                         @foreach ($this->sites as $site)
                             <option value="{{ $site->id }}">{{ $site->domain }}</option>
                         @endforeach
-                    </select>
+                    </x-select>
                 @else
                     <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">Domain:</span>
                     <span class="text-sm rounded-lg border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white px-3 py-2">

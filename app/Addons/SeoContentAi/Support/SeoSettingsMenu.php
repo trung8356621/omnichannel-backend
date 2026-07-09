@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsEditor;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsKeywords;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsPrompt;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsScoring;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
 
@@ -54,6 +55,12 @@ final class SeoSettingsMenu
                 'label' => 'Prompt settings',
                 'icon' => 'heroicon-o-chat-bubble-left-ellipsis',
                 'url' => SeoSettingsPrompt::getUrl(),
+            ],
+            [
+                'id' => 'scoring',
+                'label' => 'SEO scoring',
+                'icon' => 'heroicon-o-chart-bar',
+                'url' => SeoSettingsScoring::getUrl(),
             ],
         ];
     }

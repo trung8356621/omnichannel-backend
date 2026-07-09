@@ -84,6 +84,8 @@ Truyền dữ liệu từ Blade sang React thông qua thuộc tính data: <div i
 
 Sử dụng lucide-react cho toàn bộ hệ thống icon.
 
+SELECT BOX (BLADE): Mọi thẻ `<select>` BẮT BUỘC dùng component `<x-select>` (`resources/views/components/select.blade.php`). Không tự viết `<select>` thuần hay custom CSS chevron. Không chèn thêm icon SVG mũi tên bên ngoài component (gây trùng lặp icon). Ví dụ: `<x-select name="sort" class="your-class"><option value="newest">Newest first</option></x-select>`. Addon SEO React dùng `<SeoSelect>`; Addon SEO Blade ưu tiên `<x-select>`.
+
 7. BẢO MẬT & API (WORDPRESS BRIDGE)
 
 Request từ hệ thống ngoài (WordPress) phải đi qua middleware addon tương ứng (vd. `WpHeadlessCors` nếu flow đó đang dùng middleware này).

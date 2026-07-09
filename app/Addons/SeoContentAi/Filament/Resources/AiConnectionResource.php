@@ -23,7 +23,7 @@ class AiConnectionResource extends SeoPanelResource
 
     protected static ?string $navigationIcon = 'heroicon-o-cpu-chip';
 
-    public static function shouldRegisterNavigation(): bool
+    public static function shouldRegisterNavigation(array $parameters = []): bool
     {
         return false;
     }

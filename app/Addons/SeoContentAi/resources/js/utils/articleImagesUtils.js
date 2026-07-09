@@ -3,6 +3,7 @@ import {
     isAiPlaceholderLoadingSrc,
     parseImageFromBlockContent,
     renderImageFigure,
+    withDefaultImageInsertAlign,
 } from './blockImageUtils';
 import {
     isLocalSeoMediaSrc,
@@ -680,11 +681,6 @@ export function applyQuickFixSlugToBlocks(blocks, keyword, slugIndexByBlockId = 
             return;
         }
 
-        const oldSlug = (row.slug || '').trim();
-        const { wpAttachmentId } = resolveImageRefIds(row);
-        if (slug !== oldSlug && wpAttachmentId <= 0 && !localRenameQueue.some((item) => item.block_id === row.blockId)) {
-            result = applyImagePatchToBlocks(result, row.blockId, { slug });
-        }
     });
 
     return { blocks: result, applied: eligible.length, renameQueue, localRenameQueue };
@@ -856,27 +852,160 @@ export function applyQuickFixImagesToBlocks(blocks, keyword) {
 }
 
 /**
- * Sau khi WordPress đổi tên xong: cập nhật URL + slug + cache-bust thumbnail.
+ * Chuẩn hóa kết quả rename WP + local thành một danh sách map theo ID.
+ *
+ * @param {Array} wpRenamed
+ * @param {Array} localResults
  */
-export function finalizeBlocksAfterWpRename(blocks, renamedItems, keyword = '') {
-    let result = applyRenameResultsToBlocks(blocks, renamedItems);
+export function normalizeRenameEntries(wpRenamed = [], localResults = []) {
+    const entries = [];
 
-    const phrase = String(keyword ?? '').trim();
-    const base = phrase ? keywordToImageSlugBase(phrase) : '';
+    (Array.isArray(wpRenamed) ? wpRenamed : []).forEach((row) => {
+        const attachmentId = Number(row?.attachment_id ?? row?.attachmentId ?? 0);
+        const newUrl = String(row?.new_url ?? row?.newUrl ?? '').trim();
+        if (attachmentId <= 0 || newUrl === '') {
+            return;
+        }
 
-    if (base) {
-        const images = collectImagesFromBlocks(result);
-        let ordinal = 0;
-        images.forEach((row) => {
-            if (row.wpAttachmentId || row.excludeQuickFix) {
-                return;
+        entries.push({
+            attachment_id: attachmentId,
+            seo_media_id: Number(row?.seo_media_id ?? row?.seoMediaId ?? 0) || null,
+            block_id: String(row?.block_id ?? row?.blockId ?? '').trim(),
+            old_url: String(row?.old_url ?? row?.oldUrl ?? '').trim(),
+            new_url: newUrl,
+            new_slug: String(row?.new_slug ?? row?.newSlug ?? slugFromUrl(newUrl)).trim(),
+        });
+    });
+
+    (Array.isArray(localResults) ? localResults : []).forEach((row) => {
+        const data = row?.data ?? {};
+        const newUrl = String(data?.url ?? '').trim();
+        if (newUrl === '') {
+            return;
+        }
+
+        const seoId = Number(data?.id ?? row?.seo_media_id ?? 0);
+        entries.push({
+            attachment_id: null,
+            seo_media_id: seoId > 0 ? seoId : null,
+            block_id: String(row?.block_id ?? '').trim(),
+            old_url: String(row?.src ?? row?.old_url ?? '').trim(),
+            new_url: newUrl,
+            new_slug: String(data?.slug ?? row?.new_slug ?? slugFromUrl(newUrl)).trim(),
+        });
+    });
+
+    return entries;
+}
+
+export function buildRenameResultMaps(entries) {
+    const byAttachmentId = new Map();
+    const bySeoMediaId = new Map();
+    const byBlockId = new Map();
+    const byOldUrl = new Map();
+
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+        const wpId = Number(entry?.attachment_id ?? 0);
+        const seoId = Number(entry?.seo_media_id ?? 0);
+        const blockId = String(entry?.block_id ?? '').trim();
+        const oldUrl = normalizeSrcKey(String(entry?.old_url ?? ''));
+
+        if (wpId > 0) {
+            byAttachmentId.set(wpId, entry);
+        }
+        if (seoId > 0) {
+            bySeoMediaId.set(seoId, entry);
+        }
+        if (blockId !== '') {
+            byBlockId.set(blockId, entry);
+        }
+        if (oldUrl !== '') {
+            byOldUrl.set(oldUrl, entry);
+        }
+    });
+
+    return { byAttachmentId, bySeoMediaId, byBlockId, byOldUrl };
+}
+
+function findRenameEntryForImageRow(row, maps) {
+    const wpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+    const seoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+    const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+    const srcKey = normalizeSrcKey(String(row?.src ?? ''));
+
+    if (wpId > 0 && maps.byAttachmentId.has(wpId)) {
+        return maps.byAttachmentId.get(wpId);
+    }
+    if (seoId > 0 && maps.bySeoMediaId.has(seoId)) {
+        return maps.bySeoMediaId.get(seoId);
+    }
+    if (blockId !== '' && maps.byBlockId.has(blockId)) {
+        return maps.byBlockId.get(blockId);
+    }
+    if (srcKey !== '' && maps.byOldUrl.has(srcKey)) {
+        return maps.byOldUrl.get(srcKey);
+    }
+
+    return null;
+}
+
+/**
+ * Sau rename: chỉ giữ supplemental không trùng block; cập nhật URL theo ID (không theo số thứ tự).
+ */
+export function resetSupplementalImagesAfterSlugRename(supplementalRows, blocks, wpRenamed = [], localResults = []) {
+    const maps = buildRenameResultMaps(normalizeRenameEntries(wpRenamed, localResults));
+    const blockIdentityKeys = new Set();
+
+    collectImagesFromBlocks(blocks).forEach((row) => {
+        const key = articleImageIdentityKey(row);
+        if (key) {
+            blockIdentityKeys.add(key);
+        }
+    });
+
+    const cleaned = (Array.isArray(supplementalRows) ? supplementalRows : [])
+        .filter((row) => {
+            if (hasArticleImageBlockId(row)) {
+                return false;
             }
 
-            ordinal += 1;
-            const slug = imageSlugFromKeyword(phrase, ordinal);
-            result = applyImagePatchToBlocks(result, row.blockId, { slug });
+            const key = articleImageIdentityKey(row);
+
+            return key === '' || !blockIdentityKeys.has(key);
+        })
+        .map((row) => {
+            const entry = findRenameEntryForImageRow(row, maps);
+            if (!entry) {
+                return row;
+            }
+
+            const newUrl = String(entry.new_url ?? '').trim();
+            const newSlug = String(entry.new_slug ?? '').trim();
+            if (!newUrl) {
+                return row;
+            }
+
+            const isLocal = isLocalSeoMediaSrc(newUrl);
+
+            return {
+                ...row,
+                src: newUrl,
+                slug: newSlug || row.slug,
+                wp_url: isLocal ? String(row?.wp_url ?? '').trim() : newUrl,
+                wpSrc: isLocal ? String(row?.wpSrc ?? '').trim() : newUrl,
+                localSrc: isLocal ? newUrl : String(row?.localSrc ?? row?.local_src ?? '').trim(),
+                local_src: isLocal ? newUrl : String(row?.local_src ?? '').trim(),
+            };
         });
-    }
+
+    return filterSupplementalDuplicatesOfBlockRows(assignInArticleQuickFixIndices(cleaned));
+}
+
+/**
+ * Sau khi WordPress/local đổi tên xong: map URL mới theo attachment_id / seo_media_id / block_id.
+ */
+export function finalizeBlocksAfterWpRename(blocks, wpRenamed = [], localResults = [], _keyword = '') {
+    const result = applyRenameResultsToBlocks(blocks, wpRenamed, localResults);
 
     return bustAllImageBlockSrc(result);
 }
@@ -1025,23 +1154,16 @@ export function applyLocalSlugRenameResultToBlocks(blocks, blockId, result) {
 }
 
 /**
- * Cập nhật src ảnh sau khi WordPress trả URL mới (nếu khác dự đoán).
+ * Cập nhật src/slug ảnh sau rename — match theo ID, không theo số thứ tự slug.
  */
-export function applyRenameResultsToBlocks(blocks, renamedItems) {
-    if (!renamedItems?.length) {
-        return blocks;
-    }
-
-    const byAttachment = new Map();
-    renamedItems.forEach((row) => {
-        const id = row.attachment_id ?? row.attachmentId;
-        const newUrl = row.new_url ?? row.newUrl;
-        if (id && newUrl) {
-            byAttachment.set(Number(id), newUrl);
-        }
-    });
-
-    if (byAttachment.size === 0) {
+export function applyRenameResultsToBlocks(blocks, wpRenamed = [], localResults = []) {
+    const maps = buildRenameResultMaps(normalizeRenameEntries(wpRenamed, localResults));
+    if (
+        maps.byAttachmentId.size === 0
+        && maps.bySeoMediaId.size === 0
+        && maps.byBlockId.size === 0
+        && maps.byOldUrl.size === 0
+    ) {
         return blocks;
     }
 
@@ -1051,19 +1173,33 @@ export function applyRenameResultsToBlocks(blocks, renamedItems) {
         }
 
         const image = block.image ?? parseImageFromBlockContent(block.content);
-        if (!image?.wpAttachmentId) {
+        if (!image?.src) {
             return block;
         }
 
-        const newUrl = byAttachment.get(Number(image.wpAttachmentId));
-        if (!newUrl || newUrl === image.src) {
+        const row = {
+            blockId: block.id,
+            wpAttachmentId: image.wpAttachmentId,
+            seoMediaId: image.seoMediaId,
+            src: image.src,
+        };
+        const entry = findRenameEntryForImageRow(row, maps);
+        if (!entry) {
             return block;
         }
 
+        const newUrl = String(entry.new_url ?? '').trim();
+        const newSlug = String(entry.new_slug ?? slugFromUrl(newUrl)).trim();
+        if (!newUrl || (newUrl === image.src && newSlug === String(image.slug ?? '').trim())) {
+            return block;
+        }
+
+        const resolvedSeoId = Number(entry?.seo_media_id ?? image.seoMediaId ?? 0);
         const nextImage = {
             ...image,
             src: newUrl,
-            slug: slugFromUrl(newUrl),
+            slug: newSlug || image.slug || slugFromUrl(newUrl),
+            seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
         };
 
         return {
@@ -1088,12 +1224,12 @@ export function applyImagePatchToBlocks(blocks, blockId, patch) {
             nextSrc = patch.src;
         }
 
-        const nextImage = {
+        const nextImage = withDefaultImageInsertAlign({
             ...image,
             ...patch,
             src: nextSrc,
             slug: patch.slug !== undefined ? patch.slug : image.slug || slugFromUrl(nextSrc),
-        };
+        });
 
         return {
             ...block,

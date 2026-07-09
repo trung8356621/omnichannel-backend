@@ -6,12 +6,12 @@
             <div class="seo-image-opt__toolbar-row">
                 @unless ($this->hasLockedGlobalSite())
                     <label class="seo-image-opt__label" for="seo-image-opt-site">Apply to website:</label>
-                    <x-seo-content-ai::seo-select id="seo-image-opt-site" wire:model.live="siteId" size="inline">
+                    <x-select id="seo-image-opt-site" wire:model.live="siteId" class="text-sm">
                         <option value="">-- System default (Global) --</option>
                         @foreach ($this->sites as $site)
                             <option value="{{ $site->id }}">{{ $site->domain }}</option>
                         @endforeach
-                    </x-seo-content-ai::seo-select>
+                    </x-select>
                 @else
                     <span class="seo-image-opt__label">Apply to website:</span>
                     <span class="seo-image-opt__select">

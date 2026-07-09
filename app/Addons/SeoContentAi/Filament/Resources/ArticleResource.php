@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Models\SeoMediaProcessingHistory;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
@@ -20,6 +21,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use App\Models\User;
@@ -229,6 +231,43 @@ class ArticleResource extends SeoPanelResource
                     ->alignCenter()
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('wp_sync_queue_status')
+                    ->label(__('seo-content-ai::filament.article_list.queue_status'))
+                    ->badge()
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveWpSyncQueueStatus($record))
+                    ->formatStateUsing(fn (?string $state): string => match ((string) $state) {
+                        ArticleWpSyncQueueService::STATUS_PENDING => __('seo-content-ai::filament.article_list.queue_status_pending'),
+                        ArticleWpSyncQueueService::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
+                        ArticleWpSyncQueueService::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
+                        ArticleWpSyncQueueService::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+                        default => $state ?: '—',
+                    })
+                    ->color(fn (?string $state): string => match ((string) $state) {
+                        ArticleWpSyncQueueService::STATUS_PENDING => 'warning',
+                        ArticleWpSyncQueueService::STATUS_PROCESSING => 'info',
+                        ArticleWpSyncQueueService::STATUS_COMPLETED => 'success',
+                        ArticleWpSyncQueueService::STATUS_FAILED => 'danger',
+                        default => 'gray',
+                    })
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE)
+                    ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('wp_sync_queue_queued_at')
+                    ->label(__('seo-content-ai::filament.article_list.queue_queued_at'))
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::formatWpSyncQueueDateTime(
+                        static::resolveWpSyncQueueField($record, 'queued_at'),
+                    ))
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE)
+                    ->toggleable(isToggledHiddenByDefault: false),
+                Tables\Columns\TextColumn::make('wp_sync_queue_error')
+                    ->label(__('seo-content-ai::filament.article_list.queue_error'))
+                    ->wrap()
+                    ->limit(80)
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveWpSyncQueueField($record, 'error'))
+                    ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE)
+                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\ViewColumn::make('seo_details')
                     ->label(fn (): \Illuminate\Support\HtmlString => new \Illuminate\Support\HtmlString(
                         view('seo-content-ai::filament.tables.columns.article-seo-details-header')->render(),
@@ -240,6 +279,8 @@ class ArticleResource extends SeoPanelResource
                             ->orderBy('seo_score', $direction);
                     })
                     ->disabledClick()
+                    ->visible(fn ($livewire): bool => ! ($livewire instanceof Pages\ListArticles
+                        && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE))
                     ->toggleable(isToggledHiddenByDefault: false),
             ])
             ->defaultSort('updated_at', 'desc')
@@ -532,7 +573,7 @@ class ArticleResource extends SeoPanelResource
             ])
             ->persistFiltersInSession()
             ->actionsAlignment('start')
-            ->actions(static::getArticleTableRowActions())
+            ->actions(static::getArticleTableRowActionsMerged())
             ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\BulkAction::make('approve_articles')
@@ -673,6 +714,10 @@ class ArticleResource extends SeoPanelResource
 
     public static function applyContentTabScope(Builder $query, string $contentTab): Builder
     {
+        if ($contentTab === Pages\ListArticles::TAB_QUEUE) {
+            return static::applyWpSyncQueueScope($query);
+        }
+
         if ($contentTab === Pages\ListArticles::TAB_CATEGORIES) {
             return $query->whereIn('type', ['category', 'product_category']);
         }
@@ -722,6 +767,243 @@ class ArticleResource extends SeoPanelResource
                         ->whereRaw(static::articleMetaContainsCategoryWpIdSql('articles.wp_post_id'));
                 });
         }, 'articles_in_category_count');
+    }
+
+    public static function appendWpSyncQueueMetaSelect(Builder $query): Builder
+    {
+        if ($query->getQuery()->columns === null) {
+            $query->select('articles.*');
+        }
+
+        return $query->selectSub(function ($subQuery): void {
+            $subQuery->from('article_meta')
+                ->select('meta_value')
+                ->whereColumn('article_meta.article_id', 'articles.id')
+                ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
+                ->limit(1);
+        }, 'wp_sync_queue_meta');
+    }
+
+    public static function applyWpSyncQueueScope(Builder $query): Builder
+    {
+        return $query->whereIn('articles.id', function ($subQuery): void {
+            $subQuery->select('article_id')
+                ->from('article_meta')
+                ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
+                ->where(function ($statusQuery): void {
+                    $statusQuery
+                        ->where('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"%')
+                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PROCESSING.'"%')
+                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_FAILED.'"%');
+                });
+        });
+    }
+
+    public static function applyWpSyncQueueListScope(Builder $query): Builder
+    {
+        return $query->whereIn('articles.id', function ($subQuery): void {
+            $subQuery->select('article_id')
+                ->from('article_meta')
+                ->where('meta_key', ArticleWpSyncQueueService::META_KEY);
+        });
+    }
+
+    public static function formatWpSyncQueueDateTime(?string $iso): ?string
+    {
+        return SeoDisplayTimezone::format($iso);
+    }
+
+    public static function queueTable(Table $table): Table
+    {
+        return $table
+            ->recordAction('edit')
+            ->columns([
+                Tables\Columns\TextColumn::make('title')
+                    ->label(__('seo-content-ai::filament.article_list.title'))
+                    ->searchable()
+                    ->sortable()
+                    ->wrap()
+                    ->description(fn (SeoArticle $record): ?string => filled($record->slug)
+                        ? '/'.ltrim((string) $record->slug, '/')
+                        : ($record->wp_post_id ? 'WP ID: '.$record->wp_post_id : null)),
+                Tables\Columns\TextColumn::make('site.domain')
+                    ->label(__('seo-content-ai::filament.article_list.domain'))
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('wp_sync_queue_status')
+                    ->label(__('seo-content-ai::filament.article_list.queue_status'))
+                    ->badge()
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveWpSyncQueueStatus($record))
+                    ->formatStateUsing(fn (?string $state): string => match ((string) $state) {
+                        ArticleWpSyncQueueService::STATUS_PENDING => __('seo-content-ai::filament.article_list.queue_status_pending'),
+                        ArticleWpSyncQueueService::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
+                        ArticleWpSyncQueueService::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
+                        ArticleWpSyncQueueService::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+                        default => $state ?: '—',
+                    })
+                    ->color(fn (?string $state): string => match ((string) $state) {
+                        ArticleWpSyncQueueService::STATUS_PENDING => 'warning',
+                        ArticleWpSyncQueueService::STATUS_PROCESSING => 'info',
+                        ArticleWpSyncQueueService::STATUS_COMPLETED => 'success',
+                        ArticleWpSyncQueueService::STATUS_FAILED => 'danger',
+                        default => 'gray',
+                    }),
+                Tables\Columns\TextColumn::make('wp_sync_queue_queued_at')
+                    ->label(__('seo-content-ai::filament.article_list.queue_queued_at'))
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::formatWpSyncQueueDateTime(
+                        static::resolveWpSyncQueueField($record, 'queued_at'),
+                    )),
+                Tables\Columns\TextColumn::make('wp_sync_queue_started_at')
+                    ->label(__('seo-content-ai::filament.article_list.queue_started_at'))
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::formatWpSyncQueueDateTime(
+                        static::resolveWpSyncQueueField($record, 'started_at'),
+                    )),
+                Tables\Columns\TextColumn::make('wp_sync_queue_finished_at')
+                    ->label(__('seo-content-ai::filament.article_list.queue_finished_at'))
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::formatWpSyncQueueDateTime(
+                        static::resolveWpSyncQueueField($record, 'finished_at'),
+                    )),
+                Tables\Columns\TextColumn::make('wp_sync_queue_error')
+                    ->label(__('seo-content-ai::filament.article_list.queue_error'))
+                    ->wrap()
+                    ->limit(60)
+                    ->getStateUsing(fn (SeoArticle $record): ?string => static::resolveWpSyncQueueField($record, 'error'))
+                    ->toggleable(isToggledHiddenByDefault: true),
+            ])
+            ->defaultSort('updated_at', 'desc')
+            ->filters([
+                SelectFilter::make('queue_status')
+                    ->label(__('seo-content-ai::filament.article_list.queue_status'))
+                    ->options([
+                        ArticleWpSyncQueueService::STATUS_PENDING => __('seo-content-ai::filament.article_list.queue_status_pending'),
+                        ArticleWpSyncQueueService::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
+                        ArticleWpSyncQueueService::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
+                        ArticleWpSyncQueueService::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+                    ])
+                    ->native(false)
+                    ->placeholder(__('seo-content-ai::filament.article_list.queue_all_statuses'))
+                    ->query(function (Builder $query, array $data): void {
+                        $status = (string) ($data['value'] ?? '');
+                        if ($status === '') {
+                            return;
+                        }
+
+                        $query->whereIn('articles.id', function ($subQuery) use ($status): void {
+                            $subQuery->select('article_id')
+                                ->from('article_meta')
+                                ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
+                                ->where('meta_value', 'like', '%"status":"'.$status.'"%');
+                        });
+                    }),
+            ])
+            ->actions(static::getArticleQueueTableRowActions())
+            ->bulkActions([]);
+    }
+
+    public static function resolveWpSyncQueuePayload(SeoArticle $record): array
+    {
+        $raw = $record->wp_sync_queue_meta ?? null;
+        if (! is_string($raw) || trim($raw) === '') {
+            $record->loadMissing('articleMetas');
+            $raw = (string) ($record->articleMetas
+                ->firstWhere('meta_key', ArticleWpSyncQueueService::META_KEY)?->meta_value ?? '');
+        }
+
+        if (trim($raw) === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    public static function resolveWpSyncQueueStatus(SeoArticle $record): ?string
+    {
+        $status = (string) (static::resolveWpSyncQueuePayload($record)['status'] ?? '');
+
+        return $status !== '' ? $status : null;
+    }
+
+    public static function resolveWpSyncQueueField(SeoArticle $record, string $field): ?string
+    {
+        $value = static::resolveWpSyncQueuePayload($record)[$field] ?? null;
+
+        return is_string($value) && $value !== '' ? $value : null;
+    }
+
+    /**
+     * @return array<int, Tables\Actions\Action>
+     */
+    public static function getArticleTableRowActionsMerged(): array
+    {
+        $hideOnQueueTab = fn (): bool => static::isArticlesQueueTab();
+        $hideOffQueueTab = fn (): bool => ! static::isArticlesQueueTab();
+
+        $queueActions = array_map(
+            static fn (Tables\Actions\Action $action): Tables\Actions\Action => $action->hidden($hideOffQueueTab),
+            static::getArticleQueueTableRowActions(),
+        );
+
+        $defaultActions = array_map(
+            static fn (Tables\Actions\Action $action): Tables\Actions\Action => $action->hidden($hideOnQueueTab),
+            static::getArticleTableRowActions(),
+        );
+
+        return array_merge($queueActions, $defaultActions);
+    }
+
+    public static function isArticlesQueueTab(): bool
+    {
+        if (request()->query('tab') === Pages\ListArticles::TAB_QUEUE) {
+            return true;
+        }
+
+        $livewire = \Livewire\Livewire::current();
+
+        if ($livewire instanceof Pages\ListArticleSyncQueue) {
+            return true;
+        }
+
+        return $livewire instanceof Pages\ListArticles
+            && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE;
+    }
+
+    /**
+     * @return array<int, Tables\Actions\Action>
+     */
+    public static function getArticleQueueTableRowActions(): array
+    {
+        return [
+            Tables\Actions\Action::make('resync_sync_queue')
+                ->icon('heroicon-o-arrow-path')
+                ->iconButton()
+                ->color('warning')
+                ->tooltip(__('seo-content-ai::filament.article_list.queue_resync'))
+                ->visible(fn (SeoArticle $record): bool => in_array(
+                    static::resolveWpSyncQueueStatus($record),
+                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED],
+                    true,
+                ))
+                ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue $livewire): void {
+                    $livewire->resyncArticleSyncQueue((int) $record->getKey());
+                }),
+            Tables\Actions\Action::make('cancel_sync_queue')
+                ->icon('heroicon-o-x-circle')
+                ->iconButton()
+                ->color('danger')
+                ->tooltip(__('seo-content-ai::filament.article_list.queue_cancel'))
+                ->visible(fn (SeoArticle $record): bool => in_array(
+                    static::resolveWpSyncQueueStatus($record),
+                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED],
+                    true,
+                ))
+                ->requiresConfirmation()
+                ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue $livewire): void {
+                    $livewire->cancelArticleSyncQueue((int) $record->getKey());
+                }),
+            Tables\Actions\EditAction::make()
+                ->iconButton(),
+        ];
     }
 
     /**
@@ -814,7 +1096,7 @@ class ArticleResource extends SeoPanelResource
             'site',
             'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [
                 'seo_focus_keyword',
-                'seo_rank_math_score',
+                'seo_rule_violations',
                 'wp_post_images',
                 'wp_featured_image_url',
                 'wp_permalink',
@@ -1786,6 +2068,7 @@ class ArticleResource extends SeoPanelResource
     {
         return [
             'index' => Pages\ListArticles::route('/'),
+            'queue' => Pages\ListArticleSyncQueue::route('/queue'),
             'trash' => Pages\ListArticlesTrash::route('/trash'),
             'domain-mismatch' => Pages\ArticleDomainMismatch::route('/{record}/domain-mismatch'),
             'access-denied' => Pages\ArticleAccessDenied::route('/{record}/access-denied'),

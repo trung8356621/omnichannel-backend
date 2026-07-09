@@ -60,10 +60,10 @@ final readonly class ArticleEditorSaveContext
         }
 
         $publishedAt = $article->published_at;
-        $tz = config('app.timezone');
+        $tz = SeoDisplayTimezone::name();
         $dt = $publishedAt instanceof Carbon
             ? $publishedAt->copy()->timezone($tz)
-            : now($tz);
+            : SeoDisplayTimezone::now();
 
         return new self(
             title: $title,
@@ -94,10 +94,10 @@ final readonly class ArticleEditorSaveContext
 
         $candidate = $this->buildPublishAtFromParts();
         if ($candidate instanceof Carbon) {
-            return $candidate->copy()->timezone(config('app.timezone'));
+            return $candidate;
         }
 
-        return now(config('app.timezone'));
+        return SeoDisplayTimezone::now();
     }
 
     /**
@@ -134,7 +134,7 @@ final readonly class ArticleEditorSaveContext
             return Carbon::createFromFormat(
                 'Y-m-d H:i',
                 sprintf('%04d-%02d-%02d %02d:%02d', $year, $month, $day, $hour, $minute),
-                config('app.timezone'),
+                SeoDisplayTimezone::name(),
             );
         } catch (\Throwable) {
             return null;

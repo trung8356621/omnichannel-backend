@@ -34,7 +34,7 @@ export const ArticleImage = Node.create({
             alt: { default: '' },
             title: { default: '' },
             caption: { default: '' },
-            align: { default: 'none' },
+            align: { default: 'center' },
             size: { default: 'full' },
         };
     },

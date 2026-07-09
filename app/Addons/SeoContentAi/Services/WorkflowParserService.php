@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
@@ -1459,43 +1460,52 @@ class WorkflowParserService
     }
 
     /**
-     * Tính điểm SEO bổ sung dựa trên nội dung và FAQ đã bóc tách.
+     * Tính violation keys bổ sung từ nội dung workflow (FAQ + Featured Snippet).
      *
      * @param  list<array{question: string, answer: string}>  $parsedFaqs
-     * @return array{total_score: int, parsed_faq_count: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
+     * @return array{violations: list<string>, parsed_faq_count: int, total_score: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
      */
     public function calculateSeoScore(string $markdown, array $parsedFaqs = [], ?string $sourceContent = null): array
     {
-        $score = 0;
-        $details = [];
+        $violations = [];
         $faqCount = count($parsedFaqs);
+        $details = [];
 
         if ($faqCount > 0) {
-            $score += 10;
             $details['faq'] = [
                 'passed' => true,
-                'points' => 10,
+                'points' => 0,
                 'message' => 'Có chứa cấu trúc FAQ chuẩn ('.$faqCount.' câu hỏi)',
             ];
         } else {
+            $violations[] = SeoScoringRulesRegistry::KEY_FAQ_MISSING;
             $details['faq'] = [
                 'passed' => false,
-                'points' => 0,
+                'points' => SeoScoringRulesRegistry::deductionFor(SeoScoringRulesRegistry::KEY_FAQ_MISSING),
                 'message' => 'Thiếu phần FAQ chuẩn',
             ];
         }
 
         $tableScore = $this->resolveFeaturedSnippetTableScore($markdown, $sourceContent);
-        $score += $tableScore['points'];
+        $snippetViolation = $this->mapFeaturedSnippetTierToViolation((string) ($tableScore['tier'] ?? 'none'));
+        if ($snippetViolation !== null) {
+            $violations[] = $snippetViolation;
+        }
+
         $details['table'] = [
             'passed' => $tableScore['passed'],
-            'points' => $tableScore['points'],
+            'points' => $snippetViolation !== null
+                ? SeoScoringRulesRegistry::deductionFor($snippetViolation)
+                : 0,
             'message' => $tableScore['message'],
             'tier' => $tableScore['tier'],
         ];
 
+        $violations = SeoScoringRulesRegistry::sanitizeViolations($violations);
+
         return [
-            'total_score' => $score,
+            'violations' => $violations,
+            'total_score' => SeoScoringCalculator::scoreFromViolations($violations),
             'parsed_faq_count' => $faqCount,
             'checklist' => $details,
         ];
@@ -1505,7 +1515,7 @@ class WorkflowParserService
      * Chấm FAQ + Featured Snippet từ Markdown hoặc HTML (editor / đồng bộ).
      *
      * @param  list<array{question: string, answer: string}>  $parsedFaqs
-     * @return array{total_score: int, parsed_faq_count: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
+     * @return array{violations: list<string>, parsed_faq_count: int, total_score: int, checklist: array<string, array{passed: bool, points: int, message: string}>}
      */
     public function calculateSeoScoreFromContent(string $content, array $parsedFaqs = []): array
     {
@@ -2611,6 +2621,16 @@ class WorkflowParserService
             self::SNIPPET_TIER_GOOD => 6,
             self::SNIPPET_TIER_AVERAGE => 3,
             default => 0,
+        };
+    }
+
+    private function mapFeaturedSnippetTierToViolation(string $tier): ?string
+    {
+        return match ($tier) {
+            self::SNIPPET_TIER_EXCELLENT => null,
+            self::SNIPPET_TIER_GOOD => SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_BELOW_EXCELLENT,
+            self::SNIPPET_TIER_AVERAGE => SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_BELOW_GOOD,
+            default => SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_MISSING,
         };
     }
 

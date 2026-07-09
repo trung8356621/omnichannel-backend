@@ -4,7 +4,6 @@ import SeoArticleEditor from './components/SeoArticleEditor';
 import ArticleAiChatPanel from './components/ArticleAiChatPanel';
 import ArticleFaqEditor from './components/ArticleFaqEditor';
 import ArticleLinksSidebar from './components/ArticleLinksSidebar';
-import ArticleDomainWidgetsSidebar from './components/ArticleDomainWidgetsSidebar';
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
@@ -115,7 +114,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
 
         if (normalizedAction === 'sync') {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
-                'Đang đồng bộ với WordPress — vui lòng chờ…',
+                'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
             );
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             if (result.notification) {
@@ -125,9 +124,6 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
             const result = await saveArticleViaApi(articleId, apiPayload);
-            if (result.notification) {
-                notifyEditorFromApi(wire, result.notification);
-            }
             finishArticleEditorApiAction(result, articleId, siteId, 'save');
             window.__seoResetPublishTabPrimed?.();
         }
@@ -185,7 +181,7 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
     try {
         if (normalizedAction === 'sync') {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
-                'Đang đồng bộ với WordPress — vui lòng chờ…',
+                'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
             );
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             if (result.notification) {
@@ -195,9 +191,6 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
             const result = await saveArticleViaApi(articleId, apiPayload);
-            if (result.notification) {
-                notifyEditorFromApi(wire, result.notification);
-            }
             finishArticleEditorApiAction(result, articleId, siteId, 'save');
         }
     } catch (error) {
@@ -575,6 +568,21 @@ function mountArticleEditorPage() {
         saveProductAlbum(articleId, initialProductGallery);
     }
 
+    const scoringRules = Array.isArray(editorSettings?.seo_scoring_rules) && editorSettings.seo_scoring_rules.length > 0
+        ? editorSettings.seo_scoring_rules
+        : (Array.isArray(initialSeo?.seo_scoring_rules) ? initialSeo.seo_scoring_rules : []);
+    if (scoringRules.length > 0) {
+        window.__SEO_SCORING_RULES__ = scoringRules;
+    }
+    const scoringMessages = editorSettings?.seo_rule_messages && typeof editorSettings.seo_rule_messages === 'object'
+        ? editorSettings.seo_rule_messages
+        : (initialSeo?.seo_rule_messages && typeof initialSeo.seo_rule_messages === 'object'
+            ? initialSeo.seo_rule_messages
+            : {});
+    if (Object.keys(scoringMessages).length > 0) {
+        window.__SEO_RULE_MESSAGES__ = scoringMessages;
+    }
+
     getOrCreateReactRoot(rootElement).render(
         <SeoArticleEditor
             articleId={articleId}
@@ -602,13 +610,8 @@ function mountArticleEditorPage() {
 
     const linksRoot = document.getElementById('seo-article-links-root');
     if (showLinkWidgets && linksRoot) {
-        getOrCreateReactRoot(linksRoot).render(<ArticleLinksSidebar />);
-    }
-
-    const domainWidgetsRoot = document.getElementById('seo-article-domain-widgets-root');
-    if (showLinkWidgets && domainWidgetsRoot) {
-        getOrCreateReactRoot(domainWidgetsRoot).render(
-            <ArticleDomainWidgetsSidebar
+        getOrCreateReactRoot(linksRoot).render(
+            <ArticleLinksSidebar
                 initialDomainLinkList={initialSeo?.domain_link_list ?? []}
                 initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
                 initialDomainCtaList={initialSeo?.domain_cta_list ?? []}

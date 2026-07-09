@@ -12,12 +12,12 @@
                 @unless ($this->hasLockedGlobalSite())
                     <div class="seo-media-library-field">
                         <label class="seo-media-library-label" for="image-processing-site">Domain</label>
-                        <x-seo-content-ai::seo-select id="image-processing-site" wire:model.live="siteId" size="inline">
+                        <x-select id="image-processing-site" wire:model.live="siteId" class="text-sm">
                             <option value="">-- Select domain --</option>
                             @foreach ($this->sites as $site)
                                 <option value="{{ $site->id }}">{{ $site->domain }}</option>
                             @endforeach
-                        </x-seo-content-ai::seo-select>
+                        </x-select>
                     </div>
                 @else
                     <div class="seo-media-library-field">
@@ -30,12 +30,12 @@
 
                 <div class="seo-media-library-field">
                     <label class="seo-media-library-label" for="image-processing-status">Status</label>
-                    <x-seo-content-ai::seo-select id="image-processing-status" wire:model.live="statusFilter" size="inline">
+                    <x-select id="image-processing-status" wire:model.live="statusFilter" class="text-sm">
                         <option value="">{{ __('seo-content-ai::filament.image_processing.filter_all') }} ({{ $counts['all'] ?? 0 }})</option>
                         <option value="processing">{{ __('seo-content-ai::filament.image_processing.filter_processing') }} ({{ $counts['processing'] ?? 0 }})</option>
                         <option value="completed">{{ __('seo-content-ai::filament.image_processing.filter_completed') }} ({{ $counts['completed'] ?? 0 }})</option>
                         <option value="failed">{{ __('seo-content-ai::filament.image_processing.filter_failed') }} ({{ $counts['failed'] ?? 0 }})</option>
-                    </x-seo-content-ai::seo-select>
+                    </x-select>
                 </div>
 
                 <div class="seo-media-library-field">

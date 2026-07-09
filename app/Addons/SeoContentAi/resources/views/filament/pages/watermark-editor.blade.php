@@ -8,7 +8,7 @@
                 <label class="text-sm font-semibold text-gray-700 dark:text-gray-300" for="wm-design-site">
                     Domain (watermark belongs to this domain):
                 </label>
-                <select
+                <x-select
                     id="wm-design-site"
                     wire:model.live="siteId"
                     class="text-sm rounded-lg border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-white min-w-[220px]"
@@ -17,7 +17,7 @@
                     @foreach ($this->sites as $site)
                         <option value="{{ $site->id }}">{{ $site->domain }}</option>
                     @endforeach
-                </select>
+                </x-select>
             @else
                 <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">
                     Domain:

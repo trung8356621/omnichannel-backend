@@ -14,12 +14,15 @@ use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoScoringRuleMessageResolver;
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use App\Models\Site;
 use App\Services\SeoEngineService;
 use Filament\Notifications\Notification;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Url;
@@ -393,6 +396,64 @@ final class ArticlesOptimal extends SeoPanelPage
     }
 
     /**
+     * @return list<array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}>
+     */
+    #[Computed]
+    public function reviewedArticlesGrouped(): array
+    {
+        return $this->getReviewedArticlesGrouped();
+    }
+
+    /**
+     * @return list<array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}>
+     */
+    public function getReviewedArticlesGrouped(): array
+    {
+        $articles = $this->accessibleArticleQuery()
+            ->where('is_reviewed', true)
+            ->whereNotNull('reviewed_at')
+            ->whereNotIn('type', ['category', 'product_category'])
+            ->where('status', '!=', 'trash')
+            ->select(['id', 'title', 'reviewed_at'])
+            ->orderByDesc('reviewed_at')
+            ->get();
+
+        /** @var array<string, array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}> $grouped */
+        $grouped = [];
+
+        foreach ($articles as $article) {
+            if (! $article instanceof SeoArticle || $article->reviewed_at === null) {
+                continue;
+            }
+
+            $reviewedAt = $article->reviewed_at instanceof Carbon
+                ? $article->reviewed_at
+                : Carbon::parse((string) $article->reviewed_at);
+
+            $dateKey = $reviewedAt->toDateString();
+
+            if (! isset($grouped[$dateKey])) {
+                $grouped[$dateKey] = [
+                    'date' => $dateKey,
+                    'date_label' => $reviewedAt->translatedFormat('d/m/Y'),
+                    'count' => 0,
+                    'articles' => [],
+                ];
+            }
+
+            $grouped[$dateKey]['articles'][] = [
+                'id' => (int) $article->id,
+                'title' => (string) ($article->title ?? ''),
+                'reviewed_time' => $reviewedAt->format('H:i'),
+                'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
+            ];
+            $grouped[$dateKey]['count']++;
+        }
+
+        return array_values($grouped);
+    }
+
+    /**
      * @return LengthAwarePaginator<int, array<string, mixed>>
      */
     public function getResultsPaginator(): LengthAwarePaginator
@@ -461,8 +522,8 @@ final class ArticlesOptimal extends SeoPanelPage
             ],
         );
 
-        $reasonKeys = $analysis['reason_keys'] ?? [];
-        $score = (int) ($analysis['seo_score'] ?? 0);
+        $violations = $analysis['violations'] ?? $analysis['reason_keys'] ?? [];
+        $score = (int) ($analysis['seo_score'] ?? $analysis['score'] ?? 0);
 
         return [
             'id' => (int) $article->id,
@@ -472,10 +533,11 @@ final class ArticlesOptimal extends SeoPanelPage
             'permalink' => $this->resolveCachedPermalink($article),
             'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
             'score' => $score,
-            'reason_keys' => $reasonKeys,
+            'violations' => $violations,
+            'reason_keys' => $violations,
             'reason_labels' => array_map(
-                static fn (string $key): string => __($key),
-                $reasonKeys,
+                static fn (string $key): string => SeoScoringRuleMessageResolver::messageForKey($key),
+                SeoScoringRulesRegistry::sanitizeViolations($violations),
             ),
             'matches_filters' => $this->articleMatchesActiveFilters($analysis, $body, $article),
         ];
@@ -499,23 +561,25 @@ final class ArticlesOptimal extends SeoPanelPage
             return true;
         }
 
-        $reasonKeys = $analysis['reason_keys'] ?? [];
-        $score = (int) ($analysis['seo_score'] ?? 0);
+        $violations = is_array($analysis['violations'] ?? null)
+            ? $analysis['violations']
+            : ($analysis['reason_keys'] ?? []);
+        $score = (int) ($analysis['seo_score'] ?? $analysis['score'] ?? 0);
         $matched = false;
 
-        if ($this->filterThinContent && in_array('seo.length', $reasonKeys, true)) {
+        if ($this->filterThinContent && in_array('content_length_low', $violations, true)) {
             $matched = true;
         }
 
-        if ($this->filterPoorImageDensity && in_array('seo.image_ratio', $reasonKeys, true)) {
+        if ($this->filterPoorImageDensity && $this->hasImageRatioViolation($violations)) {
             $matched = true;
         }
 
-        if ($this->filterMissingH2 && in_array('seo.heading', $reasonKeys, true)) {
+        if ($this->filterMissingH2 && in_array('h2_missing', $violations, true)) {
             $matched = true;
         }
 
-        if ($this->filterMissingFaq && in_array('seo.faq_schema', $reasonKeys, true)) {
+        if ($this->filterMissingFaq && in_array('faq_missing', $violations, true)) {
             $matched = true;
         }
 
@@ -528,6 +592,26 @@ final class ArticlesOptimal extends SeoPanelPage
         }
 
         return $matched;
+    }
+
+    /**
+     * @param  list<string>  $violations
+     */
+    private function hasImageRatioViolation(array $violations): bool
+    {
+        foreach ([
+            'image_ratio_missing',
+            'image_ratio_poor',
+            'image_ratio_low',
+            'image_ratio_suboptimal',
+            'image_alt_missing',
+        ] as $key) {
+            if (in_array($key, $violations, true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function resolveCachedPermalink(SeoArticle $article): ?string

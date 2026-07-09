@@ -1,17 +1,12 @@
 import { csrfToken, seoArticleApiFetch } from './seoArticleApi.js';
 
 /**
- * @param {object|null|undefined} wire Livewire component ($wire)
+ * @param {object|null|undefined} wire Livewire snapshot (read-only properties, không gọi method)
  * @return {{ title: string, slug: string, seo_meta_description: string, focus_keyword: string }}
  */
 export function readArticleMetaFromWire(wire) {
     if (!wire) {
-        return {
-            title: '',
-            slug: '',
-            seo_meta_description: '',
-            focus_keyword: '',
-        };
+        return readArticleMetaFromDom();
     }
 
     return {
@@ -19,6 +14,36 @@ export function readArticleMetaFromWire(wire) {
         slug: String(wire.articleSlug ?? '').trim(),
         seo_meta_description: String(wire.seoMetaDescription ?? '').trim(),
         focus_keyword: String(wire.focusKeyword ?? '').trim(),
+    };
+}
+
+/**
+ * Đọc meta từ DOM/Livewire snapshot mà không gọi $wire method.
+ */
+export function readArticleMetaFromDom() {
+    const titleInput = document.querySelector('.seo-article-edit-page input[wire\\:model\\.blur="articleTitle"]');
+    const slugInput = document.querySelector('.seo-article-edit-page input[data-seo-article-slug-input]');
+
+    let focusKeyword = '';
+    let seoMetaDescription = '';
+
+    try {
+        const pageRoot = document.querySelector('.seo-article-edit-page[wire\\:id]');
+        const wireId = pageRoot?.getAttribute('wire:id');
+        const component = typeof Livewire !== 'undefined' && wireId ? Livewire.find(wireId) : null;
+        if (component) {
+            focusKeyword = String(component.get?.('focusKeyword') ?? component.focusKeyword ?? '').trim();
+            seoMetaDescription = String(component.get?.('seoMetaDescription') ?? component.seoMetaDescription ?? '').trim();
+        }
+    } catch {
+        /* ignore */
+    }
+
+    return {
+        title: String(titleInput?.value ?? '').trim(),
+        slug: String(slugInput?.value ?? '').trim(),
+        seo_meta_description: seoMetaDescription,
+        focus_keyword: focusKeyword,
     };
 }
 
@@ -90,34 +115,157 @@ export async function syncArticleToWordPressViaApi(articleId, payload) {
 }
 
 /**
- * @param {object|null|undefined} wire
+ * Toast Filament thuần JS — không qua Livewire.
+ *
  * @param {{ title?: string, body?: string, status?: string }} notification
  */
-export function notifyEditorFromApi(wire, notification) {
-    const payload = {
-        title: notification.title ?? '',
-        body: notification.body ?? '',
-        status: notification.status ?? 'success',
-    };
+export function showArticleEditorFilamentToast(notification) {
+    if (typeof window.FilamentNotification === 'undefined') {
+        return;
+    }
 
-    if (wire?.handleEditorNotify) {
-        wire.handleEditorNotify(payload);
+    const toast = new window.FilamentNotification()
+        .title(String(notification.title ?? ''))
+        .body(String(notification.body ?? ''));
+
+    const status = String(notification.status ?? 'success');
+    if (status === 'danger' || status === 'error') {
+        toast.danger();
+    } else if (status === 'warning') {
+        toast.warning();
+    } else {
+        toast.success();
+    }
+
+    toast.send();
+}
+
+/**
+ * @param {Record<string, unknown>} patch
+ */
+export function applyArticleEditorSavePatch(patch) {
+    if (!patch || typeof patch !== 'object') {
+        return;
+    }
+
+    window.dispatchEvent(new CustomEvent('article-editor-save-patched', { detail: patch }));
+
+    const article = patch.article ?? {};
+    if (article.updated_at_label) {
+        document.querySelectorAll('[data-seo-article-updated-at]').forEach((el) => {
+            el.textContent = String(article.updated_at_label);
+        });
+    }
+
+    if (article.seo_score != null) {
+        document.querySelectorAll('[data-seo-article-score]').forEach((el) => {
+            el.textContent = String(article.seo_score);
+        });
+        window.dispatchEvent(
+            new CustomEvent('seo-article-score-patched', {
+                detail: { score: Number(article.seo_score) },
+            }),
+        );
+    }
+
+    if (patch.flags && typeof patch.flags === 'object') {
+        window.dispatchEvent(
+            new CustomEvent('article-editor-flags-patched', {
+                detail: patch.flags,
+            }),
+        );
+    }
+
+    if (patch.seo_analysis && typeof patch.seo_analysis === 'object') {
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-analyze-result', {
+                detail: { result: patch.seo_analysis },
+            }),
+        );
+    }
+
+    if (patch.revision_count != null) {
+        window.dispatchEvent(
+            new CustomEvent('article-revisions-changed', {
+                detail: { count: Number(patch.revision_count) },
+            }),
+        );
+
+        const revisionCountEl = document.querySelector('[data-seo-revision-count]');
+        if (revisionCountEl) {
+            revisionCountEl.textContent = String(Number(patch.revision_count));
+        }
+    }
+}
+
+function resetEditArticleHeavyActionBusyOnWire() {
+    if (typeof Livewire === 'undefined') {
+        return;
+    }
+
+    const wireId =
+        String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '').trim()
+        || document.querySelector('.seo-article-edit-page[wire\\:id]')?.getAttribute('wire:id')
+        || document.querySelector('.seo-article-edit-page [wire\\:id]')?.getAttribute('wire:id')
+        || '';
+
+    if (wireId === '') {
+        return;
+    }
+
+    const component = Livewire.find(wireId);
+    if (!component?.call) {
+        return;
+    }
+
+    const busy = Boolean(component.get?.('articleHeavyActionBusy') ?? component.articleHeavyActionBusy);
+    if (!busy) {
+        return;
+    }
+
+    void component.call('cancelHeavyArticleAction');
+}
+
+/**
+ * Hoàn tất Save — không reload, không Livewire.
+ *
+ * @param {{ patch?: Record<string, unknown>, notification?: Record<string, string> }} result
+ */
+export function finishArticleSaveFromApi(result) {
+    if (result.patch) {
+        applyArticleEditorSavePatch(result.patch);
+    }
+
+    if (result.notification) {
+        showArticleEditorFilamentToast(result.notification);
+    }
+
+    window.__seoEndArticleHeavyActionClient?.();
+    resetEditArticleHeavyActionBusyOnWire();
+    window.dispatchEvent(new CustomEvent('article-editor-save-finished'));
+}
+
+/**
+ * Hoàn tất Sync WP — vẫn reload trang sau khi đồng bộ.
+ *
+ * @param {{ reload?: boolean, clear_local_state?: boolean, notification?: Record<string, string> }} result
+ * @param {number} articleId
+ * @param {number} siteId
+ */
+export function finishArticleSyncFromApi(result, articleId, siteId) {
+    if (result.notification) {
+        showArticleEditorFilamentToast(result.notification);
+    }
+
+    if (result.queued) {
+        window.__seoEndArticleHeavyActionClient?.();
+        window.dispatchEvent(new CustomEvent('article-wordpress-sync-queued', { detail: result }));
 
         return;
     }
 
-    window.dispatchEvent(new CustomEvent('article-editor-notify', { detail: payload }));
-}
-
-/**
- * @param {{ reload?: boolean, clear_local_state?: boolean, message?: string }} result
- * @param {number} articleId
- * @param {number} siteId
- * @param {'save'|'sync'} action
- */
-export function finishArticleEditorApiAction(result, articleId, siteId, action = 'save') {
     if (result.reload) {
-        window.__seoArticleHeavyActionOverlay?.show(action, { persistUntilUnload: true });
+        window.__seoArticleHeavyActionOverlay?.show('sync', { persistUntilUnload: true });
         if (result.clear_local_state) {
             window.__seoClearArticleLocalState?.(articleId, siteId);
         }
@@ -127,4 +275,20 @@ export function finishArticleEditorApiAction(result, articleId, siteId, action =
     }
 
     window.__seoEndArticleHeavyActionClient?.();
+}
+
+/** @deprecated Sync-only — Save dùng finishArticleSaveFromApi */
+export function finishArticleEditorApiAction(result, articleId, siteId, action = 'save') {
+    if (action === 'sync') {
+        finishArticleSyncFromApi(result, articleId, siteId);
+
+        return;
+    }
+
+    finishArticleSaveFromApi(result);
+}
+
+/** @deprecated Save không gọi Livewire notify */
+export function notifyEditorFromApi(_wire, notification) {
+    showArticleEditorFilamentToast(notification);
 }

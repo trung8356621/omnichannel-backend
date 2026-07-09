@@ -4,13 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\SeoRuleViolationsResolver;
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 
 final class ArticleContentSeoBonusService
 {
-    public const MAX_POINTS_PER_ITEM = 10;
-
     public function __construct(
         private readonly WorkflowParserService $workflowParser,
     ) {}
@@ -27,16 +26,17 @@ final class ArticleContentSeoBonusService
      */
     public function resolveForArticle(SeoArticle $article, ?string $content = null): array
     {
-        $content = $content ?? (string) ($article->body ?? '');
-        $faqs = $this->resolveFaqsForScoring($article, $content);
+        $violations = SeoRuleViolationsResolver::forArticle($article);
 
-        $checklist = $this->loadStoredChecklist($article);
-        if ($checklist === null || trim($content) !== '') {
-            $scoreData = $this->workflowParser->calculateSeoScoreFromContent($content, $faqs);
-            $checklist = is_array($scoreData['checklist'] ?? null) ? $scoreData['checklist'] : [];
+        if ($content !== null && trim($content) !== '') {
+            $faqs = $this->resolveFaqsForScoring($article, $content);
+            $runtime = $this->workflowParser->calculateSeoScoreFromContent($content, $faqs);
+            $violations = SeoScoringRulesRegistry::sanitizeViolations(
+                array_merge($violations, $runtime['violations'] ?? []),
+            );
         }
 
-        return $this->formatBonusPayload($checklist, $this->countArticleFaqs($article));
+        return $this->formatFromViolations($violations, $this->countArticleFaqs($article));
     }
 
     /**
@@ -52,10 +52,10 @@ final class ArticleContentSeoBonusService
     public function resolveFromContent(SeoArticle $article, string $content): array
     {
         $faqs = $this->resolveFaqsForScoring($article, $content);
-        $scoreData = $this->workflowParser->calculateSeoScoreFromContent($content, $faqs);
-        $checklist = is_array($scoreData['checklist'] ?? null) ? $scoreData['checklist'] : [];
+        $runtime = $this->workflowParser->calculateSeoScoreFromContent($content, $faqs);
+        $violations = SeoScoringRulesRegistry::sanitizeViolations($runtime['violations'] ?? []);
 
-        return $this->formatBonusPayload($checklist, $this->countArticleFaqs($article));
+        return $this->formatFromViolations($violations, $this->countArticleFaqs($article));
     }
 
     /**
@@ -76,27 +76,7 @@ final class ArticleContentSeoBonusService
     }
 
     /**
-     * @return array<string, array{passed: bool, points: int, message: string}>|null
-     */
-    private function loadStoredChecklist(SeoArticle $article): ?array
-    {
-        if (! $article->relationLoaded('articleMetas')) {
-            $article->loadMissing('articleMetas');
-        }
-
-        /** @var ArticleMeta|null $meta */
-        $meta = $article->articleMetas->firstWhere('meta_key', 'seo_scoring_details');
-        if ($meta === null || ! is_string($meta->meta_value) || trim($meta->meta_value) === '') {
-            return null;
-        }
-
-        $decoded = json_decode($meta->meta_value, true);
-
-        return is_array($decoded) ? $decoded : null;
-    }
-
-    /**
-     * @param  array<string, array{passed?: bool, points?: int, message?: string}>  $checklist
+     * @param  list<string>  $violations
      * @return array{
      *     faq_count: int,
      *     total_bonus: int,
@@ -106,80 +86,68 @@ final class ArticleContentSeoBonusService
      *     },
      * }
      */
-    private function countArticleFaqs(SeoArticle $article): int
+    private function formatFromViolations(array $violations, int $faqCount): array
     {
-        $article->loadMissing('faqs');
+        $messages = SeoScoringRulesRegistry::messagesForLocale();
+        $faqPassed = ! in_array(SeoScoringRulesRegistry::KEY_FAQ_MISSING, $violations, true);
+        $faqDeduction = SeoScoringRulesRegistry::deductionFor(SeoScoringRulesRegistry::KEY_FAQ_MISSING);
 
-        return (int) $article->faqs->count();
-    }
+        $snippetKey = $this->resolveFeaturedSnippetViolationKey($violations);
+        $snippetPassed = $snippetKey === null;
+        $snippetDeduction = $snippetKey !== null ? SeoScoringRulesRegistry::deductionFor($snippetKey) : 0;
 
-    private function formatBonusPayload(array $checklist, int $faqCount): array
-    {
-        $table = $checklist['table'] ?? [];
-        $faq = $checklist['faq'] ?? [];
-
-        if ($faqCount === 0) {
-            $faq = [
-                'passed' => false,
-                'points' => 0,
-                'message' => 'Thiếu phần FAQ chuẩn (chưa tách / lưu FAQ)',
-            ];
-        }
-
-        $featuredItem = $this->formatItem(
-            'featured_snippet',
-            'FEATURED SNIPPET',
-            $table,
-        );
-        $faqItem = $this->formatItem('faq', 'FAQ', $faq, $faqCount);
+        $totalDeduction = ($faqPassed ? 0 : $faqDeduction) + $snippetDeduction;
 
         return [
             'faq_count' => $faqCount,
-            'total_bonus' => $featuredItem['points'] + $faqItem['points'],
+            'total_bonus' => max(0, ($faqPassed ? $faqDeduction : 0) + ($snippetPassed ? $snippetDeduction : 0) - $totalDeduction),
             'items' => [
-                'featured_snippet' => $featuredItem,
-                'faq' => $faqItem,
+                'featured_snippet' => [
+                    'key' => 'featured_snippet',
+                    'label' => 'FEATURED SNIPPET',
+                    'points' => $snippetPassed ? 0 : $snippetDeduction,
+                    'max_points' => SeoScoringRulesRegistry::deductionFor(SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_MISSING),
+                    'passed' => $snippetPassed,
+                    'message' => $snippetKey !== null
+                        ? ($messages['seo_rules.'.$snippetKey] ?? $snippetKey)
+                        : __('seo_rules.all_passed'),
+                ],
+                'faq' => [
+                    'key' => 'faq',
+                    'label' => 'FAQ',
+                    'points' => $faqPassed ? 0 : $faqDeduction,
+                    'max_points' => $faqDeduction,
+                    'passed' => $faqPassed,
+                    'message' => $faqPassed
+                        ? __('seo_rules.all_passed')
+                        : ($messages['seo_rules.faq_missing'] ?? 'FAQ missing'),
+                ],
             ],
         ];
     }
 
     /**
-     * @param  array{passed?: bool, points?: int, message?: string}  $raw
-     * @return array{key: string, label: string, points: int, max_points: int, passed: bool, message: string}
+     * @param  list<string>  $violations
      */
-    private function formatItem(string $key, string $label, array $raw, ?int $faqCount = null): array
+    private function resolveFeaturedSnippetViolationKey(array $violations): ?string
     {
-        $passed = (bool) ($raw['passed'] ?? false);
-        $points = (int) ($raw['points'] ?? 0);
-        $message = trim((string) ($raw['message'] ?? ''));
-
-        if ($message === '') {
-            $message = $passed
-                ? $label . ' đạt chuẩn.'
-                : $label . ' chưa đạt.';
-        }
-
-        if ($key === 'faq' && $faqCount !== null && $faqCount > 0 && ! str_contains($message, (string) $faqCount)) {
-            $message = preg_replace(
-                '/\(\d+ câu hỏi\)/u',
-                '(' . $faqCount . ' câu hỏi)',
-                $message,
-            ) ?? $message;
-
-            if (! preg_match('/\d+\s*câu\s*hỏi/iu', $message)) {
-                $message = rtrim($message, '.') . ' (' . $faqCount . ' câu hỏi).';
+        foreach ([
+            SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_MISSING,
+            SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_BELOW_GOOD,
+            SeoScoringRulesRegistry::KEY_FEATURED_SNIPPET_BELOW_EXCELLENT,
+        ] as $key) {
+            if (in_array($key, $violations, true)) {
+                return $key;
             }
         }
 
-        $displayPoints = min(max(0, $points), self::MAX_POINTS_PER_ITEM);
+        return null;
+    }
 
-        return [
-            'key' => $key,
-            'label' => $label,
-            'points' => $displayPoints,
-            'max_points' => self::MAX_POINTS_PER_ITEM,
-            'passed' => $passed,
-            'message' => $message,
-        ];
+    private function countArticleFaqs(SeoArticle $article): int
+    {
+        $article->loadMissing('faqs');
+
+        return $article->faqs->count();
     }
 }

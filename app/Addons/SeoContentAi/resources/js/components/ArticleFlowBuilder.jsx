@@ -9,12 +9,18 @@ import {
   getOutputPortCenterX,
   getOutputPortTop,
   getPromptOutputPorts,
+  getUserInputOutputPorts,
+  endNodeSurfaceClass,
+  isFlowEndNode,
+  isFlowStartNode,
   nodeBorderClass,
+  startNodeSurfaceClass,
 } from './flowTheme';
 
 // Bộ Icon
 const Icons = {
   Article: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l6 6v10a2 2 0 01-2 2z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 4v5h5M10 12h4m-4 4h4" /></svg>,
+  Input: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h10M4 18h7" /></svg>,
   Prompt: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>,
   Filter: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>,
   Play: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
@@ -23,6 +29,7 @@ const Icons = {
   ZoomIn: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0ZM11 8v6m-3-3h6" /></svg>,
   ZoomOut: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-13 0h6" /></svg>,
   ArrowLeft: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" /></svg>,
+  End: () => <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12h18M15 6l6 6-6 6" /></svg>,
 };
 
 const MIN_ZOOM = 0.5;
@@ -191,6 +198,15 @@ function migrateLegacyFlowNode(node) {
     return node;
   }
 
+  const hasLegacyAction = Boolean(node.data?.actionType) || node.title === 'Save / End';
+  if (!hasLegacyAction) {
+    return {
+      ...node,
+      title: node.title === 'Save / End' ? 'End' : (node.title || 'End'),
+      data: { symbolic: true, ...(node.data ?? {}) },
+    };
+  }
+
   return {
     ...node,
     type: 'action',
@@ -238,6 +254,14 @@ function normalizeNodes(nodes) {
           ...next.data,
           actionType: normalizeActionType(next.data?.actionType),
         },
+      };
+    }
+
+    if (next.type === 'end') {
+      next = {
+        ...next,
+        title: next.title || 'End',
+        data: { symbolic: true, ...(next.data ?? {}) },
       };
     }
 
@@ -435,6 +459,10 @@ export default function ArticleFlowBuilder({
       title = 'Article';
       data = {};
     }
+    else if (type === 'user_input') {
+      title = 'Input ({{input}})';
+      data = {};
+    }
     else if (type === 'article_filter') {
       title = 'Lọc bài viết';
       data = { postTypes: [], taxonomies: [], actions: [] };
@@ -456,6 +484,10 @@ export default function ArticleFlowBuilder({
     else if (type === 'action') {
       title = 'Action';
       data = { actionType: ARTICLE_SAVE_ACTION, isTrigger: false };
+    }
+    else if (type === 'end') {
+      title = 'End';
+      data = { symbolic: true };
     }
     setNodes([...nodes, { id, type, title, x: 100, y: 100, data }]);
     setSelectedNodeId(id);
@@ -576,6 +608,7 @@ export default function ArticleFlowBuilder({
           <h3 className={`text-xs font-bold uppercase tracking-wider mb-2 ${t.sidebarTitle}`}>Thêm Widget</h3>
           {[
             { type: 'article', label: 'Article (Input)', icon: <Icons.Article /> },
+            { type: 'user_input', label: 'Input ({{input}})', icon: <Icons.Input /> },
             { type: 'article_filter', label: 'Lọc bài viết', icon: <Icons.Filter /> },
             { type: 'prompt', label: 'AI Prompt block', icon: <Icons.Prompt /> },
             { type: 'filter', label: 'Filter block', icon: <Icons.Filter /> },
@@ -584,6 +617,12 @@ export default function ArticleFlowBuilder({
               label: 'Action',
               icon: <Icons.Play />,
               iconClass: 'text-rose-600 dark:text-rose-400 bg-rose-100 dark:bg-rose-500/10',
+            },
+            {
+              type: 'end',
+              label: 'End',
+              icon: <Icons.End />,
+              iconClass: 'text-slate-600 dark:text-slate-300 bg-slate-200 dark:bg-slate-500/20',
             },
           ].map(tool => (
             <button key={tool.type} onClick={() => addNode(tool.type)} className={`flex items-center gap-3 p-3 rounded-lg border text-left transition-all ${t.widgetBtn}`}>
@@ -628,7 +667,9 @@ export default function ArticleFlowBuilder({
                 ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark)
                 : srcNode.type === 'article_filter'
                   ? getArticleFilterOutputPorts(isDark)
-                  : [{ id: 'out_main' }];
+                  : srcNode.type === 'user_input'
+                    ? getUserInputOutputPorts(isDark)
+                    : [{ id: 'out_main' }];
               const tgtOutPorts = tgtNode.type === 'prompt' ? getPromptOutputPorts(tgtNode.data.promptId, mockPrompts, isDark) : [{ id: 'out_main' }];
               const srcPortIndex = srcPorts.findIndex(p => p.id === edge.sourcePort);
               const srcNodeHeight = getDefaultNodeHeight(srcNode.type, srcPorts.length);
@@ -657,7 +698,9 @@ export default function ArticleFlowBuilder({
                 ? getPromptOutputPorts(srcNode.data.promptId, mockPrompts, isDark)
                 : srcNode.type === 'article_filter'
                   ? getArticleFilterOutputPorts(isDark)
-                  : [{ id: 'out_main' }];
+                  : srcNode.type === 'user_input'
+                    ? getUserInputOutputPorts(isDark)
+                    : [{ id: 'out_main' }];
               const connectHeight = getDefaultNodeHeight(srcNode.type, connectPorts.length);
               const connectIndex = connectPorts.findIndex((p) => p.id === connecting.portId);
               const ix = Math.max(0, connectIndex);
@@ -670,26 +713,47 @@ export default function ArticleFlowBuilder({
             {/* Nodes */}
             {nodes.map(node => {
             const isSelected = node.id === selectedNodeId;
-            const nodeClass = `absolute w-[220px] rounded-xl border shadow-lg cursor-grab z-10 flex flex-col transition-colors duration-200 ${t.nodeBg} ${nodeBorderClass(node.type, isSelected, isDark)}`;
-            const outputPorts = node.type === 'prompt'
+            const nodeClass = [
+              'absolute w-[220px] rounded-xl border shadow-lg cursor-grab z-10 flex flex-col transition-colors duration-200',
+              t.nodeBg,
+              nodeBorderClass(node.type, isSelected, isDark),
+              startNodeSurfaceClass(node.type, isDark),
+              isFlowEndNode(node.type) ? endNodeSurfaceClass(isDark) : '',
+            ].filter(Boolean).join(' ');
+            const outputPorts = isFlowEndNode(node.type)
+              ? []
+              : node.type === 'prompt'
               ? getPromptOutputPorts(node.data.promptId, mockPrompts, isDark)
               : node.type === 'article_filter'
                 ? getArticleFilterOutputPorts(isDark)
-                : [{ id: 'out_main', label: 'Connect', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
+                : node.type === 'user_input'
+                  ? getUserInputOutputPorts(isDark)
+                  : [{ id: 'out_main', label: 'Connect', color: isDark ? 'bg-slate-500' : 'bg-gray-500' }];
             const nodeHeight = getDefaultNodeHeight(node.type, outputPorts.length);
 
             return (
               <div key={node.id} onMouseDown={(e) => handleMouseDown(node.id, e)} className={nodeClass} style={{ left: node.x, top: node.y, height: nodeHeight }}>
                 
-                {node.type !== 'article' && (
+                {!isFlowStartNode(node.type) && (
                   <div onClick={(e) => handlePortClick(node.id, 'in_main', 'input', e)} className={`absolute -left-3 top-1/2 -translate-y-1/2 w-5 h-5 border-2 rounded-full cursor-pointer hover:bg-emerald-500 hover:border-emerald-500 flex items-center justify-center z-20 ${t.portInput}`}><div className={`w-1.5 h-1.5 rounded-full ${t.portDot}`}></div></div>
                 )}
                 
                 <div className={`p-3 flex items-center justify-between border-b ${t.nodeHeaderBorder}`}>
-                  <div className={`flex items-center gap-2 font-bold text-sm ${t.nodeTitle}`}>
-                    {node.type === 'article' && <Icons.Article />} {node.type === 'article_filter' && <Icons.Filter />} {node.type === 'prompt' && <Icons.Prompt />}
-                    {node.type === 'filter' && <Icons.Filter />} {node.type === 'action' && <Icons.Play />}
-                    {node.title}
+                  <div className={`flex items-center gap-2 font-bold text-sm min-w-0 ${t.nodeTitle}`}>
+                    {node.type === 'article' && <Icons.Article />}
+                    {node.type === 'user_input' && <Icons.Input />}
+                    {node.type === 'article_filter' && <Icons.Filter />}
+                    {node.type === 'prompt' && <Icons.Prompt />}
+                    {node.type === 'filter' && <Icons.Filter />}
+                    {node.type === 'action' && <Icons.Play />}
+                    {node.type === 'end' && <Icons.End />}
+                    <span className="truncate">{node.title}</span>
+                    {isFlowStartNode(node.type) ? (
+                      <span className="seo-flow-node__badge seo-flow-node__badge--start shrink-0">Start</span>
+                    ) : null}
+                    {isFlowEndNode(node.type) ? (
+                      <span className="seo-flow-node__badge seo-flow-node__badge--end shrink-0">End</span>
+                    ) : null}
                   </div>
                   <button onClick={(e) => { e.stopPropagation(); deleteNode(node.id); }} className={t.trash}><Icons.Trash /></button>
                 </div>
@@ -698,6 +762,12 @@ export default function ArticleFlowBuilder({
                   {node.type === 'article' && (
                     <div className="space-y-1">
                       <span className={t.emptyHint}>Input bài viết</span>
+                    </div>
+                  )}
+                  {node.type === 'user_input' && (
+                    <div className="space-y-1">
+                      <span className={`font-semibold ${isDark ? 'text-orange-300' : 'text-orange-700'}`}>{'{{input}}'}</span>
+                      <span className={t.emptyHint}>Từ panel AI ảnh &amp; video trên editor</span>
                     </div>
                   )}
                   {node.type === 'article_filter' && (
@@ -754,9 +824,12 @@ export default function ArticleFlowBuilder({
                       ) : null}
                     </div>
                   )}
+                  {node.type === 'end' && (
+                    <span className={t.emptyHint}>Điểm kết thúc quy trình (tượng trưng)</span>
+                  )}
                 </div>
 
-                {outputPorts.map((port, index) => (
+                {outputPorts.length > 0 && outputPorts.map((port, index) => (
                   <div
                     key={port.id}
                     className="absolute -right-3 flex items-center flex-row-reverse"
@@ -766,7 +839,7 @@ export default function ArticleFlowBuilder({
                     }}
                   >
                     <div onClick={(e) => handlePortClick(node.id, port.id, 'output', e)} className={`w-5 h-5 rounded-full border-2 cursor-pointer flex items-center justify-center z-20 ${t.portBorder} ${connecting?.nodeId === node.id && connecting?.portId === port.id ? 'bg-amber-500 animate-pulse' : port.color}`}><div className="w-1.5 h-1.5 bg-white rounded-full"></div></div>
-                    {(node.type === 'prompt' || node.type === 'article_filter') && (
+                    {(node.type === 'prompt' || node.type === 'article_filter' || node.type === 'user_input') && (
                       <div
                         className={`mr-3 max-w-38 truncate text-[10px] font-semibold px-1.5 py-0.5 rounded border ${t.portLabel}`}
                         title={port.label}
@@ -826,6 +899,15 @@ export default function ArticleFlowBuilder({
                 <div className="space-y-4">
                   <p className={`text-xs leading-relaxed ${t.emptyHint}`}>
                     Node đầu vào từ dự án / bài viết. Cấu hình <b>Hành động</b>, loại bài và taxonomy trên widget <b>Lọc bài viết</b>.
+                  </p>
+                </div>
+              )}
+
+              {selectedNode.type === 'user_input' && (
+                <div className="space-y-4">
+                  <p className={`text-xs leading-relaxed ${t.emptyHint}`}>
+                    Nhận biến <code className="text-orange-600 dark:text-orange-300">{'{{input}}'}</code> từ panel <b>AI ảnh &amp; video</b> khi biên tập bấm Generate image/video trên block ảnh.
+                    Nối cổng <b>{'{{input}}'}</b> vào Prompt Hình ảnh (hoặc Filter) trong quy trình tạo ảnh editor.
                   </p>
                 </div>
               )}
@@ -1070,7 +1152,7 @@ export default function ArticleFlowBuilder({
 
                   {selectedNode.data.filterType === 'score_seo' && (
                     <div className="bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/20 p-3 rounded-lg text-xs text-violet-700 dark:text-violet-300 leading-relaxed shadow-sm">
-                      💡 <b>Chấm SEO:</b> FAQ (+10) và bảng Markdown Featured Snippet (&gt;=10 hàng, 2-5 cột, +10). Chạy sau khi AI sinh nội dung.
+                      💡 <b>Chấm SEO:</b> FAQ và bảng Featured Snippet là rule riêng trong hệ thống deduction-based (trừ điểm khi thiếu). Chạy sau khi AI sinh nội dung.
                     </div>
                   )}
                 </div>
@@ -1132,6 +1214,15 @@ export default function ArticleFlowBuilder({
                       </p>
                     </div>
                   ) : null}
+                </div>
+              )}
+
+              {selectedNode.type === 'end' && (
+                <div className="space-y-4">
+                  <p className={`text-xs leading-relaxed ${t.emptyHint}`}>
+                    Node <b>End</b> chỉ để đánh dấu điểm kết thúc sơ đồ — không thực thi logic.
+                    Nối cổng output của bước cuối (Prompt, Action, …) vào <b>End</b>.
+                  </p>
                 </div>
               )}
             </div>

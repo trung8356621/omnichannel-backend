@@ -13,6 +13,7 @@ export function buildFlowTheme(isDark) {
         'bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-100 shadow-sm',
       widgetIcon: {
         article: 'text-sky-300 bg-sky-500/25',
+        user_input: 'text-orange-300 bg-orange-500/25',
         article_filter: 'text-cyan-300 bg-cyan-500/25',
         prompt: 'text-violet-300 bg-violet-500/25',
         filter: 'text-amber-300 bg-amber-500/25',
@@ -57,6 +58,7 @@ export function buildFlowTheme(isDark) {
       'bg-white hover:bg-gray-50 border-gray-300 text-gray-800 shadow-sm',
     widgetIcon: {
       article: 'text-sky-700 bg-sky-100',
+      user_input: 'text-orange-700 bg-orange-100',
       article_filter: 'text-cyan-700 bg-cyan-100',
       prompt: 'text-violet-700 bg-violet-100',
       filter: 'text-amber-800 bg-amber-100',
@@ -92,12 +94,44 @@ export function buildFlowTheme(isDark) {
 export function nodeBorderClass(type, isSelected, isDark) {
   if (isSelected) {
     if (type === 'article') return 'border-sky-500';
+    if (type === 'user_input') return 'border-orange-500';
     if (type === 'article_filter') return 'border-cyan-500';
     if (type === 'prompt') return 'border-violet-500';
     if (type === 'filter') return 'border-amber-500';
-    if (type === 'action' || type === 'end') return 'border-rose-500';
+    if (type === 'end') return 'border-slate-500';
+    if (type === 'action') return 'border-rose-500';
   }
   return isDark ? 'border-slate-600' : 'border-gray-300';
+}
+
+export const FLOW_START_NODE_TYPES = ['article', 'user_input'];
+
+export function isFlowStartNode(nodeType) {
+  return FLOW_START_NODE_TYPES.includes(nodeType);
+}
+
+export function isFlowEndNode(nodeType) {
+  return nodeType === 'end';
+}
+
+export function startNodeSurfaceClass(nodeType, isDark) {
+  if (!isFlowStartNode(nodeType)) {
+    return '';
+  }
+
+  if (nodeType === 'article') {
+    return isDark
+      ? 'seo-flow-node--start seo-flow-node--start-article-dark'
+      : 'seo-flow-node--start seo-flow-node--start-article';
+  }
+
+  return isDark
+    ? 'seo-flow-node--start seo-flow-node--start-input-dark'
+    : 'seo-flow-node--start seo-flow-node--start-input';
+}
+
+export function endNodeSurfaceClass(isDark) {
+  return isDark ? 'seo-flow-node--end seo-flow-node--end-dark' : 'seo-flow-node--end';
 }
 
 /**
@@ -193,10 +227,26 @@ export function getArticleNodeHeight() {
   return 140;
 }
 
+export function getUserInputOutputPorts(isDark) {
+  const orange = isDark ? 'bg-orange-500' : 'bg-orange-600';
+
+  return [{ id: 'out_input', label: '{{input}}', color: orange }];
+}
+
+export function getUserInputNodeHeight() {
+  return 128;
+}
+
+export function getEndNodeHeight() {
+  return 108;
+}
+
 export function getDefaultNodeHeight(nodeType, outputPortsCount = 1) {
   if (nodeType === 'prompt') return getPromptNodeHeight(outputPortsCount);
   if (nodeType === 'article_filter') return getArticleFilterNodeHeight(outputPortsCount);
   if (nodeType === 'article') return getArticleNodeHeight();
+  if (nodeType === 'user_input') return getUserInputNodeHeight();
+  if (nodeType === 'end') return getEndNodeHeight();
   return 100;
 }
 

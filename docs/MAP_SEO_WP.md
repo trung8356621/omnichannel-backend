@@ -94,7 +94,7 @@ flowchart TB
 
 **Trace MCP (`syncForArticle` outbound):** 30+ callees — `ArticleEditorHtmlSanitizeService`, `WorkflowParserService`, `WordPressLocalMediaSyncService`, `ArticleMediaLocalService`, `SeoMediaBuilder`, `ExternalPluginRegistry`.
 
-**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `ArticlesOptimal.demoteToDraft`, `SeoProjectApprovalService.approveLinkedProject`.
+**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `ArticlesOptimal.demoteToDraft` ([MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md)), `SeoProjectApprovalService.approveLinkedProject`.
 
 ### Đăng bài mới — tránh bài trùng / `post_content` trắng
 

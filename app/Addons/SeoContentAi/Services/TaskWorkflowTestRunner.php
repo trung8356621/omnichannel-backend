@@ -14,6 +14,8 @@ use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoRuleViolationsResolver;
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WorkflowExecutionState;
 use App\Models\Site;
@@ -78,6 +80,7 @@ final class TaskWorkflowTestRunner
         TaskTestContext $context,
         string $nodeId,
         array $priorSteps = [],
+        ?string $modelOverride = null,
     ): array {
         $ordered = $this->orderedNodesForTask($task);
         $flow = is_array($task->flow_data) ? $task->flow_data : [];
@@ -90,6 +93,12 @@ final class TaskWorkflowTestRunner
 
         foreach ($ordered as $node) {
             if ((string) ($node['id'] ?? '') === $nodeId) {
+                if (filled($modelOverride)) {
+                    $data = is_array($node['data'] ?? null) ? $node['data'] : [];
+                    $data['aiModel'] = $modelOverride;
+                    $node['data'] = $data;
+                }
+
                 return $this->executeNode($node, $context, $state, $edges);
             }
         }
@@ -127,10 +136,12 @@ final class TaskWorkflowTestRunner
         $others = [];
 
         foreach ($ordered as $node) {
-            $isReviewAction = (string) ($node['type'] ?? '') === 'action'
+            $type = (string) ($node['type'] ?? '');
+            $isReviewAction = $type === 'action'
                 && (string) ($node['data']['actionType'] ?? '') === 'post_comment_review';
+            $isEnd = $type === 'end';
 
-            if ($isReviewAction) {
+            if ($isReviewAction || $isEnd) {
                 $reviewActions[] = $node;
             } else {
                 $others[] = $node;
@@ -180,6 +191,19 @@ final class TaskWorkflowTestRunner
                     static fn ($value): string => is_string($value) ? $value : (string) $value,
                     $outputs,
                 );
+            }
+        }
+
+        if ($type === 'user_input') {
+            $nodeId = (string) ($step['node_id'] ?? '');
+            $output = trim((string) ($step['output'] ?? ''));
+            if ($nodeId !== '' && $output !== '') {
+                $state->nodeOutputs[$nodeId] = is_array($step['outputs'] ?? null)
+                    ? array_map(
+                        static fn ($value): string => is_string($value) ? $value : (string) $value,
+                        $step['outputs'],
+                    )
+                    : ['out_input' => $output, 'out_main' => $output];
             }
         }
 
@@ -257,6 +281,37 @@ final class TaskWorkflowTestRunner
                 'status' => 'ok',
                 'message' => $context->summary,
                 'outputs' => $outputs,
+            ];
+        }
+
+        if ($type === 'user_input') {
+            $input = trim((string) ($variables['input'] ?? $variables['user_brief'] ?? ''));
+            $outputs = [
+                'out_input' => $input,
+                'out_main' => $input,
+            ];
+            $state->nodeOutputs[$nodeId] = $outputs;
+
+            return [
+                'node_id' => $nodeId,
+                'type' => $type,
+                'title' => $title,
+                'status' => 'ok',
+                'message' => $input !== ''
+                    ? 'Đã nhận biến {{input}} từ editor / test.'
+                    : 'Chưa có nội dung {{input}} (nhập ở panel AI ảnh & video hoặc test input).',
+                'output' => $input,
+                'outputs' => $outputs,
+            ];
+        }
+
+        if ($type === 'end') {
+            return [
+                'node_id' => $nodeId,
+                'type' => $type,
+                'title' => $title,
+                'status' => 'ok',
+                'message' => 'Điểm kết thúc quy trình (tượng trưng).',
             ];
         }
 
@@ -370,6 +425,8 @@ final class TaskWorkflowTestRunner
                         isTaskMode: true,
                     ),
                 );
+                $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
+                $rawModelUsed = trim((string) ($snapshot['raw_model_used'] ?? ''));
                 $output = trim((string) ($result->output_text ?? ''));
                 if ($output !== '') {
                     $output = $this->applyPromptPostProcessing($prompt, $output);
@@ -414,6 +471,7 @@ final class TaskWorkflowTestRunner
                     'prompt_id' => $prompt->id,
                     'prompt_name' => (string) $prompt->name,
                     'ai_model' => $model !== '' ? $model : null,
+                    'raw_model_used' => $rawModelUsed !== '' ? $rawModelUsed : null,
                     'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
                     'output' => $output,
                     'outputs' => $state->nodeOutputs[$nodeId] ?? [],
@@ -1159,41 +1217,35 @@ final class TaskWorkflowTestRunner
     private function applyWorkflowSeoScoreToArticle(SeoArticle $article, WorkflowExecutionState $state): ?string
     {
         $scoreData = $state->meta['seo_score_data'] ?? null;
-        if (! is_array($scoreData) || ! isset($scoreData['total_score'])) {
+        if (! is_array($scoreData)) {
             return null;
         }
 
-        $bonus = (int) $scoreData['total_score'];
-        if ($bonus <= 0) {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'seo_scoring_details'],
-                ['meta_value' => json_encode($scoreData['checklist'] ?? [], JSON_UNESCAPED_UNICODE)],
-            );
+        $workflowViolations = is_array($scoreData['violations'] ?? null)
+            ? SeoScoringRulesRegistry::sanitizeViolations($scoreData['violations'])
+            : [];
 
-            return 'seo_scoring_details';
+        if ($workflowViolations === []) {
+            return 'seo_rule_violations (no workflow violations)';
         }
 
         if (! $article->countsTowardSeoScore()) {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'seo_scoring_details'],
-                ['meta_value' => json_encode($scoreData['checklist'] ?? [], JSON_UNESCAPED_UNICODE)],
-            );
-
-            return 'seo_scoring_details (skipped score)';
+            return 'seo_rule_violations (skipped score)';
         }
 
-        $current = $article->seo_score !== null ? (float) $article->seo_score : 0.0;
-
-        $article->update([
-            'seo_score' => $current + $bonus,
-        ]);
+        $article->loadMissing('articleMetas');
+        $existing = SeoRuleViolationsResolver::forArticle($article);
+        $merged = SeoScoringRulesRegistry::sanitizeViolations(array_merge($existing, $workflowViolations));
+        $score = SeoScoringCalculator::scoreFromViolations($merged);
 
         $article->articleMetas()->updateOrCreate(
-            ['meta_key' => 'seo_scoring_details'],
-            ['meta_value' => json_encode($scoreData['checklist'] ?? [], JSON_UNESCAPED_UNICODE)],
+            ['meta_key' => SeoScoringRulesRegistry::META_KEY_VIOLATIONS],
+            ['meta_value' => json_encode($merged, JSON_UNESCAPED_UNICODE)],
         );
 
-        return 'seo_score (+'.$bonus.')';
+        $article->update(['seo_score' => $score]);
+
+        return 'seo_rule_violations (merged '.count($workflowViolations).')';
     }
 
     private function isArticlePersistAction(string $actionType): bool
@@ -2012,6 +2064,10 @@ final class TaskWorkflowTestRunner
             return trim((string) $outputs[$sourcePort]);
         }
 
+        if ($sourcePort === 'out_input') {
+            return trim((string) ($outputs['out_input'] ?? $outputs['out_main'] ?? ''));
+        }
+
         if (in_array($sourcePort, ['out_description', 'out_gallery_description'], true)) {
             return '';
         }
@@ -2135,5 +2191,39 @@ final class TaskWorkflowTestRunner
             ->where('is_active', true)
             ->where('id', $idString)
             ->first();
+    }
+
+    /**
+     * Prompt node tools=image cuối cùng theo thứ tự topo (editor «Tạo ảnh»).
+     */
+    public function resolveImagePromptForTask(SeoTask $task): SeoPrompt
+    {
+        $ordered = $this->orderedNodesForTask($task);
+        $imagePrompt = null;
+
+        foreach ($ordered as $node) {
+            if ((string) ($node['type'] ?? '') !== 'prompt') {
+                continue;
+            }
+
+            $prompt = $this->resolvePrompt($node['data']['promptId'] ?? null);
+            if ($prompt === null) {
+                continue;
+            }
+
+            if (strtolower(trim((string) ($prompt->tools ?? 'default'))) !== 'image') {
+                continue;
+            }
+
+            $imagePrompt = $prompt;
+        }
+
+        if ($imagePrompt === null) {
+            throw new \InvalidArgumentException(
+                'Quy trình «'.(string) ($task->name ?? '').'» chưa có bước Prompt Hình ảnh (tools=image).',
+            );
+        }
+
+        return $imagePrompt;
     }
 }

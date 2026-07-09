@@ -169,24 +169,21 @@ export function BlockInsertMenuBar({
 /**
  * Box chọn / tạo / tải nhanh ảnh cho block ảnh trống.
  *
+ * @param {string} [blockId]
  * @param {() => void} onOpenMediaLibrary
- * @param {(prompt: string, mediaKind?: 'image'|'video') => void} onGenerateRequest
  * @param {(url: string) => void|Promise<void>} [onImportFromUrl]
  * @param {boolean} [importLoading]
  */
 export function ImageBlockPickerBox({
+    blockId = '',
     onOpenMediaLibrary,
-    onGenerateRequest,
     onImportFromUrl,
     importLoading = false,
     interactionReady = true,
 }) {
     const [mode, setMode] = useState('actions');
-    const [prompt, setPrompt] = useState('');
     const [importUrl, setImportUrl] = useState('');
-    const [generateKind, setGenerateKind] = useState('image');
     const importInputRef = useRef(null);
-    const generateTextareaRef = useRef(null);
     const actionsDisabled = !interactionReady || importLoading;
 
     const stopPickerPointer = (event) => {
@@ -196,17 +193,23 @@ export function ImageBlockPickerBox({
         }
     };
 
-    // Auto-focus vào input/textarea mỗi khi mode chuyển
+    const openAiChat = () => {
+        window.dispatchEvent(
+            new CustomEvent('seo-article-ai-chat-open', {
+                detail: {
+                    blockId: String(blockId ?? '').trim(),
+                    focusInput: true,
+                },
+            }),
+        );
+    };
+
     useEffect(() => {
-        if (!interactionReady) {
+        if (!interactionReady || mode !== 'import') {
             return;
         }
 
-        if (mode === 'import') {
-            importInputRef.current?.focus();
-        } else if (mode === 'generate') {
-            generateTextareaRef.current?.focus();
-        }
+        importInputRef.current?.focus();
     }, [interactionReady, mode]);
 
     if (mode === 'import') {
@@ -229,7 +232,6 @@ export function ImageBlockPickerBox({
                         placeholder="https://example.com/image.jpg"
                         disabled={importLoading}
                         onMouseDown={(e) => {
-                            // Chặn event bubble để không bị handleClickOutside interfere
                             e.stopPropagation();
                         }}
                         onKeyDown={(e) => {
@@ -247,59 +249,6 @@ export function ImageBlockPickerBox({
                         onClick={() => onImportFromUrl?.(importUrl.trim())}
                     >
                         {importLoading ? t('processing') : 'Import'}
-                    </button>
-                </div>
-            </div>
-        );
-    }
-
-    if (mode === 'generate') {
-        return (
-            <div
-                className="seo-image-block-picker seo-image-block-picker--generate"
-                onMouseDown={stopPickerPointer}
-                onPointerDown={stopPickerPointer}
-            >
-                <p className="seo-image-block-picker__title">{t('compose_placeholder')}</p>
-                <div className="seo-image-block-picker__actions">
-                    <button
-                        type="button"
-                        className={`seo-image-block-picker__choice ${generateKind === 'image' ? '' : 'is-secondary'}`}
-                        onClick={() => setGenerateKind('image')}
-                    >
-                        {t('image_block_label')}
-                    </button>
-                    <button
-                        type="button"
-                        className={`seo-image-block-picker__choice ${generateKind === 'video' ? '' : 'is-secondary'}`}
-                        onClick={() => setGenerateKind('video')}
-                    >
-                        {t('generate_video')}
-                    </button>
-                </div>
-                <textarea
-                    ref={generateTextareaRef}
-                    className="seo-image-block-picker__textarea"
-                    rows={4}
-                    value={prompt}
-                    onChange={(e) => setPrompt(e.target.value)}
-                    placeholder="e.g. White nonwoven tote bag, logo print, studio background..."
-                    onMouseDown={(e) => {
-                        e.stopPropagation();
-                    }}
-                />
-                <div className="seo-image-block-picker__actions">
-                    <button type="button" className="seo-image-block-picker__btn" onMouseDown={(e) => e.stopPropagation()} onClick={() => setMode('actions')}>
-                        {t('cancel')}
-                    </button>
-                    <button
-                        type="button"
-                        className="seo-image-block-picker__btn is-primary"
-                        disabled={!prompt.trim()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={() => onGenerateRequest(prompt.trim(), generateKind)}
-                    >
-                        {t('submit_retry')}
                     </button>
                 </div>
             </div>
@@ -346,7 +295,7 @@ export function ImageBlockPickerBox({
                     }
 
                     e.stopPropagation();
-                    setMode('generate');
+                    openAiChat();
                 }}
             >
                 {t('generate_image')}/{t('generate_video')}

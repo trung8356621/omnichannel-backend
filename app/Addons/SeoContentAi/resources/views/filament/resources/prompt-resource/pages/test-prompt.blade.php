@@ -284,7 +284,7 @@
                 <div class="space-y-4">
                     <div>
                         <label class="text-xs font-semibold text-gray-600 dark:text-gray-300 block mb-1">Bài viết / sản phẩm đích</label>
-                        <select
+                        <x-select
                             wire:model="publishArticleId"
                             class="w-full rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-gray-100 px-3 py-2"
                         >
@@ -295,7 +295,7 @@
                                     ({{ $article->type === 'product' ? 'product' : 'post' }})
                                 </option>
                             @endforeach
-                        </select>
+                        </x-select>
                     </div>
                     <div
                         class="seo-prompt-test-publish"

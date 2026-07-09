@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlignCenter, AlignLeft, AlignRight, ExternalLink, Images, Maximize2, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
-import { parseImageFromBlockContent, renderImageFigure } from '../utils/blockImageUtils';
+import {
+    parseImageFromBlockContent,
+    renderImageFigure,
+    withDefaultImageInsertAlign,
+} from '../utils/blockImageUtils';
 import { importSeoMediaFromUrl, processClipboardImagePaste } from '../utils/seoMediaApi';
 import { ImageBlockPickerBox } from './BlockInsertMenu';
 import { appendProductAlbumItems } from '../utils/articleProductAlbumStorage';
@@ -191,7 +195,6 @@ export default function ImageBlockEditor({
     const [pickerInteractionReady, setPickerInteractionReady] = useState(false);
     const toolbarRef = useRef(null);
     const emptyFrameRef = useRef(null);
-    const generatePromptAtRef = useRef(0);
 
     const image = useMemo(() => {
         if (block.image) return block.image;
@@ -202,7 +205,11 @@ export default function ImageBlockEditor({
     const figureHtml = image ? (isVideo ? renderVideoFigure(image) : renderImageFigure(image)) : block.content;
 
     const commitImage = (nextImage) => {
-        onUpdate(isVideoMedia(nextImage) ? renderVideoFigure(nextImage) : renderImageFigure(nextImage), nextImage);
+        const normalized = isVideoMedia(nextImage) ? nextImage : withDefaultImageInsertAlign(nextImage);
+        onUpdate(
+            isVideoMedia(normalized) ? renderVideoFigure(normalized) : renderImageFigure(normalized),
+            normalized,
+        );
     };
 
     const resetImageToPicker = useCallback(() => {
@@ -672,6 +679,7 @@ export default function ImageBlockEditor({
                         <p className="seo-image-block-paste-hint">{t('paste_hint')}</p>
                     )}
                     <ImageBlockPickerBox
+                        blockId={block.id}
                         interactionReady={pickerInteractionReady}
                         onOpenMediaLibrary={(event) => {
                             event?.preventDefault?.();
@@ -680,18 +688,6 @@ export default function ImageBlockEditor({
                             window.dispatchEvent(
                                 new CustomEvent('seo-open-article-media-picker', {
                                     detail: { blockId },
-                                }),
-                            );
-                        }}
-                        onGenerateRequest={(prompt, mediaKind = 'image') => {
-                            const now = Date.now();
-                            if (now - generatePromptAtRef.current < 3000) {
-                                return;
-                            }
-                            generatePromptAtRef.current = now;
-                            window.dispatchEvent(
-                                new CustomEvent('seo-editor-image-generate-request', {
-                                    detail: { blockId: block.id, prompt, mediaKind },
                                 }),
                             );
                         }}

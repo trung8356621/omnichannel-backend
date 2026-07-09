@@ -1,15 +1,11 @@
 @php
     $cssPath = base_path('app/Addons/SeoContentAi/resources/css/ai-keyword-discovery.css');
-    $selectCssPath = base_path('app/Addons/SeoContentAi/resources/css/seo-select.css');
     $workspaceCssPath = base_path('app/Addons/SeoContentAi/resources/css/keyword-workspace.css');
     $suggestions = $this->suggestions;
     $selectedCount = $this->getSelectedCount();
 @endphp
 
 <x-filament-panels::page class="keyword-workspace-page ai-discovery-page">
-    @if (is_readable($selectCssPath))
-        <style>{!! file_get_contents($selectCssPath) !!}</style>
-    @endif
     @if (is_readable($cssPath))
         <style>{!! file_get_contents($cssPath) !!}</style>
     @endif
@@ -64,7 +60,7 @@
                         <label for="discovery-intent" class="ai-discovery-label">
                             {{ __('seo-content-ai::filament.keyword.discovery_intent_label') }}
                         </label>
-                        <x-seo-content-ai::seo-select
+                        <x-select
                             id="discovery-intent"
                             wire:model="searchIntent"
                             wire:loading.attr="disabled"
@@ -75,14 +71,14 @@
                             <option value="informational">{{ __('seo-content-ai::filament.keyword.discovery_intent_informational') }}</option>
                             <option value="commercial">{{ __('seo-content-ai::filament.keyword.discovery_intent_commercial') }}</option>
                             <option value="transactional">{{ __('seo-content-ai::filament.keyword.discovery_intent_transactional') }}</option>
-                        </x-seo-content-ai::seo-select>
+                        </x-select>
                     </div>
 
                     <div>
                         <label for="discovery-region" class="ai-discovery-label">
                             {{ __('seo-content-ai::filament.keyword.discovery_region_label') }}
                         </label>
-                        <x-seo-content-ai::seo-select
+                        <x-select
                             id="discovery-region"
                             wire:model="targetRegion"
                             wire:loading.attr="disabled"
@@ -94,7 +90,7 @@
                             <option value="us">{{ __('seo-content-ai::filament.keyword.discovery_region_us') }}</option>
                             <option value="uk">{{ __('seo-content-ai::filament.keyword.discovery_region_uk') }}</option>
                             <option value="sea">{{ __('seo-content-ai::filament.keyword.discovery_region_sea') }}</option>
-                        </x-seo-content-ai::seo-select>
+                        </x-select>
                     </div>
 
                     <button

@@ -40,9 +40,7 @@ final class ArticleListSeoSummary
 
         $skipped = ! $article->countsTowardSeoScore();
 
-        $score = ! $skipped && $article->seo_score !== null && $article->seo_score !== ''
-            ? (int) round((float) $article->seo_score)
-            : null;
+        $score = $skipped ? null : SeoRuleViolationsResolver::scoreForArticle($article);
 
         $contentBonus = app(ArticleContentSeoBonusService::class)->resolveForArticle($article);
 

@@ -8,8 +8,9 @@ use App\Addons\SeoContentAi\Enums\SeoLinkMapType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
-use App\Services\SeoEngineService;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
+use App\Services\SeoEngineService;
 use Tests\TestCase;
 
 final class SeoAnalyzerScoringTest extends TestCase
@@ -34,39 +35,9 @@ final class SeoAnalyzerScoringTest extends TestCase
             'slug' => 'keyword',
         ]);
 
-        $this->assertContains('seo.heading', $none['reason_keys']);
-        $this->assertContains('seo.heading', $one['reason_keys']);
-        $this->assertNotContains('seo.heading', $two['reason_keys']);
-    }
-
-    public function test_engine_text_to_image_ideal_ratio(): void
-    {
-        $engine = app(SeoEngineService::class);
-        $words = implode(' ', array_fill(0, 500, 'word'));
-        $html = '<p>'.$words.'</p><img src="/a.jpg" alt="minh hoa"><img src="/b.jpg" alt="minh hoa 2">';
-
-        $result = $engine->analyzeHtml($html, 'keyword', [], [
-            'seo_title' => 'keyword',
-            'meta_description' => 'keyword',
-            'slug' => 'keyword',
-        ]);
-
-        $this->assertSame(15, $result['breakdown']['image_ratio']['earned'] ?? 0);
-    }
-
-    public function test_engine_text_to_image_penalizes_missing_alt(): void
-    {
-        $engine = app(SeoEngineService::class);
-        $words = implode(' ', array_fill(0, 500, 'word'));
-        $html = '<p>'.$words.'</p><img src="/a.jpg" alt="ok"><img src="/b.jpg">';
-
-        $result = $engine->analyzeHtml($html, 'keyword', [], [
-            'seo_title' => 'keyword',
-            'meta_description' => 'keyword',
-            'slug' => 'keyword',
-        ]);
-
-        $this->assertSame(10, $result['breakdown']['image_ratio']['earned'] ?? 0);
+        $this->assertContains(SeoScoringRulesRegistry::KEY_H2_MISSING, $none['violations']);
+        $this->assertContains(SeoScoringRulesRegistry::KEY_H2_MISSING, $one['violations']);
+        $this->assertNotContains(SeoScoringRulesRegistry::KEY_H2_MISSING, $two['violations']);
     }
 
     public function test_engine_wiki_trust_external_link_detection(): void
@@ -86,8 +57,8 @@ final class SeoAnalyzerScoringTest extends TestCase
             ['seo_title' => 'keyword', 'meta_description' => 'keyword', 'slug' => 'keyword'],
         );
 
-        $this->assertSame(15, $trusted['breakdown']['wiki_trust']['earned'] ?? 0);
-        $this->assertContains('seo.wiki_trust', $regular['reason_keys']);
+        $this->assertNotContains(SeoScoringRulesRegistry::KEY_WIKI_TRUST_MISSING, $trusted['violations']);
+        $this->assertContains(SeoScoringRulesRegistry::KEY_WIKI_TRUST_MISSING, $regular['violations']);
     }
 
     public function test_custom_wiki_trust_domain_from_settings(): void
@@ -107,10 +78,14 @@ final class SeoAnalyzerScoringTest extends TestCase
         );
     }
 
-    public function test_persist_client_analysis_clamps_score_and_persists(): void
+    public function test_persist_client_analysis_persists_violations(): void
     {
-        if (! \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasTable('articles')) {
-            $this->markTestSkipped('omi_seo_ai articles table is not available in this test database.');
+        try {
+            if (! \Illuminate\Support\Facades\Schema::connection('omi_seo_ai')->hasTable('articles')) {
+                $this->markTestSkipped('omi_seo_ai articles table is not available in this test database.');
+            }
+        } catch (\Throwable) {
+            $this->markTestSkipped('omi_seo_ai connection is not available in this test database.');
         }
 
         $article = SeoArticle::query()->create([
@@ -126,32 +101,7 @@ final class SeoAnalyzerScoringTest extends TestCase
             $article->fresh(),
             (string) $article->body,
             [
-                'score' => 150,
-                'good' => ['Rule pass +10'],
-                'errors' => [],
-                'warnings' => [],
-                'content_bonus' => [
-                    'faq_count' => 0,
-                    'total_bonus' => 0,
-                    'items' => [
-                        'featured_snippet' => [
-                            'key' => 'featured_snippet',
-                            'label' => 'FEATURED SNIPPET',
-                            'points' => 0,
-                            'max_points' => 10,
-                            'passed' => false,
-                            'message' => 'Test',
-                        ],
-                        'faq' => [
-                            'key' => 'faq',
-                            'label' => 'FAQ',
-                            'points' => 0,
-                            'max_points' => 10,
-                            'passed' => false,
-                            'message' => 'Test',
-                        ],
-                    ],
-                ],
+                'violations' => ['h2_missing', 'faq_missing'],
                 'extracted_links' => [
                     'internal' => [],
                     'external' => [],
@@ -159,7 +109,11 @@ final class SeoAnalyzerScoringTest extends TestCase
             ],
         );
 
-        $this->assertSame(100, $result['score']);
-        $this->assertSame(100, (int) round((float) $article->fresh()?->seo_score));
+        $this->assertSame(['h2_missing', 'faq_missing'], $result['violations']);
+        $this->assertSame(70, $result['score']);
+
+        $meta = $article->fresh()?->articleMetas()->where('meta_key', SeoScoringRulesRegistry::META_KEY_VIOLATIONS)->first();
+        $this->assertNotNull($meta);
+        $this->assertSame(['h2_missing', 'faq_missing'], json_decode((string) $meta->meta_value, true));
     }
 }

@@ -1,4 +1,6 @@
 <div wire:ignore class="seo-editor-page-actions" data-seo-page-actions-slot>
+    @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-danger-actions', ['record' => $record])
+
     <div class="relative" data-seo-shortcuts-wrap x-data="{ shortcutsOpen: false }">
         <button
             type="button"

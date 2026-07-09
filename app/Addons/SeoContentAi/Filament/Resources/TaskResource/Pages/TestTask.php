@@ -8,13 +8,15 @@ use App\Addons\SeoContentAi\Exceptions\AiModelsNotReadyException;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Models\TaskTestResult;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
+use App\Addons\SeoContentAi\Support\AiModelCatalog;
+use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
-use App\Models\Site;
 use Filament\Actions;
 use Filament\Forms;
 use Filament\Forms\Concerns\InteractsWithForms;
@@ -40,10 +42,16 @@ class TestTask extends Page implements HasForms
 
     protected static ?string $title = 'Test workflow';
 
-    /** @var array{article_id: ?int, title_or_keyword: ?string} */
+    public const INPUT_TYPE_ARTICLE = 'article';
+
+    public const INPUT_TYPE_RAW = 'input';
+
+    /** @var array{input_type: string, article_id: ?int, title_or_keyword: ?string, raw_input: ?string} */
     public array $testInput = [
+        'input_type' => self::INPUT_TYPE_ARTICLE,
         'article_id' => null,
         'title_or_keyword' => '',
+        'raw_input' => '',
     ];
 
     /** @var array<string, mixed>|null */
@@ -60,6 +68,9 @@ class TestTask extends Page implements HasForms
 
     public ?int $selectedResultId = null;
 
+    /** @var array<int, string> */
+    public array $stepRerunModels = [];
+
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -68,6 +79,7 @@ class TestTask extends Page implements HasForms
 
         abort_unless(static::getResource()::canView($this->getRecord()), 403);
 
+        $this->testInput['input_type'] = $this->detectDefaultInputType();
         $this->form->fill($this->testInput);
 
         $latest = $this->taskTestResults->first();
@@ -93,6 +105,15 @@ class TestTask extends Page implements HasForms
     {
         return $form
             ->schema([
+                Forms\Components\Select::make('input_type')
+                    ->label(__('seo-content-ai::filament.task.test_input_type'))
+                    ->options([
+                        self::INPUT_TYPE_ARTICLE => __('seo-content-ai::filament.task.test_input_type_article'),
+                        self::INPUT_TYPE_RAW => __('seo-content-ai::filament.task.test_input_type_input'),
+                    ])
+                    ->default(self::INPUT_TYPE_ARTICLE)
+                    ->live()
+                    ->required(),
                 Forms\Components\Select::make('article_id')
                     ->label('Article')
                     ->placeholder('Choose article from list...')
@@ -103,20 +124,27 @@ class TestTask extends Page implements HasForms
                         is_numeric($value) ? (int) $value : null,
                     ))
                     ->live()
+                    ->visible(fn (Get $get): bool => $get('input_type') === self::INPUT_TYPE_ARTICLE)
                     ->helperText('All domains under your account. When an article is selected, title/keyword is ignored.'),
                 Forms\Components\TextInput::make('title_or_keyword')
                     ->label('Title or keyword')
                     ->maxLength(500)
                     ->placeholder('Enter article title or focus keyword')
                     ->disabled(fn (Get $get): bool => filled($get('article_id')))
+                    ->visible(fn (Get $get): bool => $get('input_type') === self::INPUT_TYPE_ARTICLE)
                     ->helperText('Used when no article selected: find existing by title first, then keyword; create new article if no match.'),
+                Forms\Components\Textarea::make('raw_input')
+                    ->label(__('seo-content-ai::filament.task.test_raw_input'))
+                    ->rows(6)
+                    ->visible(fn (Get $get): bool => $get('input_type') === self::INPUT_TYPE_RAW)
+                    ->helperText(__('seo-content-ai::filament.task.test_raw_input_hint')),
             ])
             ->statePath('testInput');
     }
 
     public function getTitle(): string|Htmlable
     {
-        return 'Test: ' . (string) $this->getTask()->name;
+        return 'Test: '.(string) $this->getTask()->name;
     }
 
     protected function getHeaderActions(): array
@@ -151,6 +179,7 @@ class TestTask extends Page implements HasForms
             $context = $this->resolveContext($resolver, $state);
             $this->resolvedContext = $context->toArray();
             $this->stepResults = $runner->run($this->getTask(), $context);
+            $this->syncStepRerunModels();
 
             $failed = collect($this->stepResults)->where('status', 'failed')->count();
             $status = $failed > 0 ? 'failed' : 'completed';
@@ -229,12 +258,15 @@ class TestTask extends Page implements HasForms
         try {
             $context = TaskTestContext::fromArray($this->resolvedContext);
             $priorSteps = array_slice($this->stepResults, 0, $stepIndex);
+            $modelOverride = trim((string) ($this->stepRerunModels[$stepIndex] ?? ''));
             $this->stepResults[$stepIndex] = $runner->runSingleStep(
                 $this->getTask(),
                 $context,
                 $nodeId,
                 $priorSteps,
+                $modelOverride !== '' ? $modelOverride : null,
             );
+            $this->syncStepRerunModelForIndex($stepIndex);
 
             $this->syncSelectedResult();
 
@@ -242,7 +274,7 @@ class TestTask extends Page implements HasForms
             $status = (string) ($step['status'] ?? '');
 
             $notification = Notification::make()
-                ->title('Re-ran step #' . ($stepIndex + 1));
+                ->title('Re-ran step #'.($stepIndex + 1));
 
             if ($status === 'failed') {
                 $notification->body((string) ($step['message'] ?? 'Step failed.'))->warning();
@@ -316,17 +348,22 @@ class TestTask extends Page implements HasForms
         if (filled($context['summary'] ?? null)) {
             $summary = (string) $context['summary'];
 
-            return mb_strlen($summary) > 48 ? mb_substr($summary, 0, 48) . '…' : $summary;
+            return mb_strlen($summary) > 48 ? mb_substr($summary, 0, 48).'…' : $summary;
         }
 
         $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
         $query = trim((string) ($snapshot['title_or_keyword'] ?? ''));
 
         if ($query !== '') {
-            return mb_strlen($query) > 48 ? mb_substr($query, 0, 48) . '…' : $query;
+            return mb_strlen($query) > 48 ? mb_substr($query, 0, 48).'…' : $query;
         }
 
-        return '#' . $result->id;
+        $rawInput = trim((string) ($snapshot['raw_input'] ?? ''));
+        if ($rawInput !== '') {
+            return mb_strlen($rawInput) > 48 ? mb_substr($rawInput, 0, 48).'…' : $rawInput;
+        }
+
+        return '#'.$result->id;
     }
 
     public function resultStepLabel(TaskTestResult $result): string
@@ -344,11 +381,55 @@ class TestTask extends Page implements HasForms
             : sprintf('%d steps', $total);
     }
 
+    /**
+     * @param  array<string, mixed>  $step
+     */
+    public function stepModelLabel(array $step): ?string
+    {
+        $rawModel = trim((string) ($step['raw_model_used'] ?? ''));
+        if ($rawModel !== '') {
+            return $rawModel;
+        }
+
+        $category = trim((string) ($step['ai_model'] ?? ''));
+        if ($category === '') {
+            return null;
+        }
+
+        return AiModelCategory::promptSelectOptions()[$category] ?? $category;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function stepModelOptions(int $stepIndex): array
+    {
+        $step = $this->stepResults[$stepIndex] ?? null;
+        if (! is_array($step) || (string) ($step['type'] ?? '') !== 'prompt') {
+            return [];
+        }
+
+        $promptId = (int) ($step['prompt_id'] ?? 0);
+        if ($promptId <= 0) {
+            return AiModelCategory::promptSelectOptions();
+        }
+
+        $prompt = SeoPrompt::query()->with('aiConnection')->find($promptId);
+        if ($prompt === null) {
+            return AiModelCategory::promptSelectOptions();
+        }
+
+        $options = AiModelCatalog::optionsForConnection($prompt->aiConnection);
+
+        return $options !== [] ? $options : AiModelCategory::promptSelectOptions();
+    }
+
     protected function clearResultView(): void
     {
         $this->selectedResultId = null;
         $this->resolvedContext = null;
         $this->stepResults = [];
+        $this->stepRerunModels = [];
         $this->errorMessage = null;
     }
 
@@ -357,13 +438,16 @@ class TestTask extends Page implements HasForms
         $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
 
         $this->testInput = [
+            'input_type' => $this->normalizeInputType((string) ($snapshot['input_type'] ?? self::INPUT_TYPE_ARTICLE)),
             'article_id' => filled($snapshot['article_id'] ?? null) ? (int) $snapshot['article_id'] : null,
             'title_or_keyword' => (string) ($snapshot['title_or_keyword'] ?? ''),
+            'raw_input' => (string) ($snapshot['raw_input'] ?? ''),
         ];
         $this->form->fill($this->testInput);
 
         $this->resolvedContext = is_array($result->resolved_context) ? $result->resolved_context : null;
         $this->stepResults = is_array($result->step_results) ? $result->step_results : [];
+        $this->syncStepRerunModels();
         $this->errorMessage = $result->status === 'failed' && $this->stepResults === []
             ? (string) ($result->error_message ?? 'Test failed.')
             : null;
@@ -374,6 +458,12 @@ class TestTask extends Page implements HasForms
      */
     private function resolveContext(TaskTestInputResolver $resolver, array $state): TaskTestContext
     {
+        $inputType = $this->normalizeInputType((string) ($state['input_type'] ?? self::INPUT_TYPE_ARTICLE));
+
+        if ($inputType === self::INPUT_TYPE_RAW) {
+            return $resolver->resolveFromRawInput((string) ($state['raw_input'] ?? ''));
+        }
+
         $articleId = filled($state['article_id'] ?? null) ? (int) $state['article_id'] : null;
         $query = trim((string) ($state['title_or_keyword'] ?? ''));
 
@@ -401,8 +491,10 @@ class TestTask extends Page implements HasForms
             'user_id' => auth()->id(),
             'status' => $status,
             'input_snapshot' => [
+                'input_type' => $this->normalizeInputType((string) ($state['input_type'] ?? self::INPUT_TYPE_ARTICLE)),
                 'article_id' => filled($state['article_id'] ?? null) ? (int) $state['article_id'] : null,
                 'title_or_keyword' => (string) ($state['title_or_keyword'] ?? ''),
+                'raw_input' => (string) ($state['raw_input'] ?? ''),
             ],
             'resolved_context' => $this->resolvedContext,
             'step_results' => $this->stepResults,
@@ -451,7 +543,7 @@ class TestTask extends Page implements HasForms
         $query = $this->articlesQuery()->with('site');
 
         $query->where(function (Builder $inner) use ($search): void {
-            $inner->where('title', 'like', '%' . str_replace(['%', '_'], ['\\%', '\\_'], $search) . '%');
+            $inner->where('title', 'like', '%'.str_replace(['%', '_'], ['\\%', '\\_'], $search).'%');
 
             if (ctype_digit($search)) {
                 $inner->orWhere('id', (int) $search);
@@ -505,5 +597,100 @@ class TestTask extends Page implements HasForms
         $record = $this->getRecord();
 
         return $record;
+    }
+
+    private function detectDefaultInputType(): string
+    {
+        $flow = is_array($this->getTask()->flow_data) ? $this->getTask()->flow_data : [];
+        $nodes = is_array($flow['nodes'] ?? null) ? $flow['nodes'] : [];
+        $edges = is_array($flow['edges'] ?? null) ? $flow['edges'] : [];
+
+        if ($nodes === []) {
+            return self::INPUT_TYPE_ARTICLE;
+        }
+
+        $targetNodeIds = [];
+        foreach ($edges as $edge) {
+            if (! is_array($edge)) {
+                continue;
+            }
+
+            $targetId = (string) ($edge['targetNode'] ?? '');
+            if ($targetId !== '') {
+                $targetNodeIds[$targetId] = true;
+            }
+        }
+
+        $hasArticleStart = false;
+        $hasInputStart = false;
+
+        foreach ($nodes as $node) {
+            if (! is_array($node)) {
+                continue;
+            }
+
+            $nodeId = (string) ($node['id'] ?? '');
+            if ($nodeId === '' || isset($targetNodeIds[$nodeId])) {
+                continue;
+            }
+
+            $type = (string) ($node['type'] ?? '');
+            if ($type === 'article') {
+                $hasArticleStart = true;
+            }
+
+            if ($type === 'user_input') {
+                $hasInputStart = true;
+            }
+        }
+
+        if ($hasInputStart && ! $hasArticleStart) {
+            return self::INPUT_TYPE_RAW;
+        }
+
+        return self::INPUT_TYPE_ARTICLE;
+    }
+
+    private function normalizeInputType(string $inputType): string
+    {
+        return $inputType === self::INPUT_TYPE_RAW
+            ? self::INPUT_TYPE_RAW
+            : self::INPUT_TYPE_ARTICLE;
+    }
+
+    private function syncStepRerunModels(): void
+    {
+        $models = [];
+
+        foreach ($this->stepResults as $index => $step) {
+            if (! is_array($step) || (string) ($step['type'] ?? '') !== 'prompt') {
+                continue;
+            }
+
+            $category = trim((string) ($step['ai_model'] ?? ''));
+            if ($category !== '') {
+                $models[$index] = $category;
+
+                continue;
+            }
+
+            $options = $this->stepModelOptions((int) $index);
+            $models[$index] = (string) (array_key_first($options) ?? '');
+        }
+
+        $this->stepRerunModels = $models;
+    }
+
+    private function syncStepRerunModelForIndex(int $stepIndex): void
+    {
+        $step = $this->stepResults[$stepIndex] ?? null;
+        if (! is_array($step)) {
+            return;
+        }
+
+        $category = trim((string) ($step['ai_model'] ?? ''));
+        if ($category !== '') {
+            $this->stepRerunModels[$stepIndex] = $category;
+        }
     }
 }

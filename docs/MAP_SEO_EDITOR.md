@@ -2,7 +2,7 @@
 
 [← Quay lại Bản đồ tổng](SUPER_MAP_INDEX.md)
 
-**Liên quan:** [Media / upload](MAP_SEO_MEDIA.md) · [WordPress sync](MAP_SEO_WP.md) · [Content Projects & Workflow](MAP_SEO_PROJECTS.md)
+**Liên quan:** [Media / upload](MAP_SEO_MEDIA.md) · [WordPress sync](MAP_SEO_WP.md) · [Content Projects & Workflow](MAP_SEO_PROJECTS.md) · **[SEO Scoring (Rules + Violations)](MAP_SEO_EDITOR_SCORING.md)**
 
 ---
 
@@ -75,7 +75,7 @@ flowchart TB
         TAB_ED["editor → BlockEditor"]
         TAB_IMG["images → ArticleImagesTab"]
         TAB_REV["reviews → ArticleReviewsTab"]
-        TAB_SEO["seo → SeoScorePanel"]
+        TAB_SEO["seo → SeoScorePanel<br/>xem MAP_SEO_EDITOR_SCORING"]
     end
 
     EDITOR --> SERP & OUTLINE & TABS
@@ -263,6 +263,43 @@ Cache trang (không search): `articleMediaPickerCache.js` → `localStorage`. Bo
 
 > Liên quan cron publish: [§2.6.3](#263-trạng-thái-đăng-bài--lên-lịch). Settings độ dài bài: **SEO → Settings → Prompt** → *Article content rules*.
 
+#### C. Đồng bộ WordPress qua queue + tab Publish (đã implement)
+
+| Thành phần | File | Hành vi |
+|------------|------|---------|
+| Queue meta | `ArticleWpSyncQueueService` (`article_meta.wp_sync_queue`, `wp_sync_queue_bundle`) | `pending` → `processing` → `completed` / `failed` |
+| Job | `SyncArticleToWordPressFromQueueJob` | Gọi `ArticleEditorSyncOrchestrator::syncFromEditorBundle()` nền |
+| API | `ArticleEditorSyncController::syncWp` | Không sync inline — enqueue + toast, `reload: false` |
+| Tab Publish | `publish-sync-panel.blade.php` | Checkbox **Đăng ngay** (+5 phút), lịch tùy chỉnh khi uncheck, nút **Đồng bộ** |
+| Nút đồng bộ CSS | `article-editor.css` → `.seo-publish-sync-btn` | Primary full-width; dark mode `.dark .wp-article-edit …` (không dùng Tailwind utility trong Blade) |
+| Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`) |
+| Shortcut | `Ctrl+Shift+S` | `seo-publish-tab-request-sync` → tab Publish + queue sync |
+| Submenu Articles | `ListArticleSyncQueue` (`/seo/articles/queue`) | Sidebar **Articles → Hàng đợi** |
+| Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed |
+| Queue table | `ArticleResource::queueTable()` | Cột: tiêu đề, domain, trạng thái, queued/started/finished, lỗi; filter trạng thái; retry / cancel / edit |
+
+**Luồng queue meta (`wp_sync_queue`):**
+
+| Trạng thái | Ý nghĩa |
+|------------|---------|
+| `pending` | Đã enqueue, chờ worker |
+| `processing` | Job đang chạy |
+| `completed` | Đồng bộ xong (meta giữ lại để theo dõi) |
+| `failed` | Lỗi — retry từ submenu Queue |
+
+**Client sau enqueue:** `articleEditorApi.js` → `finishArticleSyncFromApi` (`queued: true`, không reload); event `article-wordpress-sync-queued`.
+
+```mermaid
+flowchart LR
+    UI["Tab Publish → Đồng bộ"]
+    API["POST /sync-wp"]
+    META["article_meta.wp_sync_queue"]
+    JOB["SyncArticleToWordPressFromQueueJob"]
+    WP["WordPressArticleSyncService"]
+
+    UI --> API --> META --> JOB --> WP
+```
+
 #### A. Trạng thái lên lịch — reconcile khi load trang (đã implement)
 
 **Triệu chứng (đã sửa):** Sidebar **Xuất bản** từng hiển thị `Bài lên lịch: …` dù bài đã **Published** và `published_at` quá hạn.
@@ -321,7 +358,7 @@ Parser lấy số nguyên đầu tiên trong chuỗi setting (`SeoPromptSettings
 | Bootstrap editor | `EditArticle::getEditorSettingsPayload()` → `article_length_product`, `article_length_default` |
 | Scorer client | `seoAnalyzer.js` → `resolveArticleLengthTarget(postType, settings)` |
 | Scorer server | `SeoEngineService::scoreLength($html, $target)` — context `article_length_target` |
-| Backend analyze | `SeoAnalyzerService`, `ArticlesOptimal` truyền target theo `ArticlePostTypeResolver` |
+| Backend analyze | `SeoAnalyzerService`, `ArticlesOptimal` truyền target theo `ArticlePostTypeResolver` — chi tiết [MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md) |
 | i18n | `lang/{vi,en}/seo.php` — `:count/:target` |
 
 ---
@@ -530,17 +567,18 @@ Sau sync thành công: `body` Laravel có thể set `null` (nội dung authorita
 | Workflow publish | `TaskWorkflowTestRunner`, `PromptTestPublishService` |
 | Duyệt project | `SeoProjectApprovalService` |
 | List articles | `ArticleResource` actions |
-| Demote draft | `ArticlesOptimal::demoteToDraft` |
+| Demote draft | `ArticlesOptimal::demoteToDraft` — xem [MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md) |
 
 ### Hướng dẫn prompt — đồng bộ từ editor
 
 ```
 Sync hub: Services/WordPressArticleSyncService.php (syncForArticle, prepareEditorSyncPayload, executeEditorSyncRequest, completeEditorSyncResponse).
-Phased UI: edit-article.blade.php __seoRunWordPressPhasedSync; EditArticle syncWpPhase*.
+Queue: ArticleWpSyncQueueService + SyncArticleToWordPressFromQueueJob; POST sync-wp enqueue (ArticleEditorSyncController).
+UI: publish-sync-panel.blade.php (.seo-publish-sync-btn trong article-editor.css); submenu ListArticleSyncQueue /seo/articles/queue.
 Scheduled cron: Console/PublishScheduledArticlesCommand.php + Services/ScheduledArticlePublishRunner.php.
-Livewire: EditArticle::syncArticleToWordPress, persistArticleLocal.
 HTML/media: WordPressLocalMediaSyncService, ArticleMediaLocalService, SeoImageOptimizationService.
 WP REST: posts/{id}/editor-sync (plugin omi-seo-ai-bridge ≥ 1.0.50).
+Worker: php artisan queue:work
 ```
 
 ### Hướng dẫn prompt — React Editor

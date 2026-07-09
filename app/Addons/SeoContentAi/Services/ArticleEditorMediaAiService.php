@@ -24,6 +24,7 @@ final class ArticleEditorMediaAiService
 
     public function __construct(
         private readonly SeoCreateArticleSettingsService $workflowSettings,
+        private readonly EditorImageTaskResolverService $imageTaskResolver,
         private readonly SeoAnalyzerService $seoAnalyzer,
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly SeoPromptSettingsService $promptSettings,
@@ -64,15 +65,7 @@ final class ArticleEditorMediaAiService
             $loaiSanPhamCustom,
         ): array {
             $target = trim($target);
-            $promptId = $target === 'product-gallery'
-                ? $this->workflowSettings->getCreateProductGalleryImagePromptId()
-                : $this->workflowSettings->getCreateImagePromptId();
-
-            $prompt = $this->resolvePrompt(
-                $promptId,
-                'Tạo ảnh',
-                'image',
-            );
+            $prompt = $this->resolveEditorImagePrompt($target);
 
             if ($target === 'product-gallery' && PromptLoaiSanPhamVariable::usesInPrompt($prompt)) {
                 $siteId = (int) ($article->site_id ?? 0);
@@ -174,15 +167,7 @@ final class ArticleEditorMediaAiService
             $loaiSanPhamCustom,
         );
 
-        $promptId = $target === 'product-gallery'
-            ? $this->workflowSettings->getCreateProductGalleryImagePromptId()
-            : $this->workflowSettings->getCreateImagePromptId();
-
-        $prompt = $this->resolvePrompt(
-            $promptId,
-            'Tạo ảnh',
-            'image',
-        );
+        $prompt = $this->resolveEditorImagePrompt($target);
 
         $mergeLoai = $this->shouldMergeLoaiSanPham(
             $prompt,
@@ -723,6 +708,27 @@ final class ArticleEditorMediaAiService
 
             throw $exception;
         }
+    }
+
+    private function resolveEditorImagePrompt(string $target): SeoPrompt
+    {
+        if (trim($target) === 'product-gallery') {
+            $galleryPromptId = $this->workflowSettings->getCreateProductGalleryImagePromptId();
+            if ($galleryPromptId !== null) {
+                return $this->resolvePrompt($galleryPromptId, 'Tạo ảnh Product gallery', 'image');
+            }
+        }
+
+        $taskId = $this->workflowSettings->getCreateImageTaskId();
+        if ($taskId !== null) {
+            return $this->imageTaskResolver->resolveImagePrompt($taskId);
+        }
+
+        return $this->resolvePrompt(
+            $this->workflowSettings->getLegacyCreateImagePromptId(),
+            'Tạo ảnh',
+            'image',
+        );
     }
 
     private function resolvePrompt(?int $promptId, string $label, string $expectedTool): SeoPrompt

@@ -4,26 +4,45 @@ import {
     containsKeywordPhrase,
     normalizePhrase,
 } from './keywordPhraseMatcher';
+import {
+    buildViolationLines,
+    isRuleEnabled,
+    resolveRuleMessage,
+    sanitizeViolations,
+    scoreFromViolations,
+} from './seoScoreCalculator';
 import { DEFAULT_WIKI_TRUST_DOMAINS, isWikiTrustUrl, normalizeDomainHost, resolveLinkHost } from './wikiTrustDomains';
 
-const MAX_HEADING = 20;
-const MAX_LENGTH = 15;
-const MAX_IMAGE_RATIO = 15;
-const MAX_WIKI_TRUST = 15;
-const MAX_FAQ_SCHEMA = 10;
-const MAX_KEYWORD = 15;
+const RULE_KEYS = {
+    missingFocusKeyword: 'missing_focus_keyword',
+    h2Missing: 'h2_missing',
+    contentLengthLow: 'content_length_low',
+    imageRatioMissing: 'image_ratio_missing',
+    imageRatioPoor: 'image_ratio_poor',
+    imageRatioLow: 'image_ratio_low',
+    imageRatioSuboptimal: 'image_ratio_suboptimal',
+    imageAltMissing: 'image_alt_missing',
+    wikiTrustMissing: 'wiki_trust_missing',
+    faqMissing: 'faq_missing',
+    keywordMissingInTitle: 'keyword_missing_in_title',
+    keywordMissingInMeta: 'keyword_missing_in_meta',
+    keywordMissingInSlug: 'keyword_missing_in_slug',
+    keywordMissingInIntro: 'keyword_missing_in_intro',
+    featuredSnippetMissing: 'featured_snippet_missing',
+    featuredSnippetBelowGood: 'featured_snippet_below_good',
+    featuredSnippetBelowExcellent: 'featured_snippet_below_excellent',
+};
 
 export function resolveScoringMessage(key, messages = {}, params = {}) {
-    let template = String(messages?.[key] ?? key);
+    let template = resolveRuleMessage(key, [], messages);
+    if (template === key && String(key).startsWith('seo_rules.')) {
+        template = String(messages?.[key] ?? key);
+    }
     Object.entries(params).forEach(([name, value]) => {
         template = template.replaceAll(`:${name}`, String(value));
     });
 
     return template;
-}
-
-function clampScore(score) {
-    return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 function normalizeFocusKeyword(raw) {
@@ -192,9 +211,9 @@ export function extractLinks(content, domain) {
     return result;
 }
 
-export function calculateTextToImageScore(htmlContent) {
+function calculateTextToImageMetrics(htmlContent) {
     if (typeof document === 'undefined') {
-        return { score: 0, ratio: 0 };
+        return { baseScore: 0, missingAlt: 0 };
     }
 
     const container = document.createElement('div');
@@ -203,23 +222,6 @@ export function calculateTextToImageScore(htmlContent) {
     const imageCount = images.length;
     const wordCount = countWordsForImageRatio(htmlContent);
 
-    if (wordCount < 10 || imageCount === 0) {
-        return { score: 0, ratio: wordCount };
-    }
-
-    const wordsPerImage = Math.round(wordCount / imageCount);
-    let score = 0;
-
-    if (wordsPerImage >= 250 && wordsPerImage <= 450) {
-        score = 15;
-    } else if (wordsPerImage > 450 && wordsPerImage <= 800) {
-        score = 10;
-    } else if (wordsPerImage < 250 && wordsPerImage >= 100) {
-        score = 8;
-    } else {
-        score = 3;
-    }
-
     let missingAlt = 0;
     images.forEach((img) => {
         if (String(img.getAttribute('alt') ?? '').trim() === '') {
@@ -227,11 +229,22 @@ export function calculateTextToImageScore(htmlContent) {
         }
     });
 
-    if (missingAlt > 0) {
-        score = Math.max(0, score - 5);
+    if (wordCount < 10 || imageCount === 0) {
+        return { baseScore: 0, missingAlt };
     }
 
-    return { score, ratio: wordsPerImage };
+    const wordsPerImage = Math.round(wordCount / imageCount);
+    let baseScore = 3;
+
+    if (wordsPerImage >= 250 && wordsPerImage <= 450) {
+        baseScore = 15;
+    } else if (wordsPerImage > 450 && wordsPerImage <= 800) {
+        baseScore = 10;
+    } else if (wordsPerImage < 250 && wordsPerImage >= 100) {
+        baseScore = 8;
+    }
+
+    return { baseScore, missingAlt };
 }
 
 function hasWikiTrustExternalLink(extractedLinks, wikiTrustDomains) {
@@ -339,37 +352,6 @@ function resolveFaqsForScoring(html, faqs) {
     return parseFaqsFromHtmlForScoring(html);
 }
 
-function applyCategoryResult(category, messages, good, errors, warnings, reasonKeys) {
-    const message = resolveScoringMessage(category.key, messages, category.params ?? {});
-
-    if (category.passed) {
-        good.push(message);
-
-        return;
-    }
-
-    if (category.earned > 0) {
-        warnings.push(message);
-    } else {
-        errors.push(message);
-    }
-
-    reasonKeys.push(category.key);
-}
-
-function scoreHeading(html) {
-    const h2Count = countH2Tags(html);
-    const passed = h2Count >= 2;
-
-    return {
-        max: MAX_HEADING,
-        earned: passed ? MAX_HEADING : 0,
-        passed,
-        key: passed ? 'seo.heading.pass' : 'seo.heading',
-        params: { points: MAX_HEADING },
-    };
-}
-
 function resolveArticleLengthTarget(postType, settings = {}) {
     const normalized = String(postType ?? '').trim();
     const isProduct = normalized === 'product';
@@ -380,82 +362,131 @@ function resolveArticleLengthTarget(postType, settings = {}) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function scoreLength(html, targetWords = 2000) {
-    const target = Math.max(1, Number(targetWords) || 2000);
-    const wordCount = countWords(html);
-    const passed = wordCount >= target;
+function countTableDataRows(table) {
+    const rows = Array.from(table.querySelectorAll('tr'));
+    if (rows.length === 0) {
+        return 0;
+    }
 
-    return {
-        max: MAX_LENGTH,
-        earned: passed ? MAX_LENGTH : 0,
-        passed,
-        key: passed ? 'seo.length.pass' : 'seo.length',
-        params: {
-            count: wordCount,
-            target,
-            points: passed ? MAX_LENGTH : 0,
-            max: MAX_LENGTH,
-        },
-    };
+    const firstCells = rows[0]?.querySelectorAll('th, td')?.length ?? 0;
+    const hasHeader = rows[0]?.querySelector('th') !== null;
+    const dataRows = hasHeader ? Math.max(0, rows.length - 1) : rows.length;
+
+    return { dataRows, columns: firstCells };
 }
 
-function scoreTextToImage(html) {
-    const result = calculateTextToImageScore(html);
-    const earned = Math.min(MAX_IMAGE_RATIO, Math.max(0, Number(result.score ?? 0)));
-    const passed = earned >= MAX_IMAGE_RATIO;
-
-    return {
-        max: MAX_IMAGE_RATIO,
-        earned,
-        passed,
-        key: passed ? 'seo.image_ratio.pass' : 'seo.image_ratio',
-        params: { ratio: result.ratio ?? 0, points: earned },
-    };
+function columnCountPasses(colCount, minCols, maxCols) {
+    return colCount >= minCols && colCount <= maxCols;
 }
 
-function scoreWikiTrust(extractedLinks, wikiTrustDomains) {
-    const passed = hasWikiTrustExternalLink(extractedLinks, wikiTrustDomains);
+function resolveFeaturedSnippetTier(dataRows, thresholds) {
+    const rowsMin = Number(thresholds?.rows_min ?? 6);
+    const rowsRange = Number(thresholds?.rows_range ?? 8);
+    const rowsMax = Number(thresholds?.rows_max ?? 10);
 
-    return {
-        max: MAX_WIKI_TRUST,
-        earned: passed ? MAX_WIKI_TRUST : 0,
-        passed,
-        key: passed ? 'seo.wiki_trust.pass' : 'seo.wiki_trust',
-        params: { points: MAX_WIKI_TRUST },
-    };
+    if (dataRows >= rowsMax) {
+        return 'excellent';
+    }
+    if (dataRows >= rowsRange) {
+        return 'good';
+    }
+    if (dataRows >= rowsMin) {
+        return 'average';
+    }
+
+    return 'none';
 }
 
-function scoreFaqSchema(html, faqs) {
-    const passed = resolveFaqsForScoring(html, faqs).length > 0;
+function resolveFeaturedSnippetViolation(html, thresholds = {}) {
+    const source = String(html ?? '').trim();
+    if (source === '' || !/<table\b/i.test(source)) {
+        return RULE_KEYS.featuredSnippetMissing;
+    }
 
-    return {
-        max: MAX_FAQ_SCHEMA,
-        earned: passed ? MAX_FAQ_SCHEMA : 0,
-        passed,
-        key: passed ? 'seo.faq_schema.pass' : 'seo.faq_schema',
-        params: { points: MAX_FAQ_SCHEMA },
-    };
+    if (typeof document === 'undefined') {
+        return RULE_KEYS.featuredSnippetMissing;
+    }
+
+    const minCols = Number(thresholds?.min_columns ?? 2);
+    const maxCols = Number(thresholds?.max_columns ?? 5);
+    const container = document.createElement('div');
+    container.innerHTML = source;
+
+    let bestTier = 'none';
+    const tierRank = { none: 0, average: 1, good: 2, excellent: 3 };
+
+    container.querySelectorAll('table').forEach((table) => {
+        const { dataRows, columns } = countTableDataRows(table);
+        if (!columnCountPasses(columns, minCols, maxCols)) {
+            return;
+        }
+
+        const tier = resolveFeaturedSnippetTier(dataRows, thresholds);
+        if (tierRank[tier] > tierRank[bestTier]) {
+            bestTier = tier;
+        }
+    });
+
+    if (bestTier === 'excellent') {
+        return null;
+    }
+    if (bestTier === 'good') {
+        return RULE_KEYS.featuredSnippetBelowExcellent;
+    }
+    if (bestTier === 'average') {
+        return RULE_KEYS.featuredSnippetBelowGood;
+    }
+
+    return RULE_KEYS.featuredSnippetMissing;
 }
 
-function scoreKeywordPlacement({ html, keyword, seoTitle, metaDescription, slug }) {
-    const inTitle = containsKeywordPhrase(seoTitle, keyword);
-    const inMeta = containsKeywordPhrase(metaDescription, keyword);
-    const inSlug = slugContainsFocusKeyword(slug, keyword);
-    const inFirst100 = containsKeywordPhrase(sliceFirstWords(html, 100), keyword);
-    const passedCount = [inTitle, inMeta, inSlug, inFirst100].filter(Boolean).length;
-    const earned = Math.round(MAX_KEYWORD * (passedCount / 4));
-    const passed = passedCount === 4;
+function resolveImageRatioViolations(html) {
+    const { baseScore, missingAlt } = calculateTextToImageMetrics(html);
+    const violations = [];
 
-    return {
-        max: MAX_KEYWORD,
-        earned: passed ? MAX_KEYWORD : earned,
-        passed,
-        key: passed ? 'seo.keyword_density.pass' : 'seo.keyword_density',
-        params: { points: passed ? MAX_KEYWORD : earned },
-    };
+    if (baseScore >= 15) {
+        // no ratio violation
+    } else if (baseScore >= 10) {
+        violations.push(RULE_KEYS.imageRatioSuboptimal);
+    } else if (baseScore >= 8) {
+        violations.push(RULE_KEYS.imageRatioLow);
+    } else if (baseScore >= 3) {
+        violations.push(RULE_KEYS.imageRatioPoor);
+    } else {
+        violations.push(RULE_KEYS.imageRatioMissing);
+    }
+
+    if (missingAlt > 0) {
+        violations.push(RULE_KEYS.imageAltMissing);
+    }
+
+    return violations;
 }
 
-function computeUnifiedScore({
+function resolveKeywordViolations({ html, keyword, seoTitle, metaDescription, slug }) {
+    const violations = [];
+
+    if (!containsKeywordPhrase(seoTitle, keyword)) {
+        violations.push(RULE_KEYS.keywordMissingInTitle);
+    }
+    if (!containsKeywordPhrase(metaDescription, keyword)) {
+        violations.push(RULE_KEYS.keywordMissingInMeta);
+    }
+    if (!slugContainsFocusKeyword(slug, keyword)) {
+        violations.push(RULE_KEYS.keywordMissingInSlug);
+    }
+    if (!containsKeywordPhrase(sliceFirstWords(html, 100), keyword)) {
+        violations.push(RULE_KEYS.keywordMissingInIntro);
+    }
+
+    return violations;
+}
+
+function sanitizeViolationList(violations, seoScoringRules = []) {
+    return sanitizeViolations(violations, seoScoringRules).filter((key) => isRuleEnabled(key, seoScoringRules));
+}
+
+function computeViolations({
     focusKeyword,
     seoTitle,
     content,
@@ -464,48 +495,49 @@ function computeUnifiedScore({
     siteDomain,
     faqs,
     wikiTrustDomains,
-    scoringMessages,
     articleLengthTarget = 2000,
+    featuredSnippetThresholds = {},
+    seoScoringRules = [],
 }) {
     const keyword = normalizeFocusKeyword(focusKeyword);
-    const good = [];
-    const errors = [];
-    const warnings = [];
-    const reasonKeys = [];
-    const breakdown = {};
-    let totalScore = 0;
-
+    const violations = [];
     const extractedLinks = extractLinks(content, siteDomain);
 
-    const categories = {
-        heading: scoreHeading(content),
-        length: scoreLength(content, articleLengthTarget),
-        image_ratio: scoreTextToImage(content),
-        wiki_trust: scoreWikiTrust(extractedLinks, wikiTrustDomains),
-        faq_schema: scoreFaqSchema(content, faqs),
-        keyword: scoreKeywordPlacement({
+    if (countH2Tags(content) < 2) {
+        violations.push(RULE_KEYS.h2Missing);
+    }
+
+    if (countWords(content) < Math.max(1, Number(articleLengthTarget) || 2000)) {
+        violations.push(RULE_KEYS.contentLengthLow);
+    }
+
+    violations.push(...resolveImageRatioViolations(content));
+
+    if (!hasWikiTrustExternalLink(extractedLinks, wikiTrustDomains)) {
+        violations.push(RULE_KEYS.wikiTrustMissing);
+    }
+
+    if (resolveFaqsForScoring(content, faqs).length === 0) {
+        violations.push(RULE_KEYS.faqMissing);
+    }
+
+    violations.push(
+        ...resolveKeywordViolations({
             html: content,
             keyword,
             seoTitle,
             metaDescription,
             slug,
         }),
-    };
+    );
 
-    Object.entries(categories).forEach(([name, category]) => {
-        breakdown[name] = category;
-        totalScore += category.earned;
-        applyCategoryResult(category, scoringMessages, good, errors, warnings, reasonKeys);
-    });
+    const snippetViolation = resolveFeaturedSnippetViolation(content, featuredSnippetThresholds);
+    if (snippetViolation) {
+        violations.push(snippetViolation);
+    }
 
     return {
-        score: clampScore(totalScore),
-        seo_score: clampScore(totalScore),
-        reason_keys: [...new Set(reasonKeys)],
-        breakdown,
-        good,
-        errors,
-        warnings,
+        violations: sanitizeViolationList(violations, seoScoringRules),
         extracted_links: extractedLinks,
     };
 }
@@ -520,29 +552,32 @@ export function computeSeoAnalysis({
     faqs = [],
     wikiTrustDomains = DEFAULT_WIKI_TRUST_DOMAINS,
     scoringMessages = {},
+    seoScoringRules = [],
     postType = 'article',
     articleLengthSettings = {},
+    featuredSnippetThresholds = {},
 } = {}) {
     const keyword = normalizeFocusKeyword(focusKeyword);
     const content = String(html ?? '');
 
     if (keyword === '') {
         const extractedLinks = extractLinks(content, siteDomain);
-        const message = resolveScoringMessage('seo.missing_focus_keyword', scoringMessages);
+        const violations = isRuleEnabled(RULE_KEYS.missingFocusKeyword, seoScoringRules)
+            ? [RULE_KEYS.missingFocusKeyword]
+            : [];
 
         return {
-            score: 0,
-            seo_score: 0,
-            reason_keys: ['seo.missing_focus_keyword'],
-            breakdown: {},
+            violations,
+            score: scoreFromViolations(violations, seoScoringRules),
+            seo_score: scoreFromViolations(violations, seoScoringRules),
+            errors: buildViolationLines(violations, seoScoringRules, scoringMessages),
             good: [],
-            errors: [message],
             warnings: [],
             extracted_links: extractedLinks,
         };
     }
 
-    return computeUnifiedScore({
+    const result = computeViolations({
         focusKeyword: keyword,
         seoTitle,
         content,
@@ -551,9 +586,24 @@ export function computeSeoAnalysis({
         siteDomain,
         faqs,
         wikiTrustDomains,
-        scoringMessages,
         articleLengthTarget: resolveArticleLengthTarget(postType, articleLengthSettings),
+        featuredSnippetThresholds,
+        seoScoringRules,
     });
+
+    const violations = result.violations;
+    const score = scoreFromViolations(violations, seoScoringRules);
+    const errors = buildViolationLines(violations, seoScoringRules, scoringMessages);
+
+    return {
+        violations,
+        score,
+        seo_score: score,
+        errors,
+        good: violations.length === 0 ? [resolveScoringMessage('seo_rules.all_passed', scoringMessages)] : [],
+        warnings: [],
+        extracted_links: result.extracted_links,
+    };
 }
 
 export function buildSeoAnalysisPayload(analysis) {
@@ -562,13 +612,18 @@ export function buildSeoAnalysisPayload(analysis) {
     }
 
     return {
-        score: clampScore(Number(analysis.score ?? analysis.seo_score ?? 0)),
-        seo_score: clampScore(Number(analysis.seo_score ?? analysis.score ?? 0)),
-        reason_keys: Array.isArray(analysis.reason_keys) ? analysis.reason_keys : [],
-        breakdown: analysis.breakdown ?? {},
-        good: Array.isArray(analysis.good) ? analysis.good : [],
-        errors: Array.isArray(analysis.errors) ? analysis.errors : [],
-        warnings: Array.isArray(analysis.warnings) ? analysis.warnings : [],
+        violations: Array.isArray(analysis.violations) ? analysis.violations : [],
         extracted_links: analysis.extracted_links ?? { internal: [], external: [] },
     };
+}
+
+// Backward compat for tests importing calculateTextToImageScore
+export function calculateTextToImageScore(htmlContent) {
+    const { baseScore, missingAlt } = calculateTextToImageMetrics(htmlContent);
+    let score = baseScore;
+    if (missingAlt > 0) {
+        score = Math.max(0, score - 5);
+    }
+
+    return { score, ratio: 0 };
 }

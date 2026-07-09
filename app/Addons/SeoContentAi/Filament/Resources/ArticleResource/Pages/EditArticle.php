@@ -40,6 +40,7 @@ use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleScheduleReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\EditorImageTaskResolverService;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
@@ -65,6 +66,7 @@ use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
+use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Addons\SeoContentAi\Support\WordPressImageUrl;
 use App\Services\SeoEngineService;
@@ -671,25 +673,10 @@ class EditArticle extends SeoEditRecord
                         ->success()
                         ->send();
                 }),
-            Actions\Action::make('fetchFromWordPress')
-                ->label(__('seo-content-ai::filament.article_list.fetch_from_wordpress'))
-                ->icon('heroicon-o-arrow-down-tray')
-                ->color('info')
-                ->visible(fn (): bool => ! SeoAccessControl::isContentManager()
-                    && (int) ($this->record->wp_post_id ?? 0) > 0)
-                ->requiresConfirmation()
-                ->modalHeading(__('seo-content-ai::filament.article_list.fetch_from_wordpress_heading'))
-                ->modalDescription(__('seo-content-ai::filament.article_list.fetch_from_wordpress_description'))
-                ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.fetch_from_wordpress_submit'))
-                ->action(fn (): mixed => $this->restoreArticleFromWordPress()),
-            Actions\DeleteAction::make()
-                ->icon('heroicon-o-trash')
-                ->iconButton()
-                ->tooltip('Delete article'),
         ];
     }
 
-    public function restoreArticleFromWordPress(): void
+    public function restoreArticleFromWordPress(): bool
     {
         $restore = app(ArticleFaqWordPressRestoreService::class)->restoreFullArticleFromWordPress($this->record);
 
@@ -700,7 +687,7 @@ class EditArticle extends SeoEditRecord
                 ->warning()
                 ->send();
 
-            return;
+            return false;
         }
 
         $categoryIds = is_array($restore['category_ids'] ?? null) ? $restore['category_ids'] : [];
@@ -719,7 +706,10 @@ class EditArticle extends SeoEditRecord
             ->success()
             ->send();
 
+        $this->articleHeavyAction = 'restore';
         $this->finishHeavyArticleActionWithReload(clearLocalState: true);
+
+        return true;
     }
 
     public function hasWpDataOutOfSync(): bool
@@ -1965,7 +1955,7 @@ class EditArticle extends SeoEditRecord
             return null;
         }
 
-        return $publishedAt->timezone(config('app.timezone'))->format('d/m/Y H:i');
+        return $publishedAt->timezone(SeoDisplayTimezone::name())->format('d/m/Y H:i');
     }
 
     public function getPublishWhenLabel(): string
@@ -1998,7 +1988,7 @@ class EditArticle extends SeoEditRecord
         /** @var Carbon $publishedAt */
         $publishedAt = $this->record->published_at;
 
-        return $this->formatWpScheduleLabel($publishedAt->copy()->timezone(config('app.timezone')));
+        return SeoDisplayTimezone::formatScheduleLabel($publishedAt);
     }
 
     public function getVisibilityLabel(): string
@@ -2944,7 +2934,7 @@ class EditArticle extends SeoEditRecord
 
             $this->captureArticleRevisionAfterSave($html);
 
-            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
                 $seoResult = app(SeoAnalyzerService::class)->persistClientAnalysis(
                     $this->record->fresh(),
                     $html,
@@ -3015,7 +3005,7 @@ class EditArticle extends SeoEditRecord
             $html = $this->persistArticleLocalSilent($html);
             $slug = Str::slug($this->articleSlug);
 
-            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
                 app(SeoAnalyzerService::class)->persistClientAnalysis(
                     $this->record->fresh(),
                     $html,
@@ -3258,7 +3248,7 @@ class EditArticle extends SeoEditRecord
             $html = $this->persistArticleLocalSilent($html);
 
             $slug = Str::slug($this->articleSlug);
-            if (is_array($seoAnalysis) && array_key_exists('score', $seoAnalysis)) {
+            if (is_array($seoAnalysis) && array_key_exists('violations', $seoAnalysis)) {
                 app(SeoAnalyzerService::class)->persistClientAnalysis(
                     $this->record->fresh(),
                     $html,
@@ -3653,6 +3643,8 @@ class EditArticle extends SeoEditRecord
             'featured_snippet_thresholds' => $featuredSnippetThresholds,
             'article_length_product' => $promptSettings->resolveArticleLengthTarget('product'),
             'article_length_default' => $promptSettings->resolveArticleLengthTarget('article'),
+            'seo_scoring_rules' => \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::publicRulesForClient(),
+            'seo_rule_messages' => \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::messagesForLocale(),
             'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
             'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
@@ -3666,7 +3658,7 @@ class EditArticle extends SeoEditRecord
 
     public function canGenerateEditorImage(): bool
     {
-        return app(SeoCreateArticleSettingsService::class)->getCreateImagePromptId() !== null;
+        return app(SeoCreateArticleSettingsService::class)->hasCreateImageConfiguration();
     }
 
     public function canGenerateEditorVideo(): bool
@@ -3884,14 +3876,31 @@ class EditArticle extends SeoEditRecord
         }
 
         $settings = app(SeoCreateArticleSettingsService::class);
+        $imagePromptId = $this->resolveEditorImageDebugPromptId($settings);
 
         return [
             'enabled' => true,
             'article_title' => trim((string) ($this->record->title ?? '')),
             'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? '',
-            'image' => $this->buildPromptDebugPayload($settings->getCreateImagePromptId()),
+            'image' => $this->buildPromptDebugPayload($imagePromptId),
             'video' => $this->buildPromptDebugPayload($settings->getCreateVideoPromptId()),
         ];
+    }
+
+    private function resolveEditorImageDebugPromptId(SeoCreateArticleSettingsService $settings): ?int
+    {
+        $taskId = $settings->getCreateImageTaskId();
+        if ($taskId !== null) {
+            try {
+                return (int) app(EditorImageTaskResolverService::class)
+                    ->resolveImagePrompt($taskId)
+                    ->id;
+            } catch (\Throwable) {
+                return null;
+            }
+        }
+
+        return $settings->getLegacyCreateImagePromptId();
     }
 
     /**
@@ -5125,7 +5134,7 @@ class EditArticle extends SeoEditRecord
 
     private function syncPublishDatePartsFromRecord(): void
     {
-        $dt = $this->resolvePublishAtForEditor() ?? now(config('app.timezone'));
+        $dt = $this->resolvePublishAtForEditor() ?? SeoDisplayTimezone::now();
 
         $this->publishDay = $dt->format('d');
         $this->publishMonth = $dt->format('m');
@@ -5137,12 +5146,10 @@ class EditArticle extends SeoEditRecord
     private function resolvePublishAtForEditor(): ?Carbon
     {
         if ($this->record->published_at instanceof Carbon) {
-            return $this->record->published_at->copy()->timezone(config('app.timezone'));
+            return $this->record->published_at->copy()->timezone(SeoDisplayTimezone::name());
         }
 
-        $fromParts = $this->buildPublishAtFromParts();
-
-        return $fromParts?->timezone(config('app.timezone'));
+        return $this->buildPublishAtFromParts();
     }
 
     private function resolvePublishAtForSave(): ?Carbon
@@ -5153,14 +5160,14 @@ class EditArticle extends SeoEditRecord
 
         $candidate = $this->buildPublishAtFromParts();
         if ($candidate !== null) {
-            return $candidate->copy()->timezone(config('app.timezone'));
+            return $candidate;
         }
 
         if ($this->record->published_at instanceof Carbon) {
-            return $this->record->published_at->copy()->timezone(config('app.timezone'));
+            return $this->record->published_at->copy()->timezone(SeoDisplayTimezone::name());
         }
 
-        return now(config('app.timezone'));
+        return SeoDisplayTimezone::now();
     }
 
     private function buildPublishAtFromParts(): ?Carbon
@@ -5185,7 +5192,7 @@ class EditArticle extends SeoEditRecord
             return Carbon::createFromFormat(
                 'Y-m-d H:i',
                 sprintf('%04d-%02d-%02d %02d:%02d', $year, $month, $day, $hour, $minute),
-                config('app.timezone'),
+                SeoDisplayTimezone::name(),
             );
         } catch (\Throwable) {
             return null;
@@ -5194,18 +5201,6 @@ class EditArticle extends SeoEditRecord
 
     private function formatWpScheduleLabel(Carbon $dt): string
     {
-        $weekdayMap = [
-            0 => 'CN',
-            1 => 'Th2',
-            2 => 'Th3',
-            3 => 'Th4',
-            4 => 'Th5',
-            5 => 'Th6',
-            6 => 'Th7',
-        ];
-
-        $weekday = $weekdayMap[(int) $dt->dayOfWeek] ?? 'Th';
-
-        return sprintf('%s %d, %d at %02d:%02d', $weekday, (int) $dt->day, (int) $dt->year, (int) $dt->hour, (int) $dt->minute);
+        return SeoDisplayTimezone::formatScheduleLabel($dt);
     }
 }

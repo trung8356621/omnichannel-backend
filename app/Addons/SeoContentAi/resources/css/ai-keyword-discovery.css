@@ -52,7 +52,7 @@
     border-color: rgb(99 102 241);
 }
 
-.ai-discovery-form-pane .seo-select.ai-discovery-select {
+.ai-discovery-form-pane .classic-select.ai-discovery-select {
     border-radius: 0.625rem;
     border-color: rgb(229 231 235);
     padding-top: 0.625rem;
@@ -61,13 +61,13 @@
     box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
 }
 
-.dark .ai-discovery-form-pane .seo-select.ai-discovery-select {
+.dark .ai-discovery-form-pane .classic-select.ai-discovery-select {
     border-color: rgb(255 255 255 / 0.12);
     background-color: rgb(17 24 39 / 0.5);
     color: rgb(243 244 246);
 }
 
-.ai-discovery-form-pane .seo-select.ai-discovery-select:focus {
+.ai-discovery-form-pane .classic-select.ai-discovery-select:focus {
     outline: 2px solid rgb(99 102 241 / 0.35);
     border-color: rgb(99 102 241);
 }

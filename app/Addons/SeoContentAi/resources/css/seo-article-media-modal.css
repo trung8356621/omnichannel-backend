@@ -38,6 +38,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+    flex-shrink: 0;
     padding: 0.85rem 1rem;
     border-bottom: 1px solid #dcdcde;
 }
@@ -62,14 +63,19 @@
 
 .seo-article-media-modal__tabs {
     display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    flex-shrink: 0;
     gap: 0.35rem;
-    padding: 0.65rem 1rem 0;
+    padding: 0.65rem 1rem;
     border-bottom: 1px solid #f0f0f1;
     overflow-x: auto;
+    overflow-y: visible;
     scrollbar-width: thin;
 }
 
 .seo-article-media-modal__tab {
+    flex-shrink: 0;
     padding: 0.4rem 0.75rem;
     font-size: 0.8125rem;
     font-weight: 500;
@@ -78,6 +84,7 @@
     border: 1px solid transparent;
     border-radius: 6px 6px 0 0;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .seo-article-media-modal__tab:hover {
@@ -90,7 +97,6 @@
     background: #fff;
     border-color: #dcdcde;
     border-bottom-color: #fff;
-    margin-bottom: -1px;
 }
 
 .dark .seo-article-media-modal__tab {
@@ -108,6 +114,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex-shrink: 0;
     padding: 0.65rem 1rem;
     border-bottom: 1px solid #f0f0f1;
 }
@@ -229,10 +236,10 @@
 }
 
 .seo-article-media-modal__body {
-    flex: 1;
+    flex: 1 1 auto;
     overflow: auto;
     padding: 0.75rem 1rem;
-    min-height: 12rem;
+    min-height: 0;
 }
 
 .seo-article-media-modal__results {
@@ -358,6 +365,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+    flex-shrink: 0;
     padding: 0.65rem 1rem;
     border-top: 1px solid #dcdcde;
     background: #f6f7f7;
@@ -458,6 +466,7 @@
     align-items: center;
     justify-content: center;
     gap: 0.75rem;
+    flex-shrink: 0;
     padding: 0.65rem 1rem;
     border-top: 1px solid #f0f0f1;
     font-size: 0.8125rem;
@@ -492,12 +501,100 @@
     white-space: nowrap;
 }
 
+.seo-article-media-modal__tab-label--editable {
+    cursor: text;
+}
+
+.seo-article-media-modal__tab-rename-input {
+    width: 6.5rem;
+    max-width: 100%;
+    padding: 0.1rem 0.25rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border: 1px solid #c3d9ed;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.seo-article-media-modal__tab-add-wrap {
+    flex-shrink: 0;
+}
+
 .seo-article-media-modal__tab--add {
     min-width: 2rem;
     padding-inline: 0.55rem;
     font-size: 1rem;
     line-height: 1;
     color: #2271b1;
+}
+
+.seo-article-media-modal__add-tab-menu {
+    position: fixed;
+    z-index: 10001;
+    min-width: 13rem;
+    padding: 0.35rem;
+    border: 1px solid #dcdcde;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.dark .seo-article-media-modal__add-tab-menu {
+    background: rgb(17 24 39);
+    border-color: #3c434a;
+}
+
+.seo-article-media-modal__add-tab-option {
+    display: block;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.seo-article-media-modal__add-tab-option:hover {
+    background: #f6f7f7;
+}
+
+.dark .seo-article-media-modal__add-tab-option:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.seo-article-media-modal__add-tab-search {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.35rem 0.5rem 0.25rem;
+    border-top: 1px solid #f0f0f1;
+    margin-top: 0.25rem;
+}
+
+.dark .seo-article-media-modal__add-tab-search {
+    border-top-color: #3c434a;
+}
+
+.seo-article-media-modal__add-tab-search-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #646970;
+}
+
+.seo-article-media-modal__add-tab-search-input {
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+}
+
+.seo-article-media-modal__add-tab-search-input:focus {
+    outline: none;
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
 }
 
 .seo-article-media-modal__tab-remove {
@@ -556,6 +653,29 @@
 
 .seo-article-media-modal__item-move:hover {
     background: #f0f6fc;
+}
+
+.seo-article-media-modal__item-remove {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.35rem;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border: 1px solid #e8b4b8;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #b32d2e;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.seo-article-media-modal__item-remove:hover {
+    background: #fcf0f1;
 }
 
 .seo-article-media-modal__item.is-staged {

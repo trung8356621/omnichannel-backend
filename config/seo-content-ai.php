@@ -44,4 +44,7 @@ return [
 
     /** Giới hạn upload ảnh thư viện SEO (kilobytes). */
     'media_max_upload_kb' => (int) env('SEO_CONTENT_AI_MEDIA_MAX_UPLOAD_KB', 10240),
+
+    /** Múi giờ hiển thị lên lịch publish & queue sync trong panel SEO. */
+    'display_timezone' => env('SEO_CONTENT_AI_DISPLAY_TIMEZONE', 'Asia/Ho_Chi_Minh'),
 ];

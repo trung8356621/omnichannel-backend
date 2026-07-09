@@ -1,11 +1,18 @@
 <x-filament-panels::page>
     <div class="seo-prompt-test-layout">
         <div class="seo-prompt-test-main seo-task-test space-y-6">
-            <x-filament::section heading="Đầu vào bài viết">
-                <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                    <strong>Chọn bài viết</strong> từ danh sách (mọi domain của bạn), hoặc nhập <strong>tiêu đề / từ khóa</strong> vào một ô.
-                    Khi không chọn bài, hệ thống tìm theo thứ tự <strong>tiêu đề → từ khóa</strong>; không khớp thì coi là <strong>tạo bài mới</strong>.
-                </p>
+            <x-filament::section heading="Đầu vào test">
+                @if (($testInput['input_type'] ?? 'article') === 'input')
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        Quy trình bắt đầu bằng node <strong>Input (@{{input}})</strong>.
+                        Nhập nội dung mô phỏng (mô tả ảnh, brief, v.v.) — biến <code>@{{input}}</code> sẽ được truyền vào các bước tiếp theo.
+                    </p>
+                @else
+                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        <strong>Chọn bài viết</strong> từ danh sách (mọi domain của bạn), hoặc nhập <strong>tiêu đề / từ khóa</strong> vào một ô.
+                        Khi không chọn bài, hệ thống tìm theo thứ tự <strong>tiêu đề → từ khóa</strong>; không khớp thì coi là <strong>tạo bài mới</strong>.
+                    </p>
+                @endif
 
                 <form wire:submit="runTest" class="space-y-4">
                     {{ $this->form }}
@@ -48,6 +55,9 @@
                         @foreach ($stepResults as $index => $step)
                             @php
                                 $status = (string) ($step['status'] ?? 'pending');
+                                $isPromptStep = (string) ($step['type'] ?? '') === 'prompt';
+                                $modelLabel = $isPromptStep ? $this->stepModelLabel($step) : null;
+                                $modelOptions = $isPromptStep ? $this->stepModelOptions($index) : [];
                                 $badgeClass = match ($status) {
                                     'completed', 'ok' => 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
                                     'failed' => 'bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-300',
@@ -63,7 +73,24 @@
                                     @if (! empty($step['prompt_name']))
                                         <span class="text-xs text-violet-600 dark:text-violet-400">{{ $step['prompt_name'] }}</span>
                                     @endif
-                                    <div class="ml-auto">
+                                    @if ($modelLabel)
+                                        <span
+                                            class="seo-task-step-model"
+                                            title="{{ __('seo-content-ai::filament.task.test_step_model_used') }}"
+                                        >{{ $modelLabel }}</span>
+                                    @endif
+                                    <div class="ml-auto flex flex-wrap items-center gap-2">
+                                        @if ($isPromptStep && $modelOptions !== [])
+                                            <x-select
+                                                wire:model.live="stepRerunModels.{{ $index }}"
+                                                class="seo-task-step-model-select"
+                                                title="{{ __('seo-content-ai::filament.task.test_step_model_select') }}"
+                                            >
+                                                @foreach ($modelOptions as $value => $label)
+                                                    <option value="{{ $value }}">{{ $label }}</option>
+                                                @endforeach
+                                            </x-select>
+                                        @endif
                                         <x-filament::button
                                             type="button"
                                             size="sm"
@@ -468,6 +495,47 @@
             width: 0.875rem;
             height: 0.875rem;
             flex-shrink: 0;
+        }
+
+        .seo-task-step-model {
+            display: inline-flex;
+            align-items: center;
+            max-width: 14rem;
+            padding: 0.15rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.6875rem;
+            font-weight: 600;
+            line-height: 1.3;
+            color: #0369a1;
+            background: #e0f2fe;
+            border: 1px solid #bae6fd;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .dark .seo-task-step-model {
+            color: #7dd3fc;
+            background: rgba(14, 165, 233, 0.15);
+            border-color: rgba(14, 165, 233, 0.35);
+        }
+
+        .seo-task-step-model-select {
+            max-width: 12rem;
+            min-width: 9rem;
+            padding: 0.35rem 0.5rem;
+            border-radius: 0.5rem;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            font-size: 0.6875rem;
+            line-height: 1.25;
+            color: #374151;
+        }
+
+        .dark .seo-task-step-model-select {
+            background: #1f2937;
+            border-color: #4b5563;
+            color: #e5e7eb;
         }
 
     </style>

@@ -71,7 +71,8 @@ MD;
 
         $this->assertCount(1, $faqs);
         $this->assertTrue($parser->hasFeaturedSnippetTable($markdown));
-        $this->assertSame(20, $score['total_score']);
+        $this->assertSame(100, $score['total_score']);
+        $this->assertSame([], $score['violations']);
         $this->assertTrue($score['checklist']['faq']['passed']);
         $this->assertTrue($score['checklist']['table']['passed']);
     }
@@ -95,7 +96,8 @@ HTML;
         $score = $parser->calculateSeoScoreFromContent($html);
 
         $this->assertTrue($parser->hasFeaturedSnippetTableFromHtml($html));
-        $this->assertSame(20, $score['total_score']);
+        $this->assertSame(100, $score['total_score']);
+        $this->assertSame([], $score['violations']);
         $this->assertTrue($score['checklist']['faq']['passed']);
         $this->assertTrue($score['checklist']['table']['passed']);
     }
@@ -674,9 +676,11 @@ HTML;
 
         $score = $parser->calculateSeoScore($tableRows, []);
 
-        $this->assertSame(6, $score['checklist']['table']['points']);
+        $this->assertSame(4, $score['checklist']['table']['points']);
         $this->assertFalse($score['checklist']['table']['passed']);
         $this->assertSame('good', $score['checklist']['table']['tier']);
+        $this->assertContains('faq_missing', $score['violations']);
+        $this->assertContains('featured_snippet_below_excellent', $score['violations']);
     }
 
     public function test_strip_panel_faqs_keeps_xem_them_in_body(): void

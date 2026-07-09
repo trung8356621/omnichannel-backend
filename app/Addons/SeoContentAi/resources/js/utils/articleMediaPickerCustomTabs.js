@@ -103,9 +103,10 @@ export function loadCustomPickerTabs(articleId) {
             id: String(row?.id || '').trim(),
             keyword: String(row?.keyword || '').trim(),
             label: String(row?.label || '').trim(),
+            blank: row?.blank === true,
             createdAt: Number(row?.createdAt || 0),
         }))
-        .filter((row) => row.id !== '' && row.keyword !== '');
+        .filter((row) => row.id !== '' && (row.blank === true || row.keyword !== ''));
 }
 
 function saveCustomPickerTabs(articleId, tabs) {
@@ -115,17 +116,22 @@ function saveCustomPickerTabs(articleId, tabs) {
     });
 }
 
-export function addCustomPickerTab(articleId, keyword) {
+export function addCustomPickerTab(articleId, keyword, options = {}) {
+    const blank = options?.blank === true;
     const normalized = String(keyword || '').trim();
-    if (normalized === '') {
+    if (!blank && normalized === '') {
         return null;
     }
 
     const tabs = loadCustomPickerTabs(articleId);
+    const blankCount = tabs.filter((row) => row.blank === true).length;
     const tab = {
         id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
         keyword: normalized,
-        label: truncateLabel(normalized),
+        label: blank
+            ? (blankCount > 0 ? `Nhóm trống ${blankCount + 1}` : 'Nhóm trống')
+            : truncateLabel(normalized),
+        blank,
         createdAt: Date.now(),
     };
     tabs.push(tab);
@@ -143,6 +149,25 @@ export function removeCustomPickerTab(articleId, tabId) {
     const tabs = loadCustomPickerTabs(articleId).filter((row) => row.id !== id);
     saveCustomPickerTabs(articleId, tabs);
     clearCustomTabCaches(articleId, id);
+}
+
+export function renameCustomPickerTab(articleId, tabId, label) {
+    const id = String(tabId || '').trim();
+    const nextLabel = String(label || '').trim();
+    if (id === '' || nextLabel === '') {
+        return false;
+    }
+
+    const tabs = loadCustomPickerTabs(articleId);
+    const index = tabs.findIndex((row) => row.id === id);
+    if (index === -1 || tabs[index].blank !== true) {
+        return false;
+    }
+
+    tabs[index].label = truncateLabel(nextLabel, 24);
+    saveCustomPickerTabs(articleId, tabs);
+
+    return true;
 }
 
 export function loadStagedPickerImages(articleId, tabId) {
@@ -171,6 +196,25 @@ export function stagePickerImageToTab(articleId, tabId, image) {
 
     return writeJson(stagedKey(articleId, tabId), {
         images: existing,
+        updatedAt: Date.now(),
+    });
+}
+
+export function unstagePickerImageFromTab(articleId, tabId, pickerKey) {
+    const key = String(pickerKey || '').trim();
+    const id = String(tabId || '').trim();
+    if (key === '' || id === '') {
+        return false;
+    }
+
+    const existing = loadStagedPickerImages(articleId, id);
+    const next = existing.filter((row) => row.picker_key !== key);
+    if (next.length === existing.length) {
+        return false;
+    }
+
+    return writeJson(stagedKey(articleId, id), {
+        images: next,
         updatedAt: Date.now(),
     });
 }

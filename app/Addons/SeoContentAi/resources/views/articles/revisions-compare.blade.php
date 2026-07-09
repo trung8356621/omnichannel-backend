@@ -191,7 +191,7 @@
         <section class="seo-rev-panel">
             <div class="seo-rev-panel__head is-past">Phiên bản cũ (Lịch sử)</div>
             <div class="seo-rev-panel__tools">
-                <select
+                <x-select
                     class="seo-rev-select"
                     x-model="selectedRevisionId"
                     x-on:change="loadRevision()"
@@ -200,7 +200,7 @@
                     <template x-for="item in revisions" x-bind:key="item.id">
                         <option x-bind:value="item.id" x-text="item.label"></option>
                     </template>
-                </select>
+                </x-select>
             </div>
             <div class="seo-rev-panel__body">
                 <template x-if="loadingRevision">

@@ -334,6 +334,101 @@ html.seo-article-sync-locked .fi-no {
     }
 }
 
+.seo-article-confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 2147482500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.seo-article-confirm-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    background: rgb(15 23 42 / 45%);
+    backdrop-filter: blur(2px);
+    cursor: default;
+}
+
+.seo-article-confirm-modal__panel {
+    position: relative;
+    z-index: 1;
+    width: min(28rem, 100%);
+    border: 1px solid rgb(226 232 240);
+    border-radius: 0.875rem;
+    background: #fff;
+    padding: 1.25rem 1.5rem 1.5rem;
+    box-shadow: 0 24px 64px rgb(15 23 42 / 28%);
+}
+
+.dark .seo-article-confirm-modal__panel {
+    border-color: rgb(51 65 85);
+    background: rgb(15 23 42);
+}
+
+.seo-article-confirm-modal__title {
+    margin: 0 0 0.5rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    color: rgb(15 23 42);
+}
+
+.dark .seo-article-confirm-modal__title {
+    color: rgb(241 245 249);
+}
+
+.seo-article-confirm-modal__description {
+    margin: 0 0 1.25rem;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    color: rgb(71 85 105);
+}
+
+.dark .seo-article-confirm-modal__description {
+    color: rgb(148 163 184);
+}
+
+.seo-article-confirm-modal__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.seo-article-confirm-modal__btn {
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+}
+
+.seo-article-confirm-modal__btn--ghost {
+    border: 1px solid rgb(226 232 240);
+    background: #fff;
+    color: rgb(51 65 85);
+}
+
+.dark .seo-article-confirm-modal__btn--ghost {
+    border-color: rgb(51 65 85);
+    background: rgb(30 41 59);
+    color: rgb(226 232 240);
+}
+
+.seo-article-confirm-modal__btn--primary {
+    border: 0;
+    background: rgb(14 165 233);
+    color: #fff;
+}
+
+.seo-article-confirm-modal__btn--danger {
+    border: 0;
+    background: rgb(220 38 38);
+    color: #fff;
+}
+
 /* Filament grid uses flex-1 — don't shrink article editor below its content */
 .seo-article-edit-page .grid.flex-1 {
     flex: none;

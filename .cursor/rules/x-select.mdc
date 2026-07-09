@@ -1,0 +1,50 @@
+---
+description: Bắt buộc dùng component x-select thay cho thẻ select thuần
+globs: "**/*.{blade.php,php,jsx,tsx,vue}"
+alwaysApply: true
+---
+
+# Select Box — dùng `<x-select>`
+
+Mọi select box trong dự án **phải** dùng component Blade `<x-select>`. Không tự viết `<select>` thuần, không custom CSS chevron riêng.
+
+Component: `resources/views/components/select.blade.php`
+
+## Đúng
+
+```blade
+<x-select name="sort" class="your-custom-class">
+    <option value="newest">Newest first</option>
+    <option value="oldest">Oldest first</option>
+</x-select>
+
+<x-select wire:model.live="siteId" :disabled="$isLocked">
+    @foreach ($sites as $site)
+        <option value="{{ $site->id }}">{{ $site->name }}</option>
+    @endforeach
+</x-select>
+```
+
+## Sai
+
+```blade
+{{-- ❌ select thuần --}}
+<select name="sort" class="rounded-lg border ...">
+    <option value="newest">Newest first</option>
+</select>
+
+{{-- ❌ thêm SVG chevron bên ngoài x-select — icon trùng lặp --}}
+<div class="relative">
+    <x-select name="sort">...</x-select>
+    <svg>...</svg>
+</div>
+```
+
+## Quy tắc
+
+- Truyền `name`, `wire:model`, `x-model`, `id`, `class` qua attributes của `<x-select>`.
+- Nội dung `<option>` đặt trong slot (children).
+- **Không** chèn thêm icon mũi tên SVG bên ngoài component — component đã có chevron sẵn.
+- **Không** bọc `<x-select>` trong wrapper chỉ để thêm mũi tên.
+- Addon SEO React: tiếp tục dùng `<SeoSelect>` (`app/Addons/SeoContentAi/resources/js/components/SeoSelect.jsx`).
+- Addon SEO Blade: ưu tiên `<x-select>`; `<x-seo-content-ai::seo-select>` chỉ khi cần size/variant SEO đặc thù.

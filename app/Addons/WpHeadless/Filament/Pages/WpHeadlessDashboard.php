@@ -27,7 +27,7 @@ class WpHeadlessDashboard extends Page
      * PHÂN QUYỀN HIỂN THỊ MENU (SIDEBAR):
      * Mặc định ẩn hết với mọi người, trừ Admin.
      */
-    public static function shouldRegisterNavigation(): bool
+    public static function shouldRegisterNavigation(array $parameters = []): bool
     {
         return auth()->user()?->role === 'admin';
     }

@@ -4,17 +4,27 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
-use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class TaskTestInputResolverTest extends TestCase
 {
-    public function test_requires_at_least_one_input(): void
+    public function test_resolve_from_raw_input_sets_input_variables(): void
     {
-        $resolver = new TaskTestInputResolver($this->createStub(SeoAnalyzerService::class));
+        $resolver = app(TaskTestInputResolver::class);
+
+        $context = $resolver->resolveFromRawInput('  Mô tả ảnh sản phẩm  ');
+
+        $this->assertSame('Mô tả ảnh sản phẩm', $context->variables['input']);
+        $this->assertSame('Mô tả ảnh sản phẩm', $context->variables['user_brief']);
+        $this->assertStringContainsString('Mô tả ảnh sản phẩm', $context->summary);
+    }
+
+    public function test_resolve_from_raw_input_rejects_empty_string(): void
+    {
+        $resolver = app(TaskTestInputResolver::class);
 
         $this->expectException(\InvalidArgumentException::class);
-        $resolver->resolve(null, null, null);
+        $resolver->resolveFromRawInput('   ');
     }
 }

@@ -1,25 +1,161 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Copy, Link2, RotateCcw, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Copy, Link2, Phone, RotateCcw, Trash2 } from 'lucide-react';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { t } from '../utils/i18n';
+import ArticleAssistantWidget from './ArticleAssistantWidget';
 import {
-    clearExcludedLinkSuggestions,
-    loadExcludedLinkSuggestions,
-    saveExcludedLinkSuggestions,
-} from '../utils/articleExcludedLinkSuggestionsStorage';
+    ctaDisplayLabel,
+    formatCtaHref,
+    isCtaItemInsertable,
+    isCtaPlainTextType,
+} from '../utils/ctaLinkFormat';
 import {
     buildVisibleInternalSuggestions,
     filterDomainLinksInArticleContent,
+    filterSuggestedInternalLinks,
     isSuggestionExcluded,
     mergeSuggestionCatalog,
     normalizeHrefForCompare,
     normalizeLinkLabel,
 } from '../utils/articleLinkSuggestionFilter';
+import {
+    clearExcludedLinkSuggestions,
+    loadExcludedLinkSuggestions,
+    saveExcludedLinkSuggestions,
+} from '../utils/articleExcludedLinkSuggestionsStorage';
 
 /**
  * @typedef {{ href?: string, text: string, offset?: number, is_nofollow?: boolean, is_suggestion?: boolean, target_url?: string|null, can_insert?: boolean, keyword_id?: number, occurrence_count?: number }} ExtractedLink
  * @typedef {{ text: string, index: number }} FaqLinkItem
  */
+
+function LinkAssistantSection({ title, count, collapsed, onToggle, children }) {
+    return (
+        <div className="seo-link-assistant__section">
+            <button
+                type="button"
+                className="seo-link-assistant__section-toggle"
+                aria-expanded={!collapsed}
+                onClick={onToggle}
+            >
+                {collapsed ? <ChevronRight size={15} aria-hidden /> : <ChevronDown size={15} aria-hidden />}
+                <span className="seo-link-assistant__section-title">{title}</span>
+                <span className="seo-assistant-widget__badge">{count}</span>
+            </button>
+            {!collapsed ? <div className="seo-link-assistant__section-body">{children}</div> : null}
+        </div>
+    );
+}
+
+function DomainInsertableList({
+    items,
+    variant,
+    activeKey,
+    hiddenRowKeys,
+    onKeywordClick,
+    onInsert,
+    emptyText,
+}) {
+    if (!items.length) {
+        return <p className="wp-article-links-empty">{emptyText}</p>;
+    }
+
+    return (
+        <ul className="wp-article-links-keywords">
+            {items.map((item, index) => {
+                const label =
+                    variant === 'cta'
+                        ? ctaDisplayLabel(item)
+                        : String(item?.text ?? '').trim();
+                const href =
+                    variant === 'cta'
+                        ? String(item?.href ?? formatCtaHref(item?.type, item?.value)).trim()
+                        : String(item?.href ?? item?.target_url ?? '').trim();
+                const count = Number(item?.article_count ?? 0);
+                const countSuffix =
+                    variant === 'domain-link' && Number.isFinite(count) && count > 0
+                        ? ` (${count})`
+                        : '';
+                const itemKey = `${variant}-${label}-${index}`;
+                const isActive = activeKey === itemKey;
+                const insertable =
+                    variant === 'cta'
+                        ? isCtaItemInsertable(item)
+                        : item?.can_insert !== false && label !== '' && href !== '';
+                const isCtaBlank = variant === 'cta' && item?.is_blank === true;
+                const isRowHiding = hiddenRowKeys?.has(itemKey) === true;
+
+                return (
+                    <li
+                        key={itemKey}
+                        className={`wp-article-links-keyword-row${isCtaBlank ? ' is-cta-blank' : ''}${isRowHiding ? ' is-row-hiding' : ''}`}
+                        aria-hidden={isRowHiding}
+                    >
+                        <button
+                            type="button"
+                            className={`wp-article-links-keyword${isActive ? ' is-active' : ''} is-suggestion`}
+                            title={
+                                variant === 'cta'
+                                    ? t('cta_widget_find', { label, type: item?.type ?? '' })
+                                    : t('domain_link_widget_find', { label, count })
+                            }
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => onKeywordClick(item, index, itemKey)}
+                        >
+                            {variant === 'cta' ? (
+                                <span className="wp-article-domain-cta-label">
+                                    <span className="wp-article-domain-cta-type">{item?.type ?? 'cta'}</span>
+                                    {label}
+                                </span>
+                            ) : (
+                                `${label}${countSuffix}`
+                            )}
+                        </button>
+                        {onInsert ? (
+                            <button
+                                type="button"
+                                className="wp-article-links-insert-btn"
+                                aria-label={
+                                    variant === 'cta'
+                                        ? t('cta_widget_insert_for', { label })
+                                        : t('domain_link_widget_insert_for', { label })
+                                }
+                                title={
+                                    variant === 'cta'
+                                        ? t('cta_widget_insert_for', { label })
+                                        : t('domain_link_widget_insert_for', { label })
+                                }
+                                disabled={!insertable}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (insertable) {
+                                        onInsert(item, itemKey);
+                                    }
+                                }}
+                            >
+                                {variant === 'cta' ? (
+                                    <Phone size={14} aria-hidden />
+                                ) : (
+                                    <Link2 size={14} aria-hidden />
+                                )}
+                            </button>
+                        ) : null}
+                    </li>
+                );
+            })}
+        </ul>
+    );
+}
+
+const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks) => {
+    const inArticle = filterDomainLinksInArticleContent(allLinks, articlePlainText);
+
+    return filterSuggestedInternalLinks(inArticle, internalLinks).map((item) => ({
+        ...item,
+        can_insert: item.can_insert !== false,
+    }));
+};
 
 function keywordLabel(item) {
     const text = String(item?.text ?? '').trim();
@@ -71,7 +207,7 @@ function occurrenceCount(item) {
 }
 
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onExcludeSuggestion?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, interactive?: boolean, hiddenRowKeys?: Set<string>, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onExcludeSuggestion?: Function }} props
  */
 function KeywordList({
     items,
@@ -80,6 +216,7 @@ function KeywordList({
     target,
     variant = 'default',
     hideTitle = false,
+    interactive = true,
     hiddenRowKeys,
     onKeywordClick,
     onInsertSuggestion,
@@ -127,15 +264,24 @@ function KeywordList({
                             className={`wp-article-links-keyword-row${isRowHiding ? ' is-row-hiding' : ''}`}
                             aria-hidden={isRowHiding}
                         >
-                            <button
-                                type="button"
-                                className={`wp-article-links-keyword${isActive ? ' is-active' : ''}${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
-                                title={fullTitle(item, hint)}
-                                onMouseDown={(e) => e.preventDefault()}
-                                onClick={() => onKeywordClick(item, index, itemKey, target)}
-                            >
-                                {labelWithCount}
-                            </button>
+                            {interactive ? (
+                                <button
+                                    type="button"
+                                    className={`wp-article-links-keyword${isActive ? ' is-active' : ''}${target === 'faq' ? ' is-faq' : ''}${variant === 'suggestion' ? ' is-suggestion' : ''}`}
+                                    title={fullTitle(item, hint)}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => onKeywordClick(item, index, itemKey, target)}
+                                >
+                                    {labelWithCount}
+                                </button>
+                            ) : (
+                                <span
+                                    className={`wp-article-links-keyword is-readonly${target === 'faq' ? ' is-faq' : ''}`}
+                                    title={label}
+                                >
+                                    {labelWithCount}
+                                </span>
+                            )}
                             {variant === 'suggestion' && onInsertSuggestion ? (
                                 <button
                                     type="button"
@@ -339,7 +485,11 @@ function readSuggestionCatalogBootstrap() {
     return Array.isArray(data?.domain_link_list_catalog) ? data.domain_link_list_catalog : [];
 }
 
-export default function ArticleLinksSidebar() {
+export default function ArticleLinksSidebar({
+    initialDomainLinkList = [],
+    initialDomainLinkCatalog = [],
+    initialDomainCtaList = [],
+}) {
     const articleMetaRef = useRef(readArticleMetaIds());
     const editorSeoBootstrap = useRef(readEditorSeoBootstrap());
     const keywordCatalogRef = useRef(
@@ -366,8 +516,25 @@ export default function ArticleLinksSidebar() {
     const excludedPersistRef = useRef(excludedSuggestionLabels);
     const [activeKey, setActiveKey] = useState('');
     const [cycleByKey, setCycleByKey] = useState({});
-    const [collapsed, setCollapsed] = useState(false);
+    const [internalCollapsed, setInternalCollapsed] = useState(true);
+    const [externalCollapsed, setExternalCollapsed] = useState(true);
+    const [faqCollapsed, setFaqCollapsed] = useState(true);
+    const [domainLinksCollapsed, setDomainLinksCollapsed] = useState(true);
+    const [ctaCollapsed, setCtaCollapsed] = useState(true);
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
+    const allDomainLinksRef = useRef(
+        initialDomainLinkCatalog.length > 0 ? initialDomainLinkCatalog : initialDomainLinkList,
+    );
+    const [domainLinkCatalogCount, setDomainLinkCatalogCount] = useState(
+        initialDomainLinkCatalog.length > 0
+            ? initialDomainLinkCatalog.length
+            : initialDomainLinkList.length,
+    );
+    const [domainLinks, setDomainLinks] = useState(initialDomainLinkList);
+    const [domainCtas, setDomainCtas] = useState(initialDomainCtaList);
+    const [domainLinkActiveKey, setDomainLinkActiveKey] = useState('');
+    const [ctaActiveKey, setCtaActiveKey] = useState('');
+    const [domainHiddenRowKeys, setDomainHiddenRowKeys] = useState(() => new Set());
 
     const { debounced: debouncedPersistExcluded } = useDebouncedCallback(() => {
         const { articleId, siteId } = articleMetaRef.current;
@@ -440,17 +607,24 @@ export default function ArticleLinksSidebar() {
     useEffect(() => {
         const onLinksUpdate = (event) => {
             const payload = event.detail?.links ?? event.detail?.extracted_links;
-            if (!payload || typeof payload !== 'object') {
-                return;
+            const articlePlain = String(event.detail?.article_plain_text ?? '');
+            if (payload && typeof payload === 'object') {
+                setLinks((prev) => ({
+                    ...prev,
+                    internal: Array.isArray(payload.internal) ? payload.internal : [],
+                    external: Array.isArray(payload.external) ? payload.external : [],
+                }));
+                setCycleByKey({});
+                setHiddenRowKeys(new Set());
             }
-            setLinks((prev) => ({
-                ...prev,
-                internal: Array.isArray(payload.internal) ? payload.internal : [],
-                external: Array.isArray(payload.external) ? payload.external : [],
-            }));
-            setCycleByKey({});
-            setHiddenRowKeys(new Set());
-            setArticlePlainText(String(event.detail?.article_plain_text ?? ''));
+            setArticlePlainText(articlePlain);
+
+            const internal = Array.isArray(payload?.internal)
+                ? payload.internal
+                : Array.isArray(event.detail?.extracted_links?.internal)
+                  ? event.detail.extracted_links.internal
+                  : [];
+            setDomainLinks(applyDomainLinkFilters(allDomainLinksRef.current, articlePlain, internal));
 
             const incomingSuggested = Array.isArray(event.detail?.suggested_internal)
                 ? event.detail.suggested_internal
@@ -481,6 +655,58 @@ export default function ArticleLinksSidebar() {
             setCatalogVersion((version) => version + 1);
         };
 
+        const onSeoPayload = (event) => {
+            const detail = event.detail ?? {};
+            if (Array.isArray(detail.domain_link_list_catalog)) {
+                allDomainLinksRef.current = detail.domain_link_list_catalog;
+                setDomainLinkCatalogCount(detail.domain_link_list_catalog.length);
+            } else if (Array.isArray(detail.domain_link_list)) {
+                allDomainLinksRef.current = detail.domain_link_list;
+                setDomainLinkCatalogCount(detail.domain_link_list.length);
+            }
+            if (
+                Array.isArray(detail.domain_link_list_catalog) ||
+                Array.isArray(detail.domain_link_list)
+            ) {
+                const internal = Array.isArray(detail.extracted_links?.internal)
+                    ? detail.extracted_links.internal
+                    : [];
+                const articlePlain = String(detail.article_plain_text ?? '');
+                setDomainLinks(
+                    applyDomainLinkFilters(allDomainLinksRef.current, articlePlain, internal),
+                );
+            }
+            if (Array.isArray(detail.domain_cta_list)) {
+                setDomainCtas(
+                    detail.domain_cta_list.map((item) => ({
+                        ...item,
+                        can_insert: true,
+                    })),
+                );
+            }
+        };
+
+        const onDomainInserted = (event) => {
+            const text = normalizeLinkLabel(event.detail?.text);
+            const hrefKey = normalizeHrefForCompare(event.detail?.href);
+            if (!text && !hrefKey) {
+                return;
+            }
+
+            setDomainLinks((prev) =>
+                prev.filter((item) => {
+                    if (text && normalizeLinkLabel(item.text) === text) {
+                        return false;
+                    }
+                    if (hrefKey && normalizeHrefForCompare(item.href ?? item.target_url) === hrefKey) {
+                        return false;
+                    }
+                    return true;
+                }),
+            );
+            setDomainHiddenRowKeys(new Set());
+        };
+
         const onFaqUpdate = (event) => {
             const faq = event.detail?.faq;
             if (!Array.isArray(faq)) {
@@ -494,16 +720,21 @@ export default function ArticleLinksSidebar() {
 
         const onInserted = () => {
             setHiddenRowKeys(new Set());
+            setDomainHiddenRowKeys(new Set());
         };
 
         window.addEventListener('seo-editor-links-updated', onLinksUpdate);
+        window.addEventListener('seo-editor-seo-payload-updated', onSeoPayload);
         window.addEventListener('seo-editor-faqs-updated', onFaqUpdate);
         window.addEventListener('seo-editor-suggested-link-inserted', onInserted);
+        window.addEventListener('seo-editor-suggested-link-inserted', onDomainInserted);
 
         return () => {
             window.removeEventListener('seo-editor-links-updated', onLinksUpdate);
+            window.removeEventListener('seo-editor-seo-payload-updated', onSeoPayload);
             window.removeEventListener('seo-editor-faqs-updated', onFaqUpdate);
             window.removeEventListener('seo-editor-suggested-link-inserted', onInserted);
+            window.removeEventListener('seo-editor-suggested-link-inserted', onDomainInserted);
         };
     }, []);
 
@@ -666,29 +897,122 @@ export default function ArticleLinksSidebar() {
         );
     };
 
-    const faqCountLabel = faq.length > 0 ? `, ${faq.length} faq` : '';
+    const hideDomainRow = (itemKey) => {
+        if (!itemKey) {
+            return;
+        }
+        setDomainHiddenRowKeys((prev) => {
+            if (prev.has(itemKey)) {
+                return prev;
+            }
+            const next = new Set(prev);
+            next.add(itemKey);
+            return next;
+        });
+    };
+
+    const scrollToDomainItem = (item, itemKey, variant) => {
+        if (variant === 'cta') {
+            setCtaActiveKey(itemKey);
+        } else {
+            setDomainLinkActiveKey(itemKey);
+        }
+        const text = variant === 'cta' ? ctaDisplayLabel(item) : String(item?.text ?? '').trim();
+
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-scroll-to-link', {
+                detail: {
+                    href:
+                        variant === 'cta'
+                            ? String(item?.href ?? formatCtaHref(item?.type, item?.value)).trim()
+                            : String(item?.href ?? item?.target_url ?? '').trim(),
+                    text,
+                    type: 'internal',
+                    index: 0,
+                    searchPlainText: true,
+                },
+            }),
+        );
+    };
+
+    const insertDomainLink = (item, itemKey) => {
+        hideDomainRow(itemKey);
+
+        const text = String(item?.text ?? '').trim();
+        const href = String(item?.href ?? item?.target_url ?? '').trim();
+        if (!text || !href) {
+            return;
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-insert-suggested-link', {
+                detail: {
+                    text,
+                    href,
+                    keyword_id: item.keyword_id ?? null,
+                },
+            }),
+        );
+    };
+
+    const insertCta = (item) => {
+        const type = String(item?.type ?? '').toLowerCase();
+        if (!type) {
+            return;
+        }
+
+        if (item?.is_blank === true) {
+            const token = `[${type}]`;
+            window.dispatchEvent(
+                new CustomEvent('seo-editor-insert-cta-link', {
+                    detail: {
+                        text: token,
+                        href: '',
+                        type,
+                        is_placeholder: true,
+                        html: `<span class="seo-cta-blank-placeholder" data-cta-type="${type}">${token}</span>`,
+                    },
+                }),
+            );
+
+            return;
+        }
+
+        const text = ctaDisplayLabel(item);
+        const plainText = isCtaPlainTextType(type) || item?.plain_text === true;
+        const href = plainText ? '' : String(item?.href ?? formatCtaHref(type, item?.value)).trim();
+        if (!text || (!href && !plainText)) {
+            return;
+        }
+
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-insert-cta-link', {
+                detail: {
+                    text,
+                    href,
+                    type,
+                },
+            }),
+        );
+    };
+
+    const linkCountBadge = internal.length + external.length + faq.length + domainLinks.length + domainCtas.length;
 
     return (
-        <div className="wp-postbox wp-article-links-box">
-            <div className="wp-postbox-header">
-                <h2>
-                    {t('links_heading')}
-                    <span className="wp-article-links-counts">
-                        ({internal.length} int, {external.length} ext{faqCountLabel})
-                    </span>
-                </h2>
-                <button
-                    type="button"
-                    className="wp-postbox-toggle"
-                    aria-expanded={!collapsed}
-                    title={collapsed ? t('links_expand') : t('links_collapse')}
-                    onClick={() => setCollapsed((v) => !v)}
+        <ArticleAssistantWidget
+            title="Link Assistant"
+            icon={Link2}
+            badge={linkCountBadge > 0 ? linkCountBadge : null}
+            defaultCollapsed={false}
+            className="seo-assistant-widget--links"
+        >
+            <div className="seo-link-assistant">
+                <LinkAssistantSection
+                    title={`Internal Links (${internal.length})`}
+                    count={internal.length}
+                    collapsed={internalCollapsed}
+                    onToggle={() => setInternalCollapsed((value) => !value)}
                 >
-                    {collapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                </button>
-            </div>
-            {!collapsed ? (
-                <div className="wp-postbox-inside">
                     <InternalLinksSection
                         internal={internal}
                         suggestedInternal={suggestedInternal}
@@ -707,28 +1031,84 @@ export default function ArticleLinksSidebar() {
                         onInsertSuggestion={insertSuggestedLink}
                         onExcludeSuggestion={excludeSuggestion}
                     />
+                </LinkAssistantSection>
+
+                <LinkAssistantSection
+                    title={`External Links (${external.length})`}
+                    count={external.length}
+                    collapsed={externalCollapsed}
+                    onToggle={() => setExternalCollapsed((value) => !value)}
+                >
                     <KeywordList
                         items={external}
                         title={t('links_external_title', { count: external.length })}
                         activeKey={activeKey}
                         target="editor"
+                        hideTitle
                         onKeywordClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'external', index, itemKey)
                         }
                         onCopyKeyword={copyKeyword}
                     />
+                </LinkAssistantSection>
+
+                <LinkAssistantSection
+                    title={`FAQ (${faq.length})`}
+                    count={faq.length}
+                    collapsed={faqCollapsed}
+                    onToggle={() => setFaqCollapsed((value) => !value)}
+                >
                     <KeywordList
                         items={faq}
                         title={t('links_faq_title', { count: faq.length })}
                         activeKey={activeKey}
                         target="faq"
-                        onKeywordClick={(item, index, itemKey) =>
-                            scrollToKeyword(item, 'faq', index, itemKey)
-                        }
+                        hideTitle
+                        interactive={false}
+                        onKeywordClick={() => {}}
                         onCopyKeyword={copyKeyword}
                     />
-                </div>
-            ) : null}
-        </div>
+                </LinkAssistantSection>
+
+                <LinkAssistantSection
+                    title={`${t('domain_link_widget_title')} (${domainLinks.length})`}
+                    count={domainLinks.length}
+                    collapsed={domainLinksCollapsed}
+                    onToggle={() => setDomainLinksCollapsed((value) => !value)}
+                >
+                    <p className="wp-article-links-hint">{t('domain_link_widget_hint')}</p>
+                    <DomainInsertableList
+                        items={domainLinks}
+                        variant="domain-link"
+                        activeKey={domainLinkActiveKey}
+                        hiddenRowKeys={domainHiddenRowKeys}
+                        emptyText={
+                            domainLinkCatalogCount > 0
+                                ? t('domain_link_widget_empty_in_article')
+                                : t('domain_link_widget_empty')
+                        }
+                        onKeywordClick={(item, _index, itemKey) => scrollToDomainItem(item, itemKey, 'domain-link')}
+                        onInsert={insertDomainLink}
+                    />
+                </LinkAssistantSection>
+
+                <LinkAssistantSection
+                    title={`${t('cta_widget_title')} (${domainCtas.length})`}
+                    count={domainCtas.length}
+                    collapsed={ctaCollapsed}
+                    onToggle={() => setCtaCollapsed((value) => !value)}
+                >
+                    <p className="wp-article-links-hint">{t('cta_widget_hint')}</p>
+                    <DomainInsertableList
+                        items={domainCtas}
+                        variant="cta"
+                        activeKey={ctaActiveKey}
+                        emptyText={t('cta_widget_empty')}
+                        onKeywordClick={(item, _index, itemKey) => scrollToDomainItem(item, itemKey, 'cta')}
+                        onInsert={insertCta}
+                    />
+                </LinkAssistantSection>
+            </div>
+        </ArticleAssistantWidget>
     );
 }

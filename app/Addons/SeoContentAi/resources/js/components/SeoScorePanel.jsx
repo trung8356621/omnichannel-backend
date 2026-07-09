@@ -1,7 +1,13 @@
-import React from 'react';
-import { CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
+import React, { useState } from 'react';
+import { ChevronDown, ChevronRight, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { t } from '../utils/i18n';
-import { resolveScoringMessage } from '../utils/seoAnalyzer';
+import {
+    buildFailedViolationItems,
+    buildPassedRuleItems,
+    sanitizeViolations,
+    scoreFromViolations,
+    scoreQualityLabel,
+} from '../utils/seoScoreCalculator';
 
 function scoreColor(score) {
     if (score >= 70) return 'text-emerald-600 dark:text-emerald-400';
@@ -9,177 +15,111 @@ function scoreColor(score) {
     return 'text-rose-600 dark:text-rose-400';
 }
 
-function scoreRingColor(score) {
-    if (score >= 70) return '#10b981';
-    if (score >= 50) return '#f59e0b';
-    return '#f43f5e';
-}
-
-function ScoreRing({ score, loading }) {
-    const value = typeof score === 'number' ? Math.max(0, Math.min(100, score)) : 0;
-    const circumference = 2 * Math.PI * 52;
-    const offset = circumference - (value / 100) * circumference;
-
-    return (
-        <div className="seo-score-ring-wrap">
-            <svg className="seo-score-ring" viewBox="0 0 120 120" aria-hidden>
-                <circle cx="60" cy="60" r="52" className="seo-score-ring-bg" />
-                <circle
-                    cx="60"
-                    cy="60"
-                    r="52"
-                    className="seo-score-ring-fg"
-                    style={{
-                        stroke: scoreRingColor(value),
-                        strokeDasharray: circumference,
-                        strokeDashoffset: loading ? circumference : offset,
-                    }}
-                />
-            </svg>
-            <div className={`seo-score-ring-value ${scoreColor(value)}`}>
-                {loading ? '…' : value}
-            </div>
-        </div>
-    );
-}
-
-function resolveDisplayLine(item, scoringMessages) {
-    if (typeof item === 'string') {
-        return item;
-    }
-
-    if (item && typeof item === 'object') {
-        const key = String(item.key ?? '');
-        if (key !== '') {
-            return resolveScoringMessage(key, scoringMessages, item.params ?? {});
-        }
-
-        if (typeof item.message === 'string' && item.message !== '') {
-            return item.message;
-        }
-    }
-
-    return String(item ?? '');
-}
-
-function resolveDisplayItems(items, scoringMessages, reasonKeys) {
-    if (Array.isArray(items) && items.length > 0) {
-        return items.map((item) => resolveDisplayLine(item, scoringMessages));
-    }
-
-    if (Array.isArray(reasonKeys) && reasonKeys.length > 0) {
-        return reasonKeys.map((key) => resolveScoringMessage(key, scoringMessages));
-    }
-
-    return [];
-}
-
-function CheckList({ title, icon: Icon, items, tone }) {
-    if (!items?.length) return null;
-
-    const toneClass =
-        tone === 'good'
-            ? 'text-emerald-700 dark:text-emerald-300'
-            : tone === 'error'
-              ? 'text-rose-700 dark:text-rose-300'
-              : 'text-amber-700 dark:text-amber-300';
-
-    return (
-        <div className="seo-check-list">
-            <h4 className={`seo-check-list-title ${toneClass}`}>
-                <Icon size={16} className="inline mr-1.5 -mt-0.5" />
-                {title}
-            </h4>
-            <ul className="space-y-1.5">
-                {items.map((item, i) => (
-                    <li key={`${tone}-${i}`} className="text-sm text-gray-700 dark:text-gray-300 leading-snug">
-                        {item}
-                    </li>
-                ))}
-            </ul>
-        </div>
-    );
-}
-
-function BreakdownSection({ breakdown, scoringMessages }) {
-    if (!breakdown || typeof breakdown !== 'object') {
-        return null;
-    }
-
-    const rows = Object.entries(breakdown);
-    if (rows.length === 0) {
-        return null;
-    }
-
-    return (
-        <div className="seo-score-breakdown space-y-2">
-            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">{t('seo_score_breakdown_title')}</h3>
-            <ul className="space-y-1.5">
-                {rows.map(([name, item]) => {
-                    const earned = Number(item?.earned ?? 0);
-                    const max = Number(item?.max ?? 0);
-                    const key = String(item?.key ?? '');
-                    const label = resolveScoringMessage(key, scoringMessages, item?.params ?? {});
-
-                    return (
-                        <li key={name} className="text-sm text-gray-700 dark:text-gray-300 flex justify-between gap-3">
-                            <span>{label}</span>
-                            <span className="font-medium whitespace-nowrap">
-                                {earned}/{max}
-                            </span>
-                        </li>
-                    );
-                })}
-            </ul>
-        </div>
-    );
+function scoreBadgeClass(score) {
+    if (score >= 70) return 'seo-assistant-score__badge--good';
+    if (score >= 50) return 'seo-assistant-score__badge--fair';
+    return 'seo-assistant-score__badge--poor';
 }
 
 export default function SeoScorePanel({
     focusKeyword,
     analysis,
-    scoringMessages = {},
+    seoScoringRules = [],
+    seoRuleMessages = {},
     loading,
     analyzing,
 }) {
-    const score = analysis?.score ?? analysis?.seo_score ?? 0;
-    const reasonKeys = analysis?.reason_keys ?? [];
-    const good = resolveDisplayItems(analysis?.good, scoringMessages, []);
-    const errors = resolveDisplayItems(analysis?.errors, scoringMessages, reasonKeys.filter((key) => !String(key).includes('.pass')));
-    const warnings = resolveDisplayItems(analysis?.warnings, scoringMessages, []);
-    const breakdown = analysis?.breakdown ?? null;
+    const [passedOpen, setPassedOpen] = useState(true);
+    const rules = Array.isArray(seoScoringRules) && seoScoringRules.length > 0
+        ? seoScoringRules
+        : (Array.isArray(window.__SEO_SCORING_RULES__) ? window.__SEO_SCORING_RULES__ : []);
+    const violations = sanitizeViolations(
+        Array.isArray(analysis?.violations) ? analysis.violations : [],
+        rules,
+    );
+    const messages = Object.keys(seoRuleMessages).length > 0 ? seoRuleMessages : (analysis?.messages ?? {});
+
+    const score = scoreFromViolations(violations, rules);
+    const failedItems = buildFailedViolationItems(violations, rules, messages);
+    const passedItems = buildPassedRuleItems(violations, rules, messages);
+    const quality = scoreQualityLabel(score);
+    const isLoading = loading || analyzing;
 
     return (
-        <div className="seo-score-panel">
-            <div className="seo-score-header">
-                <ScoreRing score={score} loading={loading || analyzing} />
-                <div className="seo-score-meta">
-                    <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-semibold">
-                        {t('seo_score_title')}
-                    </p>
-                    <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
-                        {analyzing ? t('seo_score_analyzing') : t('seo_score_updated_by_content')}
-                    </p>
-                    {focusKeyword ? (
-                        <p className="mt-2 text-sm">
-                            <span className="text-gray-500">Focus keyword:</span>{' '}
-                            <strong className="text-gray-900 dark:text-white">{focusKeyword}</strong>
-                        </p>
-                    ) : (
-                        <p className="mt-2 text-sm text-rose-600 dark:text-rose-400">
-                            {t('seo_score_missing_focus_keyword')}
-                        </p>
+        <div className="seo-score-panel seo-assistant-score">
+            <div className="seo-assistant-score__hero">
+                <div className={`seo-assistant-score__value ${scoreColor(score)}`}>
+                    {isLoading ? '…' : (
+                        <>
+                            <span className="seo-assistant-score__number">{score}</span>
+                            <span className="seo-assistant-score__max">/ 100</span>
+                        </>
                     )}
                 </div>
+                <span className={`seo-assistant-score__badge ${scoreBadgeClass(score)}`}>
+                    {isLoading ? t('seo_score_analyzing') : quality}
+                </span>
             </div>
 
-            <BreakdownSection breakdown={breakdown} scoringMessages={scoringMessages} />
+            <p className="seo-assistant-score__hint">
+                {analyzing ? t('seo_score_analyzing') : t('seo_score_updated_by_content')}
+            </p>
 
-            <div className="seo-score-checks space-y-4">
-                <CheckList title={t('seo_score_good')} icon={CheckCircle2} items={good} tone="good" />
-                <CheckList title={t('seo_score_errors')} icon={AlertCircle} items={errors} tone="error" />
-                <CheckList title={t('seo_score_warnings')} icon={AlertTriangle} items={warnings} tone="warning" />
-            </div>
+            {focusKeyword ? (
+                <p className="seo-assistant-score__keyword">
+                    <span className="text-gray-500 dark:text-gray-400">Focus keyword:</span>{' '}
+                    <strong className="text-gray-900 dark:text-white">{focusKeyword}</strong>
+                </p>
+            ) : (
+                <p className="seo-assistant-score__keyword seo-assistant-score__keyword--missing">
+                    {t('seo_score_missing_focus_keyword')}
+                </p>
+            )}
+
+            {failedItems.length > 0 ? (
+                <ul className="seo-assistant-score__issues">
+                    {failedItems.map((item) => (
+                        <li key={item.key} className="seo-assistant-score__issue">
+                            <AlertCircle size={14} className="seo-assistant-score__issue-icon" aria-hidden />
+                            <span className="seo-assistant-score__issue-label">{item.label}</span>
+                            <span className="seo-assistant-score__issue-deduction">(-{item.deduction})</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <p className="seo-assistant-score__all-passed">{t('seo_score_all_passed')}</p>
+            )}
+
+            {passedItems.length > 0 ? (
+                <div className="seo-assistant-score__passed">
+                    <button
+                        type="button"
+                        className="seo-assistant-score__passed-toggle"
+                        aria-expanded={passedOpen}
+                        onClick={() => setPassedOpen((open) => !open)}
+                    >
+                        {passedOpen ? (
+                            <ChevronDown size={15} aria-hidden />
+                        ) : (
+                            <ChevronRight size={15} aria-hidden />
+                        )}
+                        <span>Passed Checks</span>
+                        <span className="seo-assistant-widget__badge">{passedItems.length}</span>
+                    </button>
+                    {passedOpen ? (
+                        <ul className="seo-assistant-score__passed-list">
+                            {passedItems.map((item) => (
+                                <li key={item.key} className="seo-assistant-score__passed-item">
+                                    <span className="seo-assistant-score__passed-icon-wrap" aria-hidden>
+                                        <CheckCircle2 size={13} />
+                                    </span>
+                                    <span className="seo-assistant-score__passed-label">{item.label}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : null}
+                </div>
+            ) : null}
         </div>
     );
 }

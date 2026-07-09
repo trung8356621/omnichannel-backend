@@ -1335,7 +1335,7 @@ final class WordPressArticleSyncService
 
         return $article->published_at
             ->copy()
-            ->timezone(config('app.timezone'))
+            ->timezone(\App\Addons\SeoContentAi\Support\SeoDisplayTimezone::name())
             ->format('Y-m-d H:i:s');
     }
 

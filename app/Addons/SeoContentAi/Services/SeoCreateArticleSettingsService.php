@@ -17,7 +17,10 @@ final class SeoCreateArticleSettingsService
 
     public const KEY_POST_REVIEW = 'post_review_task_id';
 
-    public const KEY_CREATE_IMAGE = 'create_image_prompt_id';
+    public const KEY_CREATE_IMAGE = 'create_image_task_id';
+
+    /** @deprecated Đọc để tương thích wp_options cũ (trước khi chuyển sang task workflow) */
+    public const KEY_LEGACY_CREATE_IMAGE_PROMPT = 'create_image_prompt_id';
 
     public const KEY_CREATE_PRODUCT_GALLERY_IMAGE = 'create_product_gallery_image_prompt_id';
 
@@ -68,6 +71,9 @@ final class SeoCreateArticleSettingsService
             self::KEY_REWRITE_ARTICLE => $this->positiveIntOrNull($data[self::KEY_REWRITE_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($data[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_LEGACY_CREATE_IMAGE_PROMPT => $this->positiveIntOrNull(
+                $data[self::KEY_LEGACY_CREATE_IMAGE_PROMPT] ?? null,
+            ),
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($data[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($data[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($data[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
@@ -196,17 +202,33 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_POST_REVIEW];
     }
 
-    public function getCreateImagePromptId(): ?int
+    public function getCreateImageTaskId(): ?int
     {
         return $this->getSettings()[self::KEY_CREATE_IMAGE];
     }
 
+    public function getLegacyCreateImagePromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_LEGACY_CREATE_IMAGE_PROMPT];
+    }
+
+    public function hasCreateImageConfiguration(): bool
+    {
+        return $this->getCreateImageTaskId() !== null
+            || $this->getLegacyCreateImagePromptId() !== null;
+    }
+
+    /**
+     * @deprecated Dùng getCreateImageTaskId() + EditorImageTaskResolverService
+     */
+    public function getCreateImagePromptId(): ?int
+    {
+        return $this->getLegacyCreateImagePromptId();
+    }
+
     public function getCreateProductGalleryImagePromptId(): ?int
     {
-        $settings = $this->getSettings();
-
-        return $settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE]
-            ?? $settings[self::KEY_CREATE_IMAGE];
+        return $this->getSettings()[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE];
     }
 
     public function getCreateVideoPromptId(): ?int
@@ -217,14 +239,6 @@ final class SeoCreateArticleSettingsService
     public function getTranslateArticlePromptId(): ?int
     {
         return $this->getSettings()[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID];
-    }
-
-    /**
-     * @deprecated Dùng getCreateImagePromptId()
-     */
-    public function getCreateImageTaskId(): ?int
-    {
-        return $this->getCreateImagePromptId();
     }
 
     /**
@@ -249,12 +263,19 @@ final class SeoCreateArticleSettingsService
     public function saveSettings(array $settings): void
     {
         $publish = $this->positiveIntOrNull($settings[self::KEY_PUBLISH_ARTICLE] ?? $settings[self::KEY_LEGACY_TASK_ID] ?? null);
+        $existingData = WpOption::get(self::OPTION_KEY, []);
+        $existingData = is_array($existingData) ? $existingData : [];
+
+        $legacyCreateImagePrompt = array_key_exists(self::KEY_LEGACY_CREATE_IMAGE_PROMPT, $settings)
+            ? $this->positiveIntOrNull($settings[self::KEY_LEGACY_CREATE_IMAGE_PROMPT] ?? null)
+            : $this->positiveIntOrNull($existingData[self::KEY_LEGACY_CREATE_IMAGE_PROMPT] ?? null);
 
         WpOption::set(self::OPTION_KEY, [
             self::KEY_PUBLISH_ARTICLE => $publish,
             self::KEY_REWRITE_ARTICLE => $this->positiveIntOrNull($settings[self::KEY_REWRITE_ARTICLE] ?? null),
             self::KEY_POST_REVIEW => $this->positiveIntOrNull($settings[self::KEY_POST_REVIEW] ?? null),
             self::KEY_CREATE_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_IMAGE] ?? null),
+            self::KEY_LEGACY_CREATE_IMAGE_PROMPT => $legacyCreateImagePrompt,
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => $this->positiveIntOrNull($settings[self::KEY_CREATE_PRODUCT_GALLERY_IMAGE] ?? null),
             self::KEY_CREATE_VIDEO => $this->positiveIntOrNull($settings[self::KEY_CREATE_VIDEO] ?? null),
             self::KEY_RENEW_FAQ_PROMPT_ID => $this->positiveIntOrNull($settings[self::KEY_RENEW_FAQ_PROMPT_ID] ?? null),
@@ -288,6 +309,7 @@ final class SeoCreateArticleSettingsService
             self::KEY_REWRITE_ARTICLE => null,
             self::KEY_POST_REVIEW => null,
             self::KEY_CREATE_IMAGE => null,
+            self::KEY_LEGACY_CREATE_IMAGE_PROMPT => null,
             self::KEY_CREATE_PRODUCT_GALLERY_IMAGE => null,
             self::KEY_CREATE_VIDEO => null,
             self::KEY_RENEW_FAQ_PROMPT_ID => null,

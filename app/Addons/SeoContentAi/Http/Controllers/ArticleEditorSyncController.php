@@ -8,7 +8,8 @@ use App\Addons\SeoContentAi\Http\Requests\ArticleEditorActionRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
-use App\Addons\SeoContentAi\Services\ArticleEditorSyncOrchestrator;
+use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
@@ -25,7 +26,8 @@ final class ArticleEditorSyncController extends Controller
     public function __construct(
         private readonly ArticleEditorBundleApplyService $bundleApply,
         private readonly ArticleEditorPersistService $persist,
-        private readonly ArticleEditorSyncOrchestrator $syncOrchestrator,
+        private readonly ArticleEditorSavePatchService $savePatch,
+        private readonly ArticleWpSyncQueueService $syncQueue,
     ) {}
 
     public function save(ArticleEditorActionRequest $request, SeoArticle $article): JsonResponse
@@ -62,9 +64,12 @@ final class ArticleEditorSyncController extends Controller
         return response()->json([
             'success' => true,
             'message' => (string) ($result['message'] ?? 'Article saved'),
-            'reload' => true,
-            'clear_local_state' => false,
-            'seo_analysis_pending' => true,
+            'reload' => false,
+            'patch' => $this->savePatch->build(
+                $article->fresh() ?? $article,
+                $context,
+                $seoAnalysis,
+            ),
             'notification' => [
                 'title' => 'Article saved',
                 'body' => (string) ($result['message'] ?? ''),
@@ -77,8 +82,24 @@ final class ArticleEditorSyncController extends Controller
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        $result = $this->syncOrchestrator->syncFromEditorBundle($article, $request->editorBundle());
+        $result = $this->syncQueue->enqueueFromEditorBundle($article, $request->editorBundle());
         $status = ($result['success'] ?? false) ? 200 : 422;
+
+        if ($result['success'] ?? false) {
+            $result['queued'] = true;
+            $result['reload'] = false;
+            $result['notification'] = [
+                'title' => __('seo-content-ai::filament.article_list.sync_queued_title'),
+                'body' => (string) ($result['message'] ?? ''),
+                'status' => 'success',
+            ];
+        } else {
+            $result['notification'] = [
+                'title' => __('seo-content-ai::filament.article_list.sync_queue_failed_title'),
+                'body' => (string) ($result['message'] ?? ''),
+                'status' => 'danger',
+            ];
+        }
 
         return response()->json($result, $status);
     }

@@ -10,6 +10,7 @@ use App\Models\Site;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 final class SeoQueueControlService
 {
@@ -25,6 +26,8 @@ final class SeoQueueControlService
      *     pending_audit_jobs: int,
      *     running_audit_jobs: int,
      *     pending_default_jobs: int,
+     *     pending_wp_sync_jobs: int,
+     *     pending_work_total: int,
      *     worker_status: string,
      *     worker_active: bool,
      *     last_reserved_at: ?string,
@@ -70,18 +73,13 @@ final class SeoQueueControlService
             ->where('reserved_at', '>=', $workerThreshold)
             ->exists();
 
-        $pendingDefault = (int) DB::connection($this->jobsConnection())
-            ->table('jobs')
-            ->where('queue', $this->defaultQueueName())
-            ->where(function ($query) use ($workerThreshold): void {
-                $query->whereNull('reserved_at')
-                    ->orWhere('reserved_at', '<', $workerThreshold);
-            })
-            ->count();
+        $pendingDefault = $this->countPendingQueueJobs($workerThreshold);
+        $pendingWpSync = $this->countPendingWpSyncForOwner($ownerId);
+        $pendingWorkTotal = $pendingAudit + $pendingDefault + $pendingWpSync;
 
         $workerStatus = match (true) {
             $workerActivity => 'running',
-            $pendingAudit > 0 || $pendingDefault > 0 => 'offline',
+            $pendingWorkTotal > 0 => 'offline',
             default => 'idle',
         };
 
@@ -90,6 +88,8 @@ final class SeoQueueControlService
             'pending_audit_jobs' => $pendingAudit,
             'running_audit_jobs' => $runningAudit,
             'pending_default_jobs' => $pendingDefault,
+            'pending_wp_sync_jobs' => $pendingWpSync,
+            'pending_work_total' => $pendingWorkTotal,
             'worker_status' => $workerStatus,
             'worker_active' => $workerActivity,
             'last_reserved_at' => $lastReservedAt !== null
@@ -107,6 +107,24 @@ final class SeoQueueControlService
         $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
 
         return $this->statusForOwner((int) $ownerId);
+    }
+
+    public function shouldShowOfflineAlertForCurrentOwner(): bool
+    {
+        $ownerId = SeoAccessControl::accountOwnerId() ?? (int) auth()->id();
+
+        return $this->shouldShowOfflineAlertForOwner((int) $ownerId);
+    }
+
+    public function shouldShowOfflineAlertForOwner(int $ownerId): bool
+    {
+        $status = $this->statusForOwner($ownerId);
+
+        if ($status['worker_active'] ?? false) {
+            return false;
+        }
+
+        return (int) ($status['pending_work_total'] ?? 0) > 0;
     }
 
     public function pauseForCurrentOwner(): void
@@ -289,11 +307,56 @@ final class SeoQueueControlService
             'pending_audit_jobs' => 0,
             'running_audit_jobs' => 0,
             'pending_default_jobs' => 0,
+            'pending_wp_sync_jobs' => 0,
+            'pending_work_total' => 0,
             'worker_status' => 'idle',
             'worker_active' => false,
             'last_reserved_at' => null,
             'owner_id' => 0,
         ];
+    }
+
+    private function countPendingQueueJobs(int $workerThreshold): int
+    {
+        try {
+            return (int) DB::connection($this->jobsConnection())
+                ->table('jobs')
+                ->where(function ($query) use ($workerThreshold): void {
+                    $query->whereNull('reserved_at')
+                        ->orWhere('reserved_at', '<', $workerThreshold);
+                })
+                ->count();
+        } catch (Throwable) {
+            return 0;
+        }
+    }
+
+    private function countPendingWpSyncForOwner(int $ownerId): int
+    {
+        if ($ownerId <= 0) {
+            return 0;
+        }
+
+        $siteIds = $this->siteIdsForOwner($ownerId);
+        if ($siteIds === []) {
+            return 0;
+        }
+
+        try {
+            return (int) DB::connection('omi_seo_ai')
+                ->table('article_meta')
+                ->join('articles', 'articles.id', '=', 'article_meta.article_id')
+                ->where('article_meta.meta_key', ArticleWpSyncQueueService::META_KEY)
+                ->whereIn('articles.site_id', $siteIds)
+                ->where(function ($query): void {
+                    $query
+                        ->where('article_meta.meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"%')
+                        ->orWhere('article_meta.meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PROCESSING.'"%');
+                })
+                ->count();
+        } catch (Throwable) {
+            return 0;
+        }
     }
 
     private function pauseCacheKey(int $ownerId): string

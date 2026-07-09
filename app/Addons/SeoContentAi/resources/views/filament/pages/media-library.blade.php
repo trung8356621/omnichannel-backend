@@ -42,12 +42,12 @@
                 @unless ($this->hasLockedGlobalSite())
                     <div class="seo-media-library-field">
                         <label class="seo-media-library-label" for="media-library-site">Domain</label>
-                        <x-seo-content-ai::seo-select id="media-library-site" wire:model.live="siteId" size="inline">
+                        <x-select id="media-library-site" wire:model.live="siteId" class="text-sm">
                             <option value="">-- Select domain --</option>
                             @foreach ($this->sites as $site)
                                 <option value="{{ $site->id }}">{{ $site->domain }}</option>
                             @endforeach
-                        </x-seo-content-ai::seo-select>
+                        </x-select>
                     </div>
                 @else
                     <div class="seo-media-library-field">

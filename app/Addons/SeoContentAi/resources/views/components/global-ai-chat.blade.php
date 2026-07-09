@@ -1166,7 +1166,7 @@
 
         <div class="seo-global-chat__model-row" x-show="canUseAiChat && activeTab === 'ai'" x-cloak>
             <label for="seo-global-chat-model">Model</label>
-            <select
+            <x-select
                 id="seo-global-chat-model"
                 x-model="selectedModel"
                 x-on:change="localStorage.setItem(`${storageKey}_model`, selectedModel)"
@@ -1177,7 +1177,7 @@
                 </template>
                 <option x-show="loadingModels" value="">Đang tải model...</option>
                 <option x-show="! loadingModels && models.length === 0" value="">Chưa có model AI active</option>
-            </select>
+            </x-select>
         </div>
 
         <div

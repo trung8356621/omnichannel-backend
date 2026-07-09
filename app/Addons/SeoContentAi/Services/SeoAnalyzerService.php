@@ -16,7 +16,9 @@ use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
-use App\Services\SeoEngineService;
+use App\Addons\SeoContentAi\Services\SeoScoringCalculator;
+use App\Addons\SeoContentAi\Services\SeoScoringEngine;
+use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
 use DOMXPath;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -29,14 +31,14 @@ class SeoAnalyzerService
         private readonly CtaKeywordBlacklistFilter $ctaKeywordBlacklistFilter,
         private readonly KeywordPersistenceService $keywordPersistence,
         private readonly WorkflowParserService $workflowParser,
-        private readonly SeoEngineService $seoEngine,
+        private readonly SeoScoringEngine $scoringEngine,
         private readonly SeoPromptSettingsService $promptSettings,
     ) {}
 
     /**
      * Phân tích SEO tổng hợp theo rule-set nội bộ.
      *
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
     public function analyze(SeoArticle $article, ?string $domainOverride = null): array
     {
@@ -45,7 +47,7 @@ class SeoAnalyzerService
         if ($focusKeyword === null) {
             return $this->persistScoreResult(
                 $article,
-                $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], [])
+                $this->buildScoreResult([SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD])
             );
         }
 
@@ -64,7 +66,7 @@ class SeoAnalyzerService
      * Chấm điểm khi đồng bộ từ WordPress: dùng dữ liệu scoring trong payload, không đọc body/slug từ bảng articles.
      *
      * @param  array<string, mixed>  $item
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
     public function analyzeFromSyncItem(SeoArticle $article, array $item, ?string $domainOverride = null): array
     {
@@ -83,7 +85,7 @@ class SeoAnalyzerService
         if ($focusKeyword === '') {
             return $this->persistScoreResult(
                 $article,
-                $this->buildScoreResult(0, [], ['Không có Focus Keyword từ Rank Math / Yoast SEO.'], [])
+                $this->buildScoreResult([SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD])
             );
         }
 
@@ -125,7 +127,7 @@ class SeoAnalyzerService
             $emptyLinks = $this->extractLinks($content, $domain);
 
             return array_merge(
-                $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], []),
+                $this->buildScoreResult([SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD]),
                 [
                     'extracted_links' => $emptyLinks,
                     'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
@@ -190,7 +192,7 @@ class SeoAnalyzerService
 
         if ($focusKeyword === null) {
             $extractedLinks = $this->extractLinks($content, $domain);
-            $scoreData = $this->buildScoreResult(0, [], ['Không tìm thấy Focus Keyword (main keyword).'], []);
+            $scoreData = $this->buildScoreResult([SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD]);
         } else {
             $computed = $this->computeAnalysis(
                 $article,
@@ -256,18 +258,19 @@ class SeoAnalyzerService
 
     /**
      * @param  array<string, mixed>  $payload
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
     private function sanitizeClientScorePayload(array $payload): array
     {
-        $score = max(0, min(100, (int) ($payload['score'] ?? 0)));
+        $violations = is_array($payload['violations'] ?? null)
+            ? SeoScoringRulesRegistry::sanitizeViolations($payload['violations'])
+            : [];
 
-        return $this->buildScoreResult(
-            $score,
-            $this->sanitizeScoreLines($payload['good'] ?? []),
-            $this->sanitizeScoreLines($payload['errors'] ?? []),
-            $this->sanitizeScoreLines($payload['warnings'] ?? []),
-        );
+        if ($violations === [] && is_array($payload['reason_keys'] ?? null)) {
+            $violations = SeoScoringRulesRegistry::sanitizeViolations($payload['reason_keys']);
+        }
+
+        return $this->buildScoreResult($violations);
     }
 
     /**
@@ -313,7 +316,7 @@ class SeoAnalyzerService
 
     /**
      * @return array{
-     *   scoreData: array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>},
+     *   scoreData: array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>},
      *   extractedLinks: array{internal: array<int, mixed>, external: array<int, mixed>}
      * }
      */
@@ -328,7 +331,7 @@ class SeoAnalyzerService
     ): array {
         $extractedLinks = $this->extractLinks($content, $domain);
 
-        $engineResult = $this->seoEngine->analyzeHtml(
+        $violations = $this->scoringEngine->analyzeViolations(
             $content,
             $focusKeyword,
             $this->resolveFaqsForScoring($article, $content),
@@ -340,17 +343,11 @@ class SeoAnalyzerService
                 'article_length_target' => $this->promptSettings->resolveArticleLengthTarget(
                     ArticlePostTypeResolver::resolve($article),
                 ),
+                'featured_snippet_thresholds' => $this->promptSettings->getFeaturedSnippetThresholds(),
             ],
         );
 
-        $scoreData = $this->buildScoreResult(
-            (int) ($engineResult['score'] ?? 0),
-            $engineResult['good'] ?? [],
-            $engineResult['errors'] ?? [],
-            $engineResult['warnings'] ?? [],
-        );
-        $scoreData['reason_keys'] = $engineResult['reason_keys'] ?? [];
-        $scoreData['breakdown'] = $engineResult['breakdown'] ?? [];
+        $scoreData = $this->buildScoreResult($violations);
 
         return [
             'scoreData' => $scoreData,
@@ -380,7 +377,7 @@ class SeoAnalyzerService
     }
 
     /**
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
     private function runAnalysis(
         SeoArticle $article,
@@ -409,18 +406,24 @@ class SeoAnalyzerService
     }
 
     /**
-     * @param  array<int, string>  $good
-     * @param  array<int, string>  $errors
-     * @param  array<int, string>  $warnings
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @param  list<string>  $violations
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
-    private function buildScoreResult(int $score, array $good, array $errors, array $warnings): array
+    private function buildScoreResult(array $violations): array
     {
+        $violations = SeoScoringRulesRegistry::sanitizeViolations($violations);
+        $score = SeoScoringCalculator::scoreFromViolations($violations);
+        $lines = SeoScoringCalculator::violationLines($violations);
+
         return [
             'score' => $score,
-            'good' => $good,
-            'errors' => $errors,
-            'warnings' => $warnings,
+            'violations' => $violations,
+            'good' => $violations === [] ? [__('seo_rules.all_passed')] : [],
+            'errors' => array_map(
+                static fn (array $line): string => sprintf('-%d: %s', $line['deduction'], $line['message']),
+                $lines,
+            ),
+            'warnings' => [],
         ];
     }
 
@@ -461,9 +464,9 @@ class SeoAnalyzerService
     }
 
     /**
-     * @param  array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}  $scoreData
+     * @param  array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}  $scoreData
      * @param  array{internal: array<int, mixed>, external: array<int, mixed>}|null  $extractedLinks
-     * @return array{score:int,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
+     * @return array{score:int,violations:list<string>,good:array<int,string>,errors:array<int,string>,warnings:array<int,string>}
      */
     private function persistScoreResult(SeoArticle $article, array $scoreData, ?array $extractedLinks = null): array
     {
@@ -472,12 +475,14 @@ class SeoAnalyzerService
         }
 
         $links = $extractedLinks ?? ['internal' => [], 'external' => []];
+        $violations = SeoScoringRulesRegistry::sanitizeViolations($scoreData['violations'] ?? []);
+        $score = SeoScoringCalculator::scoreFromViolations($violations);
 
-        $this->storeMeta($article, 'seo_rank_math_score', $scoreData);
+        $this->storeMeta($article, SeoScoringRulesRegistry::META_KEY_VIOLATIONS, $violations);
         $this->persistExtractedLinks($article, $links);
 
         $updatePayload = [
-            'seo_score' => $scoreData['score'],
+            'seo_score' => $score,
         ];
 
         if ($this->articleHasColumn('internal_link_count')) {

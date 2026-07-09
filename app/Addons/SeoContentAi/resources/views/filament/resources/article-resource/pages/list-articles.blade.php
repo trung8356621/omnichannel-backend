@@ -26,9 +26,18 @@
         >
             {{ __('seo-content-ai::filament.article_list.tab_categories') }}
         </a>
+        <a
+            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE) }}"
+            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE])
+        >
+            {{ __('seo-content-ai::filament.article_list.tab_queue') }}
+        </a>
     </div>
 
-    <div class="article-list-table-shell">
+    <div @class([
+        'article-list-table-shell',
+        'article-list-table-shell--queue' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
+    ])>
         <div
             class="article-list-table-shell__overlay"
             role="status"
@@ -157,10 +166,15 @@
                 .fi-resource-articles .fi-ta-actions-cell .fi-ta-actions {
                     display: grid !important;
                     grid-template-columns: repeat(3, 2rem);
-                    gap: 0.125rem 0.25rem;
+                    gap: 0.25rem 0.5rem;
                     justify-content: start;
                     align-items: center;
                     width: max-content;
+                }
+
+                .fi-resource-articles .article-list-table-shell--queue .fi-ta-actions-cell .fi-ta-actions {
+                    grid-template-columns: repeat(3, 2rem);
+                    gap: 0.375rem 0.625rem;
                 }
 
                 .article-seo-modal {

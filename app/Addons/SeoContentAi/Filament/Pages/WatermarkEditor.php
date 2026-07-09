@@ -30,7 +30,7 @@ class WatermarkEditor extends SeoPanelPage
 
     protected static bool $shouldRegisterNavigation = true;
 
-    public static function shouldRegisterNavigation(): bool
+    public static function shouldRegisterNavigation(array $parameters = []): bool
     {
         return ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
     }

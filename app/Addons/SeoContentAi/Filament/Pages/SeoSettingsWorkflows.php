@@ -65,12 +65,11 @@ class SeoSettingsWorkflows extends Page implements HasForms
                         __('seo-content-ai::filament.settings_workflows.editor_media_description')
                     )
                     ->schema([
-                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_IMAGE)
-                            ->label(__('seo-content-ai::filament.settings_workflows.create_image_prompt'))
-                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activeImagePromptOptions())
-                            ->searchable()
-                            ->native(false)
-                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_image_prompt')),
+                        $this->taskSelect(
+                            SeoCreateArticleSettingsService::KEY_CREATE_IMAGE,
+                            __('seo-content-ai::filament.settings_workflows.create_image_task'),
+                            __('seo-content-ai::filament.settings_workflows.create_image_task_hint'),
+                        ),
                         Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_CREATE_PRODUCT_GALLERY_IMAGE)
                             ->label(__('seo-content-ai::filament.settings_workflows.create_product_gallery_image_prompt'))
                             ->helperText(__('seo-content-ai::filament.settings_workflows.create_product_gallery_image_prompt_hint'))

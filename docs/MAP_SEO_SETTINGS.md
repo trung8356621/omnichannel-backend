@@ -21,6 +21,7 @@ flowchart TB
     SETTINGS --> EDITOR["/editor<br/>Article editor"]
     SETTINGS --> KEYWORDS["/keywords<br/>Keywords"]
     SETTINGS --> PROMPT["/prompt<br/>AI Prompts"]
+    SETTINGS --> SCORING["/scoring<br/>SEO scoring rules"]
     SETTINGS --> WORKFLOWS["/workflows<br/>Workflows"]
     SETTINGS --> AI["/settings/ai<br/>AI Connections<br/>(Resource)"]
     SETTINGS --> IMG["Image Optimization<br/>(Media parent)"]
@@ -36,6 +37,7 @@ flowchart TB
 | **SeoSettingsEditor** | `settings/editor` | `Filament/Pages/SeoSettingsEditor.php` | Cấu hình Editor: auto-save interval, editor height, publish behavior |
 | **SeoSettingsKeywords** | `settings/keywords` | `Filament/Pages/SeoSettingsKeywords.php` | Cấu hình keywords: cluster settings, suggestion sources |
 | **SeoSettingsPrompt** | `settings/prompt` | `Filament/Pages/SeoSettingsPrompt.php` | Cấu hình prompt mặc định, model selection, system prompts |
+| **SeoSettingsScoring** | `settings/scoring` | `Filament/Pages/SeoSettingsScoring.php` | **Quy tắc chấm điểm SEO** — bật/tắt từng rule, chỉnh điểm trừ (lưu `wp_options.seo_scoring_rules_settings`) |
 | **SeoSettingsWorkflows** | `settings/workflows` | `Filament/Pages/SeoSettingsWorkflows.php` | **Cấu hình workflow quan trọng nhất** — gán task cho từng bước |
 | **SeoSettings** | `settings` | `Filament/Pages/SeoSettings.php` | Redirect → overview |
 
@@ -56,6 +58,23 @@ flowchart TB
 
 ---
 
+## 1.5 SEO Scoring Rules (`SeoSettingsScoring`)
+
+Page quản lý **quy tắc trừ điểm** khi chấm SEO on-page. Rules cố định trong `SeoScoringRulesRegistry`; override bật/tắt và điểm trừ lưu `wp_options` key `seo_scoring_rules_settings` qua `SeoScoringSettingsService`.
+
+| Thành phần | File | Mô tả |
+|------------|------|-------|
+| Page | `Filament/Pages/SeoSettingsScoring.php` | Repeater: label, toggle enabled, deduction |
+| Service | `Services/SeoScoringSettingsService.php` | Đọc/ghi override, `effectiveRules()` merge default |
+| Registry | `Support/SeoScoringRulesRegistry.php` | `defaultRules()` + `rules()` đọc settings runtime |
+| Messages | `Support/SeoScoringRuleMessageResolver.php` | Map legacy `seo.*` → `seo_rules.*` cho hiển thị |
+
+**Hành vi quan trọng:** Lưu settings **không** bulk cập nhật `article_meta.seo_rule_violations`. Điểm hiển thị tính động từ violations đã lưu + rules hiện tại. Violations trong DB chỉ đổi khi analyze/save bài hoặc **Refresh article metadata (domain)**.
+
+Điểm: `100 - sum(deduction)` với rule disabled → deduction = 0.
+
+---
+
 ## 2. Workflow Settings (`SeoSettingsWorkflows`)
 
 Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từng workflow (SeoTask) cho từng bước xử lý**. Dùng service `SeoCreateArticleSettingsService` để lưu.
@@ -67,7 +86,7 @@ Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từn
 | **Task Workflows** | Publish article | `KEY_PUBLISH_ARTICLE` | Workflow chạy khi publish bài mới từ keyword |
 | | Rewrite article | `KEY_REWRITE_ARTICLE` | Workflow chạy khi viết lại bài |
 | | Post review | `KEY_POST_REVIEW` | Workflow chạy sau khi review |
-| **Editor Media** | Image generation prompt | `KEY_CREATE_IMAGE` | Prompt/Workflow sinh ảnh AI |
+| **Editor Media** | Image generation workflow | `KEY_CREATE_IMAGE` (`create_image_task_id`) | Quy trình (SeoTask) sinh ảnh AI — widget **Input ({{input}})** + Prompt Hình ảnh |
 | | Product gallery prompt | `KEY_CREATE_PRODUCT_GALLERY_IMAGE` | Prompt sinh ảnh gallery sản phẩm |
 | | Image model priority | `KEY_IMAGE_MODEL_PRIORITY` | Rules: bảng + repeater cho model priority |
 | | Video prompt | `KEY_CREATE_VIDEO` | Prompt sinh video |

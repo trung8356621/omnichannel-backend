@@ -24,6 +24,30 @@ export default function ArticleAiChatPanel({
     const [generatingImage, setGeneratingImage] = useState(false);
     const [generatingVideo, setGeneratingVideo] = useState(false);
     const generateLockRef = useRef(false);
+    const inputRef = useRef(null);
+
+    useEffect(() => {
+        const onOpen = (event) => {
+            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
+            const blockId = String(detail.blockId ?? '').trim();
+            if (blockId) {
+                setActiveBlockId(blockId);
+            }
+
+            const prefill = String(detail.prefill ?? detail.prompt ?? '').trim();
+            if (prefill) {
+                setInput(prefill);
+            }
+
+            if (detail.focusInput !== false) {
+                requestAnimationFrame(() => inputRef.current?.focus());
+            }
+        };
+
+        window.addEventListener('seo-article-ai-chat-open', onOpen);
+
+        return () => window.removeEventListener('seo-article-ai-chat-open', onOpen);
+    }, []);
 
     useEffect(() => {
         const onSelection = (e) => {
@@ -202,6 +226,7 @@ export default function ArticleAiChatPanel({
             <div className="seo-ai-chat-body">
                 <div className="seo-ai-chat-compose">
                     <textarea
+                        ref={inputRef}
                         className="seo-ai-chat-input"
                         rows={8}
                         value={input}

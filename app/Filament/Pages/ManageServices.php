@@ -80,7 +80,7 @@ class ManageServices extends Page
         Notification::make()->title(__('site-service.status_updated'))->success()->send();
     }
 
-    public static function shouldRegisterNavigation(): bool
+    public static function shouldRegisterNavigation(array $parameters = []): bool
     {
         return auth()->user()?->role === 'admin';
     }
