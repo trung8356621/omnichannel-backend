@@ -110,11 +110,7 @@ final class SeoPerformanceHubService
             ->values()
             ->all();
 
-        if ($quickWins !== []) {
-            return $quickWins;
-        }
-
-        return $this->fallbackQuickWinsFromKeywords($siteId, $limit);
+        return $quickWins;
     }
 
     /**
@@ -162,6 +158,136 @@ final class SeoPerformanceHubService
             ->take($limit)
             ->values()
             ->all();
+    }
+
+    /**
+     * @return list<array{query: string, clicks: int, impressions: int, ctr: float, position: float|null}>
+     */
+    public function getGscQueriesSource(?int $siteId): array
+    {
+        $snapshot = $this->resolveGscSnapshot($siteId);
+
+        return $this->normalizeQueries($snapshot['queries'] ?? []);
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function getGscQueryDistribution(?int $siteId): array
+    {
+        return app(GscQueriesTableService::class)->distributionFromQueries($this->getGscQueriesSource($siteId));
+    }
+
+    public function getGscTotalQueries(?int $siteId): ?int
+    {
+        $snapshot = $this->resolveGscSnapshot($siteId);
+        $kpis = is_array($snapshot['kpis'] ?? null) ? $snapshot['kpis'] : [];
+
+        if (isset($kpis['total_queries']) && is_numeric($kpis['total_queries'])) {
+            return (int) $kpis['total_queries'];
+        }
+
+        $queries = $this->normalizeQueries($snapshot['queries'] ?? []);
+
+        return $queries !== [] ? count($queries) : null;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getGscPerformanceChart(?int $siteId, string $metric = 'clicks'): array
+    {
+        $allowedMetrics = ['clicks', 'impressions', 'ctr', 'position'];
+        if (! in_array($metric, $allowedMetrics, true)) {
+            $metric = 'clicks';
+        }
+
+        $snapshot = $this->resolveGscSnapshot($siteId);
+        if ($snapshot === []) {
+            return $this->emptyChartPayload($metric, 'empty');
+        }
+
+        $timeseries = is_array($snapshot['timeseries'] ?? null) ? $snapshot['timeseries'] : [];
+        $current = is_array($timeseries['current'] ?? null) ? $timeseries['current'] : [];
+        $previous = is_array($timeseries['previous'] ?? null) ? $timeseries['previous'] : [];
+        $chartStatus = (string) ($snapshot['chart_status'] ?? 'empty');
+
+        if ($current === [] && $previous === []) {
+            return $this->emptyChartPayload($metric, $chartStatus === 'failed' ? 'failed' : 'empty');
+        }
+
+        $labels = array_values(array_unique(array_merge(
+            array_column($current, 'date'),
+            array_column($previous, 'date'),
+        )));
+        sort($labels);
+
+        $currentValues = $this->mapTimeseriesMetric($current, $labels, $metric);
+        $previousValues = $this->mapTimeseriesMetric($previous, $labels, $metric);
+
+        return [
+            'has_data' => true,
+            'status' => 'ok',
+            'labels' => $labels,
+            'current' => $currentValues,
+            'previous' => $previousValues,
+            'metric' => $metric,
+            'is_lower_better' => $metric === 'position',
+            'current_label' => __('seo-content-ai::filament.performance_hub.chart_current_period'),
+            'previous_label' => __('seo-content-ai::filament.performance_hub.chart_previous_period'),
+            'period_days' => (int) ($timeseries['period_days'] ?? 28),
+            'current_start' => (string) ($timeseries['current_start'] ?? ''),
+            'current_end' => (string) ($timeseries['current_end'] ?? ''),
+        ];
+    }
+
+    /**
+     * @param  list<array{date: string, clicks: int, impressions: int, ctr: float, position: float}>  $rows
+     * @param  list<string>  $labels
+     * @return list<float|int>
+     */
+    private function mapTimeseriesMetric(array $rows, array $labels, string $metric): array
+    {
+        $indexed = [];
+        foreach ($rows as $row) {
+            $indexed[(string) ($row['date'] ?? '')] = $row;
+        }
+
+        return array_map(static function (string $label) use ($indexed, $metric): float|int {
+            $row = $indexed[$label] ?? null;
+            if (! is_array($row)) {
+                return 0;
+            }
+
+            return match ($metric) {
+                'clicks' => (int) ($row['clicks'] ?? 0),
+                'impressions' => (int) ($row['impressions'] ?? 0),
+                'ctr' => (float) ($row['ctr'] ?? 0),
+                'position' => (float) ($row['position'] ?? 0),
+                default => 0,
+            };
+        }, $labels);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function emptyChartPayload(string $metric, string $status): array
+    {
+        return [
+            'has_data' => false,
+            'status' => $status,
+            'labels' => [],
+            'current' => [],
+            'previous' => [],
+            'metric' => $metric,
+            'is_lower_better' => $metric === 'position',
+            'current_label' => __('seo-content-ai::filament.performance_hub.chart_current_period'),
+            'previous_label' => __('seo-content-ai::filament.performance_hub.chart_previous_period'),
+            'period_days' => 28,
+            'current_start' => '',
+            'current_end' => '',
+        ];
     }
 
     public function pushKeywordToEditor(string $phrase, int $siteId, string $type = Keyword::TYPE_SUGGEST): ?Keyword
@@ -296,37 +422,4 @@ final class SeoPerformanceHubService
         ];
     }
 
-    /**
-     * @return list<array{query: string, impressions: int, position: float, clicks: int, ctr: float}>
-     */
-    private function fallbackQuickWinsFromKeywords(?int $siteId, int $limit): array
-    {
-        if ($siteId === null || $siteId <= 0) {
-            return [];
-        }
-
-        $metaRepository = app(KeywordMetaRepository::class);
-
-        return Keyword::query()
-            ->forSite($siteId)
-            ->orderByDesc('id')
-            ->limit($limit * 3)
-            ->get()
-            ->map(static function (Keyword $keyword) use ($siteId, $metaRepository): array {
-                $volume = (int) ($metaRepository->getSiteSearchVolume((int) $keyword->id, $siteId) ?? 0);
-
-                return [
-                    'query' => (string) $keyword->phrase,
-                    'impressions' => $volume,
-                    'position' => 15.0,
-                    'clicks' => 0,
-                    'ctr' => 0.0,
-                ];
-            })
-            ->filter(static fn (array $row): bool => $row['impressions'] > 0)
-            ->sortByDesc(static fn (array $row): int => (int) $row['impressions'])
-            ->take($limit)
-            ->values()
-            ->all();
-    }
 }

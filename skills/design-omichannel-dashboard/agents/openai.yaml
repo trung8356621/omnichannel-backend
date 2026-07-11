@@ -1,0 +1,14 @@
+interface:
+  display_name: Omichannel Dashboard Design
+  short_description: "Thi\u1EBFt k\u1EBF dashboard SaaS s\u1EA1ch, compact v\xE0 data-first"
+  default_prompt: "Thi\u1EBFt k\u1EBF ho\u1EB7c ch\u1EC9nh s\u1EEDa giao di\u1EC7\
+    n Omichannel theo design system dashboard SaaS, audit code hi\u1EC7n t\u1EA1i\
+    \ tr\u01B0\u1EDBc khi s\u1EEDa v\xE0 ki\u1EC3m tra tr\u1EF1c quan sau khi ho\xE0\
+    n t\u1EA5t."
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true

@@ -1,7 +1,7 @@
 <div>
     <x-filament-panels::page>
         <div class="seo-settings-root">
-            @include('seo-content-ai::filament.pages.partials.seo-settings-sidebar', ['active' => 'ai'])
+            @include('seo-content-ai::filament.pages.partials.seo-settings-sidebar', ['active' => 'api'])
 
             <div class="seo-settings-main">
                 <header class="seo-settings-header">

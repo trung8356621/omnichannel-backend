@@ -12,6 +12,11 @@ use Filament\Resources\Resource;
  */
 trait InteractsWithSeoConnectionResourceRoutes
 {
+    public static function panelId(): string
+    {
+        return 'seo';
+    }
+
     /**
      * @param  array<string, mixed>  $parameters
      */
@@ -26,7 +31,7 @@ trait InteractsWithSeoConnectionResourceRoutes
             $name,
             SeoConnectionContext::mergePanelRouteParameters($parameters),
             $isAbsolute,
-            $panel,
+            $panel ?? static::panelId(),
             $tenant,
         );
     }

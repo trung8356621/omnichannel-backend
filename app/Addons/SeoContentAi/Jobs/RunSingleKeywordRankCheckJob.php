@@ -1,0 +1,165 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Jobs;
+
+use App\Addons\SeoContentAi\DataTransfer\SerpRankRequest;
+use App\Addons\SeoContentAi\DataTransfer\SerpRankResult;
+use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\KeywordRankCheckRun;
+use App\Addons\SeoContentAi\Providers\Serp\SerpRankProviderRegistry;
+use App\Addons\SeoContentAi\Services\KeywordRankSnapshotWriter;
+use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
+use App\Models\Site;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Throwable;
+
+final class RunSingleKeywordRankCheckJob implements ShouldQueue
+{
+    use Dispatchable;
+    use InteractsWithQueue;
+    use Queueable;
+    use SerializesModels;
+
+    public int $timeout = 120;
+
+    public int $tries = 2;
+
+    /** @var list<int> */
+    public array $backoff = [15, 60];
+
+    public function __construct(
+        public int $runId,
+        public int $siteId,
+        public int $userId,
+        public string $provider,
+        public int $keywordId,
+        public ?string $country = null,
+        public ?string $location = null,
+        public ?string $language = null,
+        public ?string $device = null,
+        public ?string $comparisonBatchId = null,
+    ) {}
+
+    public function handle(
+        SeoSerpProviderConnectionService $serpConnections,
+        SerpRankProviderRegistry $registry,
+        KeywordRankSnapshotWriter $snapshotWriter,
+        SeoDatabaseConnectionService $databaseConnection,
+    ): void {
+        $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
+
+        $run = KeywordRankCheckRun::query()->find($this->runId);
+        if ($run === null || in_array($run->status, ['completed', 'failed'], true)) {
+            return;
+        }
+
+        $connection = $serpConnections->resolveForUser($this->userId, $this->provider);
+        if ($connection === null || ! $connection->isConfigured()) {
+            $this->incrementRunFailure($run);
+
+            return;
+        }
+
+        $keyword = Keyword::query()->find($this->keywordId);
+        if ($keyword === null) {
+            $this->incrementRunFailure($run);
+
+            return;
+        }
+
+        try {
+            $provider = $registry->get($this->provider);
+            $request = new SerpRankRequest(
+                keyword: (string) $keyword->phrase,
+                country: $this->country,
+                language: $this->language,
+                location: $this->location,
+                device: $this->device,
+                depth: (int) ($connection->result_depth ?: 100),
+                trackedDomain: $this->resolveTrackedDomain($this->siteId),
+            );
+
+            $result = $provider->search($connection, $request);
+            $snapshotWriter->persist($this->siteId, (int) $keyword->id, $connection, $result, $this->runId);
+
+            if ($this->isFailureStatus($result->status)) {
+                $this->incrementRunFailure($run);
+            } else {
+                $this->incrementRunSuccess($run, $connection, $serpConnections);
+            }
+        } catch (Throwable) {
+            $this->incrementRunFailure($run);
+        }
+    }
+
+    public function failed(?Throwable $exception): void
+    {
+        $run = KeywordRankCheckRun::query()->find($this->runId);
+        if ($run === null) {
+            return;
+        }
+
+        $this->incrementRunFailure($run, $exception?->getMessage());
+    }
+
+    private function incrementRunSuccess(
+        KeywordRankCheckRun $run,
+        \App\Addons\SeoContentAi\Models\SeoSerpProviderConnection $connection,
+        SeoSerpProviderConnectionService $serpConnections,
+    ): void {
+        $run->refresh();
+        $run->processed_keywords = (int) $run->processed_keywords + 1;
+        $this->finalizeRunIfDone($run, $connection, $serpConnections);
+        $run->save();
+    }
+
+    private function incrementRunFailure(KeywordRankCheckRun $run, ?string $message = null): void
+    {
+        $run->refresh();
+        $run->failed_keywords = (int) $run->failed_keywords + 1;
+        if ($message !== null && $run->last_error === null) {
+            $run->last_error = mb_substr($message, 0, 240);
+        }
+        $this->finalizeRunIfDone($run);
+        $run->save();
+    }
+
+    private function finalizeRunIfDone(
+        KeywordRankCheckRun $run,
+        ?\App\Addons\SeoContentAi\Models\SeoSerpProviderConnection $connection = null,
+        ?SeoSerpProviderConnectionService $serpConnections = null,
+    ): void {
+        if (($run->processed_keywords + $run->failed_keywords) < (int) $run->total_keywords) {
+            return;
+        }
+
+        $run->status = 'completed';
+        $run->completed_at = now();
+
+        if ($connection !== null && $serpConnections !== null) {
+            $serpConnections->markRankCheckCompleted($connection);
+        }
+    }
+
+    private function resolveTrackedDomain(int $siteId): ?string
+    {
+        $domain = Site::query()->whereKey($siteId)->value('domain');
+
+        return is_string($domain) && $domain !== '' ? $domain : null;
+    }
+
+    private function isFailureStatus(string $status): bool
+    {
+        return ! in_array($status, [
+            SerpRankResult::STATUS_SUCCESS_FOUND,
+            SerpRankResult::STATUS_SUCCESS_NOT_FOUND,
+        ], true);
+    }
+}

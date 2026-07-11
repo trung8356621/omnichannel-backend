@@ -2,6 +2,18 @@
     max-width: 100%;
 }
 
+.performance-hub-gsc-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+@media (min-width: 1024px) {
+    .performance-hub-gsc-stack {
+        gap: 1.75rem;
+    }
+}
+
 .performance-hub-header {
     display: flex;
     flex-wrap: wrap;
@@ -74,7 +86,7 @@
 .performance-hub-panel {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 1.25rem;
 }
 
 .performance-hub-panel-hint {
@@ -262,4 +274,524 @@
 
 .performance-hub-page .ai-discovery-layout {
     margin-top: 0;
+}
+
+.performance-hub-header__main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    width: 100%;
+}
+
+.performance-hub-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: flex-end;
+}
+
+.performance-hub-toolbar__field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 10rem;
+}
+
+.performance-hub-toolbar__field label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-input,
+.performance-hub-select {
+    min-width: 10rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(229 231 235);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+}
+
+.performance-hub-connection-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.75rem;
+}
+
+.performance-hub-connection-card {
+    border: 1px solid rgb(229 231 235);
+    border-radius: 0.75rem;
+    background: white;
+    padding: 1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.performance-hub-connection-card--gsc {
+    gap: 0.625rem;
+    padding: 1.125rem 1.375rem;
+}
+
+.performance-hub-connection-card--link {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    color: rgb(5 150 105);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.performance-hub-connection-card__label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-connection-card__status {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: rgb(17 24 39);
+}
+
+.performance-hub-connection-card__meta {
+    font-size: 0.75rem;
+    color: rgb(107 114 128);
+    word-break: break-all;
+    line-height: 1.4;
+}
+
+.performance-hub-connection-card--gsc .performance-hub-connection-card__meta + .performance-hub-connection-card__meta {
+    margin-top: 0.125rem;
+}
+
+.performance-hub-connection-card__meta--warn {
+    color: rgb(180 83 9);
+}
+
+.performance-hub-connection-card__action {
+    margin-top: 0.35rem;
+    align-self: flex-start;
+    border: 1px solid rgb(209 213 219);
+    border-radius: 0.5rem;
+    background: rgb(249 250 251);
+    color: rgb(17 24 39);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.35rem 0.65rem;
+    cursor: pointer;
+}
+
+.performance-hub-connection-card__action:hover {
+    background: rgb(243 244 246);
+}
+
+.performance-hub-connection-card__action:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.performance-hub-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+}
+
+@media (min-width: 1280px) {
+    .performance-hub-kpi-grid {
+        gap: 1.25rem;
+    }
+}
+
+.performance-hub-kpi-grid--compact {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.performance-hub-kpi-card {
+    border: 1px solid rgb(229 231 235);
+    border-radius: 0.75rem;
+    background: white;
+    padding: 1rem 1.125rem;
+}
+
+.performance-hub-kpi-card__label {
+    font-size: 0.75rem;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-kpi-card__value {
+    margin-top: 0.25rem;
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: rgb(17 24 39);
+}
+
+.performance-hub-empty-value {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: rgb(156 163 175);
+}
+
+.performance-hub-panel__head h2 {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: rgb(17 24 39);
+}
+
+.performance-hub-panel__head p {
+    margin-top: 0.25rem;
+    font-size: 0.8125rem;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-panel__head--toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.performance-hub-distribution-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 0.75rem;
+}
+
+.performance-hub-distribution-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    border: 1px solid rgb(229 231 235);
+    border-radius: 0.625rem;
+    background: rgb(255 255 255);
+    padding: 0.75rem 1rem;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 150ms, background-color 150ms, box-shadow 150ms;
+}
+
+.performance-hub-distribution-item:hover {
+    border-color: rgb(167 243 208);
+    background: rgb(240 253 244);
+}
+
+.performance-hub-distribution-item:focus-visible {
+    outline: 2px solid rgb(5 150 105);
+    outline-offset: 2px;
+}
+
+.performance-hub-distribution-item--active {
+    border-color: rgb(5 150 105);
+    background: rgb(236 253 245);
+    box-shadow: inset 0 0 0 1px rgb(167 243 208);
+}
+
+.performance-hub-distribution-item__range {
+    display: block;
+    font-size: 0.75rem;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-change.is-up {
+    color: rgb(5 150 105);
+    font-weight: 700;
+}
+
+.performance-hub-change.is-down {
+    color: rgb(220 38 38);
+    font-weight: 700;
+}
+
+.performance-hub-empty-state {
+    border: 1px dashed rgb(229 231 235);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    text-align: center;
+    color: rgb(107 114 128);
+    background: rgb(249 250 251);
+}
+
+.performance-hub-chart {
+    min-height: 220px;
+}
+
+.performance-hub-link-btn {
+    color: rgb(5 150 105);
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.performance-hub-sort-btn {
+    font: inherit;
+    color: inherit;
+}
+
+.performance-hub-source-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    border-bottom: 2px solid rgb(229 231 235);
+    padding-bottom: 0.5rem;
+}
+
+.dark .performance-hub-source-tabs {
+    border-bottom-color: rgb(255 255 255 / 0.1);
+}
+
+.performance-hub-source-tab {
+    border-radius: 0.5rem;
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 700;
+    color: rgb(107 114 128);
+    transition: color 150ms, background-color 150ms;
+}
+
+.performance-hub-source-tab:hover {
+    color: rgb(17 24 39);
+    background: rgb(243 244 246);
+}
+
+.dark .performance-hub-source-tab:hover {
+    color: rgb(243 244 246);
+    background: rgb(255 255 255 / 0.05);
+}
+
+.performance-hub-source-tab.is-active {
+    color: rgb(5 150 105);
+    background: rgb(236 253 245);
+}
+
+.dark .performance-hub-source-tab.is-active {
+    color: rgb(110 231 183);
+    background: rgb(16 185 129 / 0.12);
+}
+
+.performance-hub-toolbar__note {
+    font-size: 0.8125rem;
+    color: rgb(107 114 128);
+    max-width: 20rem;
+}
+
+.performance-hub-connection-card__head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.performance-hub-connection-card__icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 9999px;
+    background: rgb(219 234 254);
+    color: rgb(37 99 235);
+    font-weight: 700;
+    font-size: 0.875rem;
+}
+
+.performance-hub-connection-card__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.625rem;
+    margin-top: 0.75rem;
+    padding-top: 0.875rem;
+    border-top: 1px solid rgb(243 244 246);
+}
+
+.performance-hub-connection-card__action--link {
+    text-decoration: none;
+}
+
+.performance-hub-bulk-summary__stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+.performance-hub-bulk-summary__stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    background: rgb(249 250 251);
+    font-size: 0.8125rem;
+}
+
+.dark .performance-hub-bulk-summary__stat {
+    background: rgb(255 255 255 / 0.05);
+}
+
+.performance-hub-queries-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.performance-hub-toolbar__field--grow {
+    flex: 1 1 16rem;
+    min-width: 12rem;
+}
+
+.performance-hub-active-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.performance-hub-filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: 9999px;
+    background: rgb(236 253 245);
+    border: 1px solid rgb(167 243 208);
+    color: rgb(4 120 87);
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+
+.performance-hub-filter-chip__clear {
+    font-size: 1rem;
+    line-height: 1;
+    color: rgb(4 120 87);
+}
+
+.performance-hub-pagination {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgb(229 231 235);
+}
+
+.performance-hub-pagination__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.8125rem;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-pagination__size {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+}
+
+.performance-hub-select--compact {
+    min-width: 4.5rem;
+}
+
+.performance-hub-pagination__nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.performance-hub-pagination__btn {
+    min-width: 2rem;
+    padding: 0.375rem 0.625rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(229 231 235);
+    background: rgb(255 255 255);
+    font-size: 0.8125rem;
+    color: rgb(55 65 81);
+}
+
+.performance-hub-pagination__btn:hover:not(:disabled) {
+    border-color: rgb(167 243 208);
+    background: rgb(240 253 244);
+}
+
+.performance-hub-pagination__btn.is-active {
+    border-color: rgb(5 150 105);
+    background: rgb(236 253 245);
+    color: rgb(4 120 87);
+    font-weight: 700;
+}
+
+.performance-hub-pagination__btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.performance-hub-pagination__ellipsis {
+    padding: 0 0.25rem;
+    color: rgb(156 163 175);
+}
+
+.performance-hub-panel__head--split {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem 1.25rem;
+    margin-bottom: 0.25rem;
+}
+
+.performance-hub-chart-metric-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.performance-hub-chart-metric-tab {
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(229 231 235);
+    background: rgb(255 255 255);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: rgb(107 114 128);
+}
+
+.performance-hub-chart-metric-tab.is-active {
+    border-color: rgb(5 150 105);
+    background: rgb(236 253 245);
+    color: rgb(4 120 87);
+}
+
+.performance-hub-chart-skeleton {
+    display: grid;
+    gap: 0.5rem;
+    min-height: 220px;
+    padding: 1rem 0;
+}
+
+.performance-hub-chart-skeleton__bar {
+    height: 2.5rem;
+    border-radius: 0.5rem;
+    background: linear-gradient(90deg, rgb(243 244 246), rgb(229 231 235), rgb(243 244 246));
+    background-size: 200% 100%;
+    animation: performance-hub-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes performance-hub-pulse {
+    0% { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+}
+
+.performance-hub-empty-state--warn {
+    border-color: rgb(254 202 202);
+    background: rgb(254 242 242);
 }

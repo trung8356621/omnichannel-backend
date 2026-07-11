@@ -34,12 +34,18 @@ final class SeoPlannerPermissionMiddleware
         if ($request->routeIs([
             'filament.seo.resources.keywords.*',
             'filament.seo.pages.performance-hub',
+            'filament.seo.pages.ai-keyword-discovery',
             'seo.keywords.*',
             'seo.performance.*',
         ])) {
             return true;
         }
 
-        return $request->is('seo/*/keywords', 'seo/*/keywords/*', 'seo/*/performance-hub', 'seo/*/performance-hub/*');
+        return $request->is(
+            'seo/*/keywords',
+            'seo/*/keywords/*',
+            'seo/*/performance-hub',
+            'seo/*/performance-hub/*',
+        );
     }
 }

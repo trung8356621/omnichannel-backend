@@ -225,12 +225,6 @@ class ArticleResource extends SeoPanelResource
                     ->dateTime('d/m/Y H:i')
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
-                Tables\Columns\IconColumn::make('is_reviewed')
-                    ->label(__('seo-content-ai::filament.article_list.reviewed'))
-                    ->boolean()
-                    ->alignCenter()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: false),
                 Tables\Columns\TextColumn::make('wp_sync_queue_status')
                     ->label(__('seo-content-ai::filament.article_list.queue_status'))
                     ->badge()

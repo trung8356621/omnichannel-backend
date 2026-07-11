@@ -45,9 +45,9 @@ final class SeoSettingsMenu
                 'url' => SeoSettingsKeywords::getUrl(),
             ],
             [
-                'id' => 'ai',
-                'label' => 'AI settings',
-                'icon' => 'heroicon-o-cpu-chip',
+                'id' => 'api',
+                'label' => 'API Connections',
+                'icon' => 'heroicon-o-link',
                 'url' => AiConnectionResource::getUrl(),
             ],
             [

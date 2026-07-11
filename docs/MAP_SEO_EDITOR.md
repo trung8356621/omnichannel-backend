@@ -6,6 +6,30 @@
 
 ---
 
+## 2.4 Danh sách bài viết (ListArticles)
+
+| Thông tin | Giá trị |
+|-----------|---------|
+| **URL panel** | `/seo/{connection_hash}/articles` |
+| **Resource** | `Filament/Resources/ArticleResource.php` |
+| **Page** | `Filament/Resources/ArticleResource/Pages/ListArticles.php` |
+| **View** | `resources/views/filament/resources/article-resource/pages/list-articles.blade.php` |
+
+**Tab nội dung** (`?tab=`):
+
+| Tab | Constant | Query mặc định |
+|-----|----------|----------------|
+| Bài viết | `ListArticles::TAB_POSTS` (`posts`) | `type` post/product; **`is_reviewed = 0`** (ẩn bài đã duyệt) |
+| Danh mục | `TAB_CATEGORIES` (`categories`) | `type` category/product_category; **`is_reviewed = 0`** |
+| Hàng đợi WP | `TAB_QUEUE` (`queue`) | Meta `wp_sync_queue`; **`is_reviewed = 0`** |
+| Đã duyệt | `TAB_REVIEWED` (`reviewed`) | `is_reviewed = 1` + `reviewed_at` not null — partial `reviewed-articles-tab.blade.php` |
+
+**Cột bảng:** không có cột **Reviewed** (`is_reviewed`) — trạng thái duyệt chỉ xem ở tab **Reviewed**. Cột `reviewed_at` vẫn toggle ẩn mặc định.
+
+**Route liên quan:** `/seo/{connection_hash}/articles/queue` (`ListArticleSyncQueue`), `/seo/{connection_hash}/articles/{id}/edit` (`EditArticle`).
+
+---
+
 ## 2.5 Cấu trúc chi tiết EditArticle (React Component Graph)
 
 > MCP `search_graph` (`SeoArticleEditor`, out_degree **112**), `search_code` (`callEditArticleLivewire`). Files: `article-editor.jsx`, `edit-article.blade.php`, `EditArticle.php`.
@@ -314,8 +338,8 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Nút đồng bộ CSS | `article-editor.css` → `.seo-publish-sync-btn` | Primary full-width; dark mode `.dark .wp-article-edit …` (không dùng Tailwind utility trong Blade) |
 | Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`) |
 | Shortcut | `Ctrl+Shift+S` | `seo-publish-tab-request-sync` → tab Publish + queue sync |
-| Submenu Articles | `ListArticleSyncQueue` (`/seo/articles/queue`) | Sidebar **Articles → Hàng đợi** |
-| Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed |
+| Submenu Articles | `ListArticleSyncQueue` (`/seo/{connection_hash}/articles/queue`) | Sidebar **Articles → Hàng đợi** |
+| Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed; `is_reviewed = 0` |
 | Queue table | `ArticleResource::queueTable()` | Cột: tiêu đề, domain, trạng thái, queued/started/finished, lỗi; filter trạng thái; retry / cancel / edit |
 
 **Luồng queue meta (`wp_sync_queue`):**

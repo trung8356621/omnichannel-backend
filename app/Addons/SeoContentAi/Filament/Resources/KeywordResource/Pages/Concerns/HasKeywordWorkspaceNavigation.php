@@ -84,6 +84,11 @@ trait HasKeywordWorkspaceNavigation
                 'label' => __('seo-content-ai::filament.keyword.workspace_nav_two'),
                 'url' => $this->appendKeywordWorkspaceSiteToUrl(KeywordResource::getUrl('workspace-2')),
             ],
+            [
+                'key' => 'cannibalization',
+                'label' => __('seo-content-ai::filament.keyword.cannibalization_nav'),
+                'url' => $this->appendKeywordWorkspaceSiteToUrl(KeywordResource::getUrl('cannibalization')),
+            ],
         ];
     }
 

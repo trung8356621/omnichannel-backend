@@ -2520,6 +2520,7 @@ class KeywordResource extends SeoPanelResource
             'focus' => Pages\ListFocusKeywords::route('/focus'),
             'anchor-audit' => Pages\AnchorTextAuditWorkspace::route('/anchor-audit'),
             'workspace-2' => Pages\KeywordWorkspaceTwo::route('/workspace-2'),
+            'cannibalization' => Pages\KeywordCannibalizationWorkspace::route('/cannibalization'),
         ];
     }
 }

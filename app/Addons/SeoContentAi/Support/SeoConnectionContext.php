@@ -27,13 +27,25 @@ final class SeoConnectionContext
         }
     }
 
+    public static function rememberHash(?string $hash = null): void
+    {
+        $hash ??= self::hash();
+
+        if ($hash === null || ! self::isValidHashFormat($hash)) {
+            return;
+        }
+
+        session(['seo_current_connection_hash' => $hash]);
+        self::applyUrlDefaults($hash);
+    }
+
     /**
      * @param  array<string, mixed>  $parameters
      * @return array<string, mixed>
      */
     public static function mergePanelRouteParameters(array $parameters = []): array
     {
-        if (isset($parameters['connection_hash'])) {
+        if (isset($parameters['connection_hash']) && self::isValidHashFormat((string) $parameters['connection_hash'])) {
             return $parameters;
         }
 
@@ -42,6 +54,13 @@ final class SeoConnectionContext
             $routeHash = request()->route('connection_hash');
             if (is_string($routeHash) && self::isValidHashFormat($routeHash)) {
                 $hash = $routeHash;
+            }
+        }
+
+        if ($hash === null) {
+            $path = trim((string) request()->path(), '/');
+            if (preg_match('#^seo/([a-zA-Z0-9]{32,64})(?:/|$)#', $path, $matches) === 1) {
+                $hash = $matches[1];
             }
         }
 

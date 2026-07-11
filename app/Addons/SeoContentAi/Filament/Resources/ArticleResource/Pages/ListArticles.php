@@ -21,6 +21,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Livewire\Attributes\Url;
 
 class ListArticles extends ListRecords
 {
@@ -36,6 +37,7 @@ class ListArticles extends ListRecords
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
 
+    #[Url(as: 'tab')]
     public string $contentTab = self::TAB_POSTS;
 
     public function mount(): void
@@ -98,6 +100,10 @@ class ListArticles extends ListRecords
 
                 if ($this->contentTab === self::TAB_REVIEWED) {
                     return $query->where('is_reviewed', true)->whereNotNull('reviewed_at');
+                }
+
+                if (in_array($this->contentTab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {
+                    ArticleResource::applyWpSyncQueueUnreviewedScope($query);
                 }
 
                 return $query;

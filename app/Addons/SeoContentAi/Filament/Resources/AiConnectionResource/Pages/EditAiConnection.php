@@ -7,7 +7,10 @@ namespace App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Services\AiModelRouterService;
+use App\Addons\SeoContentAi\Support\ApiConnectionFormSchema;
+use App\Addons\SeoContentAi\Support\ApiConnectionProviders;
 use Filament\Actions;
+use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 
 class EditAiConnection extends SeoEditRecord
@@ -18,15 +21,23 @@ class EditAiConnection extends SeoEditRecord
 
     public function getTitle(): string
     {
-        return __('Edit AI connection');
+        return __('seo-content-ai::filament.api_connections.edit_ai');
+    }
+
+    public function form(Form $form): Form
+    {
+        return $form
+            ->schema(ApiConnectionFormSchema::components(operation: 'edit', lockProvider: true))
+            ->model($this->getRecord());
     }
 
     protected function getHeaderActions(): array
     {
         return [
             Actions\Action::make('sync_models')
-                ->label('Sync models from API')
+                ->label(__('seo-content-ai::filament.api_connections.sync_models'))
                 ->icon('heroicon-o-arrow-path')
+                ->visible(fn (): bool => ApiConnectionProviders::isAi((string) $this->record->provider))
                 ->action(function (): void {
                     $ok = app(AiModelRouterService::class)->syncModelsForConnection((int) $this->record->id);
 
@@ -59,6 +70,10 @@ class EditAiConnection extends SeoEditRecord
 
     protected function afterSave(): void
     {
+        if (! ApiConnectionProviders::isAi((string) $this->record->provider)) {
+            return;
+        }
+
         app(AiModelRouterService::class)->syncModelsForConnection((int) $this->record->id);
     }
 }

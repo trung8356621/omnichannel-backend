@@ -29,6 +29,7 @@ export default defineConfig({
                 'app/Addons/SeoContentAi/resources/css/project-run-queue.css',
                 'app/Addons/SeoContentAi/resources/js/project-run-queue.js',
                 'app/Addons/SeoContentAi/resources/css/global-ai-chat.css',
+                'app/Addons/SeoContentAi/resources/js/performance-hub-gsc-chart.js',
             ],
             refresh: true,
         }),

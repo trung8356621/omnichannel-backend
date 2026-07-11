@@ -41,4 +41,13 @@ return [
         'redirect' => env("GOOGLE_REDIRECT_URI")
     ],
 
+    'google_search_console' => [
+        'client_id' => env('GOOGLE_SEARCH_CONSOLE_CLIENT_ID'),
+        'client_secret' => env('GOOGLE_SEARCH_CONSOLE_CLIENT_SECRET'),
+        'redirect' => env(
+            'GOOGLE_SEARCH_CONSOLE_REDIRECT_URI',
+            rtrim((string) env('APP_URL'), '/').'/seo/oauth/google-search-console/callback'
+        ),
+    ],
+
 ];

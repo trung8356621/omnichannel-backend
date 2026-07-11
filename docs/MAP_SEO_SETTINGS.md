@@ -23,7 +23,7 @@ flowchart TB
     SETTINGS --> PROMPT["/prompt<br/>AI Prompts"]
     SETTINGS --> SCORING["/scoring<br/>SEO scoring rules"]
     SETTINGS --> WORKFLOWS["/workflows<br/>Workflows"]
-    SETTINGS --> AI["/settings/ai<br/>AI Connections<br/>(Resource)"]
+    SETTINGS --> AI["/settings/api<br/>API Connections<br/>(Resource)"]
     SETTINGS --> IMG["Image Optimization<br/>(Media parent)"]
 ```
 
@@ -169,24 +169,42 @@ getEloquentQuery() {
 
 ---
 
-## 4. AI Connections (`AiConnectionResource`)
+## 4. API Connections (`AiConnectionResource`)
 
 ### 4.1 Tổng quan
 
 - **Resource:** `Filament/Resources/AiConnectionResource.php`
-- **Model:** `ApiConnection` (table `api_connections`, connection `mysql`)
-- **Slug:** `settings/ai` → `/seo/.../settings/ai`
-- **Navigation:** Không register navigation (chỉ accessible từ settings page)
-- **Permission:** `canAccessManagerFeatures()` để view; thêm `allowsSeoPanelMutation()` để create/edit/delete
+- **Slug:** `settings/api` → `/seo/.../settings/api` (canonical); legacy `/settings/ai` redirect trong `SeoPanelProvider`
+- **List page:** `Pages/ListAiConnections.php` — view `seo-settings-api-list.blade.php`, Filament table `contentGrid` + cột **Provider**
+- **Navigation:** Không register navigation (truy cập từ settings sidebar)
+- **Permission:** `canAccessManagerFeatures()` view; `allowsSeoPanelMutation()` create/edit/delete (chỉ AI providers)
 
-### 4.2 Form Schema
+### 4.2 Provider & lưu trữ
 
-- `provider` (Select: `gemini` | `claude`) — hiển thị link hướng dẫn lấy API key tương ứng
-- `name` (TextInput)
-- `api_key` (PasswordInput, revealable) — chỉ required khi create, có thể bỏ trống khi edit
-- `status` (Select: `active` | `inactive`)
+| Provider | Form fields | Bảng lưu |
+|----------|-------------|----------|
+| `gemini`, `claude` | name, api_key, status | `api_connections` (mysql) |
+| `google_search_console` | email, tokens, property URL | `seo_gsc_master_connections` (mysql) |
+| `dataforseo` | login, password, location, language | `seo_dataforseo_connections` (mysql) |
 
-### 4.3 Query Scope
+Support: `Support/ApiConnectionProviders.php`, `Support/ApiConnectionFormSchema.php`.
+
+Create/Edit: dropdown Provider đổi form; GSC/DataForSEO có page riêng `edit-gsc`, `edit-dataforseo`.
+
+**Chi tiết GSC (OAuth, route `{id}`, gap, debug):** [MAP_SEO_GSC_API_CONNECTIONS.md](MAP_SEO_GSC_API_CONNECTIONS.md).
+
+### 4.3 List thống nhất
+
+- **Service:** `Services/ApiConnectionsListService.php` → `recordsForUser()` gộp AI + GSC + DataForSEO
+- **Model ảo:** `Models/ApiConnectionListRow.php` — row GSC/DataForSEO; GSC status = `GoogleSearchConsoleConnectionService::resolveEffectiveStatus()`
+- **Override records:** `ListAiConnections::getTableRecords()` — search/sort; `notifyOAuthFlash()` sau OAuth callback; Edit URL tùy provider; Delete AI/GSC/DataForSEO
+
+### 4.4 Form AI (gemini/claude)
+
+- `provider` (Select: `gemini` | `claude` | `google_search_console` | `dataforseo`)
+- `name`, `api_key` (encrypted), `status` (`active` | `inactive`)
+
+### 4.5 Query Scope (AI)
 
 ```php
 getEloquentQuery() {
@@ -194,16 +212,25 @@ getEloquentQuery() {
 }
 ```
 
-### 4.4 Model: `ApiConnection`
+### 4.6 Model: `ApiConnection`
 
 | Thuộc tính | Kiểu |
 |-----------|------|
 | `$connection` | `mysql` |
 | `$table` | `api_connections` |
-| `$casts` | `metadata` → json, `is_global` → boolean |
-| Relations | `aiModels()` → HasMany → `SeoAiModel` |
+| `$casts` | `api_key` → encrypted, `metadata` → json, `is_global` → boolean |
+| Relations | `seoAiModels()` → HasMany → `SeoAiModel` |
 
-### 4.5 SeoAiModel (Model phụ thuộc)
+### 4.7 External connection models
+
+| Model | Table | Service resolve |
+|-------|-------|-----------------|
+| `SeoGscMasterConnection` | `seo_gsc_master_connections` | `GoogleSearchConsoleConnectionService` |
+| `SeoDataForSeoConnection` | `seo_dataforseo_connections` | `DataForSeoConnectionService` |
+
+Migration: `2026_07_11_100000_create_seo_external_api_connections_tables.php` (mysql).
+
+### 4.8 SeoAiModel (Model phụ thuộc)
 
 - **Table:** `seo_ai_models` (connection `mysql`)
 - Lưu danh sách model từ API provider (Gemini models), sync qua `AiModelsSyncService`
@@ -308,7 +335,7 @@ Cho phép truy xuất nguồn gốc của mỗi output AI (prompt result nào si
 ```
 Settings Pages: Filament/Pages/SeoSettings*.php, ImageOptimizationSettings.php
 Workflows Settings: Filament/Pages/SeoSettingsWorkflows.php → SeoCreateArticleSettingsService
-AI Connections: Filament/Resources/AiConnectionResource.php → ApiConnection model (mysql)
+API Connections: `AiConnectionResource` (`settings/api`) → `ApiConnection` + `SeoGscMasterConnection` + `SeoDataForSeoConnection`; list `ApiConnectionsListService` + `ApiConnectionListRow`
 Prompt Management: Filament/Resources/PromptResource.php → SeoPrompt model (omi_seo_ai)
 Prompt Engine: Services/PromptRunnerService.php (1181 dòng)
 Model Router: Services/AiModelRouterService.php → SeoAiModel (mysql)

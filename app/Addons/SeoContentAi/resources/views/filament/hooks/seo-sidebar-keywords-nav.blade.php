@@ -1,19 +1,20 @@
 @php
+    use App\Addons\SeoContentAi\Filament\Pages\AiKeywordDiscovery;
     use App\Addons\SeoContentAi\Filament\Pages\SeoPerformanceHub;
     use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
     use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
     $contentEditorUrl = KeywordResource::getUrl('index');
+    $aiDiscoveryUrl = AiKeywordDiscovery::getUrl();
     $performanceHubUrl = SeoPerformanceHub::getUrl();
     $isKeywordsActive = request()->routeIs([
         'filament.seo.resources.keywords.*',
-        'seo.keywords.*',
-    ]);
-    $isPerformanceActive = request()->routeIs([
+        'filament.seo.pages.ai-keyword-discovery',
         'filament.seo.pages.performance-hub',
+        'seo.keywords.*',
         'seo.performance.*',
     ]);
-    $openKeywords = $isKeywordsActive || $isPerformanceActive;
+    $openKeywords = $isKeywordsActive;
 @endphp
 
 @if (SeoAccessControl::canAccessPlannerFeatures())
@@ -60,7 +61,13 @@
                     href="{{ $contentEditorUrl }}"
                     @class([
                         'seo-keywords-dropdown__link',
-                        'is-active' => $isKeywordsActive,
+                        'is-active' => request()->routeIs(
+                            'filament.seo.resources.keywords.index',
+                            'filament.seo.resources.keywords.focus',
+                            'filament.seo.resources.keywords.anchor-audit',
+                            'filament.seo.resources.keywords.workspace-2',
+                            'filament.seo.resources.keywords.cannibalization',
+                        ),
                     ])
                 >
                     {{ __('seo-content-ai::filament.performance_hub.nav_content_editor') }}
@@ -68,13 +75,24 @@
             </li>
             <li>
                 <a
+                    href="{{ $aiDiscoveryUrl }}"
+                    @class([
+                        'seo-keywords-dropdown__link',
+                        'is-active' => request()->routeIs('filament.seo.pages.ai-keyword-discovery'),
+                    ])
+                >
+                    {{ __('seo-content-ai::filament.keyword.ai_discovery_nav') }}
+                </a>
+            </li>
+            <li>
+                <a
                     href="{{ $performanceHubUrl }}"
                     @class([
                         'seo-keywords-dropdown__link',
-                        'is-active' => $isPerformanceActive,
+                        'is-active' => request()->routeIs('filament.seo.pages.performance-hub', 'seo.performance.*'),
                     ])
                 >
-                    {{ __('seo-content-ai::filament.performance_hub.nav_performance_hub') }}
+                    {{ __('seo-content-ai::filament.performance_hub.nav_seo_performance') }}
                 </a>
             </li>
         </ul>
@@ -87,6 +105,10 @@
 
         .fi-sidebar-nav .fi-sidebar-item[data-seo-keywords-nav] + .fi-sidebar-item[data-seo-keywords-nav] {
             display: none;
+        }
+
+        .fi-sidebar-nav .fi-sidebar-item:has(> .fi-sidebar-item-button[href*="/performance-hub"]) {
+            display: none !important;
         }
 
         .seo-keywords-dropdown__link {

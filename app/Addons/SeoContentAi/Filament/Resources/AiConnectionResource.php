@@ -5,21 +5,31 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
+use App\Addons\SeoContentAi\Models\ApiConnectionListRow;
+use App\Addons\SeoContentAi\Services\DataForSeoConnectionService;
+use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
+use App\Addons\SeoContentAi\Services\GoogleSearchConsoleConnectionService;
+use App\Addons\SeoContentAi\Support\ApiConnectionFormSchema;
+use App\Addons\SeoContentAi\Support\ApiConnectionProviders;
+use App\Addons\SeoContentAi\Support\SerpProviderKeys;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Models\ApiConnection;
-use Filament\Forms;
-use Filament\Forms\Form;
-use Filament\Forms\Get;
+use Filament\Notifications\Notification;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\HtmlString;
+use Illuminate\Database\Eloquent\Model;
 
 class AiConnectionResource extends SeoPanelResource
 {
     protected static ?string $model = ApiConnection::class;
 
-    protected static ?string $slug = 'settings/ai';
+    protected static ?string $slug = 'settings/api';
+
+    protected static ?string $modelLabel = 'API connection';
+
+    protected static ?string $pluralModelLabel = 'API Connections';
 
     protected static ?string $navigationIcon = 'heroicon-o-cpu-chip';
 
@@ -39,101 +49,177 @@ class AiConnectionResource extends SeoPanelResource
             && SeoAccessControl::canAccessManagerFeatures();
     }
 
-    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    public static function canEdit(Model $record): bool
     {
-        return static::allowsSeoPanelMutation()
-            && SeoAccessControl::canAccessManagerFeatures();
+        if (! static::allowsSeoPanelMutation() || ! SeoAccessControl::canAccessManagerFeatures()) {
+            return false;
+        }
+
+        if ($record instanceof ApiConnectionListRow) {
+            return ApiConnectionProviders::isExternal((string) $record->getAttribute('provider'));
+        }
+
+        return ApiConnectionProviders::isAi((string) $record->getAttribute('provider'));
     }
 
-    public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
+    public static function resolveEditUrl(Model $record): ?string
     {
-        return static::allowsSeoPanelMutation()
-            && SeoAccessControl::canAccessManagerFeatures();
+        if ($record instanceof ApiConnectionListRow) {
+            return static::externalEditUrl(
+                (string) $record->getAttribute('provider'),
+                (string) $record->getKey(),
+            );
+        }
+
+        if ($record instanceof ApiConnection && ApiConnectionProviders::isAi((string) $record->getAttribute('provider'))) {
+            return static::getUrl('edit', ['record' => $record]);
+        }
+
+        return null;
     }
 
-    protected static ?string $modelLabel = 'AI connection';
-
-    protected static ?string $pluralModelLabel = 'AI settings';
-
-    public static function form(Form $form): Form
+    public static function gscEditUrl(int $recordId, ?string $connectionHash = null): string
     {
-        return $form
-            ->schema([
-                Forms\Components\Select::make('provider')
-                    ->label(__('seo-content-ai::filament.ai_connection.provider'))
-                    ->options([
-                        'gemini' => 'Google Gemini',
-                        'claude' => 'Anthropic Claude',
-                    ])
-                    ->live()
-                    ->required()
-                    ->native(false)
-                    ->helperText(fn (Get $get): ?HtmlString => match ($get('provider')) {
-                        'gemini' => new HtmlString(
-                            '<a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" '
-                            .'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
-                            .'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            .e('👉 How to get Gemini API key from Google AI Studio')
-                            .'</a>'
-                        ),
-                        'claude' => new HtmlString(
-                            '<a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" '
-                            .'class="text-primary-600 hover:underline inline-flex items-center gap-1" '
-                            .'style="color: #3b82f6; text-decoration: underline; font-weight: 500;">'
-                            .e('👉 How to get Claude API key from Anthropic Console')
-                            .'</a>'
-                        ),
-                        default => null,
-                    }),
-                Forms\Components\TextInput::make('name')
-                    ->label(__('seo-content-ai::filament.ai_connection.name'))
-                    ->required()
-                    ->maxLength(255),
-                Forms\Components\TextInput::make('api_key')
-                    ->label(__('seo-content-ai::filament.ai_connection.api_key'))
-                    ->password()
-                    ->revealable()
-                    ->required(fn (string $operation): bool => $operation === 'create')
-                    ->dehydrated(fn (?string $state): bool => filled($state))
-                    ->maxLength(65535)
-                    ->helperText(__('seo-content-ai::filament.ai_connection.helper_sync')),
-                Forms\Components\Select::make('status')
-                    ->label(__('seo-content-ai::filament.ai_connection.status'))
-                    ->options([
-                        'active' => __('seo-content-ai::filament.ai_connection.active'),
-                        'inactive' => __('seo-content-ai::filament.ai_connection.inactive'),
-                    ])
-                    ->default('active')
-                    ->native(false),
-            ]);
+        if ($connectionHash !== null && SeoConnectionContext::isValidHashFormat($connectionHash)) {
+            return '/seo/'.$connectionHash.'/settings/api/google-search-console/'.$recordId.'/edit';
+        }
+
+        return static::getUrl('edit-gsc', ['record' => $recordId]);
+    }
+
+    public static function externalEditUrl(string $provider, ?string $listRowId = null): string
+    {
+        if ($provider === ApiConnectionProviders::GOOGLE_SEARCH_CONSOLE) {
+            $recordId = ApiConnectionListRow::extractGscId((string) $listRowId);
+            if ($recordId !== null) {
+                return static::gscEditUrl($recordId);
+            }
+        }
+
+        return match ($provider) {
+            ApiConnectionProviders::DATAFORSEO => static::getUrl('edit-dataforseo'),
+            ApiConnectionProviders::SERPER,
+            ApiConnectionProviders::SERPAPI,
+            ApiConnectionProviders::SEARCHAPI => static::getUrl('edit-serp', ['provider' => $provider]),
+            default => static::getUrl('index'),
+        };
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        if (! static::allowsSeoPanelMutation() || ! SeoAccessControl::canAccessManagerFeatures()) {
+            return false;
+        }
+
+        if ($record instanceof ApiConnection) {
+            return ApiConnectionProviders::isAi((string) $record->getAttribute('provider'))
+                && ! (bool) $record->getAttribute('is_global');
+        }
+
+        if ($record instanceof ApiConnectionListRow) {
+            return ApiConnectionProviders::isExternal((string) $record->getAttribute('provider'));
+        }
+
+        return false;
+    }
+
+    public static function form(\Filament\Forms\Form $form): \Filament\Forms\Form
+    {
+        return $form->schema(ApiConnectionFormSchema::components());
     }
 
     public static function table(Table $table): Table
     {
         return $table
-            ->contentGrid([
-                'md' => 1,
-            ])
+            ->paginated(false)
+            ->emptyStateHeading(__('seo-content-ai::filament.api_connections.empty'))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->label(__('seo-content-ai::filament.ai_connection.model'))
-                    ->description(fn (ApiConnection $record): string => match ($record->provider) {
-                        'gemini' => 'Google Gemini',
-                        'claude' => 'Anthropic Claude',
-                        default => (string) $record->provider,
-                    })
                     ->searchable()
+                    ->sortable()
+                    ->url(fn (Model $record): ?string => static::resolveEditUrl($record)),
+                Tables\Columns\TextColumn::make('provider')
+                    ->label(__('seo-content-ai::filament.ai_connection.provider'))
+                    ->formatStateUsing(
+                        fn (?string $state): string => ApiConnectionProviders::label((string) $state),
+                    )
                     ->sortable(),
             ])
             ->actions([
-                Tables\Actions\EditAction::make(),
-                Tables\Actions\DeleteAction::make(),
+                Tables\Actions\EditAction::make()
+                    ->url(fn (Model $record): ?string => static::resolveEditUrl($record))
+                    ->visible(fn (Model $record): bool => static::canEdit($record)),
+                Tables\Actions\DeleteAction::make()
+                    ->label(__('seo-content-ai::filament.api_connections.delete_connection'))
+                    ->modalHeading(__('seo-content-ai::filament.api_connections.delete_connection'))
+                    ->modalDescription(__('seo-content-ai::filament.api_connections.delete_connection_confirm'))
+                    ->successNotificationTitle(__('seo-content-ai::filament.api_connections.delete_connection_success'))
+                    ->visible(fn (Model $record): bool => static::canDelete($record))
+                    ->action(function (Model $record): void {
+                        if (! static::deleteRecord($record)) {
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.api_connections.delete_connection'))
+                                ->body(__('seo-content-ai::filament.keyword.workspace_save_denied'))
+                                ->danger()
+                                ->send();
+
+                            return;
+                        }
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.api_connections.delete_connection_success'))
+                            ->success()
+                            ->send();
+                    }),
             ])
-            ->bulkActions(static::seoPanelBulkActions([
-                Tables\Actions\BulkActionGroup::make([
-                    Tables\Actions\DeleteBulkAction::make(),
-                ]),
-            ]));
+            ->actionsColumnLabel(__('seo-content-ai::filament.api_connections.table_actions'))
+            ->bulkActions([]);
+    }
+
+    public static function deleteRecord(Model $record): bool
+    {
+        $userId = (int) auth()->id();
+
+        if ($record instanceof ApiConnection) {
+            if (! ApiConnectionProviders::isAi((string) $record->getAttribute('provider')) || (bool) $record->getAttribute('is_global')) {
+                return false;
+            }
+
+            $record->delete();
+
+            return true;
+        }
+
+        if (! $record instanceof ApiConnectionListRow) {
+            return false;
+        }
+
+        $provider = (string) $record->getAttribute('provider');
+        $rowId = (string) $record->getKey();
+
+        if ($provider === ApiConnectionProviders::GOOGLE_SEARCH_CONSOLE) {
+            $gscId = ApiConnectionListRow::extractGscId($rowId);
+
+            return $gscId !== null
+                && app(GoogleSearchConsoleConnectionService::class)->deleteById($userId, $gscId);
+        }
+
+        if ($provider === ApiConnectionProviders::DATAFORSEO) {
+            $dfsId = ApiConnectionListRow::extractDfsId($rowId);
+
+            return $dfsId !== null
+                && app(DataForSeoConnectionService::class)->deleteById($userId, $dfsId);
+        }
+
+        if (ApiConnectionProviders::isSerpProvider($provider)) {
+            $serpId = ApiConnectionListRow::extractSerpId($rowId);
+
+            return $serpId !== null
+                && app(SeoSerpProviderConnectionService::class)->deleteById($userId, $serpId);
+        }
+
+        return false;
     }
 
     public static function getEloquentQuery(): Builder
@@ -152,6 +238,11 @@ class AiConnectionResource extends SeoPanelResource
         return [
             'index' => Pages\ListAiConnections::route('/'),
             'create' => Pages\CreateAiConnection::route('/create'),
+            'gsc-edit-legacy' => Pages\LegacyGscEditRedirect::route('/gsc/edit'),
+            'gsc-edit-root-legacy' => Pages\LegacyGscRootEditRedirect::route('/google-search-console/edit'),
+            'edit-gsc' => Pages\EditGscApiConnection::route('/google-search-console/{record}/edit'),
+            'edit-dataforseo' => Pages\EditDataForSeoApiConnection::route('/dataforseo/edit'),
+            'edit-serp' => Pages\EditSerpProviderApiConnection::route('/{provider}/edit'),
             'edit' => Pages\EditAiConnection::route('/{record}/edit'),
         ];
     }
