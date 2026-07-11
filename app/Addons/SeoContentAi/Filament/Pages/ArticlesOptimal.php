@@ -396,64 +396,6 @@ final class ArticlesOptimal extends SeoPanelPage
     }
 
     /**
-     * @return list<array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}>
-     */
-    #[Computed]
-    public function reviewedArticlesGrouped(): array
-    {
-        return $this->getReviewedArticlesGrouped();
-    }
-
-    /**
-     * @return list<array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}>
-     */
-    public function getReviewedArticlesGrouped(): array
-    {
-        $articles = $this->accessibleArticleQuery()
-            ->where('is_reviewed', true)
-            ->whereNotNull('reviewed_at')
-            ->whereNotIn('type', ['category', 'product_category'])
-            ->where('status', '!=', 'trash')
-            ->select(['id', 'title', 'reviewed_at'])
-            ->orderByDesc('reviewed_at')
-            ->get();
-
-        /** @var array<string, array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}> $grouped */
-        $grouped = [];
-
-        foreach ($articles as $article) {
-            if (! $article instanceof SeoArticle || $article->reviewed_at === null) {
-                continue;
-            }
-
-            $reviewedAt = $article->reviewed_at instanceof Carbon
-                ? $article->reviewed_at
-                : Carbon::parse((string) $article->reviewed_at);
-
-            $dateKey = $reviewedAt->toDateString();
-
-            if (! isset($grouped[$dateKey])) {
-                $grouped[$dateKey] = [
-                    'date' => $dateKey,
-                    'date_label' => $reviewedAt->translatedFormat('d/m/Y'),
-                    'count' => 0,
-                    'articles' => [],
-                ];
-            }
-
-            $grouped[$dateKey]['articles'][] = [
-                'id' => (int) $article->id,
-                'title' => (string) ($article->title ?? ''),
-                'reviewed_time' => $reviewedAt->format('H:i'),
-                'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
-            ];
-            $grouped[$dateKey]['count']++;
-        }
-
-        return array_values($grouped);
-    }
-
-    /**
      * @return LengthAwarePaginator<int, array<string, mixed>>
      */
     public function getResultsPaginator(): LengthAwarePaginator

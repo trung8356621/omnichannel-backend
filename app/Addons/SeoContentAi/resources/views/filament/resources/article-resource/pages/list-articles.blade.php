@@ -32,8 +32,17 @@
         >
             {{ __('seo-content-ai::filament.article_list.tab_queue') }}
         </a>
+        <a
+            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED) }}"
+            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED])
+        >
+            {{ __('seo-content-ai::filament.article_list.tab_reviewed') }}
+        </a>
     </div>
 
+    @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED)
+        @include('seo-content-ai::filament.resources.article-resource.pages.partials.reviewed-articles-tab')
+    @else
     <div @class([
         'article-list-table-shell',
         'article-list-table-shell--queue' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE,
@@ -50,6 +59,7 @@
         </div>
         {{ $this->table }}
     </div>
+    @endif
 
     <script type="application/json" id="article-seo-list-config">
         @json([
@@ -173,7 +183,7 @@
                 }
 
                 .fi-resource-articles .article-list-table-shell--queue .fi-ta-actions-cell .fi-ta-actions {
-                    grid-template-columns: repeat(3, 2rem);
+                    grid-template-columns: repeat(4, 2rem);
                     gap: 0.375rem 0.625rem;
                 }
 

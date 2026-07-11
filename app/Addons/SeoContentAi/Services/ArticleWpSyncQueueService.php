@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use Throwable;
 
 final class ArticleWpSyncQueueService
 {
@@ -27,7 +29,6 @@ final class ArticleWpSyncQueueService
     public function __construct(
         private readonly ArticleEditorBundleApplyService $bundleApply,
         private readonly ArticleEditorPersistService $persist,
-        private readonly ArticleEditorSyncOrchestrator $syncOrchestrator,
         private readonly SeoDatabaseConnectionService $databaseConnection,
     ) {}
 
@@ -117,7 +118,19 @@ final class ArticleWpSyncQueueService
         $payload['result_message'] = (string) ($result['message'] ?? '');
 
         $this->writeQueueMeta($article, $payload);
+        $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
+        $this->purgeDispatchedJobsForArticle((int) $article->id);
+    }
+
+    public function clearQueueEntry(SeoArticle $article): void
+    {
+        if ($this->readQueueMeta($article) === []) {
+            return;
+        }
+
+        $article = $this->bootstrapArticleDatabase($article);
+        $article->articleMetas()->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])->delete();
     }
 
     public function markFailed(SeoArticle $article, string $error): void
@@ -147,7 +160,7 @@ final class ArticleWpSyncQueueService
     }
 
     /**
-     * @return array{success: bool, message: string}
+     * @return array{success: bool, message: string, queued?: bool}
      */
     public function resync(SeoArticle $article): array
     {
@@ -159,10 +172,10 @@ final class ArticleWpSyncQueueService
             ];
         }
 
-        if (! in_array((string) ($payload['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED], true)) {
+        if (! in_array((string) ($payload['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED, self::STATUS_PROCESSING], true)) {
             return [
                 'success' => false,
-                'message' => 'Chỉ có thể đồng bộ lại bài đang chờ hoặc thất bại.',
+                'message' => 'Chỉ có thể đồng bộ lại bài đang chờ, đang xử lý hoặc thất bại.',
             ];
         }
 
@@ -175,30 +188,22 @@ final class ArticleWpSyncQueueService
         }
 
         $article = $this->bootstrapArticleDatabase($article);
-        $bundle = $this->prepareBundleForImmediateSync($bundle);
+        $now = now();
 
-        $payload['status'] = self::STATUS_PROCESSING;
-        $payload['started_at'] = now()->toIso8601String();
+        $payload['status'] = self::STATUS_PENDING;
+        $payload['queued_at'] = $now->toIso8601String();
+        $payload['started_at'] = null;
+        $payload['finished_at'] = null;
         $payload['error'] = null;
+        $payload['user_id'] = Auth::id();
         $this->writeQueueMeta($article, $payload);
 
-        $result = $this->syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle);
-
-        if (! ($result['success'] ?? false)) {
-            $message = (string) ($result['message'] ?? 'Đồng bộ WordPress thất bại.');
-            $this->markFailed($article->fresh() ?? $article, $message);
-
-            return [
-                'success' => false,
-                'message' => $message,
-            ];
-        }
-
-        $this->markCompleted($article->fresh() ?? $article, $result);
+        SyncArticleToWordPressFromQueueJob::dispatch((int) $article->id);
 
         return [
             'success' => true,
-            'message' => (string) ($result['message'] ?? 'Đã đồng bộ WordPress.'),
+            'message' => 'Đã đưa lại vào hàng đợi đồng bộ WordPress.',
+            'queued' => true,
         ];
     }
 
@@ -209,13 +214,17 @@ final class ArticleWpSyncQueueService
             return false;
         }
 
-        if (! in_array((string) ($payload['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED], true)) {
+        $status = (string) ($payload['status'] ?? '');
+        if (! in_array($status, [self::STATUS_PENDING, self::STATUS_FAILED, self::STATUS_PROCESSING, self::STATUS_COMPLETED], true)) {
             return false;
         }
 
-        $article->articleMetas()->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])->delete();
+        $article = $this->bootstrapArticleDatabase($article);
+        $deleted = $article->articleMetas()
+            ->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])
+            ->delete();
 
-        return true;
+        return $deleted > 0;
     }
 
     /**
@@ -223,9 +232,7 @@ final class ArticleWpSyncQueueService
      */
     public function readQueueMeta(SeoArticle $article): array
     {
-        $article->loadMissing('articleMetas');
-        $raw = trim((string) ($article->articleMetas
-            ->firstWhere('meta_key', self::META_KEY)?->meta_value ?? ''));
+        $raw = $this->readQueueMetaRaw($article);
 
         if ($raw === '') {
             return [];
@@ -241,9 +248,7 @@ final class ArticleWpSyncQueueService
      */
     public function readQueueBundle(SeoArticle $article): array
     {
-        $article->loadMissing('articleMetas');
-        $raw = trim((string) ($article->articleMetas
-            ->firstWhere('meta_key', self::BUNDLE_META_KEY)?->meta_value ?? ''));
+        $raw = $this->readQueueBundleRaw($article);
 
         if ($raw === '') {
             return [];
@@ -363,9 +368,98 @@ final class ArticleWpSyncQueueService
      */
     private function writeQueueMeta(SeoArticle $article, array $payload): void
     {
+        $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => self::META_KEY],
             ['meta_value' => json_encode($payload, JSON_UNESCAPED_UNICODE)],
         );
+    }
+
+    private function readQueueMetaRaw(SeoArticle $article): string
+    {
+        if (isset($article->wp_sync_queue_meta) && is_string($article->wp_sync_queue_meta)) {
+            return trim($article->wp_sync_queue_meta);
+        }
+
+        $article = $this->bootstrapArticleDatabase($article);
+        $article->unsetRelation('articleMetas');
+
+        return trim((string) $article->articleMetas()
+            ->where('meta_key', self::META_KEY)
+            ->value('meta_value') ?? '');
+    }
+
+    private function readQueueBundleRaw(SeoArticle $article): string
+    {
+        if (isset($article->wp_sync_queue_bundle) && is_string($article->wp_sync_queue_bundle)) {
+            return trim($article->wp_sync_queue_bundle);
+        }
+
+        $article = $this->bootstrapArticleDatabase($article);
+        $article->unsetRelation('articleMetas');
+
+        return trim((string) $article->articleMetas()
+            ->where('meta_key', self::BUNDLE_META_KEY)
+            ->value('meta_value') ?? '');
+    }
+
+    public function purgeDispatchedJobsForArticle(int $articleId): void
+    {
+        if ($articleId <= 0) {
+            return;
+        }
+
+        try {
+            $connection = $this->jobsConnection();
+
+            foreach (
+                DB::connection($connection)
+                    ->table('jobs')
+                    ->select(['id', 'payload'])
+                    ->where('payload', 'like', '%SyncArticleToWordPressFromQueueJob%')
+                    ->cursor() as $job
+            ) {
+                if ($this->extractArticleIdFromJobPayload((string) ($job->payload ?? '')) !== $articleId) {
+                    continue;
+                }
+
+                DB::connection($connection)->table('jobs')->where('id', $job->id)->delete();
+            }
+        } catch (Throwable) {
+            // Queue table may be unavailable in some environments.
+        }
+    }
+
+    public function extractArticleIdFromJobPayload(string $payload): ?int
+    {
+        if (preg_match('/s:\d+:"articleId";i:(\d+)/', $payload, $matches) === 1) {
+            $articleId = (int) $matches[1];
+
+            return $articleId > 0 ? $articleId : null;
+        }
+
+        $decoded = json_decode($payload, true);
+        if (! is_array($decoded)) {
+            return null;
+        }
+
+        $command = $decoded['data']['command'] ?? null;
+        if (! is_string($command) || $command === '') {
+            return null;
+        }
+
+        $job = @unserialize($command, ['allowed_classes' => [SyncArticleToWordPressFromQueueJob::class]]);
+        if ($job instanceof SyncArticleToWordPressFromQueueJob) {
+            return $job->articleId > 0 ? $job->articleId : null;
+        }
+
+        return null;
+    }
+
+    private function jobsConnection(): string
+    {
+        $connection = (string) config('queue.connections.'.config('queue.default').'.connection');
+
+        return $connection !== '' ? $connection : (string) config('database.default');
     }
 }

@@ -1,9 +1,11 @@
 /**
  * Canvas drawing helpers for watermark stamp patterns.
+ * All dimensional opts are absolute pixels resolved for the target canvas size.
  */
 
 import { applyColorStyle } from './watermarkColorUtils';
 import { normalizeAnchorPosition, resolveAnchorCenter } from './watermarkPosition';
+import { minDim, pctOfMin } from './watermarkRelativeUnits';
 
 function fillFromOpts(ctx, rect, opts) {
     if (opts.textColorConfig) {
@@ -37,39 +39,50 @@ export function drawTextArc(ctx, str, x, y, radius, startAngle, endAngle, isReve
     ctx.restore();
 }
 
-export function resolveStampCenter(canvasW, canvasH, positionType, customCoords, presetPos, margin, position = {}) {
+export function resolveStampCenter(
+    canvasW,
+    canvasH,
+    positionType,
+    customCoords,
+    presetPos,
+    margin,
+    position = {},
+) {
+    const m = minDim(canvasW, canvasH);
+
     if (positionType === 'anchor') {
         const { anchor, offsetX, offsetY } = normalizeAnchorPosition(position);
-        const stampW = 280;
-        const stampH = 120;
+        const stampW = pctOfMin(14, canvasW, canvasH);
+        const stampH = pctOfMin(6, canvasW, canvasH);
 
         return resolveAnchorCenter(canvasW, canvasH, anchor, offsetX, offsetY, stampW, stampH);
     }
 
-    const pad = margin;
+    const pad = Number(margin) || 0;
+    const inset = pctOfMin(12.5, canvasW, canvasH);
     switch (presetPos) {
         case 'top-left':
-            return { x: pad + 140, y: pad + 140 };
+            return { x: pad + inset, y: pad + inset };
         case 'top-center':
-            return { x: canvasW / 2, y: pad + 140 };
+            return { x: canvasW / 2, y: pad + inset };
         case 'top-right':
-            return { x: canvasW - pad - 140, y: pad + 140 };
+            return { x: canvasW - pad - inset, y: pad + inset };
         case 'center-left':
-            return { x: pad + 140, y: canvasH / 2 };
+            return { x: pad + inset, y: canvasH / 2 };
         case 'center-right':
-            return { x: canvasW - pad - 140, y: canvasH / 2 };
+            return { x: canvasW - pad - inset, y: canvasH / 2 };
         case 'bottom-left':
-            return { x: pad + 140, y: canvasH - pad - 140 };
+            return { x: pad + inset, y: canvasH - pad - inset };
         case 'bottom-center':
-            return { x: canvasW / 2, y: canvasH - pad - 140 };
+            return { x: canvasW / 2, y: canvasH - pad - inset };
         case 'bottom-right':
         default:
-            return { x: canvasW - pad - 140, y: canvasH - pad - 140 };
+            return { x: canvasW - pad - inset, y: canvasH - pad - inset };
     }
 }
 
 export function drawClassicGrid(ctx, w, h, opts) {
-    const { text1, textSize, selectedFont, textColor, rotation, gridSpacing } = opts;
+    const { text1, textSize, selectedFont, rotation, gridSpacing } = opts;
 
     ctx.save();
     ctx.translate(w / 2, h / 2);
@@ -106,14 +119,14 @@ export function drawCircularBadge(ctx, cx, cy, opts) {
     ctx.translate(cx, cy);
     ctx.rotate((rotation * Math.PI) / 180);
 
-    const radius = Math.max(100, textSize * 4);
+    const radius = Math.max(textSize * 4, textSize * 4.2);
 
     if (bgOpacity > 0) {
         ctx.save();
         ctx.globalAlpha = bgOpacity;
         ctx.fillStyle = backgroundColor;
         ctx.beginPath();
-        ctx.arc(0, 0, radius + 20, 0, Math.PI * 2);
+        ctx.arc(0, 0, radius + textSize * 0.85, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
     }
@@ -126,7 +139,7 @@ export function drawCircularBadge(ctx, cx, cy, opts) {
 
     ctx.lineWidth = Math.max(1, borderWidth / 2);
     ctx.beginPath();
-    ctx.arc(0, 0, radius - 8, 0, Math.PI * 2);
+    ctx.arc(0, 0, radius - textSize * 0.33, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.font = `bold ${textSize * 0.75}px ${selectedFont}`;
@@ -134,20 +147,21 @@ export function drawCircularBadge(ctx, cx, cy, opts) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    drawTextArc(ctx, String(text1).toUpperCase(), 0, 0, radius - 22, -Math.PI / 1.45, Math.PI / 1.45);
+    const arcRadius = radius - textSize * 0.92;
+    drawTextArc(ctx, String(text1).toUpperCase(), 0, 0, arcRadius, -Math.PI / 1.45, Math.PI / 1.45);
     drawTextArc(
         ctx,
         String(text2).toUpperCase(),
         0,
         0,
-        radius - 22,
+        arcRadius,
         Math.PI / 1.45,
         -Math.PI / 1.45,
         true,
     );
 
     ctx.font = `bold ${textSize}px ${selectedFont}`;
-    ctx.fillText('★', 0, 2);
+    ctx.fillText('★', 0, textSize * 0.08);
 
     ctx.restore();
 }
@@ -172,7 +186,7 @@ export function drawSecurityRect(ctx, cx, cy, opts) {
     ctx.font = `bold ${textSize}px ${selectedFont}`;
     const label = String(text1).toUpperCase();
     const textWidth = ctx.measureText(label).width;
-    const rectW = textWidth + 60;
+    const rectW = textWidth + textSize * 2.5;
     const rectH = textSize * 2.5;
 
     if (bgOpacity > 0) {
@@ -185,12 +199,18 @@ export function drawSecurityRect(ctx, cx, cy, opts) {
 
     ctx.strokeStyle = borderColor;
     ctx.lineWidth = borderWidth;
-    ctx.setLineDash([6, 4]);
+    ctx.setLineDash([textSize * 0.25, textSize * 0.17]);
     ctx.strokeRect(-rectW / 2, -rectH / 2, rectW, rectH);
     ctx.setLineDash([]);
 
+    const innerPad = textSize * 0.21;
     ctx.lineWidth = Math.max(1, borderWidth / 3);
-    ctx.strokeRect(-rectW / 2 + 5, -rectH / 2 + 5, rectW - 10, rectH - 10);
+    ctx.strokeRect(
+        -rectW / 2 + innerPad,
+        -rectH / 2 + innerPad,
+        rectW - innerPad * 2,
+        rectH - innerPad * 2,
+    );
 
     ctx.save();
     ctx.rotate((-15 * Math.PI) / 180);
@@ -218,10 +238,10 @@ export function drawElegantSignature(ctx, x, y, opts) {
 
     const w = ctx.measureText(text1).width;
     ctx.strokeStyle = borderColor;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = Math.max(1, textSize * 0.06);
     ctx.beginPath();
-    ctx.moveTo(-10, 12);
-    ctx.quadraticCurveTo(w / 2, 22, w + 30, 6);
+    ctx.moveTo(-textSize * 0.42, textSize * 0.5);
+    ctx.quadraticCurveTo(w / 2, textSize * 0.92, w + textSize * 1.25, textSize * 0.25);
     ctx.stroke();
 
     ctx.restore();
@@ -229,7 +249,9 @@ export function drawElegantSignature(ctx, x, y, opts) {
 
 export function drawMinimalFrame(ctx, w, h, opts) {
     const { text1, textSize, selectedFont, textColor, borderColor, borderWidth } = opts;
-    const padding = 30;
+    const padding = pctOfMin(2.67, w, h);
+    const innerGap = pctOfMin(0.71, w, h);
+    const labelInset = pctOfMin(1.78, w, h);
 
     ctx.save();
     ctx.strokeStyle = borderColor;
@@ -237,13 +259,18 @@ export function drawMinimalFrame(ctx, w, h, opts) {
     ctx.strokeRect(padding, padding, w - padding * 2, h - padding * 2);
 
     ctx.lineWidth = Math.max(1, borderWidth / 2);
-    ctx.strokeRect(padding + 8, padding + 8, w - (padding + 8) * 2, h - (padding + 8) * 2);
+    ctx.strokeRect(
+        padding + innerGap,
+        padding + innerGap,
+        w - (padding + innerGap) * 2,
+        h - (padding + innerGap) * 2,
+    );
 
     ctx.font = `bold ${textSize * 0.7}px ${selectedFont}`;
     ctx.fillStyle = textColor;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText(text1, w - padding - 20, h - padding - 20);
+    ctx.fillText(text1, w - padding - labelInset, h - padding - labelInset);
 
     ctx.restore();
 }
@@ -266,19 +293,16 @@ function drawVerticalBrand(ctx, text, x, startY, letterSpacing, direction = 1) {
     });
 }
 
-/**
- * Khung góc thẩm mỹ: L-shape 4 góc, chấm tròn, chữ góc + chữ dọc hai cạnh.
- */
 export function drawAestheticCorners(ctx, w, h, opts) {
     const { text1, text2, textSize, selectedFont, textColor, borderColor, borderWidth, gridSpacing } =
         opts;
 
-    const padding = Math.max(15, gridSpacing / 4);
-    const len = Math.max(28, textSize * 1.6);
+    const padding = Math.max(pctOfMin(1.33, w, h), gridSpacing / 4);
+    const len = Math.max(textSize * 1.6, textSize * 1.17);
     const sideText = String(text2 || text1).trim();
     const cornerLabel = String(text1).trim();
-    const letterSpacing = Math.max(14, textSize * 0.82);
-    const smallSize = Math.max(11, textSize * 0.55);
+    const letterSpacing = Math.max(textSize * 0.82, textSize * 0.58);
+    const smallSize = Math.max(textSize * 0.55, textSize * 0.46);
 
     ctx.save();
     ctx.strokeStyle = borderColor;
@@ -300,12 +324,13 @@ export function drawAestheticCorners(ctx, w, h, opts) {
     drawL(w - padding - len, h - padding, w - padding, h - padding, w - padding, h - padding - len);
 
     ctx.fillStyle = borderColor;
-    const dotR = Math.max(2.5, borderWidth * 0.9);
+    const dotR = Math.max(borderWidth * 0.9, borderWidth * 0.83);
+    const dotOffset = textSize * 0.58;
     const dots = [
-        [padding + len + 14, padding + 14],
-        [w - padding - len - 14, padding + 14],
-        [padding + len + 14, h - padding - 14],
-        [w - padding - len - 14, h - padding - 14],
+        [padding + len + dotOffset, padding + dotOffset],
+        [w - padding - len - dotOffset, padding + dotOffset],
+        [padding + len + dotOffset, h - padding - dotOffset],
+        [w - padding - len - dotOffset, h - padding - dotOffset],
     ];
     dots.forEach(([dx, dy]) => {
         ctx.beginPath();
@@ -314,24 +339,26 @@ export function drawAestheticCorners(ctx, w, h, opts) {
     });
 
     ctx.fillStyle = textColor;
-    ctx.font = fontCss(selectedFont, Math.max(12, textSize * 0.72));
+    ctx.font = fontCss(selectedFont, Math.max(textSize * 0.72, textSize * 0.5));
     ctx.textBaseline = 'middle';
 
+    const labelPad = textSize * 0.5;
+    const labelOffset = textSize * 0.75;
     ctx.textAlign = 'left';
-    ctx.fillText(cornerLabel, padding + 12, padding + len + 18);
+    ctx.fillText(cornerLabel, padding + labelPad, padding + len + labelOffset);
     ctx.textAlign = 'right';
-    ctx.fillText(cornerLabel, w - padding - 12, padding + len + 18);
+    ctx.fillText(cornerLabel, w - padding - labelPad, padding + len + labelOffset);
     ctx.textAlign = 'left';
-    ctx.fillText(cornerLabel, padding + 12, h - padding - len - 18);
+    ctx.fillText(cornerLabel, padding + labelPad, h - padding - len - labelOffset);
     ctx.textAlign = 'right';
-    ctx.fillText(cornerLabel, w - padding - 12, h - padding - len - 18);
+    ctx.fillText(cornerLabel, w - padding - labelPad, h - padding - len - labelOffset);
 
     ctx.font = fontCss(selectedFont, smallSize, 'normal');
 
-    const sideStartY = padding + len + 36;
-    const sideEndY = h - padding - len - 36;
-    const leftX = padding + 10;
-    const rightX = w - padding - 10;
+    const sideStartY = padding + len + textSize * 1.5;
+    const sideEndY = h - padding - len - textSize * 1.5;
+    const leftX = padding + textSize * 0.42;
+    const rightX = w - padding - textSize * 0.42;
 
     drawVerticalBrand(ctx, sideText, leftX, sideStartY, letterSpacing, 1);
 

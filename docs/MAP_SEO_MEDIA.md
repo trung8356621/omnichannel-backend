@@ -372,12 +372,16 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 
 ### Filament Pages
 
-- `WatermarkSettingsPage.php` — cấu hình watermark mặc định (vị trí, opacity, size)
-- `WatermarkEditor.php` — design suite cho watermark (canvas editor + preview)
+| Page | Route | Vai trò |
+|------|-------|---------|
+| `WatermarkEditor.php` | `/seo/watermark-editor` | **Watermark design suite** — thiết kế đóng dấu theo domain (canvas React, lưu `design_config` + overlay PNG). Domain mặc định từ `SeoAccessControl::globalSiteId()`. |
+| `WatermarkSettingsPage.php` | `/seo/watermark-settings-page` | **Batch apply** — đóng dấu hàng loạt + tối ưu ảnh (local + WordPress). Không còn form «Automatic watermark settings»; cấu hình thiết kế chỉ qua design suite. |
+
+**Luồng cấu hình:** Design suite lưu thiết kế → `auto_watermark=true` (tự động đóng dấu khi upload/paste). Batch page chỉ chạy xử lý hàng loạt trên ảnh đã có.
 
 ### Watermark Service
 
-`SeoWatermarkService` — `applyToMediaIfEnabled()` được gọi từ upload pipeline. Batch processing qua `applyBatch()`.
+`SeoWatermarkService` — `applyToMediaIfEnabled()` được gọi từ upload pipeline khi `auto_watermark` và thiết kế đã lưu. Batch processing qua `applyBatchAllForSite()` / `applyBatch()`.
 
 ### Save New From Canvas
 

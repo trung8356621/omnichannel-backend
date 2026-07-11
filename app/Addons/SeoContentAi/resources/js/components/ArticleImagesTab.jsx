@@ -4,6 +4,7 @@ import {
     assignInArticleQuickFixIndices,
     collectImagesFromBlocks,
     filterSupplementalDuplicatesOfBlockRows,
+    mergeArticleImageRow,
 } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
 import { t } from '../utils/i18n';
@@ -587,41 +588,9 @@ export default function ArticleImagesTab({
             }
         };
 
-        const mergeRow = (current, next) => {
-            if (!current) return next;
-
-            return {
-                ...current,
-                ...next,
-                blockId: String(next?.blockId || '').trim() || String(current?.blockId || '').trim(),
-                wpAttachmentId:
-                    Number(next?.wpAttachmentId ?? 0) > 0
-                        ? Number(next.wpAttachmentId)
-                        : Number(current?.wpAttachmentId ?? 0) || null,
-                seoMediaId:
-                    Number(next?.seoMediaId ?? 0) > 0
-                        ? Number(next.seoMediaId)
-                        : Number(current?.seoMediaId ?? 0) || null,
-                src: String(next?.src || '').trim() || String(current?.src || '').trim(),
-                wpSrc: String(next?.wpSrc || '').trim() || String(current?.wpSrc || '').trim(),
-                localSrc: String(next?.localSrc || '').trim() || String(current?.localSrc || '').trim(),
-                slug: String(next?.slug || '').trim() || String(current?.slug || '').trim(),
-                alt: String(next?.alt || '').trim() || String(current?.alt || '').trim(),
-                title: String(next?.title || '').trim() || String(current?.title || '').trim(),
-                caption: String(next?.caption || '').trim() || String(current?.caption || '').trim(),
-                originLabel:
-                    String(next?.originLabel || '').trim() || String(current?.originLabel || '').trim(),
-                excludeQuickFix: Boolean(
-                    next?.excludeQuickFix ??
-                        next?.exclude_quick_fix ??
-                        current?.excludeQuickFix ??
-                        current?.exclude_quick_fix,
-                ),
-            };
-        };
+        const mergeRow = mergeArticleImageRow;
 
         const normalizedRows = [
-            ...blockImages,
             ...(Array.isArray(extraImages)
                 ? extraImages
                       .map((row, index) => {
@@ -648,6 +617,7 @@ export default function ArticleImagesTab({
                       })
                       .filter(Boolean)
                 : []),
+            ...blockImages,
         ];
 
         const merged = [];

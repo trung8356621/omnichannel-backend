@@ -29,9 +29,9 @@ import {
  * @typedef {{ text: string, index: number }} FaqLinkItem
  */
 
-function LinkAssistantSection({ title, count, collapsed, onToggle, children }) {
+function LinkAssistantSection({ title, count, collapsed, onToggle, children, sectionKey = '' }) {
     return (
-        <div className="seo-link-assistant__section">
+        <div className="seo-link-assistant__section" data-assistant-link-section={sectionKey || undefined}>
             <button
                 type="button"
                 className="seo-link-assistant__section-toggle"
@@ -521,6 +521,34 @@ export default function ArticleLinksSidebar({
     const [faqCollapsed, setFaqCollapsed] = useState(true);
     const [domainLinksCollapsed, setDomainLinksCollapsed] = useState(true);
     const [ctaCollapsed, setCtaCollapsed] = useState(true);
+    const [linkSectionFilter, setLinkSectionFilter] = useState('all');
+
+    useEffect(() => {
+        const onLinkSection = (event) => {
+            const section = String(event?.detail?.section ?? 'all');
+            setLinkSectionFilter(section);
+
+            if (section === 'links') {
+                setInternalCollapsed(false);
+                setExternalCollapsed(false);
+                setDomainLinksCollapsed(false);
+                return;
+            }
+
+            if (section === 'faq') {
+                setFaqCollapsed(false);
+                return;
+            }
+
+            if (section === 'cta') {
+                setCtaCollapsed(false);
+            }
+        };
+
+        window.addEventListener('seo-assistant-link-section', onLinkSection);
+
+        return () => window.removeEventListener('seo-assistant-link-section', onLinkSection);
+    }, []);
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
     const allDomainLinksRef = useRef(
         initialDomainLinkCatalog.length > 0 ? initialDomainLinkCatalog : initialDomainLinkList,
@@ -996,10 +1024,27 @@ export default function ArticleLinksSidebar({
         );
     };
 
-    const linkCountBadge = internal.length + external.length + faq.length + domainLinks.length + domainCtas.length;
+    const linkCountBadge = internal.length + external.length + domainLinks.length;
+    const showAllLinkSections = linkSectionFilter === 'all';
+    const showLinksCluster = showAllLinkSections || linkSectionFilter === 'links';
+    const showFaqSection = showAllLinkSections || linkSectionFilter === 'faq';
+    const showCtaSection = showAllLinkSections || linkSectionFilter === 'cta';
+
+    useEffect(() => {
+        window.dispatchEvent(
+            new CustomEvent('seo-assistant-navigator-badges', {
+                detail: {
+                    links: linkCountBadge > 0 ? linkCountBadge : null,
+                    faq: faq.length > 0 ? faq.length : null,
+                    cta: domainCtas.length > 0 ? domainCtas.length : null,
+                },
+            }),
+        );
+    }, [linkCountBadge, faq.length, domainCtas.length]);
 
     return (
         <ArticleAssistantWidget
+            widgetId="links"
             title="Link Assistant"
             icon={Link2}
             badge={linkCountBadge > 0 ? linkCountBadge : null}
@@ -1007,11 +1052,14 @@ export default function ArticleLinksSidebar({
             className="seo-assistant-widget--links"
         >
             <div className="seo-link-assistant">
+                {showLinksCluster ? (
+                    <>
                 <LinkAssistantSection
                     title={`Internal Links (${internal.length})`}
                     count={internal.length}
                     collapsed={internalCollapsed}
                     onToggle={() => setInternalCollapsed((value) => !value)}
+                    sectionKey="links"
                 >
                     <InternalLinksSection
                         internal={internal}
@@ -1038,6 +1086,7 @@ export default function ArticleLinksSidebar({
                     count={external.length}
                     collapsed={externalCollapsed}
                     onToggle={() => setExternalCollapsed((value) => !value)}
+                    sectionKey="links"
                 >
                     <KeywordList
                         items={external}
@@ -1053,28 +1102,11 @@ export default function ArticleLinksSidebar({
                 </LinkAssistantSection>
 
                 <LinkAssistantSection
-                    title={`FAQ (${faq.length})`}
-                    count={faq.length}
-                    collapsed={faqCollapsed}
-                    onToggle={() => setFaqCollapsed((value) => !value)}
-                >
-                    <KeywordList
-                        items={faq}
-                        title={t('links_faq_title', { count: faq.length })}
-                        activeKey={activeKey}
-                        target="faq"
-                        hideTitle
-                        interactive={false}
-                        onKeywordClick={() => {}}
-                        onCopyKeyword={copyKeyword}
-                    />
-                </LinkAssistantSection>
-
-                <LinkAssistantSection
                     title={`${t('domain_link_widget_title')} (${domainLinks.length})`}
                     count={domainLinks.length}
                     collapsed={domainLinksCollapsed}
                     onToggle={() => setDomainLinksCollapsed((value) => !value)}
+                    sectionKey="links"
                 >
                     <p className="wp-article-links-hint">{t('domain_link_widget_hint')}</p>
                     <DomainInsertableList
@@ -1091,12 +1123,37 @@ export default function ArticleLinksSidebar({
                         onInsert={insertDomainLink}
                     />
                 </LinkAssistantSection>
+                    </>
+                ) : null}
 
+                {showFaqSection ? (
+                <LinkAssistantSection
+                    title={`FAQ (${faq.length})`}
+                    count={faq.length}
+                    collapsed={faqCollapsed}
+                    onToggle={() => setFaqCollapsed((value) => !value)}
+                    sectionKey="faq"
+                >
+                    <KeywordList
+                        items={faq}
+                        title={t('links_faq_title', { count: faq.length })}
+                        activeKey={activeKey}
+                        target="faq"
+                        hideTitle
+                        interactive={false}
+                        onKeywordClick={() => {}}
+                        onCopyKeyword={copyKeyword}
+                    />
+                </LinkAssistantSection>
+                ) : null}
+
+                {showCtaSection ? (
                 <LinkAssistantSection
                     title={`${t('cta_widget_title')} (${domainCtas.length})`}
                     count={domainCtas.length}
                     collapsed={ctaCollapsed}
                     onToggle={() => setCtaCollapsed((value) => !value)}
+                    sectionKey="cta"
                 >
                     <p className="wp-article-links-hint">{t('cta_widget_hint')}</p>
                     <DomainInsertableList
@@ -1108,6 +1165,7 @@ export default function ArticleLinksSidebar({
                         onInsert={insertCta}
                     />
                 </LinkAssistantSection>
+                ) : null}
             </div>
         </ArticleAssistantWidget>
     );

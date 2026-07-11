@@ -429,29 +429,6 @@ class ArticleResource extends SeoPanelResource
                     ->native(false)
                     ->placeholder(__('seo-content-ai::filament.article_list.all_scores'))
                     ->indicator(__('seo-content-ai::filament.article_list.seo_score')),
-                SelectFilter::make('is_reviewed')
-                    ->label(__('seo-content-ai::filament.article_list.review'))
-                    ->visible(fn (): bool => SeoAccessControl::canAccessManagerFeatures())
-                    ->options([
-                        '0' => __('seo-content-ai::filament.article_list.not_reviewed'),
-                        '1' => __('seo-content-ai::filament.article_list.reviewed'),
-                    ])
-                    ->default('0')
-                    ->native(false)
-                    ->placeholder(__('seo-content-ai::filament.article_list.not_reviewed'))
-                    ->indicator(__('seo-content-ai::filament.article_list.review'))
-                    ->query(function (Builder $query, array $data): void {
-                        $value = (string) ($data['value'] ?? '0');
-                        if ($value === '1') {
-                            $query->where('is_reviewed', true);
-
-                            return;
-                        }
-
-                        $query->where(function (Builder $sub): void {
-                            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
-                        });
-                    }),
                 Filter::make('seo_link')
                     ->label(__('seo-content-ai::filament.article_list.links_in_article'))
                     ->form([
@@ -786,7 +763,7 @@ class ArticleResource extends SeoPanelResource
 
     public static function applyWpSyncQueueScope(Builder $query): Builder
     {
-        return $query->whereIn('articles.id', function ($subQuery): void {
+        return static::applyWpSyncQueueUnreviewedScope($query)->whereIn('articles.id', function ($subQuery): void {
             $subQuery->select('article_id')
                 ->from('article_meta')
                 ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
@@ -794,17 +771,25 @@ class ArticleResource extends SeoPanelResource
                     $statusQuery
                         ->where('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"%')
                         ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PROCESSING.'"%')
-                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_FAILED.'"%');
+                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_FAILED.'"%')
+                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_COMPLETED.'"%');
                 });
         });
     }
 
     public static function applyWpSyncQueueListScope(Builder $query): Builder
     {
-        return $query->whereIn('articles.id', function ($subQuery): void {
+        return static::applyWpSyncQueueUnreviewedScope($query)->whereIn('articles.id', function ($subQuery): void {
             $subQuery->select('article_id')
                 ->from('article_meta')
                 ->where('meta_key', ArticleWpSyncQueueService::META_KEY);
+        });
+    }
+
+    public static function applyWpSyncQueueUnreviewedScope(Builder $query): Builder
+    {
+        return $query->where(function (Builder $sub): void {
+            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
         });
     }
 
@@ -932,24 +917,80 @@ class ArticleResource extends SeoPanelResource
     }
 
     /**
+     * @return list<array{
+     *     date: string,
+     *     date_label: string,
+     *     count: int,
+     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>
+     * }>
+     */
+    public static function buildReviewedArticlesGrouped(): array
+    {
+        $query = SeoArticle::query()
+            ->where('is_reviewed', true)
+            ->whereNotNull('reviewed_at')
+            ->whereNotIn('type', ['category', 'product_category'])
+            ->where('status', '!=', 'trash')
+            ->select(['id', 'title', 'reviewed_at'])
+            ->orderByDesc('reviewed_at');
+
+        if (SeoAccessControl::shouldScopeToAccountOwner() && ! SeoAccessControl::isContentManager()) {
+            SeoAccessControl::applyAccessibleSiteScope($query);
+        }
+
+        if (SeoAccessControl::shouldApplyGlobalSiteScope()) {
+            $query->where('site_id', (int) SeoAccessControl::globalSiteId());
+        }
+
+        if (SeoAccessControl::isContentManager()) {
+            static::applyContentManagerOwnershipScope($query);
+        }
+
+        /** @var array<string, array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}> $grouped */
+        $grouped = [];
+
+        foreach ($query->get() as $article) {
+            if (! $article instanceof SeoArticle || $article->reviewed_at === null) {
+                continue;
+            }
+
+            $reviewedAt = $article->reviewed_at instanceof Carbon
+                ? $article->reviewed_at
+                : Carbon::parse((string) $article->reviewed_at);
+
+            $dateKey = $reviewedAt->toDateString();
+
+            if (! isset($grouped[$dateKey])) {
+                $grouped[$dateKey] = [
+                    'date' => $dateKey,
+                    'date_label' => $reviewedAt->translatedFormat('d/m/Y'),
+                    'count' => 0,
+                    'articles' => [],
+                ];
+            }
+
+            $grouped[$dateKey]['articles'][] = [
+                'id' => (int) $article->id,
+                'title' => (string) ($article->title ?? ''),
+                'reviewed_time' => $reviewedAt->format('H:i'),
+                'edit_url' => static::getUrl('edit', ['record' => $article]),
+            ];
+            $grouped[$dateKey]['count']++;
+        }
+
+        return array_values($grouped);
+    }
+
+    /**
      * @return array<int, Tables\Actions\Action>
      */
     public static function getArticleTableRowActionsMerged(): array
     {
-        $hideOnQueueTab = fn (): bool => static::isArticlesQueueTab();
-        $hideOffQueueTab = fn (): bool => ! static::isArticlesQueueTab();
+        if (static::isArticlesQueueTab()) {
+            return static::getArticleQueueTableRowActions();
+        }
 
-        $queueActions = array_map(
-            static fn (Tables\Actions\Action $action): Tables\Actions\Action => $action->hidden($hideOffQueueTab),
-            static::getArticleQueueTableRowActions(),
-        );
-
-        $defaultActions = array_map(
-            static fn (Tables\Actions\Action $action): Tables\Actions\Action => $action->hidden($hideOnQueueTab),
-            static::getArticleTableRowActions(),
-        );
-
-        return array_merge($queueActions, $defaultActions);
+        return static::getArticleTableRowActions();
     }
 
     public static function isArticlesQueueTab(): bool
@@ -974,6 +1015,7 @@ class ArticleResource extends SeoPanelResource
     public static function getArticleQueueTableRowActions(): array
     {
         return [
+            static::makeApproveArticleTableAction(),
             Tables\Actions\Action::make('resync_sync_queue')
                 ->icon('heroicon-o-arrow-path')
                 ->iconButton()
@@ -981,7 +1023,7 @@ class ArticleResource extends SeoPanelResource
                 ->tooltip(__('seo-content-ai::filament.article_list.queue_resync'))
                 ->visible(fn (SeoArticle $record): bool => in_array(
                     static::resolveWpSyncQueueStatus($record),
-                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED],
+                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED, ArticleWpSyncQueueService::STATUS_PROCESSING],
                     true,
                 ))
                 ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue $livewire): void {
@@ -994,7 +1036,12 @@ class ArticleResource extends SeoPanelResource
                 ->tooltip(__('seo-content-ai::filament.article_list.queue_cancel'))
                 ->visible(fn (SeoArticle $record): bool => in_array(
                     static::resolveWpSyncQueueStatus($record),
-                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED],
+                    [
+                        ArticleWpSyncQueueService::STATUS_PENDING,
+                        ArticleWpSyncQueueService::STATUS_FAILED,
+                        ArticleWpSyncQueueService::STATUS_PROCESSING,
+                        ArticleWpSyncQueueService::STATUS_COMPLETED,
+                    ],
                     true,
                 ))
                 ->requiresConfirmation()
@@ -1272,48 +1319,7 @@ class ArticleResource extends SeoPanelResource
                         ->success()
                         ->send();
                 }),
-            Tables\Actions\Action::make('approve_article')
-                ->icon('heroicon-o-check-badge')
-                ->iconButton()
-                ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
-                ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
-                    ? __('seo-content-ai::filament.article_list.already_reviewed')
-                    : (SeoAccessControl::isContentManager()
-                        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
-                        : __('seo-content-ai::filament.article_list.mark_reviewed')))
-                ->visible(function (SeoArticle $record): bool {
-                    if (SeoAccessControl::canAccessPlannerFeatures()) {
-                        return true;
-                    }
-
-                    if (! SeoAccessControl::isContentManager() || ! static::articleIsInContentProject($record)) {
-                        return false;
-                    }
-
-                    $user = auth()->user();
-
-                    return $user instanceof User
-                        && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($record, $user);
-                })
-                ->requiresConfirmation()
-                ->modalDescription(fn (SeoArticle $record): string => SeoAccessControl::isContentManager()
-                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
-                    : __('seo-content-ai::filament.article_list.review_article_description'))
-                ->action(function (SeoArticle $record): void {
-                    if (SeoAccessControl::isContentManager()) {
-                        static::submitStaffEditingComplete($record);
-
-                        return;
-                    }
-
-                    $deletedCount = static::markArticleReviewed($record);
-
-                    Notification::make()
-                        ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
-                        ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
-                        ->success()
-                        ->send();
-                }),
+            static::makeApproveArticleTableAction(),
             Tables\Actions\Action::make('view_content_project_runs')
                 ->icon('heroicon-o-queue-list')
                 ->iconButton()
@@ -1388,7 +1394,67 @@ class ArticleResource extends SeoPanelResource
             'reviewed_at' => Carbon::now(),
         ])->save();
 
+        app(ArticleWpSyncQueueService::class)->clearQueueEntry($article->fresh() ?? $article);
+
         return $deletedCount;
+    }
+
+    public static function runApproveArticleAction(SeoArticle $record): void
+    {
+        if (SeoAccessControl::isContentManager()) {
+            static::submitStaffEditingComplete($record);
+
+            return;
+        }
+
+        $deletedCount = static::markArticleReviewed($record);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.article_reviewed'))
+            ->body(__('seo-content-ai::filament.article_list.deleted_local_images', ['count' => $deletedCount]))
+            ->success()
+            ->send();
+    }
+
+    /**
+     * @return Tables\Actions\Action
+     */
+    public static function makeApproveArticleTableAction(): Tables\Actions\Action
+    {
+        return Tables\Actions\Action::make('approve_article')
+            ->icon('heroicon-o-check-badge')
+            ->iconButton()
+            ->color(fn (SeoArticle $record): string => (bool) $record->is_reviewed ? 'success' : 'gray')
+            ->tooltip(fn (SeoArticle $record): string => (bool) $record->is_reviewed
+                ? __('seo-content-ai::filament.article_list.already_reviewed')
+                : (SeoAccessControl::isContentManager()
+                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
+                    : __('seo-content-ai::filament.article_list.mark_reviewed')))
+            ->visible(function (SeoArticle $record): bool {
+                if (SeoAccessControl::canAccessPlannerFeatures()) {
+                    return true;
+                }
+
+                if (! SeoAccessControl::isContentManager() || ! static::articleIsInContentProject($record)) {
+                    return false;
+                }
+
+                $user = auth()->user();
+
+                return $user instanceof User
+                    && ! app(SeoProjectApprovalService::class)->contentManagerHasSubmitted($record, $user);
+            })
+            ->requiresConfirmation()
+            ->modalDescription(fn (SeoArticle $record): string => SeoAccessControl::isContentManager()
+                ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
+                : __('seo-content-ai::filament.article_list.review_article_description'))
+            ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue|null $livewire = null): void {
+                static::runApproveArticleAction($record);
+
+                if ($livewire instanceof Pages\ListArticles || $livewire instanceof Pages\ListArticleSyncQueue) {
+                    $livewire->resetTable();
+                }
+            });
     }
 
     public static function submitStaffEditingComplete(SeoArticle $article, ?User $user = null): void

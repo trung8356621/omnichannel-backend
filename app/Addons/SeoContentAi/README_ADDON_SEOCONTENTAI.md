@@ -26,7 +26,7 @@ Addon Omnichannel Backend để quản lý nội dung SEO, prompt/workflow AI, t
 - **Thư viện media** — Upload local, sync WP, watermark, split ảnh, tối ưu ảnh, job AI generate.
 - **Team** — Trang quản lý thành viên (`SeoTeam`), chat team (`/api/seo/team/messages`), profile / đổi mật khẩu trên panel SEO.
 - **Editor nâng cao** — Lưu nháp local cho featured image + product album, bridge event Livewire↔React, autosave lock, FAQ extract debug.
-- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark theo domain.
+- **Cài đặt** — Workflows, prompt hệ thống, tối ưu ảnh, watermark design suite + batch theo domain.
 - **Tiện ích** — Hub công khai tại `/tools` (MD↔HTML, MD→FAQ); tab **Dịch đoạn** chỉ khi đăng nhập owner có `api_connections` hoặc staff của owner đó.
 
 ---

@@ -1514,7 +1514,6 @@
             }
         "
         x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
-        @seo-attachment-slugs-rename-finished.window="window.dispatchEvent(new CustomEvent('seo-attachment-slugs-rename-finished', { detail: $event.detail }))"
         x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [])"
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
@@ -1636,8 +1635,9 @@
                 x-data="{ aiChatOpen: false, syncOpen: false }"
                 x-on:seo-article-ai-chat-open.window="aiChatOpen = true"
                 x-on:seo-article-ai-chat-close.window="aiChatOpen = false"
-                x-on:seo-sidebar-open-publish-tab.window="aiChatOpen = false; syncOpen = true; $nextTick(() => document.getElementById('seo-publishing-assistant')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))"
-                x-on:seo-publish-tab-request-sync.window="aiChatOpen = false; syncOpen = true; $nextTick(() => { document.getElementById('seo-publishing-assistant')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); window.__seoPublishTabRequestSync?.(); })"
+                x-on:seo-assistant-open-publishing.window="aiChatOpen = false; syncOpen = true"
+                x-on:seo-sidebar-open-publish-tab.window="aiChatOpen = false; syncOpen = true"
+                x-on:seo-publish-tab-request-sync.window="aiChatOpen = false; syncOpen = true; $nextTick(() => window.__seoPublishTabRequestSync?.())"
             >
                 <div class="wp-article-edit-rail">
                     <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-rail-top">
@@ -1649,12 +1649,104 @@
                         x-bind:class="{ 'is-chat': aiChatOpen }"
                     >
                         <div class="wp-article-edit-sidebar-window">
-                            <div x-show="!aiChatOpen" x-cloak class="wp-article-edit-sidebar-scroll seo-assistant-sidebar space-y-3">
-                                <div wire:ignore id="seo-article-seo-assistant-root"></div>
+                            <div
+                                x-show="!aiChatOpen"
+                                x-cloak
+                                class="wp-article-edit-sidebar-scroll seo-assistant-host seo-assistant-sidebar space-y-3"
+                                x-data="seoAssistantNavigator()"
+                                x-init="initWorkspace()"
+                                x-bind:class="{ 'is-panel-filter': panelFilterActive }"
+                            >
+                                <div
+                                    x-ref="dock"
+                                    class="seo-assistant-dock"
+                                    role="navigation"
+                                    aria-label="Assistant Dock"
+                                >
+                                    <div class="seo-assistant-dock__search-wrap">
+                                        <label class="sr-only" for="seo-assistant-dock-search">Search assistants</label>
+                                        <div class="seo-assistant-dock__search">
+                                            <svg class="seo-assistant-dock__search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z" />
+                                            </svg>
+                                            <input
+                                                id="seo-assistant-dock-search"
+                                                type="search"
+                                                class="seo-assistant-dock__search-input"
+                                                placeholder="Search assistants..."
+                                                autocomplete="off"
+                                                x-model="searchQuery"
+                                                x-on:input="onSearchInput()"
+                                                x-on:focus="openSearch()"
+                                                x-on:keydown="onSearchKeydown($event)"
+                                                x-on:keydown.escape.prevent="searchQuery = ''; closeSearch()"
+                                            />
+                                        </div>
+                                        <div
+                                            class="seo-assistant-dock__dropdown"
+                                            x-show="searchOpen && filteredSearchResults.length > 0"
+                                            x-cloak
+                                            x-on:click.outside="closeSearch()"
+                                        >
+                                            <template x-for="(item, index) in filteredSearchResults" :key="item.label + '-' + index">
+                                                <button
+                                                    type="button"
+                                                    class="seo-assistant-dock__dropdown-item"
+                                                    x-bind:class="{ 'is-active': searchHighlightIndex === index }"
+                                                    x-on:click="selectSearchResult(index)"
+                                                >
+                                                    <span class="seo-assistant-dock__dropdown-label" x-text="item.label"></span>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="seo-assistant-dock__tabs" role="tablist" aria-label="Assistant panels">
+                                        <template x-for="chip in chips" :key="chip.id">
+                                            <button
+                                                type="button"
+                                                class="seo-assistant-dock__tab"
+                                                role="tab"
+                                                x-bind:class="{ 'is-active': panelFilterActive && activePanel === chip.id }"
+                                                x-bind:aria-selected="panelFilterActive && activePanel === chip.id ? 'true' : 'false'"
+                                                x-on:click="selectChip(chip.id)"
+                                            >
+                                                <span x-text="chip.label"></span>
+                                                <span
+                                                    class="seo-assistant-dock__tab-badge"
+                                                    x-show="chipBadge(chip.id)"
+                                                    x-text="chipBadge(chip.id)"
+                                                ></span>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
 
-                                <div id="seo-article-image-assistant" class="seo-assistant-stack seo-assistant-stack--images">
-                                @if (! $this->supportsProductGallery())
-                    <section class="seo-assistant-widget seo-assistant-widget--featured-image seo-assistant-widget--static">
+                                <div class="seo-assistant-widget-layer space-y-3">
+                                    <div
+                                        class="seo-assistant-panel-slot"
+                                        data-assistant-widget
+                                        data-assistant-widget-id="seo"
+                                        data-assistant-tab-label="SEO"
+                                        data-assistant-widget-label="SEO Assistant"
+                                        data-assistant-search-keywords="seo,score,keyword,violation,check,focus"
+                                        x-show="isWidgetVisible('seo')"
+                                        x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'seo' }"
+                                    >
+                                        <div wire:ignore id="seo-article-seo-assistant-root"></div>
+                                    </div>
+
+                                    @if (! $this->supportsProductGallery())
+                                        <div
+                                            class="seo-assistant-panel-slot"
+                                            data-assistant-widget
+                                            data-assistant-widget-id="featured"
+                                            data-assistant-tab-label="Featured"
+                                            data-assistant-widget-label="Featured Image"
+                                            data-assistant-search-keywords="featured,thumbnail,cover,đại diện"
+                                            x-show="isWidgetVisible('featured')"
+                                            x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'featured' }"
+                                        >
+                                            <section class="seo-assistant-widget seo-assistant-widget--featured-image seo-assistant-widget--static">
                         <header class="seo-assistant-widget__header seo-assistant-widget__header--static">
                             <div class="seo-assistant-widget__toggle seo-assistant-widget__toggle--static">
                                 <svg class="seo-assistant-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="m2 7 4.41-4.41A2 2 0 0 1 7.17 2h9.66a2 2 0 0 1 1.42.59L22 7"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 22v-4.172a2 2 0 0 0-.586-1.414L12 15l-2.414 2.414A2 2 0 0 0 9 18.828V22"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M2 7h20"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 2v5"/></svg>
@@ -1692,9 +1784,20 @@
                             ></p>
                         </div>
                     </section>
+                                        </div>
                 @endif
 
                 @if ($this->supportsProductGallery())
+                                        <div
+                                            class="seo-assistant-panel-slot"
+                                            data-assistant-widget
+                                            data-assistant-widget-id="featured"
+                                            data-assistant-tab-label="Featured"
+                                            data-assistant-widget-label="Product Album"
+                                            data-assistant-search-keywords="album,gallery,product,featured,sản phẩm"
+                                            x-show="isWidgetVisible('featured')"
+                                            x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'featured' }"
+                                        >
                     <section class="seo-assistant-widget seo-assistant-widget--product-album seo-assistant-widget--static">
                         <header class="seo-assistant-widget__header seo-assistant-widget__header--static">
                             <div class="seo-assistant-widget__toggle seo-assistant-widget__toggle--static">
@@ -1778,51 +1881,102 @@
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400" x-text="albumCountLabel()"></p>
                         </div>
                     </section>
+                                        </div>
                 @endif
 
+                                    <div
+                                        class="seo-assistant-panel-slot"
+                                        data-assistant-widget
+                                        data-assistant-widget-id="images"
+                                        data-assistant-tab-label="Images"
+                                        data-assistant-widget-label="Image Assistant"
+                                        data-assistant-search-keywords="image,images,alt,photo,picture,generate,fix"
+                                        x-show="isWidgetVisible('images')"
+                                        x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'images' }"
+                                    >
                                 <div wire:ignore id="seo-article-image-assistant-root"></div>
-                                </div>
-
-                                <div wire:ignore id="seo-article-reviews-assistant-root"></div>
-
-                                @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
-                                    <div wire:ignore id="seo-article-links-root"></div>
-                                @endif
-
-                                <section class="seo-assistant-widget seo-assistant-widget--article-info seo-assistant-widget--static">
-                                    <header class="seo-assistant-widget__header seo-assistant-widget__header--static">
-                                        <div class="seo-assistant-widget__toggle seo-assistant-widget__toggle--static">
-                                            <svg class="seo-assistant-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
-                                            <span class="seo-assistant-widget__title">Article Information</span>
-                                        </div>
-                                    </header>
-                                    <div class="seo-assistant-widget__body space-y-3">
-                                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-sidebar')
-
-                                        <section
-                                            id="seo-publishing-assistant"
-                                            class="seo-assistant-widget seo-assistant-widget--nested seo-assistant-widget--publishing"
-                                        >
-                                            <header class="seo-assistant-widget__header">
-                                                <button
-                                                    type="button"
-                                                    class="seo-assistant-widget__toggle"
-                                                    x-bind:aria-expanded="syncOpen"
-                                                    x-on:click="syncOpen = !syncOpen"
-                                                >
-                                                    <svg x-show="!syncOpen" x-cloak class="seo-assistant-widget__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m9 18 6-6-6-6"/></svg>
-                                                    <svg x-show="syncOpen" class="seo-assistant-widget__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m6 9 6 6 6-6"/></svg>
-                                                    <svg class="seo-assistant-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 16V4m0 12-4-4m4 4 4-4M4 20h16"/></svg>
-                                                    <span class="seo-assistant-widget__title">Sync to WordPress</span>
-                                                </button>
-                                            </header>
-                                            <div class="seo-assistant-widget__body space-y-3" x-show="syncOpen" x-collapse>
-                                                @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-categories')
-                                                @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-sync-panel')
-                                            </div>
-                                        </section>
                                     </div>
-                                </section>
+
+                                    @if ($this->supportsProductGallery())
+                                    <div
+                                        class="seo-assistant-panel-slot"
+                                        data-assistant-widget
+                                        data-assistant-widget-id="reviews"
+                                        data-assistant-tab-label="Reviews"
+                                        data-assistant-widget-label="Reviews Assistant"
+                                        data-assistant-search-keywords="reviews,rating,comment"
+                                        x-show="isWidgetVisible('reviews')"
+                                        x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'reviews' }"
+                                    >
+                                <div wire:ignore id="seo-article-reviews-assistant-root"></div>
+                                    </div>
+                                    @endif
+
+                                            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
+                                                <div
+                                                    class="seo-assistant-panel-slot"
+                                                    data-assistant-widget
+                                                    data-assistant-widget-id="links"
+                                                    data-assistant-tab-label="Links"
+                                                    data-assistant-widget-label="Link Assistant"
+                                                    data-assistant-search-keywords="link,links,internal,external,href"
+                                                    x-show="isWidgetVisible('links')"
+                                                    x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'links' }"
+                                                >
+                                                    <div wire:ignore id="seo-article-links-root"></div>
+                                                </div>
+                                            @endif
+
+                                            <div
+                                                class="seo-assistant-panel-slot"
+                                                data-assistant-widget
+                                                data-assistant-widget-id="publishing"
+                                                data-assistant-tab-label="Publishing"
+                                                data-assistant-widget-label="Publishing Assistant"
+                                                data-assistant-search-keywords="publish,publishing,sync,wordpress,schedule"
+                                                x-show="isWidgetVisible('publishing')"
+                                                x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'publishing' }"
+                                            >
+                                                <section
+                                                    id="seo-publishing-assistant"
+                                                    class="seo-assistant-widget seo-assistant-widget--publishing seo-assistant-widget--static"
+                                                >
+                                                    <header class="seo-assistant-widget__header seo-assistant-widget__header--static">
+                                                        <div class="seo-assistant-widget__toggle seo-assistant-widget__toggle--static">
+                                                            <svg class="seo-assistant-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 16V4m0 12-4-4m4 4 4-4M4 20h16"/></svg>
+                                                            <span class="seo-assistant-widget__title">Publishing Assistant</span>
+                                                        </div>
+                                                    </header>
+                                                    <div class="seo-assistant-widget__body space-y-3">
+                                                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-categories')
+                                                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-sync-panel')
+                                                    </div>
+                                                </section>
+                                            </div>
+
+                                            <div
+                                                class="seo-assistant-panel-slot"
+                                                data-assistant-widget
+                                                data-assistant-widget-id="article"
+                                                data-assistant-tab-label="Article"
+                                                data-assistant-widget-label="Article Information"
+                                                data-assistant-search-keywords="article,info,slug,status,schedule"
+                                                x-show="isWidgetVisible('article')"
+                                                x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'article' }"
+                                            >
+                                                <section class="seo-assistant-widget seo-assistant-widget--article-info seo-assistant-widget--static">
+                                                    <header class="seo-assistant-widget__header seo-assistant-widget__header--static">
+                                                        <div class="seo-assistant-widget__toggle seo-assistant-widget__toggle--static">
+                                                            <svg class="seo-assistant-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+                                                            <span class="seo-assistant-widget__title">Article Information</span>
+                                                        </div>
+                                                    </header>
+                                                    <div class="seo-assistant-widget__body space-y-3">
+                                                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.publish-sidebar')
+                                                    </div>
+                                                </section>
+                                            </div>
+                                </div>
                             </div>
 
                             <div

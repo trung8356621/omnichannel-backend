@@ -1275,24 +1275,7 @@ export function buildMergedEditorImagesForPicker(blocks, supplementalImages = []
         }
     };
 
-    const mergeRow = (current, next) => ({
-        ...current,
-        ...next,
-        blockId: String(next?.blockId || '').trim() || String(current?.blockId || '').trim(),
-        wpAttachmentId:
-            Number(next?.wpAttachmentId ?? 0) > 0
-                ? Number(next.wpAttachmentId)
-                : Number(current?.wpAttachmentId ?? 0) || null,
-        seoMediaId:
-            Number(next?.seoMediaId ?? 0) > 0
-                ? Number(next.seoMediaId)
-                : Number(current?.seoMediaId ?? 0) || null,
-        src: String(next?.src || '').trim() || String(current?.src || '').trim(),
-        wpSrc: String(next?.wpSrc || '').trim() || String(current?.wpSrc || '').trim(),
-        localSrc: String(next?.localSrc || '').trim() || String(current?.localSrc || '').trim(),
-        slug: String(next?.slug || '').trim() || String(current?.slug || '').trim(),
-        alt: String(next?.alt || '').trim() || String(current?.alt || '').trim(),
-    });
+    const mergeRow = mergeArticleImageRow;
 
     const normalizedRows = [
         ...(Array.isArray(supplementalImages)
@@ -1366,11 +1349,55 @@ export function buildMergedEditorImagesForPicker(blocks, supplementalImages = []
     });
 }
 
-export { extractImagesFromHtml };
+export function reconcileSupplementalImagesWithBlocks(supplementalRows, blocks) {
+    return filterSupplementalDuplicatesOfBlockRows(
+        syncSupplementalRowsFromBlockImages(supplementalRows, blocks),
+    );
+}
 
 /**
- * Đồng bộ supplemental (ảnh đại diện/album) từ block sau đổi slug — match theo seo_media_id / wp_attachment_id.
+ * Gộp hai dòng ảnh trùng identity — ưu tiên URL/slug từ ảnh gắn block (editor).
  */
+export function mergeArticleImageRow(current, next) {
+    const blockRow = hasArticleImageBlockId(current)
+        ? current
+        : hasArticleImageBlockId(next)
+          ? next
+          : null;
+    const urlSource = blockRow ?? next;
+    const urlFallback = urlSource === current ? next : current;
+
+    const pickUrlField = (field) =>
+        String(urlSource?.[field] ?? '').trim() || String(urlFallback?.[field] ?? '').trim();
+
+    return {
+        ...current,
+        ...next,
+        blockId: String(next?.blockId ?? next?.block_id ?? current?.blockId ?? current?.block_id ?? '').trim(),
+        wpAttachmentId:
+            Number(next?.wpAttachmentId ?? next?.wp_attachment_id ?? 0) > 0
+                ? Number(next.wpAttachmentId ?? next.wp_attachment_id)
+                : Number(current?.wpAttachmentId ?? current?.wp_attachment_id ?? 0) || null,
+        seoMediaId:
+            Number(next?.seoMediaId ?? next?.seo_media_id ?? 0) > 0
+                ? Number(next.seoMediaId ?? next.seo_media_id)
+                : Number(current?.seoMediaId ?? current?.seo_media_id ?? 0) || null,
+        src: pickUrlField('src'),
+        wpSrc: pickUrlField('wpSrc'),
+        localSrc: pickUrlField('localSrc'),
+        slug: pickUrlField('slug'),
+        alt: String(next?.alt || '').trim() || String(current?.alt || '').trim(),
+        title: String(next?.title || '').trim() || String(current?.title || '').trim(),
+        caption: String(next?.caption || '').trim() || String(current?.caption || '').trim(),
+        originLabel:
+            String(next?.originLabel || next?.origin_label || '').trim() ||
+            String(current?.originLabel || current?.origin_label || '').trim(),
+        excludeQuickFix: Boolean(
+            next?.excludeQuickFix ?? next?.exclude_quick_fix ?? current?.excludeQuickFix ?? current?.exclude_quick_fix,
+        ),
+    };
+}
+
 export function syncSupplementalRowsFromBlockImages(supplementalRows, blocks) {
     const blockImages = collectImagesFromBlocks(blocks);
     const bySeoId = new Map();

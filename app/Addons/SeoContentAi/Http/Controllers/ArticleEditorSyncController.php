@@ -90,8 +90,8 @@ final class ArticleEditorSyncController extends Controller
             $result['reload'] = false;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.article_list.sync_queued_title'),
-                'body' => (string) ($result['message'] ?? ''),
-                'status' => 'success',
+                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.article_list.sync_queued_body')),
+                'status' => 'info',
             ];
         } else {
             $result['notification'] = [

@@ -1,0 +1,64 @@
+---
+description: Khi user gõ "XONG!" — tự cập nhật docs vệ tinh SEO theo thay đổi vừa code
+alwaysApply: true
+---
+
+# Auto-update docs — trigger `XONG!`
+
+## Bước 0 — Bắt buộc kiểm tra đầu mỗi tin nhắn user
+
+**Trước mọi hành động khác**, quét tin nhắn user xem có chứa `XONG!` không (không phân biệt hoa thường, cho phép kèm text khác).
+
+- **Không có `XONG!`** → bỏ qua toàn bộ rule này. Không đọc, không sửa docs.
+- **Có `XONG!`** → thực hiện ngay quy trình bên dưới. Đây là ưu tiên cao nhất; không hỏi lại user.
+
+## Quy trình khi trigger
+
+### 1. Xác định phạm vi thay đổi
+
+Dùng **một hoặc nhiều** nguồn sau (ưu tiên theo thứ tự):
+
+1. File đã sửa trong **phiên chat hiện tại** (git status / diff / context conversation).
+2. `git diff` và `git status` nếu cần bổ sung.
+
+Ghi nhận: class/hàm/component/route mới hoặc đổi tên, luồng nghiệp vụ thay đổi.
+
+### 2. Chọn file docs vệ tinh
+
+Đọc **chỉ** mục Menu trong `docs/SUPER_MAP_INDEX.md` (không đọc full file nếu >100 dòng — dùng grep/offset).
+
+| Vùng code | File docs |
+|-----------|-----------|
+| React/Vite, JSX, `resources/js/` addon SEO | `docs/MAP_SEO_FRONTEND.md` |
+| Domain, site settings | `docs/MAP_SEO_DOMAIN.md` |
+| Article editor, EditArticle, Livewire bridge | `docs/MAP_SEO_EDITOR.md` |
+| SEO audit, ArticlesOptimal, tab Reviewed | `docs/MAP_SEO_AUDIT.md` |
+| Media, upload, watermark | `docs/MAP_SEO_MEDIA.md` |
+| WP sync, bridge plugin | `docs/MAP_SEO_WP.md` |
+| Content projects, workflow | `docs/MAP_SEO_PROJECTS.md` |
+| Settings, prompts, AI connections | `docs/MAP_SEO_SETTINGS.md` |
+| Team, RBAC | `docs/MAP_SEO_TEAM.md` |
+| Thay đổi core (không thuộc addon SEO) | `docs/FEATURE_MAP_FULL.md` |
+
+Nhiều vùng → cập nhật nhiều file tương ứng.
+
+### 3. Cập nhật docs
+
+- Mở đúng section liên quan trong file vệ tinh (grep tên class/hàm trước).
+- **Chèn hoặc sửa** entry ngắn gọn: tên symbol, vai trò 1 dòng, đường dẫn file.
+- Không rewrite cả file. Không tạo file docs mới trừ khi SUPER_MAP_INDEX đã có entry tương ứng.
+- Nếu thêm file/service quan trọng mới → cập nhật thêm 1 dòng trong bảng Menu `docs/SUPER_MAP_INDEX.md` nếu chưa có.
+
+### 4. Phản hồi user
+
+Chỉ trả lời **một câu**:
+
+> Đã cập nhật xong docs!
+
+Kèm tên file docs đã sửa (vd: `MAP_SEO_MEDIA.md`, `MAP_SEO_EDITOR.md`). Không giải thích dài.
+
+## Cấm
+
+- Không chạy quy trình này khi user **không** gõ `XONG!`.
+- Không đọc toàn bộ file docs >100 dòng — dùng grep/search rồi patch đúng section.
+- Không bỏ qua bước cập nhật docs khi đã thấy trigger `XONG!`.

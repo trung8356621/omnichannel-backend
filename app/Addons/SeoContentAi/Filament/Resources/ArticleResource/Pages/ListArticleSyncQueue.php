@@ -92,10 +92,12 @@ class ListArticleSyncQueue extends ListRecords
         }
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_started'))
+            ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_queued'))
             ->body((string) ($result['message'] ?? ''))
             ->success()
             ->send();
+
+        $this->resetTable();
     }
 
     public function cancelArticleSyncQueue(int $articleId): void
@@ -120,6 +122,8 @@ class ListArticleSyncQueue extends ListRecords
             ->title(__('seo-content-ai::filament.article_list.sync_queue_cancelled'))
             ->success()
             ->send();
+
+        $this->resetTable();
     }
 
     protected function getHeaderActions(): array

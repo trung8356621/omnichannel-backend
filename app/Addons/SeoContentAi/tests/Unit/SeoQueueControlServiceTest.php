@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Jobs\AuditLinkStatusJob;
+use App\Addons\SeoContentAi\Jobs\SyncArticleToWordPressFromQueueJob;
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
@@ -161,6 +162,53 @@ final class SeoQueueControlServiceTest extends TestCase
         $this->assertTrue($service->shouldShowOfflineAlertForOwner($owner->id));
     }
 
+    public function test_should_not_show_offline_alert_for_completed_wp_sync_meta(): void
+    {
+        try {
+            if (! Schema::connection('omi_seo_ai')->hasTable('articles')) {
+                $this->markTestSkipped('omi_seo_ai articles table is not available in this test database.');
+            }
+        } catch (\Throwable) {
+            $this->markTestSkipped('omi_seo_ai connection is not available in this test database.');
+        }
+
+        $owner = $this->createOwner('wp-sync-complete@test.test');
+        $site = Site::query()->create([
+            'user_id' => $owner->id,
+            'domain' => 'wp-sync-complete.test',
+            'status' => 'active',
+            'ssl' => true,
+        ]);
+
+        $article = SeoArticle::query()->create([
+            'site_id' => $site->id,
+            'user_id' => $owner->id,
+            'title' => 'Completed sync article',
+            'slug' => 'completed-sync-article',
+            'status' => 'draft',
+            'type' => 'article',
+        ]);
+
+        ArticleMeta::query()->create([
+            'article_id' => $article->id,
+            'meta_key' => ArticleWpSyncQueueService::META_KEY,
+            'meta_value' => json_encode([
+                'status' => ArticleWpSyncQueueService::STATUS_COMPLETED,
+                'queued_at' => now()->toIso8601String(),
+                'finished_at' => now()->toIso8601String(),
+            ], JSON_THROW_ON_ERROR),
+        ]);
+
+        $this->insertWpSyncJob((int) $article->id, reserved: false);
+
+        $service = app(SeoQueueControlService::class);
+        $status = $service->statusForOwner($owner->id);
+
+        $this->assertSame(0, $status['pending_wp_sync_jobs']);
+        $this->assertSame(0, $status['pending_work_total']);
+        $this->assertFalse($service->shouldShowOfflineAlertForOwner($owner->id));
+    }
+
     private function createOwner(string $email): User
     {
         return User::query()->create([
@@ -177,6 +225,26 @@ final class SeoQueueControlServiceTest extends TestCase
         $job = new AuditLinkStatusJob(1, $siteId);
         $payload = json_encode([
             'displayName' => AuditLinkStatusJob::class,
+            'data' => [
+                'command' => serialize($job),
+            ],
+        ], JSON_THROW_ON_ERROR);
+
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => $payload,
+            'attempts' => 0,
+            'reserved_at' => $reserved ? now()->getTimestamp() : null,
+            'available_at' => now()->getTimestamp(),
+            'created_at' => now()->getTimestamp(),
+        ]);
+    }
+
+    private function insertWpSyncJob(int $articleId, bool $reserved): void
+    {
+        $job = new SyncArticleToWordPressFromQueueJob($articleId);
+        $payload = json_encode([
+            'displayName' => SyncArticleToWordPressFromQueueJob::class,
             'data' => [
                 'command' => serialize($job),
             ],

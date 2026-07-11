@@ -7,7 +7,6 @@ import { saveWatermarkSettings, saveWatermarkedMedia, saveNewWatermarkedImage } 
 import { exportAllWatermarkOverlayBlobs, OVERLAY_EXPORT_MAX } from './watermarkOverlayExport';
 import {
     centerToAnchorOffset,
-    DEFAULT_ANCHOR_OFFSET,
     DEFAULT_POSITION_ANCHOR,
     migratePositionFromLegacy,
     resolveAnchorCenter,
@@ -20,9 +19,17 @@ import { loadCustomIconImage } from './watermarkCustomIcon';
 import WatermarkOverlayPreviewPanel from './WatermarkOverlayPreviewPanel';
 import { t } from '../utils/i18n';
 
-function extractOverlayPreviews(config) {
-    return Array.isArray(config?.overlay_previews) ? config.overlay_previews : [];
-}
+import {
+    buildLayoutConfigPayload,
+    buildResolvedDrawOpts,
+    buildResolvedPositionBundle,
+    computeFitScale,
+    DEFAULT_LAYOUT_PERCENT,
+    migrateLayoutToPercent,
+    pxToPctHeight,
+    pxToPctWidth,
+    resolveWatermarkLayoutPixels,
+} from './watermarkRelativeUnits';
 import {
     drawAestheticCorners,
     drawCircularBadge,
@@ -32,6 +39,10 @@ import {
     drawSecurityRect,
     resolveStampCenter,
 } from './watermarkDrawUtils';
+
+function extractOverlayPreviews(config) {
+    return Array.isArray(config?.overlay_previews) ? config.overlay_previews : [];
+}
 
 const SYSTEM_FONTS = ['Arial', 'Georgia', 'Times New Roman', 'Courier New', 'Impact'];
 
@@ -73,6 +84,35 @@ const PRESET_GRID = [
 
 const DEFAULT_SAMPLE =
     'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=800';
+
+const CANVAS_MAX_HEIGHT_VH = 0.72;
+const CANVAS_AREA_PADDING_PX = 48;
+
+const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
+const ZOOM_MIN = ZOOM_STEPS[0];
+const ZOOM_MAX = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+function nearestZoomStepIndex(level) {
+    let bestIndex = 0;
+    let bestDiff = Infinity;
+
+    ZOOM_STEPS.forEach((step, index) => {
+        const diff = Math.abs(step - level);
+        if (diff < bestDiff) {
+            bestDiff = diff;
+            bestIndex = index;
+        }
+    });
+
+    return bestIndex;
+}
+
+function stepZoomLevel(level, direction) {
+    const index = nearestZoomStepIndex(level);
+    const nextIndex = Math.min(ZOOM_STEPS.length - 1, Math.max(0, index + direction));
+
+    return ZOOM_STEPS[nextIndex];
+}
 
 const DRAGGABLE_PATTERNS = new Set(['cta_button', 'circular_badge', 'security_rect', 'elegant_sig']);
 
@@ -169,42 +209,13 @@ function normalizePreset(pos) {
     return String(pos).replace(/^middle-/, 'center-');
 }
 
-function buildConfig(state) {
-    return {
-        activePattern: state.activePattern,
-        watermarkType: 'text',
-        isPattern: state.activePattern === 'classic_grid',
-        text: state.text1,
-        text1: state.text1,
-        text2: state.text2,
-        textColor: state.textColorConfig?.color1 ?? state.textColor,
-        textColorConfig: state.textColorConfig,
-        bgColorConfig: state.bgColorConfig,
-        textSize: state.textSize,
-        fontFamily: state.selectedFont,
-        selectedFont: state.selectedFont,
-        opacity: state.opacity,
-        rotation: state.rotation,
-        patternSpacing: state.gridSpacing,
-        gridSpacing: state.gridSpacing,
-        borderWidth: state.borderWidth,
-        borderColor: state.borderColor,
-        backgroundColor: state.backgroundColor,
-        bgOpacity: state.bgOpacity,
-        positionType: state.positionType,
-        positionAnchor: state.positionAnchor,
-        anchorOffset: state.anchorOffset,
-        presetPos: normalizePreset(state.presetPos),
-        customCoords: state.customCoords,
-        margin: state.margin,
-        borders: state.borders,
-        btnPaddingX: state.btnPaddingX,
-        btnPaddingY: state.btnPaddingY,
-        btnRadius: state.btnRadius,
-        selectedIcon: state.selectedIcon,
-        iconPosition: state.iconPosition,
-        customIconSvg: state.customIconSvg ?? '',
-    };
+function withDefaultBorderColorConfigs(borders) {
+    return borders.map((border) => ({
+        ...border,
+        colorConfig:
+            border.colorConfig ??
+            defaultColorConfig({ type: 'solid', color1: '#ffffff' }),
+    }));
 }
 
 function hasCtaIcon(selectedIcon, customIconSvg) {
@@ -232,12 +243,17 @@ export default function WatermarkEditorApp({
     onClose,
 }) {
     const initialConfig = migratePositionFromLegacy(rawInitialConfig);
+    const initialLayout = migrateLayoutToPercent(initialConfig);
     const canvasRef = useRef(null);
     const frameRef = useRef(null);
+    const canvasAreaRef = useRef(null);
     const dragRef = useRef(null);
     const loadedFontLinksRef = useRef(new Set());
 
     const [sampleImage, setSampleImage] = useState(null);
+    const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 });
+    const [fitScale, setFitScale] = useState(1);
+    const [zoomLevel, setZoomLevel] = useState(1);
     const [sampleUrl, setSampleUrl] = useState(initialImageUrl || DEFAULT_SAMPLE);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -289,36 +305,28 @@ export default function WatermarkEditorApp({
                 angle: 90,
             }),
     );
-    const [textSize, setTextSize] = useState(initialConfig.textSize ?? 24);
+    const [textSizePct, setTextSizePct] = useState(initialLayout.textSizePct);
     const [opacity, setOpacity] = useState(initialConfig.opacity ?? 0.95);
     const [rotation, setRotation] = useState(initialConfig.rotation ?? 0);
 
-    const [btnPaddingX, setBtnPaddingX] = useState(initialConfig.btnPaddingX ?? 30);
-    const [btnPaddingY, setBtnPaddingY] = useState(initialConfig.btnPaddingY ?? 15);
-    const [btnRadius, setBtnRadius] = useState(initialConfig.btnRadius ?? 30);
+    const [btnPaddingXPct, setBtnPaddingXPct] = useState(initialLayout.btnPaddingXPct);
+    const [btnPaddingYPct, setBtnPaddingYPct] = useState(initialLayout.btnPaddingYPct);
+    const [btnRadiusPct, setBtnRadiusPct] = useState(initialLayout.btnRadiusPct);
     const [selectedIcon, setSelectedIcon] = useState(initialConfig.selectedIcon ?? 'arrow');
     const [customIconSvg, setCustomIconSvg] = useState(initialConfig.customIconSvg ?? '');
     const [customIconImage, setCustomIconImage] = useState(null);
     const [customIconError, setCustomIconError] = useState('');
     const [iconPosition, setIconPosition] = useState(initialConfig.iconPosition ?? 'right');
-    const [borders, setBorders] = useState(
-        initialConfig.borders ?? [
-            {
-                id: 1,
-                width: 3,
-                colorConfig: defaultColorConfig({ type: 'solid', color1: '#ffffff' }),
-            },
-        ],
+    const [borders, setBorders] = useState(() =>
+        withDefaultBorderColorConfigs(initialLayout.borders),
     );
 
-    const [borderWidth, setBorderWidth] = useState(initialConfig.borderWidth ?? 3);
+    const [borderWidthPct, setBorderWidthPct] = useState(initialLayout.borderWidthPct);
     const [borderColor, setBorderColor] = useState(initialConfig.borderColor ?? '#ff2d55');
     const [backgroundColor, setBackgroundColor] = useState(initialConfig.backgroundColor ?? '#ffffff');
     const [bgOpacity, setBgOpacity] = useState(initialConfig.bgOpacity ?? 0);
 
-    const [gridSpacing, setGridSpacing] = useState(
-        initialConfig.gridSpacing ?? initialConfig.patternSpacing ?? 120,
-    );
+    const [gridSpacingPct, setGridSpacingPct] = useState(initialLayout.gridSpacingPct);
 
     const [positionType, setPositionType] = useState(
         initialConfig.positionType === 'custom' ? 'anchor' : (initialConfig.positionType ?? 'anchor'),
@@ -326,16 +334,14 @@ export default function WatermarkEditorApp({
     const [positionAnchor, setPositionAnchor] = useState(
         initialConfig.positionAnchor ?? DEFAULT_POSITION_ANCHOR,
     );
-    const [anchorOffset, setAnchorOffset] = useState(
-        initialConfig.anchorOffset ?? { ...DEFAULT_ANCHOR_OFFSET },
-    );
+    const [anchorOffsetPct, setAnchorOffsetPct] = useState(initialLayout.anchorOffsetPct);
     const [presetPos, setPresetPos] = useState(
         normalizePreset(initialConfig.presetPos ?? 'bottom-center'),
     );
     const [customCoords, setCustomCoords] = useState(
         initialConfig.customCoords ?? { x: 50, y: 50 },
     );
-    const [margin, setMargin] = useState(initialConfig.margin ?? 20);
+    const [marginPct, setMarginPct] = useState(initialLayout.marginPct);
 
     useEffect(() => {
         const img = new Image();
@@ -343,10 +349,55 @@ export default function WatermarkEditorApp({
         img.src = sampleUrl;
         img.onload = () => {
             setSampleImage(img);
+            setNaturalSize({
+                width: img.naturalWidth || img.width,
+                height: img.naturalHeight || img.height,
+            });
             setMessage(null);
         };
         img.onerror = () => setMessage({ type: 'error', text: t('watermark_sample_image_load_failed') });
     }, [sampleUrl]);
+
+    useEffect(() => {
+        setZoomLevel(1);
+    }, [sampleUrl]);
+
+    const updateFitScale = useCallback(() => {
+        if (!naturalSize.width || !canvasAreaRef.current) {
+            return;
+        }
+
+        const area = canvasAreaRef.current;
+        const viewport = area.querySelector('.wm-canvas-viewport');
+        const maxW = Math.max(1, (viewport?.clientWidth ?? area.clientWidth) - CANVAS_AREA_PADDING_PX);
+        const maxH = Math.max(
+            1,
+            Math.min(
+                window.innerHeight * CANVAS_MAX_HEIGHT_VH,
+                (viewport?.clientHeight ?? area.clientHeight) - CANVAS_AREA_PADDING_PX,
+            ),
+        );
+
+        setFitScale(computeFitScale(naturalSize.width, naturalSize.height, maxW, maxH));
+    }, [naturalSize]);
+
+    useEffect(() => {
+        updateFitScale();
+
+        const area = canvasAreaRef.current;
+        if (!area) {
+            return undefined;
+        }
+
+        const observer = new ResizeObserver(() => updateFitScale());
+        observer.observe(area);
+        window.addEventListener('resize', updateFitScale);
+
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', updateFitScale);
+        };
+    }, [updateFitScale]);
 
     // Tự động nạp Google Font khi chọn trên select
     useEffect(() => {
@@ -425,80 +476,182 @@ export default function WatermarkEditorApp({
         };
     }, [selectedIcon, customIconSvg, textColorConfig]);
 
-    const drawOpts = useCallback(
+    const layoutPercent = useCallback(
+        () => ({
+            textSizePct,
+            btnPaddingXPct,
+            btnPaddingYPct,
+            btnRadiusPct,
+            borderWidthPct,
+            marginPct,
+            gridSpacingPct,
+            anchorOffsetPct,
+            borders,
+        }),
+        [
+            textSizePct,
+            btnPaddingXPct,
+            btnPaddingYPct,
+            btnRadiusPct,
+            borderWidthPct,
+            marginPct,
+            gridSpacingPct,
+            anchorOffsetPct,
+            borders,
+        ],
+    );
+
+    const staticDrawFields = useCallback(
         () => ({
             text1,
             text2,
-            textSize,
             selectedFont,
             textColor: textColorConfig?.color1 ?? '#ffffff',
             textColorConfig,
             bgColorConfig,
-            borders,
-            btnPaddingX,
-            btnPaddingY,
-            btnRadius,
             selectedIcon,
             customIconSvg,
             customIconImage,
             iconPosition,
             borderColor,
-            borderWidth,
             backgroundColor,
             bgOpacity,
             rotation,
-            gridSpacing,
             positionType,
             positionAnchor,
-            anchorOffset,
             customCoords,
             presetPos,
-            margin,
         }),
         [
             text1,
             text2,
-            textSize,
             selectedFont,
             textColorConfig,
             bgColorConfig,
-            borders,
-            btnPaddingX,
-            btnPaddingY,
-            btnRadius,
             selectedIcon,
             customIconSvg,
             customIconImage,
             iconPosition,
             borderColor,
-            borderWidth,
             backgroundColor,
             bgOpacity,
             rotation,
-            gridSpacing,
             positionType,
             positionAnchor,
-            anchorOffset,
             customCoords,
             presetPos,
-            margin,
         ],
     );
 
-    const positionBundle = useCallback(
+    const positionStatic = useCallback(
         () => ({
             positionType,
             positionAnchor,
-            anchorOffset,
             customCoords,
             presetPos: normalizePreset(presetPos),
-            margin,
         }),
-        [positionType, positionAnchor, anchorOffset, customCoords, presetPos, margin],
+        [positionType, positionAnchor, customCoords, presetPos],
+    );
+
+    const resolveDrawAt = useCallback(
+        (canvasW, canvasH) =>
+            buildResolvedDrawOpts(layoutPercent(), staticDrawFields(), canvasW, canvasH),
+        [layoutPercent, staticDrawFields],
+    );
+
+    const resolvePositionAt = useCallback(
+        (canvasW, canvasH) =>
+            buildResolvedPositionBundle(layoutPercent(), positionStatic(), canvasW, canvasH),
+        [layoutPercent, positionStatic],
+    );
+
+    const visualScale = fitScale * zoomLevel;
+
+    const zoomOut = useCallback(() => {
+        setZoomLevel((current) => stepZoomLevel(current, -1));
+    }, []);
+
+    const zoomIn = useCallback(() => {
+        setZoomLevel((current) => stepZoomLevel(current, 1));
+    }, []);
+
+    const resetZoom = useCallback(() => {
+        setZoomLevel(1);
+    }, []);
+
+    const drawWatermarkLayer = useCallback(
+        (ctx, canvasW, canvasH) => {
+            const opts = resolveDrawAt(canvasW, canvasH);
+            const pos = resolvePositionAt(canvasW, canvasH);
+
+            switch (activePattern) {
+                case 'cta_button':
+                    drawCtaButton(ctx, canvasW, canvasH, opts);
+                    break;
+                case 'classic_grid':
+                    drawClassicGrid(ctx, canvasW, canvasH, opts);
+                    break;
+                case 'circular_badge': {
+                    const center = resolveStampCenter(
+                        canvasW,
+                        canvasH,
+                        positionType,
+                        customCoords,
+                        presetPos,
+                        pos.margin,
+                        pos,
+                    );
+                    drawCircularBadge(ctx, center.x, center.y, opts);
+                    break;
+                }
+                case 'security_rect': {
+                    const center = resolveStampCenter(
+                        canvasW,
+                        canvasH,
+                        positionType,
+                        customCoords,
+                        presetPos,
+                        pos.margin,
+                        pos,
+                    );
+                    drawSecurityRect(ctx, center.x, center.y, opts);
+                    break;
+                }
+                case 'elegant_sig': {
+                    const center = resolveStampCenter(
+                        canvasW,
+                        canvasH,
+                        positionType,
+                        customCoords,
+                        presetPos,
+                        pos.margin,
+                        pos,
+                    );
+                    drawElegantSignature(ctx, center.x, center.y, opts);
+                    break;
+                }
+                case 'minimal_frame':
+                    drawMinimalFrame(ctx, canvasW, canvasH, opts);
+                    break;
+                case 'full_cross':
+                    drawAestheticCorners(ctx, canvasW, canvasH, opts);
+                    break;
+                default:
+                    break;
+            }
+        },
+        [
+            activePattern,
+            resolveDrawAt,
+            resolvePositionAt,
+            positionType,
+            customCoords,
+            presetPos,
+        ],
     );
 
     const drawCanvas = useCallback(() => {
-        if (!sampleImage || !canvasRef.current) {
+        if (!sampleImage || !canvasRef.current || !naturalSize.width) {
             return;
         }
 
@@ -508,65 +661,22 @@ export default function WatermarkEditorApp({
             return;
         }
 
-        canvas.width = sampleImage.width;
-        canvas.height = sampleImage.height;
+        const w = naturalSize.width;
+        const h = naturalSize.height;
 
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(sampleImage, 0, 0);
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(sampleImage, 0, 0, w, h);
         ctx.globalAlpha = opacity;
 
-        const opts = drawOpts();
-        const pos = positionBundle();
-        const w = canvas.width;
-        const h = canvas.height;
-
-        switch (activePattern) {
-            case 'cta_button':
-                drawCtaButton(ctx, w, h, opts);
-                break;
-            case 'classic_grid':
-                drawClassicGrid(ctx, w, h, opts);
-                break;
-            case 'circular_badge': {
-                const center = resolveStampCenter(w, h, positionType, customCoords, presetPos, margin, pos);
-                drawCircularBadge(ctx, center.x, center.y, opts);
-                break;
-            }
-            case 'security_rect': {
-                const center = resolveStampCenter(w, h, positionType, customCoords, presetPos, margin, pos);
-                drawSecurityRect(ctx, center.x, center.y, opts);
-                break;
-            }
-            case 'elegant_sig': {
-                const center = resolveStampCenter(w, h, positionType, customCoords, presetPos, margin, pos);
-                drawElegantSignature(ctx, center.x, center.y, opts);
-                break;
-            }
-            case 'minimal_frame':
-                drawMinimalFrame(ctx, w, h, opts);
-                break;
-            case 'full_cross':
-                drawAestheticCorners(ctx, w, h, opts);
-                break;
-            default:
-                break;
-        }
+        drawWatermarkLayer(ctx, w, h);
 
         ctx.globalAlpha = 1;
-    }, [
-        sampleImage,
-        activePattern,
-        opacity,
-        drawOpts,
-        positionType,
-        positionAnchor,
-        anchorOffset,
-        customCoords,
-        presetPos,
-        margin,
-        positionBundle,
-        fontRevision,
-    ]);
+    }, [sampleImage, naturalSize, opacity, drawWatermarkLayer, fontRevision]);
 
     useEffect(() => {
         drawCanvas();
@@ -574,22 +684,25 @@ export default function WatermarkEditorApp({
 
     useEffect(() => {
         const onMove = (e) => {
-            if (!dragRef.current || !sampleImage) {
+            if (!dragRef.current || !naturalSize.width) {
                 return;
             }
             const { rect, scaleX, scaleY, elemW, elemH } = dragRef.current;
             const newCenterX = (e.clientX - rect.left) * scaleX;
             const newCenterY = (e.clientY - rect.top) * scaleY;
-            const offset = centerToAnchorOffset(
-                sampleImage.width,
-                sampleImage.height,
+            const offsetPx = centerToAnchorOffset(
+                naturalSize.width,
+                naturalSize.height,
                 newCenterX,
                 newCenterY,
                 elemW,
                 elemH,
                 positionAnchor,
             );
-            setAnchorOffset(offset);
+            setAnchorOffsetPct({
+                x: pxToPctWidth(offsetPx.x, naturalSize.width),
+                y: pxToPctHeight(offsetPx.y, naturalSize.height),
+            });
         };
         const onUp = () => {
             dragRef.current = null;
@@ -600,20 +713,37 @@ export default function WatermarkEditorApp({
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
-    }, [sampleImage, positionAnchor]);
+    }, [naturalSize, positionAnchor]);
 
-    const exportBlob = () =>
+    const exportFullResolutionBlob = () =>
         new Promise((resolve, reject) => {
-            if (!canvasRef.current) {
+            if (!sampleImage || !naturalSize.width) {
                 reject(new Error(t('watermark_canvas_not_ready')));
                 return;
             }
-            canvasRef.current.toBlob(
+
+            const exportCanvas = document.createElement('canvas');
+            exportCanvas.width = naturalSize.width;
+            exportCanvas.height = naturalSize.height;
+            const ctx = exportCanvas.getContext('2d');
+            if (!ctx) {
+                reject(new Error(t('watermark_canvas_not_ready')));
+                return;
+            }
+
+            ctx.drawImage(sampleImage, 0, 0, naturalSize.width, naturalSize.height);
+            ctx.globalAlpha = opacity;
+            drawWatermarkLayer(ctx, naturalSize.width, naturalSize.height);
+            ctx.globalAlpha = 1;
+
+            exportCanvas.toBlob(
                 (blob) => (blob ? resolve(blob) : reject(new Error(t('watermark_export_failed_alt')))),
                 'image/png',
                 0.92,
             );
         });
+
+    const exportBlob = () => exportFullResolutionBlob();
 
     const handleDownload = async () => {
         try {
@@ -645,49 +775,45 @@ export default function WatermarkEditorApp({
             selectedFont,
             textColorConfig,
             bgColorConfig,
-            textSize,
             opacity,
             rotation,
-            gridSpacing,
-            borderWidth,
             borderColor,
             backgroundColor,
             bgOpacity,
             positionType,
             positionAnchor,
-            anchorOffset,
             presetPos,
             customCoords,
-            margin,
-            borders,
-            btnPaddingX,
-            btnPaddingY,
-            btnRadius,
             selectedIcon,
             customIconSvg,
             iconPosition,
         };
 
+        const refW = naturalSize.width || 2000;
+        const refH = naturalSize.height || 1125;
+        const resolvedRef = resolveWatermarkLayoutPixels(layoutPercent(), refW, refH);
+
         try {
             const overlayVariants = await exportAllWatermarkOverlayBlobs(
                 activePattern,
                 opacity,
-                drawOpts(),
-                positionBundle(),
+                resolveDrawAt,
+                resolvePositionAt,
             );
 
             const saveResult = await saveWatermarkSettings(
                 siteId,
                 {
                     type: 'text',
+                    auto_watermark: true,
                     design_config: {
-                        ...buildConfig(state),
+                        ...buildLayoutConfigPayload(layoutPercent(), state, refW, refH),
                         overlay_export_max: OVERLAY_EXPORT_MAX,
                         overlay_variant_keys: overlayVariants.map((v) => v.key),
                     },
                     text_content: text1,
                     text_color: textColorConfig?.color1 ?? '#ffffff',
-                    text_size: textSize,
+                    text_size: Math.round(resolvedRef.textSize),
                     position: normalizePreset(presetPos),
                     opacity,
                 },
@@ -746,39 +872,47 @@ export default function WatermarkEditorApp({
     };
 
     const ctaApproxSize = useCallback(() => {
-        const padX = btnPaddingX;
-        const padY = btnPaddingY;
+        if (!naturalSize.width) {
+            return { w: 0, h: 0 };
+        }
+
+        const px = resolveWatermarkLayoutPixels(layoutPercent(), naturalSize.width, naturalSize.height);
+        const padX = px.btnPaddingX;
+        const padY = px.btnPaddingY;
+        const textSize = px.textSize;
         const label = String(text1 ?? '');
         const approxTextW = label.length * textSize * 0.55;
         const iconSize = textSize * 0.9;
-        const iconSpacing = hasCtaIcon(selectedIcon, customIconSvg) ? iconSize + 10 : 0;
+        const iconSpacing = hasCtaIcon(selectedIcon, customIconSvg) ? iconSize + textSize * 0.42 : 0;
 
         return {
             w: approxTextW + iconSpacing + padX * 2,
             h: textSize + padY * 2,
         };
-    }, [text1, textSize, btnPaddingX, btnPaddingY, selectedIcon, customIconSvg]);
+    }, [naturalSize, layoutPercent, text1, selectedIcon, customIconSvg]);
 
     const dragHandlePercent = useCallback(() => {
-        if (!sampleImage) {
+        if (!naturalSize.width) {
             return { left: '90%', top: '90%' };
         }
+
+        const px = resolveWatermarkLayoutPixels(layoutPercent(), naturalSize.width, naturalSize.height);
         const { w, h } = ctaApproxSize();
         const center = resolveAnchorCenter(
-            sampleImage.width,
-            sampleImage.height,
+            naturalSize.width,
+            naturalSize.height,
             positionAnchor,
-            anchorOffset.x,
-            anchorOffset.y,
+            px.anchorOffset.x,
+            px.anchorOffset.y,
             w,
             h,
         );
 
         return {
-            left: `${(center.x / sampleImage.width) * 100}%`,
-            top: `${(center.y / sampleImage.height) * 100}%`,
+            left: `${(center.x / naturalSize.width) * 100}%`,
+            top: `${(center.y / naturalSize.height) * 100}%`,
         };
-    }, [sampleImage, positionAnchor, anchorOffset, ctaApproxSize]);
+    }, [naturalSize, layoutPercent, positionAnchor, ctaApproxSize]);
 
     const showDragOverlay =
         activePattern === 'cta_button' && positionType === 'anchor';
@@ -796,7 +930,7 @@ export default function WatermarkEditorApp({
             ...prev,
             {
                 id: Date.now(),
-                width: 2,
+                widthPct: DEFAULT_LAYOUT_PERCENT.borderLayerWidthPct,
                 colorConfig: defaultColorConfig({ type: 'solid', color1: '#ffffff' }),
             },
         ]);
@@ -816,7 +950,7 @@ export default function WatermarkEditorApp({
             setRotation(0);
             setPositionType('anchor');
             setPositionAnchor(DEFAULT_POSITION_ANCHOR);
-            setAnchorOffset({ ...DEFAULT_ANCHOR_OFFSET });
+            setAnchorOffsetPct({ ...DEFAULT_LAYOUT_PERCENT.anchorOffsetPct });
         } else if (id === 'classic_grid') {
             setRotation(-30);
         } else if (id === 'security_rect') {
@@ -949,40 +1083,108 @@ export default function WatermarkEditorApp({
                     />
                 ) : null}
 
-                <div className={`wm-canvas-area ${workspaceTab !== 'design' ? 'is-hidden' : ''}`}>
-                    <div className="wm-canvas-frame" ref={frameRef}>
-                        <canvas ref={canvasRef} />
-                        {showDragOverlay ? (
-                            <div className="wm-drag-overlay">
-                                <div
-                                    className="wm-drag-handle"
-                                    style={dragHandlePercent()}
-                                    onMouseDown={(e) => {
-                                        e.preventDefault();
-                                        if (!sampleImage || !frameRef.current) {
-                                            return;
-                                        }
-                                        const rect = frameRef.current.getBoundingClientRect();
-                                        const scaleX = sampleImage.width / rect.width;
-                                        const scaleY = sampleImage.height / rect.height;
-                                        const { w, h } = ctaApproxSize();
-                                        const startX = (e.clientX - rect.left) * scaleX;
-                                        const startY = (e.clientY - rect.top) * scaleY;
-                                        dragRef.current = {
-                                            rect,
-                                            scaleX,
-                                            scaleY,
-                                            elemW: w,
-                                            elemH: h,
-                                            startX,
-                                            startY,
-                                            startOffset: { ...anchorOffset },
-                                        };
-                                    }}
-                                    title={t('watermark_drag_offset_hint')}
-                                />
-                            </div>
+                <div className={`wm-canvas-area ${workspaceTab !== 'design' ? 'is-hidden' : ''}`} ref={canvasAreaRef}>
+                    <div className="wm-canvas-zoom-toolbar" role="toolbar" aria-label={t('watermark_preview_zoom')}>
+                        <button
+                            type="button"
+                            className="wm-canvas-zoom-btn"
+                            onClick={zoomOut}
+                            disabled={zoomLevel <= ZOOM_MIN}
+                            title={t('magic_zoom_out')}
+                            aria-label={t('magic_zoom_out')}
+                        >
+                            −
+                        </button>
+                        <span className="wm-canvas-zoom-label" aria-live="polite">
+                            {Math.round(zoomLevel * 100)}%
+                        </span>
+                        <button
+                            type="button"
+                            className="wm-canvas-zoom-btn"
+                            onClick={zoomIn}
+                            disabled={zoomLevel >= ZOOM_MAX}
+                            title={t('magic_zoom_in')}
+                            aria-label={t('magic_zoom_in')}
+                        >
+                            +
+                        </button>
+                        <button
+                            type="button"
+                            className="wm-canvas-zoom-btn wm-canvas-zoom-btn--reset"
+                            onClick={resetZoom}
+                            title={t('watermark_zoom_fit_screen')}
+                        >
+                            {t('watermark_zoom_fit_screen')}
+                        </button>
+                        {naturalSize.width > 0 ? (
+                            <span className="wm-canvas-zoom-meta">
+                                {naturalSize.width}×{naturalSize.height}px · fit{' '}
+                                {Math.round(fitScale * 100)}%
+                            </span>
                         ) : null}
+                    </div>
+
+                    <div className="wm-canvas-viewport">
+                        <div
+                            className="wm-canvas-zoom-spacer"
+                            style={
+                                naturalSize.width > 0
+                                    ? {
+                                          width: Math.round(naturalSize.width * visualScale),
+                                          height: Math.round(naturalSize.height * visualScale),
+                                      }
+                                    : undefined
+                            }
+                        >
+                            <div
+                                className="wm-canvas-frame"
+                                ref={frameRef}
+                                style={
+                                    naturalSize.width > 0
+                                        ? {
+                                              width: naturalSize.width,
+                                              height: naturalSize.height,
+                                              transform: `scale(${visualScale})`,
+                                              transformOrigin: 'center center',
+                                              transition: 'transform 0.2s ease',
+                                          }
+                                        : undefined
+                                }
+                            >
+                                <canvas ref={canvasRef} />
+                            </div>
+                            {showDragOverlay ? (
+                                <div className="wm-drag-overlay">
+                                    <div
+                                        className="wm-drag-handle"
+                                        style={dragHandlePercent()}
+                                        onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            if (!naturalSize.width || !frameRef.current) {
+                                                return;
+                                            }
+                                            const rect = frameRef.current.getBoundingClientRect();
+                                            const scaleX = naturalSize.width / rect.width;
+                                            const scaleY = naturalSize.height / rect.height;
+                                            const { w, h } = ctaApproxSize();
+                                            const startX = (e.clientX - rect.left) * scaleX;
+                                            const startY = (e.clientY - rect.top) * scaleY;
+                                            dragRef.current = {
+                                                rect,
+                                                scaleX,
+                                                scaleY,
+                                                elemW: w,
+                                                elemH: h,
+                                                startX,
+                                                startY,
+                                                startOffset: { ...anchorOffsetPct },
+                                            };
+                                        }}
+                                        title={t('watermark_drag_offset_hint')}
+                                    />
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1071,22 +1273,22 @@ export default function WatermarkEditorApp({
                                     <label>{t('watermark_border_radius')}</label>
                                     <PreciseControl
                                         min={0}
-                                        max={80}
-                                        step={1}
-                                        value={btnRadius}
-                                        onChange={setBtnRadius}
-                                        suffix="px"
+                                        max={8}
+                                        step={0.05}
+                                        value={btnRadiusPct}
+                                        onChange={setBtnRadiusPct}
+                                        suffix="%"
                                     />
                                 </div>
                                 <div className="wm-field">
                                     <label>{t('watermark_padding_x')}</label>
                                     <PreciseControl
                                         min={0}
-                                        max={120}
-                                        step={1}
-                                        value={btnPaddingX}
-                                        onChange={setBtnPaddingX}
-                                        suffix="px"
+                                        max={8}
+                                        step={0.05}
+                                        value={btnPaddingXPct}
+                                        onChange={setBtnPaddingXPct}
+                                        suffix="%"
                                     />
                                 </div>
                             </div>
@@ -1094,11 +1296,11 @@ export default function WatermarkEditorApp({
                                 <label>{t('watermark_padding_y')}</label>
                                 <PreciseControl
                                     min={0}
-                                    max={80}
-                                    step={1}
-                                    value={btnPaddingY}
-                                    onChange={setBtnPaddingY}
-                                    suffix="px"
+                                    max={6}
+                                    step={0.05}
+                                    value={btnPaddingYPct}
+                                    onChange={setBtnPaddingYPct}
+                                    suffix="%"
                                 />
                             </div>
                             <div className="wm-field-row">
@@ -1173,12 +1375,12 @@ export default function WatermarkEditorApp({
                                             <div className="wm-field">
                                                 <label>Độ dày viền</label>
                                                 <PreciseControl
-                                                    min={1}
-                                                    max={20}
-                                                    step={1}
-                                                    value={border.width}
-                                                    onChange={(n) => updateBorder(border.id, 'width', n)}
-                                                    suffix="px"
+                                                    min={0.05}
+                                                    max={1}
+                                                    step={0.05}
+                                                    value={border.widthPct}
+                                                    onChange={(n) => updateBorder(border.id, 'widthPct', n)}
+                                                    suffix="%"
                                                 />
                                             </div>
                                             <GradientColorPicker
@@ -1208,12 +1410,12 @@ export default function WatermarkEditorApp({
                                 <div className="wm-field">
                                     <label>{t('watermark_border_thickness')}</label>
                                     <PreciseControl
-                                        min={1}
-                                        max={12}
-                                        step={1}
-                                        value={borderWidth}
-                                        onChange={setBorderWidth}
-                                        suffix="px"
+                                        min={0.05}
+                                        max={1}
+                                        step={0.05}
+                                        value={borderWidthPct}
+                                        onChange={setBorderWidthPct}
+                                        suffix="%"
                                     />
                                 </div>
                             </div>
@@ -1285,13 +1487,13 @@ export default function WatermarkEditorApp({
                                         </label>
                                         <PreciseControl
                                             min={0}
-                                            max={800}
-                                            step={1}
-                                            value={anchorOffset.x}
+                                            max={25}
+                                            step={0.1}
+                                            value={anchorOffsetPct.x}
                                             onChange={(x) =>
-                                                setAnchorOffset({ ...anchorOffset, x })
+                                                setAnchorOffsetPct({ ...anchorOffsetPct, x })
                                             }
-                                            suffix="px"
+                                            suffix="%"
                                         />
                                     </div>
                                     <div className="wm-field">
@@ -1307,13 +1509,13 @@ export default function WatermarkEditorApp({
                                         </label>
                                         <PreciseControl
                                             min={0}
-                                            max={800}
-                                            step={1}
-                                            value={anchorOffset.y}
+                                            max={25}
+                                            step={0.1}
+                                            value={anchorOffsetPct.y}
                                             onChange={(y) =>
-                                                setAnchorOffset({ ...anchorOffset, y })
+                                                setAnchorOffsetPct({ ...anchorOffsetPct, y })
                                             }
-                                            suffix="px"
+                                            suffix="%"
                                         />
                                     </div>
                                     {activePattern === 'cta_button' ? (
@@ -1339,12 +1541,12 @@ export default function WatermarkEditorApp({
                                     <div className="wm-field">
                                         <label>{t('watermark_margin')}</label>
                                         <PreciseControl
-                                            min={5}
-                                            max={100}
-                                            step={1}
-                                            value={margin}
-                                            onChange={setMargin}
-                                            suffix="px"
+                                            min={0.5}
+                                            max={12}
+                                            step={0.1}
+                                            value={marginPct}
+                                            onChange={setMarginPct}
+                                            suffix="%"
                                         />
                                     </div>
                                 </>
@@ -1357,12 +1559,12 @@ export default function WatermarkEditorApp({
                         <div className="wm-field">
                             <label>{t('watermark_font_size')}</label>
                             <PreciseControl
-                                min={12}
-                                max={100}
-                                step={1}
-                                value={textSize}
-                                onChange={setTextSize}
-                                suffix="px"
+                                min={0.5}
+                                max={5}
+                                step={0.05}
+                                value={textSizePct}
+                                onChange={setTextSizePct}
+                                suffix="%"
                             />
                         </div>
                         {['classic_grid', 'full_cross', 'cta_button'].includes(activePattern) ? (
@@ -1375,12 +1577,12 @@ export default function WatermarkEditorApp({
                                           : t('watermark_repeat_spacing')}
                                 </label>
                                 <PreciseControl
-                                    min={activePattern === 'classic_grid' ? 50 : 20}
-                                    max={400}
-                                    step={1}
-                                    value={gridSpacing}
-                                    onChange={setGridSpacing}
-                                    suffix="px"
+                                    min={activePattern === 'classic_grid' ? 2 : 1}
+                                    max={15}
+                                    step={0.1}
+                                    value={gridSpacingPct}
+                                    onChange={setGridSpacingPct}
+                                    suffix="%"
                                 />
                             </div>
                         ) : null}

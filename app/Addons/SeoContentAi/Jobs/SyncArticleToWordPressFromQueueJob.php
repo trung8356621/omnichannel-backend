@@ -25,7 +25,7 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
 
     public int $timeout = 600;
 
-    public int $tries = 2;
+    public int $tries = 1;
 
     public function __construct(
         public int $articleId,
@@ -67,7 +67,7 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
         $queueService->markProcessing($article);
 
         try {
-            $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle);
+            $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle, fromQueue: true);
 
             if (! ($result['success'] ?? false)) {
                 $queueService->markFailed(
@@ -89,8 +89,6 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
             if ($fresh instanceof SeoArticle) {
                 $queueService->markFailed($fresh, $exception->getMessage());
             }
-
-            throw $exception;
         }
     }
 }

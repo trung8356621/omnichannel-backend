@@ -33,7 +33,7 @@
                         href="{{ \App\Addons\SeoContentAi\Filament\Pages\WatermarkSettingsPage::getUrl(['siteId' => $siteId]) }}"
                         class="text-primary-600 hover:underline"
                     >
-                        Automatic settings
+                        Batch apply
                     </a>
                 </span>
             @endif

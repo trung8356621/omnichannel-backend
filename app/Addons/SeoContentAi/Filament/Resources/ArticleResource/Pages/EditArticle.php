@@ -3631,6 +3631,20 @@ class EditArticle extends SeoEditRecord
      *
      * @return array{history_step: int, autosave_interval_seconds: int}
      */
+    /**
+     * @return list<string>
+     */
+    public function getSeoAssistantPanelIds(): array
+    {
+        $panelIds = ['seo', 'images'];
+
+        if (! SeoAccessControl::isContentManager()) {
+            $panelIds[] = 'links';
+        }
+
+        return array_merge($panelIds, ['publishing', 'article']);
+    }
+
     public function getEditorSettingsPayload(): array
     {
         $editorSettings = app(ArticleEditorHistoryService::class)->getSettings();

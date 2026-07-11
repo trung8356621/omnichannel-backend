@@ -115,13 +115,24 @@ export function exportWatermarkOverlayBlobAtSize(
 /**
  * Export overlay for all preset ratios (~2000px long edge).
  *
+ * @param {string} activePattern
+ * @param {number} opacity
+ * @param {(w: number, h: number) => Record<string, unknown>} resolveOptsAt
+ * @param {(w: number, h: number) => Record<string, unknown>} resolvePositionAt
  * @returns {Promise<Array<{ key: string, label: string, blob: Blob, width: number, height: number, ratio: number }>>}
  */
-export async function exportAllWatermarkOverlayBlobs(activePattern, opacity, opts, position) {
+export async function exportAllWatermarkOverlayBlobs(
+    activePattern,
+    opacity,
+    resolveOptsAt,
+    resolvePositionAt,
+) {
     const results = [];
 
     for (const preset of OVERLAY_RATIO_PRESETS) {
         const { width, height, ratio } = dimensionsForPreset(preset);
+        const opts = resolveOptsAt(width, height);
+        const position = resolvePositionAt(width, height);
         const blob = await exportWatermarkOverlayBlobAtSize(
             width,
             height,

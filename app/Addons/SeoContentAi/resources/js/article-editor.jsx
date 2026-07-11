@@ -41,6 +41,7 @@ import {
     syncProductAlbumToServer,
 } from './utils/articleProductAlbumStorage';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
+import './utils/seoAssistantNavigator';
 import {
     applyFetchedWpCategories,
     loadWpCategoryIds,
@@ -363,6 +364,7 @@ function registerArticleEditorLivewireBridge() {
         Livewire.on('article-media-selected', forward('article-media-selected'));
         Livewire.on('article-media-removed', forward('article-media-removed'));
         Livewire.on('article-faqs-save-finished', forward('article-faqs-save-finished'));
+        Livewire.on('seo-attachment-slugs-rename-finished', forward('seo-attachment-slugs-rename-finished'));
         Livewire.on('seo-product-gallery-updated', (payload) => {
             const name = 'seo-product-gallery-updated';
             if (forwardingLivewireEvents.has(name)) {

@@ -8,6 +8,7 @@
 
 | Tài liệu | Nội dung |
 |----------|----------|
+| **[Bản đồ Frontend React/Vite](MAP_SEO_FRONTEND.md)** | **Vite entries, component hierarchy, API clients, Alpine bridge** |
 | [Domain Management](MAP_SEO_DOMAIN.md) | Menu Domain, 14 services, settings CTA/tone/links, sync cache, queue jobs |
 | [Chỉnh sửa Giao diện & React Editor](MAP_SEO_EDITOR.md) | EditArticle, SeoArticleEditor, Livewire bridge, media picker modal |
 | [Article SEO Audit](MAP_SEO_AUDIT.md) | ArticlesOptimal, quét SEO kỹ thuật, assign Content Project, tab Reviewed |
@@ -31,7 +32,8 @@
 | **DB credential core** | Bảng `seo_database_connections` (mysql) |
 | **Services** | ~150 class trong `Services/` |
 | **HTTP Controllers** | 15 class trong `Http/Controllers/` |
-| **Frontend entry** | `resources/js/article-editor.jsx` → Vite bundle |
+| **Frontend map** | [MAP_SEO_FRONTEND.md](MAP_SEO_FRONTEND.md) — 7 React entry + 4 JS/Alpine bridge |
+| **Frontend entry chính** | `article-editor.jsx` → Vite bundle `article-editor` |
 
 **Middleware chuỗi API SEO** (`$seoWebApiMiddleware` trong `SeoPanelProvider`):
 

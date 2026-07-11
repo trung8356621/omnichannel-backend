@@ -398,3 +398,17 @@ export function flattenHtmlBodyNodes(parent) {
 
     return result;
 }
+
+/**
+ * Không ghi transaction hydrate/setContent vào undo stack TipTap.
+ *
+ * @param {{ view?: { dispatch: (tr: unknown) => void }, state?: { tr: { setMeta: (key: string, value: boolean) => unknown } }, isDestroyed?: boolean } | null | undefined} editor
+ */
+export function resetTipTapEditorHistory(editor) {
+    if (!editor?.view || !editor.state || editor.isDestroyed) {
+        return;
+    }
+
+    const { state, view } = editor;
+    view.dispatch(state.tr.setMeta('addToHistory', false));
+}

@@ -1,5 +1,6 @@
 import { applyColorStyle, solidFromConfig } from './watermarkColorUtils';
 import { normalizeAnchorPosition, resolveAnchorCenter } from './watermarkPosition';
+import { pctOfMin } from './watermarkRelativeUnits';
 import { resolveStampCenter } from './watermarkDrawUtils';
 import { drawIcon } from './watermarkCtaIcons';
 
@@ -48,9 +49,9 @@ export function drawCtaButton(ctx, w, h, opts) {
     } = opts;
 
     const label = String(text1 ?? '');
-    const padX = Number(btnPaddingX) || 30;
-    const padY = Number(btnPaddingY) || 15;
-    const radius = Number(btnRadius) || 30;
+    const padX = Number(btnPaddingX) || 0;
+    const padY = Number(btnPaddingY) || 0;
+    const radius = Number(btnRadius) || 0;
     const icon = selectedIcon === 'none' ? null : selectedIcon;
     const customIconSvg = String(opts.customIconSvg ?? '').trim();
     const iconActive =
@@ -61,7 +62,8 @@ export function drawCtaButton(ctx, w, h, opts) {
 
     const textWidth = ctx.measureText(label).width;
     const iconSize = textSize * 0.9;
-    const iconSpacing = iconActive ? iconSize + 10 : 0;
+    const iconGap = textSize * 0.42;
+    const iconSpacing = iconActive ? iconSize + iconGap : 0;
     const btnW = textWidth + iconSpacing + padX * 2;
     const btnH = textSize + padY * 2;
 
@@ -77,12 +79,12 @@ export function drawCtaButton(ctx, w, h, opts) {
         cx = center.x;
         cy = center.y;
     } else if (positionType === 'preset') {
-        const center = resolveStampCenter(w, h, positionType, customCoords, presetPos, margin);
+        const center = resolveStampCenter(w, h, positionType, customCoords, presetPos, margin, opts);
         cx = center.x;
         cy = center.y;
     } else {
         cx = w / 2;
-        cy = h - btnH / 2 - Math.max(30, Number(gridSpacing) / 2);
+        cy = h - btnH / 2 - Math.max(pctOfMin(2.67, w, h), Number(gridSpacing) / 2);
     }
 
     ctx.translate(cx, cy);
@@ -108,7 +110,7 @@ export function drawCtaButton(ctx, w, h, opts) {
         ctx.stroke();
         ctx.restore();
 
-        accumulatedPadding += bw + 2;
+        accumulatedPadding += bw + textSize * 0.08;
     });
 
     ctx.save();
@@ -132,10 +134,18 @@ export function drawCtaButton(ctx, w, h, opts) {
         startX += iconSpacing;
     }
 
-    ctx.fillText(label, startX, 2);
+    ctx.fillText(label, startX, textSize * 0.08);
 
     if (iconActive && iconPosition === 'right') {
-        drawIcon(ctx, startX + textWidth + 10 + iconSize / 2, 0, iconSize, icon, iconColor, iconExtra);
+        drawIcon(
+            ctx,
+            startX + textWidth + iconGap + iconSize / 2,
+            0,
+            iconSize,
+            icon,
+            iconColor,
+            iconExtra,
+        );
     }
 
     ctx.restore();

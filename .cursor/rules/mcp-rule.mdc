@@ -1,0 +1,10 @@
+---
+description: Tối ưu hóa việc đọc file, chỉ lấy hàm cần thiết
+globs: **/*
+alwaysApply: true
+---
+
+## Nguyên tắc quản lý Context
+- Tuyệt đối KHÔNG ĐƯỢC dùng công cụ đọc toàn bộ file (`view_file` / `read_file`) đối với các file có dung lượng lớn hơn 100 dòng code.
+- Hãy sử dụng tính năng tìm kiếm ký hiệu (`search_symbols`) hoặc tìm kiếm nâng cao để định vị chính xác HÀM (Function), PHƯƠNG THỨC (Method) hoặc LỚP (Class) cần xử lý.
+- Chỉ trích xuất và nạp vào bộ nhớ đúng đoạn code của hàm có liên quan trực tiếp đến logic đang xử lý để tiết kiệm token context window.

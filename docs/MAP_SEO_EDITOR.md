@@ -259,6 +259,46 @@ Cache trang (không search): `articleMediaPickerCache.js` → `localStorage`. Bo
 
 **Video Generation:** Event `generate-article-video`, Livewire method `generateArticleVideoFromEditor`, setting flag `can_generate_video`.
 
+### 2.5.4.1 Assistant Dock — sidebar phải Edit Article (đã implement)
+
+Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire round-trip cho tab/search). CSS trong `article-editor.css`; logic `utils/seoAssistantNavigator.js` (import từ `article-editor.jsx` → `Alpine.data('seoAssistantNavigator')`).
+
+| Thành phần | File | Vai trò |
+|------------|------|---------|
+| Host + slots | `edit-article.blade.php` | `.seo-assistant-host` — mỗi widget có `data-assistant-widget`, `data-assistant-widget-id`, `data-assistant-tab-label` |
+| Navigator | `seoAssistantNavigator.js` | `discoverWidgets()`, `switchPanel()`, search, badge; **không** scroll-to-widget |
+| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`) |
+| Portals React | `SeoArticleEditor.jsx` | `createPortal` → `#seo-article-seo-assistant-root`, `#seo-article-image-assistant-root`, `#seo-article-links-root`, … |
+
+**Tabs:** auto-discover từ DOM; chip ảo **FAQ** / **CTA** inject sau tab **Links** (cùng slot `links`, filter section).
+
+**Chế độ hiển thị:**
+
+| State | `panelFilterActive` | UI |
+|-------|---------------------|-----|
+| Mặc định (load trang) | `false` | Tất cả widget xếp chồng như sidebar cũ |
+| Sau khi bấm tab dock | `true` | Chỉ panel `activePanel`; class `is-panel-filter` trên host |
+
+**Sticky (desktop ≥1024px):**
+
+| Lớp | CSS | Hành vi |
+|-----|-----|---------|
+| `.wp-article-edit-sidebar` | `position: sticky` + `max-height` viewport | Cột phải dính khi scroll bài dài |
+| `.wp-article-edit-sidebar-scroll` | `overflow-y: auto` | Scroll nội bộ widget |
+| `.seo-assistant-dock` | `position: sticky; top: 0` | Tab bar + search luôn trên cùng vùng scroll |
+
+**Custom events (dock ↔ React):**
+
+| Event | Publisher | Subscriber |
+|-------|-----------|------------|
+| `seo-assistant-switch-panel` | `SeoArticleEditor` (mở tab ảnh), … | `seoAssistantNavigator` → `switchPanel()` |
+| `seo-assistant-navigator-badges` | `SeoArticleEditor`, `ArticleLinksSidebar` | Cập nhật badge tab (SEO, Images, Links, FAQ, CTA) |
+| `seo-assistant-link-section` | `seoAssistantNavigator` | `ArticleLinksSidebar` filter section |
+| `seo-assistant-widget-control` | `seoAssistantNavigator` | React widgets (`set-collapsed`) |
+| `seo-sidebar-open-publish-tab` | Widget xuất bản / shortcut | Mở panel Publishing |
+
+**Lưu ý perf:** badge chỉ cập nhật qua event — không dùng `MutationObserver` + `characterData` trên subtree sidebar (gây freeze khi React SEO render).
+
 ### 2.5.5 Publish sidebar — lên lịch & SEO score (gap / cần sửa)
 
 > Liên quan cron publish: [§2.6.3](#263-trạng-thái-đăng-bài--lên-lịch). Settings độ dài bài: **SEO → Settings → Prompt** → *Article content rules*.
@@ -587,7 +627,7 @@ Worker: php artisan queue:work
 Hub: resources/js/components/SeoArticleEditor.jsx
 Entry: resources/js/article-editor.jsx
 Livewire: resources/js/utils/articleEditorLivewire.js
-Blade: edit-article.blade.php (Alpine media modal + $wire events)
+Blade: edit-article.blade.php (Alpine media modal + Assistant Dock seoAssistantNavigator + $wire events)
 Outline: ArticleOutlineTab.jsx → ArticleOutlineController
 ```
 

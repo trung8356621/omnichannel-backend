@@ -77,9 +77,18 @@ class SeoWatermarkService
             $data = array_merge($data, $this->mapDesignConfigToColumns($designConfig));
         }
 
+        $hasNewDesign = $designConfig !== [] || $overlayVariants !== [] || $overlayFile !== null;
+        if (array_key_exists('auto_watermark', $data)) {
+            $autoWatermark = (bool) $data['auto_watermark'];
+        } elseif ($hasNewDesign) {
+            $autoWatermark = true;
+        } else {
+            $autoWatermark = (bool) $setting->auto_watermark;
+        }
+
         $setting->fill([
             'type' => (string) ($data['type'] ?? SeoWatermarkSetting::TYPE_NONE),
-            'auto_watermark' => (bool) ($data['auto_watermark'] ?? false),
+            'auto_watermark' => $autoWatermark,
             'text_content' => $data['text_content'] ?? $data['text'] ?? null,
             'text_color' => (string) ($data['text_color'] ?? $data['textColor'] ?? '#ffffff'),
             'text_size' => (int) ($data['text_size'] ?? $data['textSize'] ?? 20),

@@ -319,15 +319,52 @@ final class SeoQueueControlService
     private function countPendingQueueJobs(int $workerThreshold): int
     {
         try {
-            return (int) DB::connection($this->jobsConnection())
+            $queueService = app(ArticleWpSyncQueueService::class);
+            $jobs = DB::connection($this->jobsConnection())
                 ->table('jobs')
+                ->select(['id', 'payload'])
                 ->where(function ($query) use ($workerThreshold): void {
                     $query->whereNull('reserved_at')
                         ->orWhere('reserved_at', '<', $workerThreshold);
                 })
-                ->count();
+                ->get();
+
+            $count = 0;
+
+            foreach ($jobs as $job) {
+                $payload = (string) ($job->payload ?? '');
+                $articleId = $queueService->extractArticleIdFromJobPayload($payload);
+
+                if ($articleId !== null && ! $this->wpSyncArticleNeedsWorker($articleId)) {
+                    continue;
+                }
+
+                $count++;
+            }
+
+            return $count;
         } catch (Throwable) {
             return 0;
+        }
+    }
+
+    private function wpSyncArticleNeedsWorker(int $articleId): bool
+    {
+        try {
+            $raw = DB::connection('omi_seo_ai')
+                ->table('article_meta')
+                ->where('article_id', $articleId)
+                ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
+                ->value('meta_value');
+
+            if (! is_string($raw) || trim($raw) === '') {
+                return true;
+            }
+
+            return str_contains($raw, '"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"')
+                || str_contains($raw, '"status":"'.ArticleWpSyncQueueService::STATUS_PROCESSING.'"');
+        } catch (Throwable) {
+            return true;
         }
     }
 
@@ -348,6 +385,9 @@ final class SeoQueueControlService
                 ->join('articles', 'articles.id', '=', 'article_meta.article_id')
                 ->where('article_meta.meta_key', ArticleWpSyncQueueService::META_KEY)
                 ->whereIn('articles.site_id', $siteIds)
+                ->where(function ($query): void {
+                    $query->where('articles.is_reviewed', false)->orWhereNull('articles.is_reviewed');
+                })
                 ->where(function ($query): void {
                     $query
                         ->where('article_meta.meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"%')

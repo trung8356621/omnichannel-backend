@@ -30,6 +30,8 @@ class ListArticles extends ListRecords
 
     public const TAB_QUEUE = 'queue';
 
+    public const TAB_REVIEWED = 'reviewed';
+
     protected static string $resource = ArticleResource::class;
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
@@ -41,7 +43,7 @@ class ListArticles extends ListRecords
         parent::mount();
 
         $tab = request()->query('tab', self::TAB_POSTS);
-        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE], true)) {
+        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE, self::TAB_REVIEWED], true)) {
             $this->contentTab = $tab;
         }
 
@@ -62,6 +64,8 @@ class ListArticles extends ListRecords
             unset($filters['category_id'], $filters['post_type']);
         } elseif ($tab === self::TAB_QUEUE) {
             unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type']);
+        } elseif ($tab === self::TAB_REVIEWED) {
+            unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type'], $filters['is_reviewed']);
         } else {
             unset($filters['taxonomy']);
         }
@@ -90,6 +94,10 @@ class ListArticles extends ListRecords
 
                 if ($this->contentTab === self::TAB_QUEUE) {
                     return ArticleResource::appendWpSyncQueueMetaSelect($query);
+                }
+
+                if ($this->contentTab === self::TAB_REVIEWED) {
+                    return $query->where('is_reviewed', true)->whereNotNull('reviewed_at');
                 }
 
                 return $query;
@@ -244,10 +252,12 @@ class ListArticles extends ListRecords
         }
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_started'))
+            ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_queued'))
             ->body((string) ($result['message'] ?? ''))
             ->success()
             ->send();
+
+        $this->resetTable();
     }
 
     public function cancelArticleSyncQueue(int $articleId): void
@@ -272,6 +282,21 @@ class ListArticles extends ListRecords
             ->title(__('seo-content-ai::filament.article_list.sync_queue_cancelled'))
             ->success()
             ->send();
+
+        $this->resetTable();
+    }
+
+    /**
+     * @return list<array{
+     *     date: string,
+     *     date_label: string,
+     *     count: int,
+     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>
+     * }>
+     */
+    public function getReviewedArticlesGrouped(): array
+    {
+        return ArticleResource::buildReviewedArticlesGrouped();
     }
 
     protected function getHeaderActions(): array

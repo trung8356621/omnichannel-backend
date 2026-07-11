@@ -40,12 +40,14 @@ final class ArticleEditorSyncOrchestrator
      *     notification?: array{title: string, body: string, status: string}
      * }
      */
-    public function syncFromEditorBundle(SeoArticle $article, array $bundle): array
+    public function syncFromEditorBundle(SeoArticle $article, array $bundle, bool $fromQueue = false): array
     {
-        abort_if(SeoAccessControl::isContentManager(), 403);
+        if (! $fromQueue) {
+            abort_if(SeoAccessControl::isContentManager(), 403);
 
-        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
-            return $this->failureResponse('Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.');
+            if (! SeoAccessControl::canSyncArticlesToWordPress()) {
+                return $this->failureResponse('Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.');
+            }
         }
 
         $lock = Cache::lock('seo-wp-publish-article-'.(int) $article->id, 120);
