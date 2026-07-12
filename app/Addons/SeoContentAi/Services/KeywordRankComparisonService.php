@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Jobs\RunSingleKeywordRankCheckJob;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordRankCheckRun;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\SerpProviderKeys;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -26,7 +27,6 @@ final class KeywordRankComparisonService
      * @return array{queued: bool, batch_id: string, job_count: int}
      */
     public function dispatchComparison(
-        int $siteId,
         int $userId,
         array $providers,
         ?array $keywordIds = null,
@@ -35,9 +35,11 @@ final class KeywordRankComparisonService
         ?string $location = null,
         ?string $language = null,
         ?string $device = null,
+        ?string $trackedDomain = null,
     ): array {
-        if (! SeoAccessControl::canAccessSite($siteId)) {
-            throw new \RuntimeException(__('seo-content-ai::filament.performance_hub.no_domain'));
+        $connectionHash = SeoConnectionContext::hash();
+        if ($connectionHash === null) {
+            throw new \RuntimeException(__('seo-content-ai::filament.rank_group.missing_connection_context'));
         }
 
         $providers = array_values(array_filter(
@@ -58,7 +60,7 @@ final class KeywordRankComparisonService
             }
         }
 
-        $resolvedKeywordIds = $this->resolveKeywordIds($siteId, $keywordIds, $keywordPhrase);
+        $resolvedKeywordIds = $this->resolveKeywordIds($keywordIds, $keywordPhrase);
         if ($resolvedKeywordIds === []) {
             throw new \RuntimeException(__('seo-content-ai::filament.performance_hub.comparison_no_keywords'));
         }
@@ -73,7 +75,6 @@ final class KeywordRankComparisonService
         $jobCount = 0;
 
         DB::connection('omi_seo_ai')->transaction(function () use (
-            $siteId,
             $userId,
             $providers,
             $resolvedKeywordIds,
@@ -82,6 +83,8 @@ final class KeywordRankComparisonService
             $location,
             $language,
             $device,
+            $trackedDomain,
+            $connectionHash,
             &$jobCount,
         ): void {
             foreach ($providers as $provider) {
@@ -91,7 +94,8 @@ final class KeywordRankComparisonService
                 }
 
                 $run = KeywordRankCheckRun::query()->create([
-                    'site_id' => $siteId,
+                    'site_id' => null,
+                    'connection_hash' => $connectionHash,
                     'user_id' => $userId,
                     'status' => 'running',
                     'run_type' => 'comparison',
@@ -112,14 +116,15 @@ final class KeywordRankComparisonService
                 foreach ($resolvedKeywordIds as $keywordId) {
                     RunSingleKeywordRankCheckJob::dispatch(
                         runId: (int) $run->id,
-                        siteId: $siteId,
                         userId: $userId,
                         provider: $provider,
                         keywordId: (int) $keywordId,
+                        connectionHash: $connectionHash,
                         country: $country,
                         location: $location,
                         language: $language,
                         device: $device,
+                        trackedDomain: $trackedDomain,
                         comparisonBatchId: $batchId,
                     )->onQueue('seo');
 
@@ -139,11 +144,10 @@ final class KeywordRankComparisonService
      * @param  list<int>|null  $keywordIds
      * @return list<int>
      */
-    private function resolveKeywordIds(int $siteId, ?array $keywordIds, ?string $keywordPhrase): array
+    private function resolveKeywordIds(?array $keywordIds, ?string $keywordPhrase): array
     {
         if (is_array($keywordIds) && $keywordIds !== []) {
             return Keyword::query()
-                ->forSite($siteId)
                 ->whereIn('id', $keywordIds)
                 ->orderBy('id')
                 ->pluck('id')
@@ -157,7 +161,6 @@ final class KeywordRankComparisonService
         }
 
         $keyword = Keyword::query()
-            ->forSite($siteId)
             ->where('phrase', $phrase)
             ->first();
 

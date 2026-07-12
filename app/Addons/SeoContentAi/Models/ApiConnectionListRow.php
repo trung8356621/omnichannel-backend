@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleConnectionService;
+use App\Addons\SeoContentAi\Services\SeoProviderRegistry;
 use App\Addons\SeoContentAi\Support\ApiConnectionProviders;
 use App\Addons\SeoContentAi\Support\SerpProviderKeys;
 use Illuminate\Database\Eloquent\Model;
@@ -54,6 +55,7 @@ final class ApiConnectionListRow extends Model
             'id' => 'gsc:'.$connection->id,
             'name' => (string) ($connection->name ?: 'Google Search Console'),
             'provider' => ApiConnectionProviders::GOOGLE_SEARCH_CONSOLE,
+            'connection_type' => ApiConnectionProviders::connectionType(ApiConnectionProviders::GOOGLE_SEARCH_CONSOLE)->value,
             'status' => $effectiveStatus,
         ]);
         $row->exists = true;
@@ -68,6 +70,7 @@ final class ApiConnectionListRow extends Model
             'id' => 'dfs:'.$connection->id,
             'name' => (string) ($connection->login ?: 'DataForSEO'),
             'provider' => ApiConnectionProviders::DATAFORSEO,
+            'connection_type' => ApiConnectionProviders::connectionType(ApiConnectionProviders::DATAFORSEO)->value,
             'status' => (string) ($connection->status ?? 'not_configured'),
         ]);
         $row->exists = true;
@@ -93,6 +96,34 @@ final class ApiConnectionListRow extends Model
             'id' => 'serp:'.$connection->id,
             'name' => (string) ($connection->name ?: SerpProviderKeys::label((string) $connection->provider)),
             'provider' => (string) $connection->provider,
+            'connection_type' => ApiConnectionProviders::connectionType((string) $connection->provider)->value,
+            'status' => (string) ($connection->status ?? 'not_configured'),
+        ]);
+        $row->exists = true;
+
+        return $row;
+    }
+
+    public static function extractExtendedId(string $rowId): ?int
+    {
+        if (! str_starts_with($rowId, 'ext:')) {
+            return null;
+        }
+
+        $id = (int) substr($rowId, 4);
+
+        return $id > 0 ? $id : null;
+    }
+
+    public static function fromExtendedProvider(\App\Addons\SeoContentAi\Models\SeoExtendedProviderConnection $connection): self
+    {
+        $provider = (string) $connection->provider;
+        $row = new self;
+        $row->forceFill([
+            'id' => 'ext:'.$connection->id,
+            'name' => (string) ($connection->name ?: app(SeoProviderRegistry::class)->label($provider)),
+            'provider' => $provider,
+            'connection_type' => ApiConnectionProviders::connectionType($provider)->value,
             'status' => (string) ($connection->status ?? 'not_configured'),
         ]);
         $row->exists = true;

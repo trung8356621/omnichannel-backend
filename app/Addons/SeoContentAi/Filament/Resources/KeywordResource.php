@@ -17,7 +17,7 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
-use App\Addons\SeoContentAi\Services\SeoNotificationService;
+use App\Addons\SeoContentAi\Services\SeoRankKeywordGroupService;
 use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -650,6 +650,36 @@ class KeywordResource extends SeoPanelResource
                             ->success()
                             ->send();
                     }),
+                Tables\Actions\Action::make('add_to_rank_group')
+                    ->label(__('seo-content-ai::filament.rank_group.add_to_group'))
+                    ->icon('heroicon-o-rectangle-stack')
+                    ->iconButton()
+                    ->tooltip(__('seo-content-ai::filament.rank_group.add_to_group'))
+                    ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures() && SeoAccessControl::canMutateInSeoPanel())
+                    ->form(fn (): array => static::addToRankGroupFormSchema())
+                    ->modalHeading(__('seo-content-ai::filament.rank_group.add_to_group_heading'))
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.rank_group.add_to_group'))
+                    ->action(function (Keyword $record, array $data): void {
+                        $groupIds = collect($data['group_ids'] ?? [])
+                            ->filter(static fn (mixed $id): bool => is_numeric($id))
+                            ->map(static fn (mixed $id): int => (int) $id)
+                            ->values()
+                            ->all();
+
+                        $summary = app(SeoRankKeywordGroupService::class)->addKeywordsToGroups(
+                            [(int) $record->id],
+                            $groupIds,
+                            (int) auth()->id(),
+                        );
+
+                        Notification::make()
+                            ->title(__('seo-content-ai::filament.rank_group.add_completed', [
+                                'added' => $summary['added'],
+                                'skipped' => $summary['skipped'],
+                            ]))
+                            ->success()
+                            ->send();
+                    }),
                 Tables\Actions\Action::make('debug_rescrape')
                     ->label(__('seo-content-ai::filament.keyword.debug_rescrape'))
                     ->icon('heroicon-o-bug-ant')
@@ -880,6 +910,35 @@ class KeywordResource extends SeoPanelResource
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.keyword.assign_completed'))
                                 ->body(ArticleResource::buildAssignContentProjectBody($summary))
+                                ->success()
+                                ->send();
+                        }),
+                    Tables\Actions\BulkAction::make('add_to_rank_group')
+                        ->label(__('seo-content-ai::filament.rank_group.add_to_group_bulk'))
+                        ->icon('heroicon-o-rectangle-stack')
+                        ->visible(fn (): bool => SeoAccessControl::canAccessPlannerFeatures() && SeoAccessControl::canMutateInSeoPanel())
+                        ->form(fn (): array => static::addToRankGroupFormSchema(multiple: false))
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records, array $data): void {
+                            $groupId = (int) ($data['group_id'] ?? 0);
+                            $groupIds = $groupId > 0 ? [$groupId] : [];
+
+                            $keywordIds = $records
+                                ->map(static fn (Keyword $keyword): int => (int) $keyword->id)
+                                ->values()
+                                ->all();
+
+                            $summary = app(SeoRankKeywordGroupService::class)->addKeywordsToGroups(
+                                $keywordIds,
+                                $groupIds,
+                                (int) auth()->id(),
+                            );
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.rank_group.add_completed', [
+                                    'added' => $summary['added'],
+                                    'skipped' => $summary['skipped'],
+                                ]))
                                 ->success()
                                 ->send();
                         }),
@@ -2092,6 +2151,39 @@ class KeywordResource extends SeoPanelResource
     public static function keywordIsInContentProject(Keyword $keyword): bool
     {
         return static::keywordAssignedContentProjectId($keyword) !== null;
+    }
+
+    /**
+     * @return list<Forms\Components\Component>
+     */
+    public static function addToRankGroupFormSchema(bool $multiple = true): array
+    {
+        $options = app(SeoRankKeywordGroupService::class)
+            ->listOptionsForUser((int) auth()->id());
+
+        $selectOptions = collect($options)
+            ->mapWithKeys(static fn (array $row): array => [(int) $row['id'] => (string) $row['label']])
+            ->all();
+
+        if (! $multiple) {
+            return [
+                Forms\Components\Select::make('group_id')
+                    ->label(__('seo-content-ai::filament.rank_group.select_groups'))
+                    ->options($selectOptions)
+                    ->searchable()
+                    ->required(),
+            ];
+        }
+
+        return [
+            Forms\Components\Select::make('group_ids')
+                ->label(__('seo-content-ai::filament.rank_group.select_groups'))
+                ->options($selectOptions)
+                ->searchable()
+                ->required()
+                ->multiple()
+                ->minItems(1),
+        ];
     }
 
     /**

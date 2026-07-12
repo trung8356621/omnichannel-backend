@@ -5,12 +5,14 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Providers\Serp;
 
 use App\Addons\SeoContentAi\Contracts\SerpRankProviderInterface;
+use App\Addons\SeoContentAi\DataTransfer\SerpAllintitleResult;
 use App\Addons\SeoContentAi\DataTransfer\SerpOrganicResult;
 use App\Addons\SeoContentAi\DataTransfer\SerpProviderUsage;
 use App\Addons\SeoContentAi\DataTransfer\SerpRankRequest;
 use App\Addons\SeoContentAi\DataTransfer\SerpRankResult;
 use App\Addons\SeoContentAi\Models\SeoSerpProviderConnection;
 use App\Addons\SeoContentAi\Services\SerpTrackedDomainMatcherService;
+use App\Addons\SeoContentAi\Support\SerpAllintitleQuery;
 use App\Addons\SeoContentAi\Support\SerpProviderKeys;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -20,6 +22,95 @@ abstract class AbstractSerpRankProvider implements SerpRankProviderInterface
     public function __construct(
         protected readonly SerpTrackedDomainMatcherService $domainMatcher,
     ) {}
+
+    public function supportsRankCheck(): bool
+    {
+        return true;
+    }
+
+    public function supportsAllintitle(): bool
+    {
+        return true;
+    }
+
+    public function supportsSearchVolume(): bool
+    {
+        return false;
+    }
+
+    public function searchAllintitle(SeoSerpProviderConnection $connection, SerpRankRequest $request): SerpAllintitleResult
+    {
+        if (! $this->supportsAllintitle()) {
+            return new SerpAllintitleResult(
+                provider: $this->providerKey(),
+                keyword: $request->keyword,
+                estimatedResults: null,
+                status: SerpAllintitleResult::STATUS_NOT_SUPPORTED,
+                errorMessage: __('seo-content-ai::filament.performance_hub.metric_not_supported'),
+            );
+        }
+
+        $request = $this->resolveDefaults($connection, $request);
+        $allintitleRequest = new SerpRankRequest(
+            keyword: SerpAllintitleQuery::build($request->keyword),
+            country: $request->country,
+            language: $request->language,
+            location: $request->location,
+            device: $request->device,
+            depth: 1,
+            trackedDomain: null,
+        );
+
+        $result = $this->search($connection, $allintitleRequest);
+        $durationMs = $result->durationMs;
+
+        if (! in_array($result->status, [
+            SerpRankResult::STATUS_SUCCESS_FOUND,
+            SerpRankResult::STATUS_SUCCESS_NOT_FOUND,
+        ], true)) {
+            return new SerpAllintitleResult(
+                provider: $this->providerKey(),
+                keyword: $request->keyword,
+                estimatedResults: null,
+                status: SerpAllintitleResult::STATUS_FAILED,
+                errorMessage: $result->errorMessage,
+                durationMs: $durationMs,
+                metadata: $result->metadata,
+            );
+        }
+
+        $estimated = $this->extractEstimatedTotalResults($result->metadata);
+        if ($estimated === null) {
+            return new SerpAllintitleResult(
+                provider: $this->providerKey(),
+                keyword: $request->keyword,
+                estimatedResults: null,
+                status: SerpAllintitleResult::STATUS_NOT_SUPPORTED,
+                errorMessage: __('seo-content-ai::filament.performance_hub.allintitle_total_unavailable'),
+                durationMs: $durationMs,
+                metadata: $result->metadata,
+            );
+        }
+
+        return new SerpAllintitleResult(
+            provider: $this->providerKey(),
+            keyword: $request->keyword,
+            estimatedResults: $estimated,
+            status: $estimated > 0
+                ? SerpAllintitleResult::STATUS_SUCCESS
+                : SerpAllintitleResult::STATUS_NOT_FOUND,
+            durationMs: $durationMs,
+            metadata: $result->metadata,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    protected function extractEstimatedTotalResults(array $metadata): ?int
+    {
+        return null;
+    }
 
     /**
      * @param  array<string, mixed>  $payload

@@ -133,7 +133,19 @@ final class SeoAccessControl
 
     public static function shouldShowGlobalSitePicker(): bool
     {
-        return ! request()->routeIs('filament.seo.resources.keywords.*');
+        if (request()->routeIs('filament.seo.resources.keywords.*')) {
+            return false;
+        }
+
+        if (request()->routeIs('filament.seo.pages.performance-hub')) {
+            $source = (string) request()->query('source', 'gsc');
+
+            if ($source !== '' && $source !== 'gsc') {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public static function isSeoPanelAdminViewer(): bool

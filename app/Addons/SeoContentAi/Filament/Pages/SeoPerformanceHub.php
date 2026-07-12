@@ -6,17 +6,22 @@ namespace App\Addons\SeoContentAi\Filament\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Services\GscQueriesTableService;
+use App\Addons\SeoContentAi\Models\SeoRankKeywordGroup;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleBulkSyncService;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleConnectionService;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleSyncService;
-use App\Addons\SeoContentAi\Services\SeoPerformanceDashboardService;
-use App\Addons\SeoContentAi\Services\SeoPerformanceHubService;
+use App\Addons\SeoContentAi\Services\GscQueriesTableService;
 use App\Addons\SeoContentAi\Services\KeywordRankComparisonResultService;
 use App\Addons\SeoContentAi\Services\KeywordRankComparisonService;
+use App\Addons\SeoContentAi\Services\KeywordSearchVolumeService;
+use App\Addons\SeoContentAi\Services\SeoPerformanceDashboardService;
+use App\Addons\SeoContentAi\Services\SeoPerformanceHubService;
+use App\Addons\SeoContentAi\Services\SeoRankKeywordGroupService;
 use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
-use App\Addons\SeoContentAi\Support\SerpProviderKeys;
+use App\Addons\SeoContentAi\Services\SeoProviderCapabilityResolver;
+use App\Addons\SeoContentAi\Services\SeoProviderRegistry;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SerpProviderKeys;
 use Filament\Notifications\Notification;
 use Illuminate\Contracts\Support\Htmlable;
 use Livewire\Attributes\Computed;
@@ -24,6 +29,8 @@ use Livewire\Attributes\Url;
 
 final class SeoPerformanceHub extends SeoPanelPage
 {
+    public const TARGET_DOMAIN_CUSTOM = '__custom__';
+
     protected static ?string $navigationIcon = 'heroicon-o-chart-bar-square';
 
     protected static ?string $navigationGroup = 'SEO Workspace';
@@ -49,6 +56,9 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     #[Url(as: 'dir')]
     public string $querySortDir = 'desc';
+
+    #[Url(as: 'rank_group')]
+    public ?int $rankGroupId = null;
 
     #[Url(as: 'q')]
     public string $keywordSearch = '';
@@ -84,6 +94,44 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     public string $comparisonKeyword = '';
 
+    public string $groupFormName = '';
+
+    public string $groupFormDescription = '';
+
+    public string $groupFormCountry = 'vn';
+
+    public string $groupFormLanguage = 'vi';
+
+    public string $groupFormLocation = '';
+
+    public string $groupFormDevice = 'desktop';
+
+    public string $groupFormTargetDomain = '';
+
+    public string $groupFormTargetDomainChoice = '';
+
+    public string $groupFormTargetDomainCustom = '';
+
+    public string $groupFormKeywordsText = '';
+
+    public ?int $editingGroupId = null;
+
+    public string $groupModalMode = 'create';
+
+    public bool $groupModalLoading = false;
+
+    public bool $groupModalSubmitting = false;
+
+    public ?string $groupModalLoadError = null;
+
+    public int $groupModalLoadToken = 0;
+
+    public bool $runMetricsRank = true;
+
+    public bool $runMetricsAllintitle = true;
+
+    public bool $runMetricsSearchVolume = true;
+
     /** @var list<string> */
     public array $comparisonProviders = [];
 
@@ -105,6 +153,12 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     private KeywordRankComparisonResultService $comparisonResults;
 
+    private SeoRankKeywordGroupService $rankGroups;
+
+    private SeoProviderRegistry $providerRegistry;
+
+    private SeoProviderCapabilityResolver $capabilityResolver;
+
     private int $lastResolvedSiteId = 0;
 
     public function boot(
@@ -117,6 +171,9 @@ final class SeoPerformanceHub extends SeoPanelPage
         SeoSerpProviderConnectionService $serpConnections,
         KeywordRankComparisonService $rankComparison,
         KeywordRankComparisonResultService $comparisonResults,
+        SeoRankKeywordGroupService $rankGroups,
+        SeoProviderRegistry $providerRegistry,
+        SeoProviderCapabilityResolver $capabilityResolver,
     ): void {
         $this->performanceHub = $performanceHub;
         $this->dashboard = $dashboard;
@@ -127,6 +184,9 @@ final class SeoPerformanceHub extends SeoPanelPage
         $this->serpConnections = $serpConnections;
         $this->rankComparison = $rankComparison;
         $this->comparisonResults = $comparisonResults;
+        $this->rankGroups = $rankGroups;
+        $this->providerRegistry = $providerRegistry;
+        $this->capabilityResolver = $capabilityResolver;
     }
 
     public function booted(): void
@@ -182,6 +242,23 @@ final class SeoPerformanceHub extends SeoPanelPage
         $this->gscChartMetric = $this->normalizeGscChartMetric($this->gscChartMetric);
 
         $this->normalizeActiveTab();
+        $this->ensureRankGroupSelected();
+        $this->reconcileStaleRankRuns();
+    }
+
+    private function reconcileStaleRankRuns(): void
+    {
+        if (! $this->isRankProviderSource() && ! $this->isKeywordMetricsSource()) {
+            return;
+        }
+
+        $groupId = (int) ($this->rankGroupId ?? 0);
+        if ($groupId <= 0) {
+            return;
+        }
+
+        app(\App\Addons\SeoContentAi\Services\KeywordRankCheckService::class)
+            ->reconcileStaleRuns($groupId, $this->dataSource);
     }
 
     public function getTitle(): string|Htmlable
@@ -191,14 +268,13 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     public function setDataSource(string $source): void
     {
-        $allowed = ['gsc', ...SerpProviderKeys::all()];
-        if (! in_array($source, $allowed, true)) {
+        if (! $this->providerRegistry->isPerformanceSource($source)) {
             return;
         }
 
-        if ($source !== 'gsc') {
-            $connection = $this->serpConnections->resolveForUser((int) auth()->id(), $source);
-            if ($connection === null || ! $connection->isConfigured()) {
+        $provider = $this->providerRegistry->resolveProviderFromSource($source);
+        if ($provider !== null && $provider !== 'google_search_console') {
+            if (! app(\App\Addons\SeoContentAi\Services\SeoProviderConnectionStatusService::class)->isConfigured((int) auth()->id(), $provider)) {
                 return;
             }
         }
@@ -206,10 +282,250 @@ final class SeoPerformanceHub extends SeoPanelPage
         $this->dataSource = $source;
         $this->normalizeActiveTab();
         if ($source !== 'gsc') {
+            $this->ensureRankGroupSelected();
+
             return;
         }
 
         $this->gscPage = 1;
+    }
+
+    public function setRankGroup(?int $groupId): void
+    {
+        if ($groupId === null || $groupId <= 0) {
+            $this->rankGroupId = null;
+
+            return;
+        }
+
+        $group = $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+        if ($group === null) {
+            return;
+        }
+
+        $this->rankGroupId = $groupId;
+    }
+
+    public function openGroupModal(?int $groupId = null): void
+    {
+        $this->groupModalLoadError = null;
+        $this->groupModalSubmitting = false;
+        $this->groupModalLoadToken++;
+
+        if ($groupId !== null && $groupId > 0) {
+            $this->groupModalMode = 'edit';
+            $this->editingGroupId = $groupId;
+            $this->groupModalLoading = true;
+            $this->resetGroupForm();
+
+            return;
+        }
+
+        $this->groupModalMode = 'create';
+        $this->editingGroupId = null;
+        $this->groupModalLoading = false;
+        $this->resetGroupForm();
+    }
+
+    public function loadGroupModalData(int $groupId): void
+    {
+        $token = $this->groupModalLoadToken;
+
+        if ($this->editingGroupId !== $groupId || $this->groupModalMode !== 'edit') {
+            return;
+        }
+
+        try {
+            $group = $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+            if ($group === null) {
+                throw new \RuntimeException(__('seo-content-ai::filament.rank_group.not_accessible'));
+            }
+
+            $keywordsText = $group->items()
+                ->with('keyword')
+                ->get()
+                ->map(static fn ($item): string => (string) ($item->keyword?->phrase ?? ''))
+                ->filter()
+                ->implode("\n");
+
+            if ($token !== $this->groupModalLoadToken || $this->editingGroupId !== $groupId) {
+                return;
+            }
+
+            $this->groupFormName = (string) $group->name;
+            $this->groupFormDescription = (string) ($group->description ?? '');
+            $this->groupFormCountry = (string) $group->country_code;
+            $this->groupFormLanguage = (string) $group->language_code;
+            $this->groupFormLocation = (string) ($group->location ?? '');
+            $this->groupFormDevice = (string) $group->device;
+            $this->hydrateTargetDomainFormState((string) ($group->target_domain ?? ''));
+            $this->groupFormKeywordsText = $keywordsText;
+            $this->groupModalLoadError = null;
+            $this->groupModalLoading = false;
+        } catch (\Throwable $exception) {
+            if ($token !== $this->groupModalLoadToken || $this->editingGroupId !== $groupId) {
+                return;
+            }
+
+            $this->groupModalLoadError = $exception->getMessage();
+            $this->groupModalLoading = false;
+            $this->resetGroupForm();
+            $this->editingGroupId = $groupId;
+        }
+    }
+
+    public function retryLoadGroupModal(): void
+    {
+        $groupId = (int) ($this->editingGroupId ?? 0);
+        if ($groupId <= 0) {
+            return;
+        }
+
+        $this->groupModalLoadError = null;
+        $this->groupModalLoading = true;
+        $this->groupModalLoadToken++;
+        $this->resetGroupForm();
+        $this->loadGroupModalData($groupId);
+    }
+
+    public function closeGroupModal(): void
+    {
+        $this->groupModalLoadToken++;
+        $this->groupModalLoading = false;
+        $this->groupModalSubmitting = false;
+        $this->groupModalLoadError = null;
+        $this->editingGroupId = null;
+        $this->groupModalMode = 'create';
+        $this->resetGroupForm();
+        $this->dispatch('close-rank-group-modal');
+    }
+
+    public function saveGroupModal(): void
+    {
+        if ($this->groupModalLoading || $this->groupModalSubmitting || $this->groupModalLoadError !== null) {
+            return;
+        }
+
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.workspace_save_denied'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->groupModalSubmitting = true;
+
+        $payload = [
+            'name' => $this->groupFormName,
+            'description' => $this->groupFormDescription,
+            'country_code' => $this->groupFormCountry,
+            'language_code' => $this->groupFormLanguage,
+            'location' => $this->groupFormLocation,
+            'device' => $this->groupFormDevice,
+            'target_domain' => $this->resolveGroupFormTargetDomain(),
+            'keywords_text' => $this->groupFormKeywordsText,
+        ];
+
+        try {
+            if ($this->editingGroupId !== null && $this->editingGroupId > 0) {
+                $group = $this->rankGroups->findAccessibleGroup($this->editingGroupId, (int) auth()->id());
+                if ($group === null) {
+                    throw new \RuntimeException(__('seo-content-ai::filament.rank_group.not_accessible'));
+                }
+
+                $group = $this->rankGroups->updateGroup($group, (int) auth()->id(), $payload);
+            } else {
+                $group = $this->rankGroups->createGroup((int) auth()->id(), $payload);
+            }
+        } catch (\RuntimeException $exception) {
+            $this->groupModalSubmitting = false;
+            Notification::make()
+                ->title(__('seo-content-ai::filament.rank_group.save_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $this->groupModalSubmitting = false;
+        $this->rankGroupId = (int) $group->id;
+        $this->closeGroupModal();
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.rank_group.saved'))
+            ->success()
+            ->send();
+    }
+
+    public function duplicateRankGroup(int $groupId): void
+    {
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            return;
+        }
+
+        $group = $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+        if ($group === null) {
+            return;
+        }
+
+        $copy = $this->rankGroups->duplicateGroup($group, (int) auth()->id());
+        $this->rankGroupId = (int) $copy->id;
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.rank_group.duplicated'))
+            ->success()
+            ->send();
+    }
+
+    public function archiveRankGroup(int $groupId): void
+    {
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            return;
+        }
+
+        $group = $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+        if ($group === null) {
+            return;
+        }
+
+        $this->rankGroups->archiveGroup($group, (int) auth()->id());
+
+        if ($this->rankGroupId === $groupId) {
+            $this->rankGroupId = null;
+            $this->ensureRankGroupSelected();
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.rank_group.archived'))
+            ->success()
+            ->send();
+    }
+
+    public function deleteRankGroup(int $groupId): void
+    {
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            return;
+        }
+
+        $group = $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+        if ($group === null) {
+            return;
+        }
+
+        $this->rankGroups->deleteGroup($group, (int) auth()->id());
+
+        if ($this->rankGroupId === $groupId) {
+            $this->rankGroupId = null;
+            $this->ensureRankGroupSelected();
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.rank_group.deleted'))
+            ->success()
+            ->send();
     }
 
     public function setRankPositionBucket(string $bucket): void
@@ -264,15 +580,8 @@ final class SeoPerformanceHub extends SeoPanelPage
             return;
         }
 
-        $siteId = (int) ($this->resolveSiteId() ?? 0);
-        if ($siteId <= 0) {
-            Notification::make()
-                ->title(__('seo-content-ai::filament.performance_hub.no_domain'))
-                ->warning()
-                ->send();
-
-            return;
-        }
+        $group = $this->resolveRankGroup();
+        $trackedDomain = $group?->target_domain;
 
         $providers = $this->comparisonProviders !== []
             ? $this->comparisonProviders
@@ -283,14 +592,14 @@ final class SeoPerformanceHub extends SeoPanelPage
 
         try {
             $result = $this->rankComparison->dispatchComparison(
-                siteId: $siteId,
                 userId: (int) auth()->id(),
                 providers: $providers,
                 keywordPhrase: $this->comparisonKeyword !== '' ? $this->comparisonKeyword : null,
-                country: null,
-                location: $this->location !== '' ? $this->location : null,
-                language: null,
-                device: $this->device !== 'all' ? $this->device : null,
+                country: $group?->country_code,
+                location: $group?->location,
+                language: $group?->language_code,
+                device: $group?->device,
+                trackedDomain: $trackedDomain,
             );
         } catch (\RuntimeException $exception) {
             Notification::make()
@@ -527,10 +836,30 @@ final class SeoPerformanceHub extends SeoPanelPage
             return;
         }
 
-        $siteId = (int) ($this->resolveSiteId() ?? 0);
-        if ($siteId <= 0) {
+        $groupId = (int) ($this->rankGroupId ?? 0);
+        if ($groupId <= 0) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.performance_hub.no_domain'))
+                ->title(__('seo-content-ai::filament.rank_group.select_group_first'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $metrics = [];
+        if ($this->runMetricsRank) {
+            $metrics[] = 'rank';
+        }
+        if ($this->runMetricsAllintitle) {
+            $metrics[] = 'allintitle';
+        }
+        if ($this->runMetricsSearchVolume) {
+            $metrics[] = 'search_volume';
+        }
+
+        if ($metrics === []) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.performance_hub.run_select_metric'))
                 ->warning()
                 ->send();
 
@@ -539,12 +868,10 @@ final class SeoPerformanceHub extends SeoPanelPage
 
         try {
             $result = $this->dashboard->dispatchRankCheck(
-                siteId: $siteId,
+                groupId: $groupId,
                 userId: (int) auth()->id(),
                 provider: $this->dataSource,
-                location: $this->location !== '' ? $this->location : null,
-                language: null,
-                device: $this->device !== 'all' ? $this->device : null,
+                metrics: $metrics,
             );
         } catch (\RuntimeException $exception) {
             Notification::make()
@@ -613,13 +940,72 @@ final class SeoPerformanceHub extends SeoPanelPage
         }
 
         return $this->dashboard->buildRankState(
-            siteId: $this->resolveSiteId(),
-            provider: $this->dataSource,
+            groupId: $this->rankGroupId,
+            userId: (int) auth()->id(),
+            source: $this->dataSource,
             keywordSearch: $this->keywordSearch,
-            device: $this->device,
-            location: $this->location,
             positionBucket: $this->positionBucket,
+            comparisonBatchId: $this->comparisonBatchId,
         );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    #[Computed]
+    public function keywordMetricsDashboardState(): array
+    {
+        if (! $this->isKeywordMetricsSource()) {
+            return [];
+        }
+
+        return $this->dashboard->buildKeywordMetricsState(
+            groupId: $this->rankGroupId,
+            userId: (int) auth()->id(),
+            source: $this->dataSource,
+        );
+    }
+
+    #[Computed]
+    public function groupFormKeywordCount(): int
+    {
+        return count($this->rankGroups->parseKeywordLines($this->groupFormKeywordsText));
+    }
+
+    /**
+     * @return list<string>
+     */
+    #[Computed]
+    public function rankGroupDomainOptions(): array
+    {
+        return SeoAccessControl::accessibleSitesQuery()
+            ->orderBy('domain')
+            ->pluck('domain')
+            ->map(static fn (mixed $domain): string => trim((string) $domain))
+            ->filter(static fn (string $domain): bool => $domain !== '')
+            ->values()
+            ->all();
+    }
+
+    #[Computed]
+    public function rankProviderCapabilities(): array
+    {
+        if (! $this->providerRegistry->isRawSerpSource($this->dataSource)) {
+            return ['rank' => false, 'allintitle' => false, 'search_volume' => false, 'search_volume_configured' => false];
+        }
+
+        $provider = $this->providerRegistry->resolveProviderFromSource($this->dataSource) ?? $this->dataSource;
+
+        return $this->capabilityResolver->legacyToolbarCapabilities((int) auth()->id(), $provider);
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    #[Computed]
+    public function rankGroupOptions(): array
+    {
+        return $this->rankGroups->listOptionsForUser((int) auth()->id());
     }
 
     /**
@@ -703,11 +1089,103 @@ final class SeoPerformanceHub extends SeoPanelPage
 
     private function isRankProviderSource(): bool
     {
-        return SerpProviderKeys::isValid($this->dataSource);
+        return $this->providerRegistry->isRawSerpSource($this->dataSource);
+    }
+
+    private function isKeywordMetricsSource(): bool
+    {
+        return $this->dashboard->isKeywordMetricsSource($this->dataSource);
     }
 
     private function resolveSiteId(): ?int
     {
         return SeoAccessControl::globalSiteId();
+    }
+
+    private function resolveRankGroup(): ?SeoRankKeywordGroup
+    {
+        $groupId = (int) ($this->rankGroupId ?? 0);
+        if ($groupId <= 0) {
+            return null;
+        }
+
+        return $this->rankGroups->findAccessibleGroup($groupId, (int) auth()->id());
+    }
+
+    private function ensureRankGroupSelected(): void
+    {
+        if (! $this->isRankProviderSource() && ! $this->isKeywordMetricsSource()) {
+            return;
+        }
+
+        if ($this->resolveRankGroup() !== null) {
+            return;
+        }
+
+        $options = $this->rankGroups->listOptionsForUser((int) auth()->id());
+        if ($options === []) {
+            $this->rankGroupId = null;
+
+            return;
+        }
+
+        $this->rankGroupId = (int) $options[0]['id'];
+    }
+
+    private function resetGroupForm(): void
+    {
+        $this->groupFormName = '';
+        $this->groupFormDescription = '';
+        $this->groupFormCountry = 'vn';
+        $this->groupFormLanguage = 'vi';
+        $this->groupFormLocation = '';
+        $this->groupFormDevice = 'desktop';
+        $this->groupFormTargetDomain = '';
+        $this->groupFormTargetDomainChoice = '';
+        $this->groupFormTargetDomainCustom = '';
+        $this->groupFormKeywordsText = '';
+    }
+
+    private function hydrateTargetDomainFormState(string $storedDomain): void
+    {
+        $normalized = $this->rankGroups->normalizeTargetDomain($storedDomain) ?? trim($storedDomain);
+
+        if ($normalized === null || $normalized === '') {
+            $this->groupFormTargetDomainChoice = '';
+            $this->groupFormTargetDomainCustom = '';
+            $this->groupFormTargetDomain = '';
+
+            return;
+        }
+
+        foreach ($this->rankGroupDomainOptions as $domain) {
+            $optionNormalized = $this->rankGroups->normalizeTargetDomain($domain) ?? strtolower($domain);
+            if ($optionNormalized !== null && strtolower($optionNormalized) === strtolower($normalized)) {
+                $this->groupFormTargetDomainChoice = $domain;
+                $this->groupFormTargetDomainCustom = '';
+                $this->groupFormTargetDomain = $optionNormalized;
+
+                return;
+            }
+        }
+
+        $this->groupFormTargetDomainChoice = self::TARGET_DOMAIN_CUSTOM;
+        $this->groupFormTargetDomainCustom = $normalized;
+        $this->groupFormTargetDomain = $normalized;
+    }
+
+    private function resolveGroupFormTargetDomain(): ?string
+    {
+        if ($this->groupFormTargetDomainChoice === self::TARGET_DOMAIN_CUSTOM) {
+            $custom = trim($this->groupFormTargetDomainCustom);
+
+            return $custom !== '' ? $custom : null;
+        }
+
+        if ($this->groupFormTargetDomainChoice === '') {
+            return null;
+        }
+
+        return $this->groupFormTargetDomainChoice;
     }
 }

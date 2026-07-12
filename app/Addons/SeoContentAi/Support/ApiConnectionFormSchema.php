@@ -194,6 +194,32 @@ final class ApiConnectionFormSchema
                         ->maxValue(100),
                 ])
                 ->columns(2),
+            Forms\Components\Section::make(__('seo-content-ai::filament.api_connections.extended_heading'))
+                ->description(__('seo-content-ai::filament.api_connections.extended_hint'))
+                ->visible(fn (Get $get): bool => ApiConnectionProviders::isExtendedProvider($get('provider')))
+                ->schema([
+                    Forms\Components\TextInput::make('extended_api_key')
+                        ->label(fn (Get $get): string => $get('provider') === ApiConnectionProviders::SE_RANKING
+                            ? __('seo-content-ai::filament.api_connections.seranking_api_token')
+                            : __('seo-content-ai::filament.api_connections.extended_api_key'))
+                        ->password()
+                        ->revealable()
+                        ->required(fn (Get $get): bool => ApiConnectionProviders::isExtendedProvider($get('provider')) && $operation === 'create')
+                        ->dehydrated(fn (?string $state): bool => filled($state))
+                        ->helperText(fn (): ?string => $operation === 'edit'
+                            ? __('seo-content-ai::filament.api_connections.extended_api_key_edit_hint')
+                            : null)
+                        ->maxLength(65535),
+                    Forms\Components\Select::make('extended_status')
+                        ->label(__('seo-content-ai::filament.api_connections.extended_status'))
+                        ->options([
+                            'active' => __('seo-content-ai::filament.api_connections.status_active'),
+                            'inactive' => __('seo-content-ai::filament.api_connections.status_inactive'),
+                        ])
+                        ->default('inactive')
+                        ->native(false),
+                ])
+                ->columns(2),
         ];
     }
 

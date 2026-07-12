@@ -1,0 +1,59 @@
+---
+description: Modal/drawer — Alpine toggle open ngay, Livewire chỉ load/persist
+globs: "**/*.{blade.php,php}"
+alwaysApply: true
+---
+
+# Modal & Drawer — Alpine mở/đóng trước, Livewire sau
+
+Mọi modal, drawer, popover layout **phải** bật/tắt khung qua Alpine **ngay lập tức**. Không chờ Livewire round-trip để hiển thị hoặc ẩn container.
+
+## Đúng
+
+```blade
+<div
+    x-data="{
+        open: false,
+        localLoading: false,
+        closeModal() { this.open = false; $wire.closeSomething(); },
+        openModal(id) {
+            this.open = true;           {{-- khung hiện NGAY --}}
+            this.localLoading = !!id;
+            $wire.prepareModal(id);
+            if (id) { $wire.loadModalData(id).finally(() => this.localLoading = false); }
+        },
+    }"
+    x-on:open-something-modal.window="openModal($event.detail.id ?? null)"
+    x-on:close-something-modal.window="open = false"
+    x-show="open"
+    x-cloak
+>
+    <button @click="closeModal()">Hủy</button>
+    <div x-show="localLoading || $wire.modalLoading">…skeleton…</div>
+    <div x-show="!localLoading && !$wire.modalLoading">…form…</div>
+</div>
+```
+
+- Title/label nút submit: Alpine `modalMode` hoặc biến từ `$event.detail` — không phụ thuộc Livewire render để đổi tiêu đề.
+- Đóng: `open = false` trước, `$wire.close…()` sau (cleanup state).
+- Livewire chỉ dùng cho: fetch data, validate, save, error state.
+- `wire:click` mở modal **không** dùng chỉ để toggle `open`.
+
+## Sai
+
+```blade
+{{-- ❌ Chờ Livewire xong mới mở --}}
+x-on:open-modal.window="$wire.openModal(id).then(() => open = true)"
+
+{{-- ❌ Chỉ wire:click để mở/đóng, không có Alpine open --}}
+<button wire:click="$set('showModal', true)">
+
+{{-- ❌ wire:loading khóa cả trang thay vì skeleton trong modal --}}
+```
+
+## Checklist
+
+1. `open = true` / `open = false` đồng bộ Alpine, không trong `.then()` của `$wire`.
+2. Skeleton/overlay loading **trong** modal body, không block UI ngoài modal.
+3. Disable submit khi `localLoading || $wire.modalLoading || $wire.modalSubmitting`.
+4. Stale fetch guard: token/id guard phía Livewire khi đóng/chuyển record giữa chừng.

@@ -11,11 +11,13 @@ use App\Addons\SeoContentAi\Models\SeoSerpProviderConnection;
 final class KeywordRankSnapshotWriter
 {
     public function persist(
-        int $siteId,
+        ?int $siteId,
         int $keywordId,
         SeoSerpProviderConnection $connection,
         SerpRankResult $result,
         ?int $runId = null,
+        ?int $rankGroupId = null,
+        ?int $rankGroupItemId = null,
     ): KeywordRankSnapshot {
         $organicPayload = array_map(static fn ($item): array => [
             'position' => $item->position,
@@ -27,6 +29,8 @@ final class KeywordRankSnapshotWriter
 
         return KeywordRankSnapshot::query()->create([
             'site_id' => $siteId,
+            'rank_group_id' => $rankGroupId,
+            'rank_group_item_id' => $rankGroupItemId,
             'keyword_id' => $keywordId,
             'provider' => $result->provider,
             'connection_id' => (int) $connection->id,

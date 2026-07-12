@@ -183,11 +183,25 @@ getEloquentQuery() {
 
 | Provider | Form fields | Bảng lưu |
 |----------|-------------|----------|
-| `gemini`, `claude` | name, api_key, status | `api_connections` (mysql) |
+| `gemini`, `claude` | name, api_key, status | `api_connections` (mysql) + `connection_type` |
 | `google_search_console` | email, tokens, property URL | `seo_gsc_master_connections` (mysql) |
 | `dataforseo` | login, password, location, language | `seo_dataforseo_connections` (mysql) |
+| `serpapi`, `serper`, `searchapi` | api_key, defaults | `seo_serp_provider_connections` (mysql) |
+| `keywords_everywhere`, `seranking` | name, api_key/token, status | `seo_extended_provider_connections` (mysql) |
 
-Support: `Support/ApiConnectionProviders.php`, `Support/ApiConnectionFormSchema.php`.
+Support: `Support/ApiConnectionProviders.php` (delegate `SeoProviderRegistry`), `Support/ApiConnectionFormSchema.php`.
+
+**Connection type (`connection_type`):** `ai` | `seo` — cột **Loại** + filter Tất cả/AI/SEO trên list (`ListAiConnections`, URL `?type=`). AI: `api_connections.connection_type` (migration backfill idempotent). External rows: expose qua `ApiConnectionListRow::connection_type` từ registry.
+
+**SEO Provider Registry (single source of truth):** `Services/SeoProviderRegistry.php`, `DataTransfer/SeoProviderDefinition.php`, `DataTransfer/SeoProviderCapabilityState.php`, enums `ApiConnectionType`, `SeoProviderCategory`, `SeoProviderCapabilityKey`, `PerformanceHubSectionKey`. Resolver runtime: `Services/SeoProviderCapabilityResolver.php`, `Services/SeoProviderConnectionStatusService.php`.
+
+**Capability matrix helper:** icon `?` header list → modal Alpine `api-capability-matrix-modal` (data từ registry, không hard-code Blade).
+
+**Providers mới (settings only, chưa data adapter):**
+- `keywords_everywhere` → `Models/SeoExtendedProviderConnection`, `Services/SeoExtendedProviderConnectionService`, edit `EditExtendedProviderApiConnection` (`settings/api/extended/{provider}/edit`). Test: credits endpoint, không tiêu keyword credit.
+- `seranking` → cùng bảng `seo_extended_provider_connections`. Test: balance endpoint. `partial_implementation` — chưa Performance tab.
+
+**List columns:** Kết nối API | Loại | Nhà cung cấp | Trạng thái | Thao tác.
 
 Create/Edit: dropdown Provider đổi form; GSC/DataForSEO có page riêng `edit-gsc`, `edit-dataforseo`.
 
@@ -335,7 +349,7 @@ Cho phép truy xuất nguồn gốc của mỗi output AI (prompt result nào si
 ```
 Settings Pages: Filament/Pages/SeoSettings*.php, ImageOptimizationSettings.php
 Workflows Settings: Filament/Pages/SeoSettingsWorkflows.php → SeoCreateArticleSettingsService
-API Connections: `AiConnectionResource` (`settings/api`) → `ApiConnection` + `SeoGscMasterConnection` + `SeoDataForSeoConnection`; list `ApiConnectionsListService` + `ApiConnectionListRow`
+API Connections: `AiConnectionResource` (`settings/api`) → `ApiConnection` + external models; list `ApiConnectionsListService` + `ApiConnectionListRow`; registry `SeoProviderRegistry` + `SeoProviderCapabilityResolver`
 Prompt Management: Filament/Resources/PromptResource.php → SeoPrompt model (omi_seo_ai)
 Prompt Engine: Services/PromptRunnerService.php (1181 dòng)
 Model Router: Services/AiModelRouterService.php → SeoAiModel (mysql)

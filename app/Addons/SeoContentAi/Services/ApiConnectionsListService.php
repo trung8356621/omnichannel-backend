@@ -15,6 +15,7 @@ final class ApiConnectionsListService
         private readonly GoogleSearchConsoleConnectionService $gscConnection,
         private readonly DataForSeoConnectionService $dataForSeo,
         private readonly SeoSerpProviderConnectionService $serpConnections,
+        private readonly SeoExtendedProviderConnectionService $extendedConnections,
     ) {}
 
     /**
@@ -42,6 +43,10 @@ final class ApiConnectionsListService
 
         foreach ($this->serpConnections->configuredForUser($userId) as $serpConnection) {
             $records->push(ApiConnectionListRow::fromSerpProvider($serpConnection));
+        }
+
+        foreach ($this->extendedConnections->configuredForUser($userId) as $extendedConnection) {
+            $records->push(ApiConnectionListRow::fromExtendedProvider($extendedConnection));
         }
 
         return $records;

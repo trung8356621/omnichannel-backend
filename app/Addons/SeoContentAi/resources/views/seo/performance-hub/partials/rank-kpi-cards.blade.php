@@ -17,7 +17,7 @@
         @php
             $item = $kpis[$key] ?? ['value' => null, 'label' => 'not_synced'];
             $value = $item['value'] ?? null;
-            $emptyLabel = $item['label'] ?? null;
+            $emptyLabel = $item['label'] ?? 'no_data';
         @endphp
         <article class="performance-hub-kpi-card">
             <p class="performance-hub-kpi-card__label">{{ $label }}</p>

@@ -67,7 +67,13 @@ Middleware `SeoPlannerPermissionMiddleware` cũng khai báo pattern `seo.perform
 
 ## 3. Kiến trúc UI (2 source tabs + sub-tabs)
 
-**Source tabs** (URL `?source=`): `gsc` | `rank-tracking`. Mặc định: GSC nếu connected + mapped; else rank-tracking nếu có DataForSEO; else `gsc` empty state.
+**Source tabs** (URL `?source=`): sinh động từ `SeoProviderRegistry` + `SeoProviderConnectionStatusService::performanceTabsForUser()` — `gsc` | `serpapi` | `serper` | `searchapi` | `keywords_everywhere` (khi configured). **Không** tab `seranking` (settings only, `performanceTabSupported=false`). Order theo `priority`. Fallback: `SeoPerformanceDashboardService::resolveSourceOrFallback()`.
+
+**Dashboard sections** theo registry `dashboardSections` / `PerformanceHubSectionKey` — Blade chỉ render section có trong allowlist (`rank_kpis`, `rankings_table`, `integration_state`, …). Keywords Everywhere: tab metrics riêng + `integration_state` khi chưa có adapter (`supported=true`, `implemented=false`).
+
+**Rank keyword groups** (URL `?rank_group=`): entity global `SeoRankKeywordGroup` — dùng chung mọi SERP provider (không GSC). Không có `site_id`/`domain_id`. Scope theo `created_by` / account owner (`SeoAccessControl::accountSiteOwnerId()`). Snapshots/runs gắn `rank_group_id` + `rank_group_item_id` + `provider`.
+
+**Global domain selector** (`GlobalSeoBar`): hiện khi `source=gsc` hoặc trang khác; ẩn khi `filament.seo.pages.performance-hub` + `source` là SERP provider (`SeoAccessControl::shouldShowGlobalSitePicker()`).
 
 **Sub-tabs** (URL `?tab=`) theo source — không trộn metric GSC với rank tracker.
 
@@ -83,10 +89,66 @@ flowchart TB
 
 | Source | URL `source` | Sub-tab `tab` | Dữ liệu |
 |--------|--------------|---------------|--------|
-| **Google Search Console** | `gsc` | `queries`, `quick-wins` | `gsc_query_snapshot` (site meta) |
-| **Rank Tracking & APIs** | `rank-tracking` | `rankings`, `serp-changes` | `KeywordRankSnapshot` + DataForSEO |
+| **Google Search Console** | `gsc` | `queries`, `quick-wins` | `gsc_query_snapshot` (site meta) — scope theo global domain |
+| **SERP providers** | `serpapi` / `serper` / `searchapi` | `rankings`, `serp-changes` | `KeywordRankSnapshot` + `SeoRankKeywordGroup` (không filter domain header) |
 
-Partials: `source-tabs`, `gsc-connection-strip`, `gsc-kpi-cards`, `gsc-chart`, `gsc-distribution`, `gsc-queries-table`, `rank-connection-strip`, `rank-kpi-cards`, `gsc-bulk-sync-summary`.
+Partials: `source-tabs`, `gsc-connection-strip`, `gsc-kpi-cards`, `gsc-chart`, `gsc-distribution`, `gsc-queries-table`, `rank-connection-strip` (provider icon strip inline), `rank-kpi-cards`, `ranking-distribution`, `rank-toolbar` (Chạy nhóm + group selector, cạnh rank sub-tabs), `rankings-table`, `serp-changes-table`, `advanced-analysis` (toggle Alpine — chứa `visibility-chart` + `provider-comparison` khi eligible), `rank-group-modal`, `gsc-bulk-sync-summary`.
+
+**Thứ tự rank provider tab (không scroll chart trắng):**
+
+1. Source tabs  
+2. Provider connection strip  
+3. KPI cards (giữ card Visibility)  
+4. Phân bố thứ hạng (`ranking-distribution`)  
+5. Rank toolbar + sub-tabs (`rankings` \| `serp-changes`)  
+6. Rankings table / SERP changes table  
+7. Nút **Phân tích nâng cao** + nội dung collapsed (chỉ khi `advanced_analysis.has_any`)
+
+**Phân tích nâng cao (`advanced_analysis` trong `buildRankState()`):**
+
+| Key | Eligible khi | Render Blade |
+|-----|--------------|--------------|
+| `organic_visibility` | Nhóm + `target_domain` + ≥2 `keyword_rank_check_runs` `status=completed` có rank snapshot (đếm theo `run_id`, không đếm keyword rows) | Partial `visibility-chart` — không heading/chart/empty khi `eligible=false` |
+| `provider_comparison` | ≥2 SERP provider configured + có rows comparison (`comparison_batch` URL) + `SeoAccessControl::canAccessManagerFeatures()` (debug/manager) | Partial `provider-comparison` — tiêu đề **So sánh nhà cung cấp** |
+| `has_any` | Một trong hai trên eligible | Partial `advanced-analysis` — nút ghost **Hiện phân tích nâng cao**, mặc định `expanded: false` (Alpine) |
+
+```php
+advanced_analysis: [
+    'has_any' => bool,
+    'organic_visibility' => ['eligible', 'successful_run_count', 'data' => [...]],
+    'provider_comparison' => ['eligible', 'provider_count', 'data' => [...]],
+]
+```
+
+| Model / Service | Vai trò |
+|-----------------|--------|
+| `Models/SeoRankKeywordGroup` | Nhóm rank global: name, country/language/location/device, `target_domain` nullable |
+| `Models/SeoRankKeywordGroupItem` | Keyword ↔ group (unique per group) |
+| `Services/SeoRankKeywordGroupService` | CRUD, duplicate/archive, add keywords idempotent |
+| `Services/KeywordRankCheckService::dispatchForGroup()` | Queue rank/allintitle/volume theo group + provider (queue `seo`, `metadata.metrics`) |
+| `Services/KeywordRankCheckService::reconcileStaleRuns()` | Dọn run kẹt `pending`/`running` trước dispatch hoặc khi mount page |
+| `Services/SeoProviderRegistry` | Provider definitions: capabilities, sections, actions, priority, `performanceSourceKey` |
+| `Services/SeoProviderCapabilityResolver` | `supported` / `implemented` / `configured` / `available`; dispatch validation |
+| `Services/SeoProviderConnectionStatusService` | Configured/active + dynamic performance tabs |
+| `Services/SerpProviderCapabilityService` | Legacy toolbar caps + `filterDispatchableMetrics` (delegate resolver) |
+| `Services/KeywordSearchVolumeService` | Search volume thật qua DataForSEO Google Ads API; `not_configured` khi chưa setup |
+| `Services/KeywordSerpChangeAnalysisService` | Tab SERP changes: `entered` / `lost` / `rank_delta` / `url_changed` (cần ≥2 snapshot) |
+| `Models/KeywordGroupMetricSnapshot` | Snapshot metric `allintitle` + `search_volume` tách khỏi rank snapshot |
+| `Jobs/RunKeywordGroupMetricBatchJob` | Batch allintitle / search volume (queue `seo`) |
+| `SeoPerformanceDashboardService::buildRankingRows()` | Merge rank snapshot + metric snapshots; status semantics đầy đủ |
+| `SeoPerformanceDashboardService::buildRankKpiCards()` | KPI chỉ khi có position số; không có → label `empty_no_data` / `empty_no_target_domain` |
+| `Services/SeoQueueControlService::countPendingNamedQueueJobs('seo')` | Đếm job rank pending; banner worker cần `--queue=seo,...` |
+
+**Queue worker rank:** job `RunKeywordRankCheckBatchJob` / `RunSingleKeywordRankCheckJob` / `RunKeywordGroupMetricBatchJob` dùng `->onQueue('seo')`. Worker phải listen `seo` (vd. `.cmd`: `--queue=seo,media_generation,default`).
+
+**Modal nhóm (`rank-group-modal`):** Alpine sở hữu `open` — bật/tắt khung **ngay** (`open = true/false`), không chờ Livewire round-trip. Livewire chỉ load/persist: `openGroupModal()`, `loadGroupModalData()`, `saveGroupModal()`, `closeGroupModal()`. Alpine state: `modalMode`, `localLoading`, title/submit label client-side. Edit: skeleton qua `localLoading || $wire.groupModalLoading`. Layout: Tên nhóm\|Thiết bị (gap `form-grid--name-device`), Mô tả textarea, Quốc gia\|Ngôn ngữ\|Vị trí, Target domain select + custom domain. Rule: `.cursor/rules/modal-alpine.mdc`.
+
+**Run nhóm (`rank-toolbar`):** popover chọn metric (`rank`, `allintitle`, `search_volume`). Không dispatch metric không hỗ trợ.
+
+**Metric availability (thực tế):**
+- **Rank:** SerpApi / Serper / SearchApi (active provider).
+- **Allintitle:** SerpApi + SearchApi (`search_information.total_results`); Serper → `not_supported`.
+- **Search Volume:** DataForSEO Google Ads API khi connection configured; không suy từ GSC/Trends/total_results.
 
 Lazy state: `#[Computed] gscDashboardState` / `rankDashboardState` — chỉ build khi source active.
 
@@ -119,7 +181,8 @@ Chỉ render khi `SeoAccessControl::canAccessPlannerFeatures()`.
 
 | Property | URL key | Mặc định | Mô tả |
 |----------|---------|----------|-------|
-| `dataSource` | `source` | auto | `gsc` hoặc `rank-tracking` |
+| `dataSource` | `source` | auto | `gsc` hoặc SERP provider key |
+| `rankGroupId` | `rank_group` | auto first group | Nhóm từ khóa (provider tabs) |
 | `activeTab` | `tab` | `queries` / `rankings` | Sub-tab theo source |
 | `querySortBy` | `sort` | `impressions` | Cột sort bảng GSC |
 | `querySortDir` | `dir` | `desc` | Hướng sort |
@@ -135,7 +198,7 @@ Chỉ render khi `SeoAccessControl::canAccessPlannerFeatures()`.
 | Property | Service | Mô tả |
 |----------|---------|-------|
 | `gscDashboardState` | `SeoPerformanceDashboardService::buildGscState()` | Connection strip, GSC KPI, distribution, queries, quick wins |
-| `rankDashboardState` | `SeoPerformanceDashboardService::buildRankState()` | Provider strip, rank KPI, visibility chart, rankings, SERP changes |
+| `rankDashboardState` | `SeoPerformanceDashboardService::buildRankState()` | Provider strip, rank KPI, distribution, rankings, SERP changes, `advanced_analysis` |
 
 ### 4.3 Livewire actions
 
@@ -151,9 +214,13 @@ Chỉ render khi `SeoAccessControl::canAccessPlannerFeatures()`.
 | `syncGscData()` | GSC | `ensureSiteMapped()` → `syncSiteWithDetails()` domain hiện tại |
 | `syncAllMappedGscDomains()` | GSC | `autoMapAndSyncAll()` — auto-map mọi domain accessible rồi sync; panel `gsc-bulk-sync-summary` |
 | `retryGscSyncForSite($siteId)` | GSC | Retry 1 domain failed |
-| `runKeywordRankCheck()` | Rank | Dispatch DataForSEO batch (chỉ tab rank) |
+| `runKeywordRankCheck()` | Rank | Popover chọn metrics → `dispatchForGroup(metrics)` |
+| `prepareGroupModal()` / `loadGroupModalData()` / `retryLoadGroupModal()` | Rank | Modal create/edit + loading guard |
+| `saveGroupModal()` / `duplicateRankGroup()` / … | Rank | CRUD nhóm qua `SeoRankKeywordGroupService` |
 
-Domain resolve: `resolveSiteId()` → `SeoAccessControl::globalSiteId()`.
+`/keywords` — row action `add_to_rank_group` + bulk `add_to_rank_group` (`KeywordResource`).
+
+Domain resolve GSC: `resolveSiteId()` → `SeoAccessControl::globalSiteId()`. Provider rank: **không** dùng global domain; dùng `rankGroupId`.
 
 ---
 
@@ -281,8 +348,37 @@ Mutations (push keyword, import, create draft): thêm `canMutateInSeoPanel()`.
 | `Filament/Pages/AiKeywordDiscovery.php` | Page AI Discovery riêng |
 | `Http/Middleware/SeoPlannerPermissionMiddleware.php` | RBAC Planner+ |
 | `resources/views/seo/performance-hub.blade.php` | UI performance tabs + partials |
+| `resources/views/seo/performance-hub/partials/advanced-analysis.blade.php` | Toggle Alpine phân tích nâng cao (collapsed mặc định) |
+| `resources/views/seo/performance-hub/partials/visibility-chart.blade.php` | Biểu đồ Organic visibility — chỉ render khi eligible + `has_data` |
+| `resources/views/seo/performance-hub/partials/provider-comparison.blade.php` | So sánh nhà cung cấp (manager/debug) |
+| `resources/views/seo/performance-hub/partials/rank-toolbar.blade.php` | Toolbar rank inline cạnh sub-tabs |
 | `resources/views/filament/hooks/seo-sidebar-keywords-nav.blade.php` | Sidebar Keywords dropdown |
+| `Services/KeywordRankCheckService.php` | Dispatch + `reconcileStaleRuns()` cho group rank check |
+| `Services/SeoRankKeywordGroupService.php` | CRUD nhóm keyword rank global |
+| `Models/SeoRankKeywordGroup.php` / `SeoRankKeywordGroupItem.php` | Nhóm + item keyword rank |
+| `Jobs/RunKeywordRankCheckBatchJob.php` | Batch rank check (queue `seo`) |
+| `Jobs/RunKeywordGroupMetricBatchJob.php` | Batch allintitle / search volume |
+| `Services/KeywordGroupMetricSnapshotWriter.php` | Persist metric snapshots |
+| `Services/KeywordSearchVolumeService.php` | DataForSEO volume resolver |
+| `Services/KeywordSerpChangeAnalysisService.php` | SERP change semantics |
+| `Services/SeoProviderRegistry.php` | Provider definitions + capability matrix |
+| `Services/SeoProviderCapabilityResolver.php` | Capability states + dispatch gate |
+| `Services/SeoProviderConnectionStatusService.php` | Connection status + dynamic tabs |
+| `Services/SeoExtendedProviderConnectionService.php` | Keywords Everywhere settings (data adapter chưa implement) |
+| `Services/SerpProviderCapabilityService.php` | Toolbar/dispatch facade |
+| `resources/views/seo/performance-hub/partials/integration-state.blade.php` | Partial implementation empty state |
+| `resources/views/seo/performance-hub/partials/keyword-metrics-toolbar.blade.php` | Group selector tab keyword metrics |
+| `Enums/KeywordGroupMetricType.php` / `KeywordMetricStatus.php` | Metric type + UI status |
+| `database/migrations/2026_07_12_110000_create_keyword_group_metric_snapshots_table.php` | Bảng metric snapshots |
+| `tests/Unit/SeoProviderRegistryTest.php` | Registry unique keys + capability semantics |
+| `tests/Unit/SerpAllintitleQueryTest.php` | Allintitle query escape |
+| `tests/Unit/SerpProviderCapabilityServiceTest.php` | Capability contract |
+| `tests/Unit/KeywordSerpChangeAnalysisServiceTest.php` | SERP changes guard |
 | `Providers/SeoPanelProvider.php` | Legacy redirects, sidebar hook |
+| `tests/Unit/KeywordRankCheckServiceTest.php` | Test reconcile run kẹt |
+| `tests/Unit/SeoRankKeywordGroupServiceTest.php` | Test CRUD / add keyword group |
+| `tests/Unit/SeoPerformanceDashboardServiceTest.php` | GSC/rank state, `advanced_analysis` eligibility, layout blade order |
+| `tests/Unit/SeoAccessControlDomainPickerTest.php` | Ẩn domain picker khi source SERP provider |
 
 ---
 

@@ -11,8 +11,11 @@ use App\Addons\SeoContentAi\Services\DataForSeoConnectionService;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleConnectionService;
 use App\Addons\SeoContentAi\Support\ApiConnectionProviders;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Services\SeoExtendedProviderConnectionService;
 use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
+use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\SerpProviderKeys;
+use App\Addons\SeoContentAi\Services\SeoProviderRegistry;
 use Filament\Notifications\Notification;
 
 class CreateAiConnection extends SeoCreateRecord
@@ -53,6 +56,12 @@ class CreateAiConnection extends SeoCreateRecord
             return;
         }
 
+        if (ApiConnectionProviders::isExtendedProvider($provider)) {
+            $this->createExtendedProviderConnection($provider, $data);
+
+            return;
+        }
+
         if (! ApiConnectionProviders::isAi($provider)) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.api_connections.unsupported_provider'))
@@ -86,9 +95,11 @@ class CreateAiConnection extends SeoCreateRecord
 
     protected function mutateFormDataBeforeCreate(array $data): array
     {
+        $provider = (string) ($data['provider'] ?? '');
         $data['user_id'] = auth()->id();
         $data['is_global'] = $data['is_global'] ?? false;
         $data['default_model'] = null;
+        $data['connection_type'] = ApiConnectionProviders::connectionType($provider)->value;
 
         return $data;
     }
@@ -217,6 +228,45 @@ class CreateAiConnection extends SeoCreateRecord
 
         Notification::make()
             ->title(__('seo-content-ai::filament.api_connections.serp_saved'))
+            ->success()
+            ->send();
+
+        $this->redirect(AiConnectionResource::getUrl('index'));
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function createExtendedProviderConnection(string $provider, array $data): void
+    {
+        if (! SeoAccessControl::canMutateInSeoPanel()) {
+            $this->denyMutation();
+
+            return;
+        }
+
+        $service = app(SeoExtendedProviderConnectionService::class);
+        $registry = app(SeoProviderRegistry::class);
+        if ($service->resolveForUser((int) auth()->id(), $provider)?->isConfigured() === true) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.api_connections.extended_already_exists', [
+                    'provider' => $registry->label($provider),
+                ]))
+                ->warning()
+                ->send();
+            $this->redirect(AiConnectionResource::getUrl('edit-extended', ['provider' => $provider]));
+
+            return;
+        }
+
+        $service->saveForUser((int) auth()->id(), $provider, [
+            'name' => $data['name'] ?? $registry->label($provider),
+            'api_key' => $data['extended_api_key'] ?? null,
+            'status' => $data['extended_status'] ?? 'inactive',
+        ]);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.api_connections.extended_saved'))
             ->success()
             ->send();
 

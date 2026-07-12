@@ -12,7 +12,6 @@ use App\Addons\SeoContentAi\Providers\Serp\SerpRankProviderRegistry;
 use App\Addons\SeoContentAi\Services\KeywordRankSnapshotWriter;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
-use App\Models\Site;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -36,14 +35,17 @@ final class RunSingleKeywordRankCheckJob implements ShouldQueue
 
     public function __construct(
         public int $runId,
-        public int $siteId,
         public int $userId,
         public string $provider,
         public int $keywordId,
+        public string $connectionHash,
+        public ?int $rankGroupId = null,
+        public ?int $rankGroupItemId = null,
         public ?string $country = null,
         public ?string $location = null,
         public ?string $language = null,
         public ?string $device = null,
+        public ?string $trackedDomain = null,
         public ?string $comparisonBatchId = null,
     ) {}
 
@@ -53,7 +55,7 @@ final class RunSingleKeywordRankCheckJob implements ShouldQueue
         KeywordRankSnapshotWriter $snapshotWriter,
         SeoDatabaseConnectionService $databaseConnection,
     ): void {
-        $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
+        $databaseConnection->bootstrapByHash($this->connectionHash);
 
         $run = KeywordRankCheckRun::query()->find($this->runId);
         if ($run === null || in_array($run->status, ['completed', 'failed'], true)) {
@@ -83,11 +85,19 @@ final class RunSingleKeywordRankCheckJob implements ShouldQueue
                 location: $this->location,
                 device: $this->device,
                 depth: (int) ($connection->result_depth ?: 100),
-                trackedDomain: $this->resolveTrackedDomain($this->siteId),
+                trackedDomain: $this->trackedDomain,
             );
 
             $result = $provider->search($connection, $request);
-            $snapshotWriter->persist($this->siteId, (int) $keyword->id, $connection, $result, $this->runId);
+            $snapshotWriter->persist(
+                siteId: null,
+                keywordId: (int) $keyword->id,
+                connection: $connection,
+                result: $result,
+                runId: $this->runId,
+                rankGroupId: $this->rankGroupId,
+                rankGroupItemId: $this->rankGroupItemId,
+            );
 
             if ($this->isFailureStatus($result->status)) {
                 $this->incrementRunFailure($run);
@@ -146,13 +156,6 @@ final class RunSingleKeywordRankCheckJob implements ShouldQueue
         if ($connection !== null && $serpConnections !== null) {
             $serpConnections->markRankCheckCompleted($connection);
         }
-    }
-
-    private function resolveTrackedDomain(int $siteId): ?string
-    {
-        $domain = Site::query()->whereKey($siteId)->value('domain');
-
-        return is_string($domain) && $domain !== '' ? $domain : null;
     }
 
     private function isFailureStatus(string $status): bool

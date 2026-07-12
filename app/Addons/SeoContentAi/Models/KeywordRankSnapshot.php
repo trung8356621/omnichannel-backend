@@ -21,6 +21,7 @@ final class KeywordRankSnapshot extends Model
         'allintitle' => 'integer',
         'checked_at' => 'datetime',
         'metadata' => 'array',
+        'duration_ms' => 'integer',
     ];
 
     public function keyword(): BelongsTo

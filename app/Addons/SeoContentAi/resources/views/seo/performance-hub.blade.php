@@ -1,10 +1,9 @@
 @php
-    use App\Addons\SeoContentAi\Support\SerpProviderKeys;
-
     $cssPath = base_path('app/Addons/SeoContentAi/resources/css/performance-hub.css');
     $dataSource = $this->dataSource;
     $activeTab = $this->activeTab;
-    $isRankProvider = SerpProviderKeys::isValid($dataSource);
+    $isRankProvider = $this->dashboard->hasRankProvider($dataSource);
+    $isKeywordMetrics = $this->dashboard->isKeywordMetricsSource($dataSource);
 @endphp
 
 <x-filament-panels::page class="performance-hub-page">
@@ -13,7 +12,13 @@
     @endif
 
     <div class="performance-hub-shell space-y-6">
-        @include('seo-content-ai::seo.performance-hub.partials.header', ['dataSource' => $dataSource])
+        @if ($isRankProvider)
+            @php $rankState = $this->rankDashboardState; @endphp
+        @endif
+        @include('seo-content-ai::seo.performance-hub.partials.header', [
+            'dataSource' => $dataSource,
+            'rankState' => $rankState ?? [],
+        ])
         @include('seo-content-ai::seo.performance-hub.partials.source-tabs', ['dataSource' => $dataSource])
 
         @if ($dataSource === 'gsc')
@@ -72,48 +77,78 @@
         @endif
 
         @if ($isRankProvider)
-            @php $rankState = $this->rankDashboardState; @endphp
-            @include('seo-content-ai::seo.performance-hub.partials.rank-connection-strip', [
-                'connections' => $rankState['connections'] ?? [],
-            ])
-            @include('seo-content-ai::seo.performance-hub.partials.rank-kpi-cards', ['kpis' => $rankState['kpis'] ?? []])
-            @include('seo-content-ai::seo.performance-hub.partials.visibility-chart', ['chart' => $rankState['visibility_chart'] ?? []])
-            @include('seo-content-ai::seo.performance-hub.partials.ranking-distribution', [
-                'distribution' => $rankState['distribution'] ?? [],
-                'activeBucket' => $rankState['position_bucket'] ?? '',
-            ])
-
-            @if (\App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures())
-                @include('seo-content-ai::seo.performance-hub.partials.provider-comparison', [
-                    'rows' => $this->comparisonRows,
+            @php
+                $rankState = $this->rankDashboardState;
+                $sections = $rankState['dashboard_sections'] ?? [];
+                $hasSection = static fn (string $key): bool => in_array($key, $sections, true);
+            @endphp
+            @if ($hasSection('rank_kpis') || $hasSection('rank_distribution') || $hasSection('rankings_table'))
+                @include('seo-content-ai::seo.performance-hub.partials.rank-connection-strip', [
+                    'connections' => $rankState['connections'] ?? [],
+                ])
+            @endif
+            @if ($hasSection('rank_kpis'))
+                @include('seo-content-ai::seo.performance-hub.partials.rank-kpi-cards', ['kpis' => $rankState['kpis'] ?? []])
+            @endif
+            @if ($hasSection('rank_distribution'))
+                @include('seo-content-ai::seo.performance-hub.partials.ranking-distribution', [
+                    'distribution' => $rankState['distribution'] ?? [],
+                    'activeBucket' => $rankState['position_bucket'] ?? '',
                 ])
             @endif
 
-            <nav class="performance-hub-tabs" aria-label="{{ __('seo-content-ai::filament.performance_hub.tabs_label') }}">
-                @foreach ([
-                    'rankings' => __('seo-content-ai::filament.performance_hub.tab_rankings'),
-                    'serp-changes' => __('seo-content-ai::filament.performance_hub.tab_serp_changes'),
-                ] as $tabKey => $tabLabel)
-                    <button
-                        type="button"
-                        wire:click="setActiveTab('{{ $tabKey }}')"
-                        wire:loading.attr="disabled"
-                        wire:target="setActiveTab"
-                        @class(['performance-hub-tab', 'is-active' => $activeTab === $tabKey])
-                        aria-selected="{{ $activeTab === $tabKey ? 'true' : 'false' }}"
-                    >
-                        {{ $tabLabel }}
-                    </button>
-                @endforeach
-            </nav>
+            <div class="performance-hub-tabs-row">
+                <nav class="performance-hub-tabs" aria-label="{{ __('seo-content-ai::filament.performance_hub.tabs_label') }}">
+                    @foreach ([
+                        'rankings' => __('seo-content-ai::filament.performance_hub.tab_rankings'),
+                        'serp-changes' => __('seo-content-ai::filament.performance_hub.tab_serp_changes'),
+                    ] as $tabKey => $tabLabel)
+                        @if (($tabKey === 'rankings' && $hasSection('rankings_table')) || ($tabKey === 'serp-changes' && $hasSection('serp_changes')))
+                            <button
+                                type="button"
+                                wire:click="setActiveTab('{{ $tabKey }}')"
+                                wire:loading.attr="disabled"
+                                wire:target="setActiveTab"
+                                @class(['performance-hub-tab', 'is-active' => $activeTab === $tabKey])
+                                aria-selected="{{ $activeTab === $tabKey ? 'true' : 'false' }}"
+                            >
+                                {{ $tabLabel }}
+                            </button>
+                        @endif
+                    @endforeach
+                </nav>
 
-            @if ($activeTab === 'rankings')
+                @include('seo-content-ai::seo.performance-hub.partials.rank-toolbar', [
+                    'rankState' => $rankState,
+                ])
+            </div>
+
+            @if ($activeTab === 'rankings' && $hasSection('rankings_table'))
                 @include('seo-content-ai::seo.performance-hub.partials.rankings-table', ['rows' => $rankState['ranking_rows'] ?? []])
             @endif
 
-            @if ($activeTab === 'serp-changes')
+            @if ($activeTab === 'serp-changes' && $hasSection('serp_changes'))
                 @include('seo-content-ai::seo.performance-hub.partials.serp-changes-table', ['rows' => $rankState['serp_changes'] ?? []])
             @endif
+
+            @if ($hasSection('organic_visibility') || $hasSection('provider_comparison'))
+                @include('seo-content-ai::seo.performance-hub.partials.advanced-analysis', [
+                    'advancedAnalysis' => $rankState['advanced_analysis'] ?? [],
+                ])
+            @endif
+        @endif
+
+        @if ($isKeywordMetrics)
+            @php $metricsState = $this->keywordMetricsDashboardState; @endphp
+            @include('seo-content-ai::seo.performance-hub.partials.rank-connection-strip', [
+                'connections' => $metricsState['connections'] ?? [],
+            ])
+            @include('seo-content-ai::seo.performance-hub.partials.keyword-metrics-toolbar', [
+                'metricsState' => $metricsState,
+            ])
+            @include('seo-content-ai::seo.performance-hub.partials.integration-state', [
+                'state' => $metricsState['integration_state'] ?? [],
+            ])
         @endif
     </div>
 </x-filament-panels::page>

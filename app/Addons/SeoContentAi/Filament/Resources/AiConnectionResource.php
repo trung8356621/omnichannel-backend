@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource\Pages;
+use App\Addons\SeoContentAi\Enums\ApiConnectionType;
 use App\Addons\SeoContentAi\Models\ApiConnectionListRow;
 use App\Addons\SeoContentAi\Services\DataForSeoConnectionService;
+use App\Addons\SeoContentAi\Services\SeoExtendedProviderConnectionService;
 use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
 use App\Addons\SeoContentAi\Services\GoogleSearchConsoleConnectionService;
 use App\Addons\SeoContentAi\Support\ApiConnectionFormSchema;
@@ -101,6 +103,8 @@ class AiConnectionResource extends SeoPanelResource
             ApiConnectionProviders::SERPER,
             ApiConnectionProviders::SERPAPI,
             ApiConnectionProviders::SEARCHAPI => static::getUrl('edit-serp', ['provider' => $provider]),
+            ApiConnectionProviders::KEYWORDS_EVERYWHERE,
+            ApiConnectionProviders::SE_RANKING => static::getUrl('edit-extended', ['provider' => $provider]),
             default => static::getUrl('index'),
         };
     }
@@ -135,15 +139,41 @@ class AiConnectionResource extends SeoPanelResource
             ->emptyStateHeading(__('seo-content-ai::filament.api_connections.empty'))
             ->columns([
                 Tables\Columns\TextColumn::make('name')
-                    ->label(__('seo-content-ai::filament.ai_connection.model'))
+                    ->label(__('seo-content-ai::filament.api_connections.col_connection'))
                     ->searchable()
                     ->sortable()
                     ->url(fn (Model $record): ?string => static::resolveEditUrl($record)),
+                Tables\Columns\TextColumn::make('connection_type')
+                    ->label(__('seo-content-ai::filament.api_connections.col_type'))
+                    ->badge()
+                    ->formatStateUsing(function (?string $state, Model $record): string {
+                        $type = $state;
+                        if (! filled($type) && $record instanceof ApiConnection) {
+                            $type = ApiConnectionProviders::connectionType((string) $record->getAttribute('provider'))->value;
+                        }
+
+                        return match ($type) {
+                            ApiConnectionType::Ai->value => __('seo-content-ai::filament.api_connections.type_ai'),
+                            ApiConnectionType::Seo->value => __('seo-content-ai::filament.api_connections.type_seo'),
+                            default => (string) $type,
+                        };
+                    })
+                    ->color(fn (?string $state): string => match ($state) {
+                        ApiConnectionType::Ai->value => 'info',
+                        ApiConnectionType::Seo->value => 'success',
+                        default => 'gray',
+                    })
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('provider')
-                    ->label(__('seo-content-ai::filament.ai_connection.provider'))
+                    ->label(__('seo-content-ai::filament.api_connections.col_provider'))
                     ->formatStateUsing(
                         fn (?string $state): string => ApiConnectionProviders::label((string) $state),
                     )
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('status')
+                    ->label(__('seo-content-ai::filament.api_connections.col_status'))
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => static::formatStatusLabel((string) $state))
                     ->sortable(),
             ])
             ->actions([
@@ -219,7 +249,29 @@ class AiConnectionResource extends SeoPanelResource
                 && app(SeoSerpProviderConnectionService::class)->deleteById($userId, $serpId);
         }
 
+        if (ApiConnectionProviders::isExtendedProvider($provider)) {
+            $extId = ApiConnectionListRow::extractExtendedId($rowId);
+
+            return $extId !== null
+                && app(SeoExtendedProviderConnectionService::class)->deleteById($userId, $extId);
+        }
+
         return false;
+    }
+
+    public static function formatStatusLabel(string $status): string
+    {
+        return match ($status) {
+            'active', 'connected' => __('seo-content-ai::filament.api_connections.status_active'),
+            'inactive' => __('seo-content-ai::filament.api_connections.status_inactive'),
+            'invalid_credentials' => __('seo-content-ai::filament.api_connections.status_invalid_credentials'),
+            'quota_exhausted' => __('seo-content-ai::filament.api_connections.status_quota_exhausted'),
+            'sync_required' => __('seo-content-ai::filament.api_connections.sync_required'),
+            'mapping_required' => __('seo-content-ai::filament.api_connections.mapping_required'),
+            'token_expired' => __('seo-content-ai::filament.api_connections.token_expired'),
+            'reauthorization_required' => __('seo-content-ai::filament.api_connections.reauthorization_required'),
+            default => __('seo-content-ai::filament.api_connections.not_configured'),
+        };
     }
 
     public static function getEloquentQuery(): Builder
@@ -243,6 +295,7 @@ class AiConnectionResource extends SeoPanelResource
             'edit-gsc' => Pages\EditGscApiConnection::route('/google-search-console/{record}/edit'),
             'edit-dataforseo' => Pages\EditDataForSeoApiConnection::route('/dataforseo/edit'),
             'edit-serp' => Pages\EditSerpProviderApiConnection::route('/{provider}/edit'),
+            'edit-extended' => Pages\EditExtendedProviderApiConnection::route('/extended/{provider}/edit'),
             'edit' => Pages\EditAiConnection::route('/{record}/edit'),
         ];
     }

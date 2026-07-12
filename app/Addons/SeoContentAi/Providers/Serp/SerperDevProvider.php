@@ -26,6 +26,11 @@ final class SerperDevProvider extends AbstractSerpRankProvider
         return SerpProviderKeys::label(SerpProviderKeys::SERPER);
     }
 
+    public function supportsAllintitle(): bool
+    {
+        return false;
+    }
+
     public function testConnection(SeoSerpProviderConnection $connection): array
     {
         $request = new SerpRankRequest(keyword: 'serper connection test', depth: 1);

@@ -1,11 +1,11 @@
-<section class="performance-hub-panel">
-    <div class="performance-hub-panel__head">
-        <h2>{{ __('seo-content-ai::filament.performance_hub.chart_visibility') }}</h2>
-        <p>{{ __('seo-content-ai::filament.performance_hub.chart_visibility_hint') }}</p>
-    </div>
+@if (($chart['has_data'] ?? false) === true)
+    <section class="performance-hub-panel">
+        <div class="performance-hub-panel__head">
+            <h2>{{ __('seo-content-ai::filament.performance_hub.chart_visibility') }}</h2>
+            <p>{{ __('seo-content-ai::filament.performance_hub.chart_visibility_hint') }}</p>
+        </div>
 
-    @if (($chart['has_data'] ?? false) === true)
-        <div class="performance-hub-chart" wire:ignore>
+        <div class="performance-hub-chart performance-hub-chart--visibility" wire:ignore>
             <canvas id="performance-visibility-chart" height="120"></canvas>
         </div>
         <script>
@@ -51,9 +51,5 @@
                 });
             });
         </script>
-    @else
-        <div class="performance-hub-empty-state">
-            <p>{{ __('seo-content-ai::filament.performance_hub.empty_not_synced') }}</p>
-        </div>
-    @endif
-</section>
+    </section>
+@endif

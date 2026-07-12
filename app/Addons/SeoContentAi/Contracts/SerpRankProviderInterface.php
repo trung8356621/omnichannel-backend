@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Contracts;
 
+use App\Addons\SeoContentAi\DataTransfer\SerpAllintitleResult;
 use App\Addons\SeoContentAi\DataTransfer\SerpProviderUsage;
 use App\Addons\SeoContentAi\DataTransfer\SerpRankRequest;
 use App\Addons\SeoContentAi\DataTransfer\SerpRankResult;
@@ -14,6 +15,14 @@ interface SerpRankProviderInterface
     public function providerKey(): string;
 
     public function displayName(): string;
+
+    public function supportsRankCheck(): bool;
+
+    public function supportsAllintitle(): bool;
+
+    public function supportsSearchVolume(): bool;
+
+    public function searchAllintitle(SeoSerpProviderConnection $connection, SerpRankRequest $request): SerpAllintitleResult;
 
     /**
      * @return array{ok: bool, message: string, usage: SerpProviderUsage|null}

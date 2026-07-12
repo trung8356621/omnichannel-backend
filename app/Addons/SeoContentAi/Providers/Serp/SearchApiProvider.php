@@ -83,7 +83,10 @@ final class SearchApiProvider extends AbstractSerpRankProvider
             $request,
             $organic,
             $durationMs,
-            ['search_parameters' => $body['search_parameters'] ?? null],
+            [
+                'search_parameters' => $body['search_parameters'] ?? null,
+                'search_information' => $body['search_information'] ?? null,
+            ],
         );
     }
 
@@ -139,5 +142,29 @@ final class SearchApiProvider extends AbstractSerpRankProvider
         }
 
         return $results;
+    }
+
+    /**
+     * @param  array<string, mixed>  $metadata
+     */
+    protected function extractEstimatedTotalResults(array $metadata): ?int
+    {
+        $info = $metadata['search_information'] ?? null;
+        if (! is_array($info)) {
+            return null;
+        }
+
+        $total = $info['total_results'] ?? null;
+        if (is_numeric($total)) {
+            return max(0, (int) $total);
+        }
+
+        if (is_string($total)) {
+            $digits = preg_replace('/\D+/', '', $total);
+
+            return is_numeric($digits) && $digits !== '' ? (int) $digits : null;
+        }
+
+        return null;
     }
 }

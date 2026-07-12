@@ -74,8 +74,9 @@ final class SeoQueueControlService
             ->exists();
 
         $pendingDefault = $this->countPendingQueueJobs($workerThreshold);
+        $pendingSeo = $this->countPendingNamedQueueJobs('seo', $workerThreshold);
         $pendingWpSync = $this->countPendingWpSyncForOwner($ownerId);
-        $pendingWorkTotal = $pendingAudit + $pendingDefault + $pendingWpSync;
+        $pendingWorkTotal = $pendingAudit + $pendingDefault + $pendingSeo + $pendingWpSync;
 
         $workerStatus = match (true) {
             $workerActivity => 'running',
@@ -88,6 +89,7 @@ final class SeoQueueControlService
             'pending_audit_jobs' => $pendingAudit,
             'running_audit_jobs' => $runningAudit,
             'pending_default_jobs' => $pendingDefault,
+            'pending_seo_jobs' => $pendingSeo,
             'pending_wp_sync_jobs' => $pendingWpSync,
             'pending_work_total' => $pendingWorkTotal,
             'worker_status' => $workerStatus,
@@ -307,6 +309,7 @@ final class SeoQueueControlService
             'pending_audit_jobs' => 0,
             'running_audit_jobs' => 0,
             'pending_default_jobs' => 0,
+            'pending_seo_jobs' => 0,
             'pending_wp_sync_jobs' => 0,
             'pending_work_total' => 0,
             'worker_status' => 'idle',
@@ -322,11 +325,12 @@ final class SeoQueueControlService
             $queueService = app(ArticleWpSyncQueueService::class);
             $jobs = DB::connection($this->jobsConnection())
                 ->table('jobs')
-                ->select(['id', 'payload'])
+                ->select(['id', 'payload', 'queue'])
                 ->where(function ($query) use ($workerThreshold): void {
                     $query->whereNull('reserved_at')
                         ->orWhere('reserved_at', '<', $workerThreshold);
                 })
+                ->whereIn('queue', ['default', 'media_generation'])
                 ->get();
 
             $count = 0;
@@ -343,6 +347,22 @@ final class SeoQueueControlService
             }
 
             return $count;
+        } catch (Throwable) {
+            return 0;
+        }
+    }
+
+    private function countPendingNamedQueueJobs(string $queue, int $workerThreshold): int
+    {
+        try {
+            return (int) DB::connection($this->jobsConnection())
+                ->table('jobs')
+                ->where('queue', $queue)
+                ->where(function ($query) use ($workerThreshold): void {
+                    $query->whereNull('reserved_at')
+                        ->orWhere('reserved_at', '<', $workerThreshold);
+                })
+                ->count();
         } catch (Throwable) {
             return 0;
         }

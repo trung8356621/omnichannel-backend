@@ -12,7 +12,6 @@ use App\Addons\SeoContentAi\Providers\Serp\SerpRankProviderRegistry;
 use App\Addons\SeoContentAi\Services\KeywordRankSnapshotWriter;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\SeoSerpProviderConnectionService;
-use App\Models\Site;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -35,18 +34,19 @@ final class RunKeywordRankCheckBatchJob implements ShouldQueue
     public array $backoff = [30, 120, 300];
 
     /**
-     * @param  list<int>  $keywordIds
+     * @param  list<array{item_id: int, keyword_id: int}>  $groupItems
      */
     public function __construct(
         public int $runId,
-        public int $siteId,
         public int $userId,
         public string $provider,
-        public array $keywordIds,
+        public array $groupItems,
+        public string $connectionHash,
         public ?string $country = null,
         public ?string $location = null,
         public ?string $language = null,
         public ?string $device = null,
+        public ?string $trackedDomain = null,
     ) {}
 
     public function handle(
@@ -55,7 +55,7 @@ final class RunKeywordRankCheckBatchJob implements ShouldQueue
         KeywordRankSnapshotWriter $snapshotWriter,
         SeoDatabaseConnectionService $databaseConnection,
     ): void {
-        $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
+        $databaseConnection->bootstrapByHash($this->connectionHash);
 
         $run = KeywordRankCheckRun::query()->find($this->runId);
         if ($run === null || in_array($run->status, ['completed', 'failed'], true)) {
@@ -70,10 +70,13 @@ final class RunKeywordRankCheckBatchJob implements ShouldQueue
         }
 
         $provider = $registry->get($this->provider);
-        $trackedDomain = $this->resolveTrackedDomain($this->siteId);
+        $keywordIds = array_column($this->groupItems, 'keyword_id');
+        $itemIdByKeyword = collect($this->groupItems)
+            ->mapWithKeys(static fn (array $row): array => [(int) $row['keyword_id'] => (int) $row['item_id']])
+            ->all();
 
         $keywords = Keyword::query()
-            ->whereIn('id', $this->keywordIds)
+            ->whereIn('id', $keywordIds)
             ->get();
 
         $processed = 0;
@@ -88,11 +91,19 @@ final class RunKeywordRankCheckBatchJob implements ShouldQueue
                     location: $this->location,
                     device: $this->device,
                     depth: (int) ($connection->result_depth ?: 100),
-                    trackedDomain: $trackedDomain,
+                    trackedDomain: $this->trackedDomain,
                 );
 
                 $result = $provider->search($connection, $request);
-                $snapshotWriter->persist($this->siteId, (int) $keyword->id, $connection, $result, $this->runId);
+                $snapshotWriter->persist(
+                    siteId: null,
+                    keywordId: (int) $keyword->id,
+                    connection: $connection,
+                    result: $result,
+                    runId: $this->runId,
+                    rankGroupId: (int) ($run->rank_group_id ?? 0) ?: null,
+                    rankGroupItemId: $itemIdByKeyword[(int) $keyword->id] ?? null,
+                );
 
                 if ($this->isFailureStatus($result->status)) {
                     $failed++;
@@ -133,13 +144,6 @@ final class RunKeywordRankCheckBatchJob implements ShouldQueue
         $run->last_error = mb_substr($message, 0, 240);
         $run->completed_at = now();
         $run->save();
-    }
-
-    private function resolveTrackedDomain(int $siteId): ?string
-    {
-        $domain = Site::query()->whereKey($siteId)->value('domain');
-
-        return is_string($domain) && $domain !== '' ? $domain : null;
     }
 
     private function isFailureStatus(string $status): bool
