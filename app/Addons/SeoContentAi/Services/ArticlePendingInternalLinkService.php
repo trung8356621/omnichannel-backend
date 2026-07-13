@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -86,7 +87,27 @@ final class ArticlePendingInternalLinkService
             $keyword->refresh();
             $keyword->loadCount('mainArticles');
 
-            if (KeywordResource::canAssignKeywordToContentProject($keyword)) {
+            $existingProjectForSite = KeywordResource::keywordAssignedContentProjectIdForSite($keyword, $siteId);
+            if ($existingProjectForSite === $projectId) {
+                $assignedToProject = true;
+                $message = __('seo-content-ai::filament.article_edit.pending_link_assigned');
+            } elseif ($existingProjectForSite !== null) {
+                return [
+                    'success' => false,
+                    'message' => ArticleResource::buildAssignContentProjectBody([
+                        'added' => 0,
+                        'duplicate' => 0,
+                        'overflow' => 0,
+                        'domain_mismatch' => 0,
+                        'already_in_project' => 1,
+                    ]),
+                ];
+            } elseif (! KeywordResource::canAssignKeywordToContentProject($keyword)) {
+                return [
+                    'success' => false,
+                    'message' => __('seo-content-ai::filament.keyword.workspace_assign_denied'),
+                ];
+            } else {
                 $summary = KeywordResource::assignKeywordsToContentProject(
                     collect([$keyword]),
                     $projectId,
@@ -94,14 +115,16 @@ final class ArticlePendingInternalLinkService
                 );
                 $added = (int) ($summary['added'] ?? 0);
                 $duplicate = (int) ($summary['duplicate'] ?? 0);
-                $assignedToProject = $added > 0 || $duplicate > 0;
 
-                if ($assignedToProject) {
+                if ($added > 0 || $duplicate > 0) {
+                    $assignedToProject = true;
                     $message = __('seo-content-ai::filament.article_edit.pending_link_assigned');
+                } else {
+                    return [
+                        'success' => false,
+                        'message' => ArticleResource::buildAssignContentProjectBody($summary),
+                    ];
                 }
-            } elseif (KeywordResource::keywordIsInContentProject($keyword)) {
-                $assignedToProject = true;
-                $message = __('seo-content-ai::filament.article_edit.pending_link_assigned');
             }
         } else {
             $message = __('seo-content-ai::filament.article_edit.pending_link_no_content_project');

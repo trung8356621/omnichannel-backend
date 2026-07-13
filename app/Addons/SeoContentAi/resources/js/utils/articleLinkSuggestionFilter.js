@@ -96,12 +96,15 @@ export function filterDomainLinksInArticleContent(links, articlePlainText) {
     });
 }
 
-export function filterSuggestedInternalLinks(suggested, internal) {
-    const internalItems = Array.isArray(internal) ? internal : [];
+export function filterSuggestedInternalLinks(suggested, internal, external = []) {
+    const existingItems = [
+        ...(Array.isArray(internal) ? internal : []),
+        ...(Array.isArray(external) ? external : []),
+    ];
     const linkedLabels = [];
     const linkedHrefs = [];
 
-    internalItems.forEach((item) => {
+    existingItems.forEach((item) => {
         const label = normalizeLinkLabel(item?.text);
         if (label) {
             linkedLabels.push(label);
@@ -197,6 +200,7 @@ export function mergeSuggestionCatalog(...sources) {
  * @param {{
  *   catalog?: Array<{ text?: string, href?: string, target_url?: string, keyword_id?: number, can_insert?: boolean }>,
  *   internal?: Array<{ text?: string, href?: string }>,
+ *   external?: Array<{ text?: string, href?: string }>,
  *   excludedLabels?: string[],
  *   articlePlainText?: string,
  *   maxSlots?: number,
@@ -206,6 +210,7 @@ export function mergeSuggestionCatalog(...sources) {
 export function buildVisibleInternalSuggestions({
     catalog = [],
     internal = [],
+    external = [],
     excludedLabels = [],
     articlePlainText = '',
     maxSlots = MAX_INTERNAL_LINK_SLOTS,
@@ -228,7 +233,7 @@ export function buildVisibleInternalSuggestions({
         return phrase !== '' && !isSuggestionExcluded(phrase, excludedLabels);
     });
 
-    return filterSuggestedInternalLinks(withoutExcluded, internal).slice(
+    return filterSuggestedInternalLinks(withoutExcluded, internal, external).slice(
         0,
         MAX_VISIBLE_INTERNAL_SUGGESTIONS,
     );

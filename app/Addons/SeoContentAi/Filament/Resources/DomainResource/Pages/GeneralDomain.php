@@ -820,6 +820,105 @@ class GeneralDomain extends Page
             ->send();
     }
 
+    public function getSeoScoringProgress(): array
+    {
+        return app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+            ->domainProgress((int) $this->getRecord()->getKey());
+    }
+
+    public function runQueueMissingSeoScoringAction(): void
+    {
+        $siteId = (int) $this->getRecord()->getKey();
+        if ($siteId <= 0) {
+            return;
+        }
+
+        try {
+            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
+            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+                ->queueMissingForSite($siteId);
+        } catch (\Throwable $exception) {
+            report($exception);
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.seo_scoring_queue_missing'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.domain.seo_scoring_queue_missing'))
+            ->body(__('seo-content-ai::filament.domain.seo_scoring_queue_missing_success', [
+                'count' => $result['queued'],
+            ]))
+            ->success()
+            ->send();
+    }
+
+    public function runRetryFailedSeoScoringAction(): void
+    {
+        $siteId = (int) $this->getRecord()->getKey();
+        if ($siteId <= 0) {
+            return;
+        }
+
+        try {
+            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
+            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+                ->queueFailedForSite($siteId);
+        } catch (\Throwable $exception) {
+            report($exception);
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.seo_scoring_retry_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.domain.seo_scoring_retry_failed'))
+            ->body(__('seo-content-ai::filament.domain.seo_scoring_retry_failed_success', [
+                'count' => $result['queued'],
+            ]))
+            ->success()
+            ->send();
+    }
+
+    public function runRequeueAllSeoScoringAction(): void
+    {
+        $siteId = (int) $this->getRecord()->getKey();
+        if ($siteId <= 0) {
+            return;
+        }
+
+        try {
+            app(SeoDatabaseConnectionService::class)->bootstrapSeoDatabaseConnection($siteId);
+            $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+                ->queueAllForSite($siteId);
+        } catch (\Throwable $exception) {
+            report($exception);
+            Notification::make()
+                ->title(__('seo-content-ai::filament.domain.seo_scoring_requeue_all'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.domain.seo_scoring_requeue_all'))
+            ->body(__('seo-content-ai::filament.domain.seo_scoring_requeue_all_success', [
+                'count' => $result['queued'],
+            ]))
+            ->success()
+            ->send();
+    }
+
     public function runAuditLinkStatusAction(): void
     {
         $siteId = (int) $this->getRecord()->getKey();

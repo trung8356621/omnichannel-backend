@@ -17,7 +17,7 @@ final class SeoScoringSettingsService
 
     public static function withOverrides(array $overrides): self
     {
-        $service = new self();
+        $service = new self;
         $service->inMemoryOverrides = $overrides;
 
         return $service;
@@ -138,5 +138,46 @@ final class SeoScoringSettingsService
         $parsed = is_numeric($value) ? (int) $value : $fallback;
 
         return max(0, min(SeoScoringRulesRegistry::BASE_SCORE, $parsed));
+    }
+
+    /**
+     * @return list<array{
+     *   key: string,
+     *   label: string,
+     *   short_label: string,
+     *   description: string,
+     *   category: string,
+     *   enabled: bool,
+     *   deduction: int,
+     *   filterable: bool,
+     *   violation_keys: list<string>,
+     *   threshold: array<string, mixed>|null
+     * }>
+     */
+    public function effectiveRuleDefinitions(?int $articleLengthTarget = null): array
+    {
+        return SeoScoringRulesRegistry::effectiveRuleDefinitions($articleLengthTarget);
+    }
+
+    /**
+     * @return list<array{
+     *   key: string,
+     *   label: string,
+     *   category: string,
+     *   deduction: int,
+     *   threshold: array<string, mixed>|null
+     * }>
+     */
+    public function auditFilterDefinitions(?int $articleLengthTarget = null): array
+    {
+        return SeoScoringRulesRegistry::auditFilterDefinitions($articleLengthTarget);
+    }
+
+    /**
+     * @return list<array{key: string, label: string, threshold: int}>
+     */
+    public function aggregateFilterDefinitions(): array
+    {
+        return SeoScoringRulesRegistry::aggregateFilterDefinitions();
     }
 }

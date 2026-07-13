@@ -77,6 +77,41 @@ final class SeoAccessControl
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_MANAGER);
     }
 
+    public static function canArchiveContentProjects(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessManagerFeatures();
+    }
+
+    public static function canViewProjectArchives(): bool
+    {
+        return self::canAccessManagerFeatures();
+    }
+
+    public static function canViewArticleArchive(): bool
+    {
+        return self::canViewProjectArchives();
+    }
+
+    public static function canReviewKeywords(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();
+    }
+
+    public static function canRestoreKeywords(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessManagerFeatures();
+    }
+
+    public static function canManageKeywordReviewReasons(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessManagerFeatures();
+    }
+
+    public static function canOverrideKeywordReviewSeverity(): bool
+    {
+        return self::canManageKeywordReviewReasons();
+    }
+
     public static function canAccessPlannerFeatures(): bool
     {
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_PLANNER);

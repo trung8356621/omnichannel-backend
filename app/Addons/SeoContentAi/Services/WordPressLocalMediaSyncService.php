@@ -1042,6 +1042,17 @@ final class WordPressLocalMediaSyncService
         return $this->applyUrlReplacements($html, $urlMap);
     }
 
+    public function htmlContainsLocalSeoMedia(string $html): bool
+    {
+        $html = trim($html);
+        if ($html === '') {
+            return false;
+        }
+
+        return $this->extractLocalSeoMediaImageRefs($html) !== []
+            || $this->extractLocalSeoMediaUrls($html) !== [];
+    }
+
     private function imageTagNeedsWpSrc(string $tag): bool
     {
         if (! preg_match('/\bsrc\s*=\s*(["\']?)([^"\'>\s]*)\1/i', $tag, $srcMatch)) {

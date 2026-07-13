@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
@@ -52,10 +53,18 @@ class Keyword extends Model
         'phrase',
         'type',
         'parent_id',
+        'review_status',
+        'review_reason_id',
+        'review_note',
+        'reviewed_by',
+        'reviewed_at',
     ];
 
     protected $casts = [
         'parent_id' => 'integer',
+        'review_reason_id' => 'integer',
+        'reviewed_by' => 'integer',
+        'reviewed_at' => 'datetime',
     ];
 
     public static function decodePhrase(?string $value): string
@@ -271,7 +280,64 @@ class Keyword extends Model
      */
     public function getQualityFlagsList(): array
     {
-        return app(KeywordMetaRepository::class)->getQualityFlags((int) $this->id);
+        $status = KeywordReviewStatus::tryFrom((string) ($this->review_status ?? ''));
+        if ($status === KeywordReviewStatus::Warning) {
+            return ['warning'];
+        }
+
+        if ($status === KeywordReviewStatus::Danger) {
+            return ['danger'];
+        }
+
+        return [];
+    }
+
+    public function reviewStatusEnum(): KeywordReviewStatus
+    {
+        return KeywordReviewStatus::tryFrom((string) ($this->review_status ?? ''))
+            ?? KeywordReviewStatus::Active;
+    }
+
+    public function isReviewNegative(): bool
+    {
+        return $this->reviewStatusEnum()->isNegative();
+    }
+
+    public function reviewReason(): BelongsTo
+    {
+        return $this->belongsTo(KeywordReviewReason::class, 'review_reason_id');
+    }
+
+    public function reviewHistories(): HasMany
+    {
+        return $this->hasMany(KeywordReviewHistory::class, 'keyword_id');
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @return Builder<Keyword>
+     */
+    public function scopeReviewActive(Builder $query): Builder
+    {
+        return $query->where('review_status', KeywordReviewStatus::Active->value);
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @return Builder<Keyword>
+     */
+    public function scopeReviewWarning(Builder $query): Builder
+    {
+        return $query->where('review_status', KeywordReviewStatus::Warning->value);
+    }
+
+    /**
+     * @param  Builder<Keyword>  $query
+     * @return Builder<Keyword>
+     */
+    public function scopeReviewDanger(Builder $query): Builder
+    {
+        return $query->where('review_status', KeywordReviewStatus::Danger->value);
     }
 
     public function mainArticleId(): ?int
@@ -378,21 +444,14 @@ class Keyword extends Model
             return $query;
         }
 
-        return $query->whereHas(
-            'metas',
-            static function (Builder $metaQuery) use ($flags): void {
-                $metaQuery
-                    ->where('meta_key', KeywordMetaKey::QualityFlags->value)
-                    ->where(function (Builder $containsQuery) use ($flags): void {
-                        foreach ($flags as $flag) {
-                            $containsQuery->orWhereRaw(
-                                'JSON_CONTAINS(meta_value, ?, "$")',
-                                [json_encode($flag, JSON_THROW_ON_ERROR)],
-                            );
-                        }
-                    });
-            },
+        $statuses = array_map(
+            static fn (string $flag): string => $flag === 'danger'
+                ? KeywordReviewStatus::Danger->value
+                : KeywordReviewStatus::Warning->value,
+            $flags,
         );
+
+        return $query->whereIn('review_status', array_values(array_unique($statuses)));
     }
 
     /**
@@ -401,14 +460,7 @@ class Keyword extends Model
      */
     public function scopeWhereHasNoQualityFlags(Builder $query): Builder
     {
-        return $query->whereDoesntHave(
-            'metas',
-            static fn (Builder $metaQuery): Builder => $metaQuery
-                ->where('meta_key', KeywordMetaKey::QualityFlags->value)
-                ->whereNotNull('meta_value')
-                ->where('meta_value', '!=', '')
-                ->where('meta_value', '!=', '[]'),
-        );
+        return $query->where('review_status', KeywordReviewStatus::Active->value);
     }
 
     public function inboundLinks(): BelongsToMany

@@ -808,9 +808,7 @@ class SyncDomainContentService
             'other' => 0,
         ];
 
-        $analyzer = app(SeoAnalyzerService::class);
         $userId = (int) $site->user_id;
-        $siteDomain = (string) $site->domain;
 
         $syncFlags = app(ArticleWordPressSyncFlagService::class);
 
@@ -830,8 +828,6 @@ class SyncDomainContentService
                     item: $item,
                     wpId: $wpId,
                     synced: $synced,
-                    analyzer: $analyzer,
-                    siteDomain: $siteDomain,
                     userId: $userId,
                     syncFlags: $syncFlags,
                 );
@@ -857,8 +853,6 @@ class SyncDomainContentService
         array $item,
         int $wpId,
         array &$synced,
-        SeoAnalyzerService $analyzer,
-        string $siteDomain,
         int $userId,
         ArticleWordPressSyncFlagService $syncFlags,
     ): void {
@@ -961,9 +955,13 @@ class SyncDomainContentService
         }
 
         try {
-            $analyzer->analyzeFromSyncItem($article, $item, $siteDomain);
+            app(SeoArticleScoringQueueService::class)->dispatchIfSyncItemChanged(
+                $article,
+                $item,
+                $existing instanceof SeoArticle ? $existing : null,
+            );
         } catch (Throwable $e) {
-            Log::warning('SeoAnalyzer failed after sync', [
+            Log::warning('Seo scoring queue dispatch failed after sync', [
                 'article_id' => $article->id,
                 'error' => $e->getMessage(),
             ]);

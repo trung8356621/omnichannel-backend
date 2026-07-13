@@ -60,6 +60,32 @@ class SeoProject extends Model
         return $this->hasMany(SeoProjectRun::class, 'project_id');
     }
 
+    public function archives(): HasMany
+    {
+        return $this->hasMany(SeoProjectArchive::class, 'project_id');
+    }
+
+    public function activeArticleCount(): int
+    {
+        if ($this->relationLoaded('tasks')) {
+            return $this->tasks
+                ->filter(static fn (SeoProjectTask $task): bool => (int) ($task->article_id ?? 0) > 0)
+                ->count();
+        }
+
+        return (int) $this->tasks()
+            ->whereNotNull('article_id')
+            ->where('article_id', '>', 0)
+            ->count();
+    }
+
+    public function activeCompletedCount(): int
+    {
+        return (int) $this->tasks()
+            ->where('status', SeoProjectTask::STATUS_COMPLETED)
+            ->count();
+    }
+
     public function monthCarbon(): Carbon
     {
         return Carbon::parse($this->month)->startOfMonth();

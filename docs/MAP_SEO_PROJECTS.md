@@ -170,6 +170,8 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
   - `canEdit()`: `SeoAccessControl::canMutateContentProjects()`
   - Content manager: chỉ xem project của mình (`user_id == auth()->id()`)
 
+**Assign keyword từ editor / keyword list:** `KeywordResource::assignKeywordContentProjectFormSchema()`, `assignKeywordContentProjectFormSchemaForSite()` (editor), `assignKeywordsToContentProject()` → `SeoProjectTask::TYPE_NEW_KEYWORD`; form field `project_id_{siteId}`.
+
 ### 3.3 Form schema (create + edit)
 
 **Section 1: Project Info** (2 columns)
@@ -206,7 +208,7 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 
 **Filters:** status, user_id, site_id, month
 
-**Row actions:** `view_runs`, `merge_completed_tasks` (modal chọn project đích), `view`, `edit`
+**Row actions:** `view_runs`, `view_archives` (khi có batch), `archive_project_articles` (Manager/Admin, chỉ khi có bài active), `view`, `edit`
 
 **Bulk actions:** Delete (cần permission)
 
@@ -255,7 +257,7 @@ flowchart TB
         CONSOL["SeoProjectRunConsolidationService"]
         SYNC["SeoProjectTaskSyncService"]
         APPROVE["SeoProjectApprovalService"]
-        MERGE["SeoProjectMergeService"]
+        ARCHIVE["SeoProjectArchiveService"]
         PARSER["SeoProjectKeywordListParser"]
         AI_GEN["SeoProjectKeywordAiGeneratorService"]
         OWNER["SeoProjectArticleOwnerSyncService"]
@@ -318,7 +320,7 @@ flowchart TB
 | **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Hợp nhất sau run. Các method: hasRunnablePendingTasks(), isProjectFullyCompleted(), syncObsoleteTaskStatuses(), maybeConsolidate(). |
 | **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` (310 dòng) | Đồng bộ task vào project: sync(), sanitizeTasksData(), tasksDataFromProject(). assertWithinMonthlyLimit() kiểm tra giới hạn tháng. tasksSignature() chống save trùng. |
 | **SeoProjectApprovalService** | `SeoProjectApprovalService.php` | approveLinkedProject() → đánh dấu project là "approved", yêu cầu user là Content Manager. |
-| **SeoProjectMergeService** | `SeoProjectMergeService.php` | mergeCompletedTasks() → gộp task completed từ project cũ sang project mới. Dùng DB::transaction + lockForUpdate. |
+| **SeoProjectArchiveService** | `SeoProjectArchiveService.php` | `archiveProject()` tạo batch + items; `batchesForProject()` load lịch sử. Không ghi `articles.*`. |
 | **SeoProjectKeywordListParser** | `SeoProjectKeywordListParser.php` | parse() → phân tích raw text (bullet, numbered, plain lines) thành mảng keyword. appendKeywordsToTasks() → gộp vào tasks_data hiện tại. |
 | **SeoProjectKeywordAiGeneratorService** | `SeoProjectKeywordAiGeneratorService.php` | generate() → gọi AI sinh danh sách keyword cho tháng, dựa trên brief + description. |
 | **SeoProjectArticleOwnerSyncService** | `SeoProjectArticleOwnerSyncService.php` | syncProjectArticles() → đồng bộ user_id từ project sang article liên kết. |
@@ -344,7 +346,8 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **SeoNotificationService** | `SeoNotificationService.php` | Gửi Filament notification cho các sự kiện project: gán owner, approved, task added. |
+| **SeoNotificationService** | `SeoNotificationService.php` | Gửi Filament notification cho các sự kiện project: gán owner, approved, task added. Dùng khi `KeywordResource::assignKeywordsToContentProject()` thêm task. |
+| **ArticlePendingInternalLinkService** | `ArticlePendingInternalLinkService.php` | Gán keyword vào `SeoProjectTask` + tạo pending link `#hash` từ editor (`assignFromEditor`). |
 | **PromptResultLinkService** | `PromptResultLinkService.php` | Liên kết PromptResult với task/article của project để truy xuất nguồn gốc output AI. |
 | **ArticlePromptRunHistoryService** | `ArticlePromptRunHistoryService.php` | build() → xây dựng timeline lịch sử run cho một article (project runs đã ảnh hưởng). |
 | **AllDomainsDashboardService** | `AllDomainsDashboardService.php` | Tổng hợp thống kê article/project/task trên tất cả sites cho All-Domains Dashboard. |
@@ -428,15 +431,27 @@ rewrite      ───→ SeoArticle.update() bài cũ (keyword mode hoặc cont
 improve      ───→ SeoArticle cần tối ưu thủ công (không chạy AI tự động)
 ```
 
-### 5.4 Merge project (task đã hoàn thành → project khác)
+### 5.4 Archive project (batch thuộc project)
+
+**Tables:** `seo_project_archives`, `seo_project_archive_items` (connection `omi_seo_ai`)
+
+**Models:** `SeoProjectArchive`, `SeoProjectArchiveItem`
 
 ```
-SeoProjectMergeService.mergeCompletedTasks(source, target)
+SeoProjectArchiveService.archiveProject(project, archivedByUserId, note?)
   1. DB::transaction + lockForUpdate
-  2. Move completed tasks từ source → target
-  3. UPDATE task.project_id = target.id
-  4. syncTotalTasksCounter() cho cả source và target
+  2. INSERT seo_project_archives (project_id, archived_by, note, articles_count)
+  3. INSERT seo_project_archive_items cho mỗi article_id đang active trong seo_project_tasks
+  4. DELETE active seo_project_tasks (không sửa articles.*)
+  5. UPDATE seo_projects SET total_tasks = 0, status = manual
 ```
+
+**UI:**
+- List: counters `active_tasks_count`, `active_completed_count` (withCount, không tính archive batches)
+- Detail: tabs `Bài viết hiện tại` / `Lưu trữ` trong `SeoProjectResource::form()` — tab Lưu trữ chỉ `canViewProjectArchives()`
+- Blade: `resources/views/filament/resources/seo-project-resource/partials/archives-tab.blade.php`
+
+**Article module:** không đổi — bài archive vẫn mở qua `ArticleResource`.
 
 ---
 
@@ -452,6 +467,7 @@ SeoProjectMergeService.mergeCompletedTasks(source, target)
 | Duyệt project | `isContentManager()` | Chỉ Content Manager |
 | Chạy workflow | `canAccessContentProjectRun()` | Kiểm tra quyền truy cập run |
 | Content Manager scope | `isContentManager()` | Chỉ xem project của mình (`user_id == auth()->id()`) |
+| Archive project / xem lịch sử | `canArchiveContentProjects()` / `canViewProjectArchives()` | Manager + Admin |
 
 ---
 
@@ -467,7 +483,7 @@ Task Execution: CreateArticlesFromTaskService → TaskWorkflowTestRunner
 Preflight: SeoProjectRunPreflightService
 Consolidation: SeoProjectRunConsolidationService
 Task Sync: SeoProjectTaskSyncService
-Merge: SeoProjectMergeService
+Archive: SeoProjectArchiveService + models SeoProjectArchive/SeoProjectArchiveItem + tab Lưu trữ trong SeoProjectResource
 Keyword Parser: SeoProjectKeywordListParser
 Keyword AI Gen: SeoProjectKeywordAiGeneratorService
 Approval: SeoProjectApprovalService

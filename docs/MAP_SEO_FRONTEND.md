@@ -127,7 +127,9 @@ resources/js/
 │   ├── ArticleImagesTab.jsx
 │   ├── GenerateImageModal.jsx
 │   ├── ArticleFaqEditor.jsx
-│   ├── ArticleLinksSidebar.jsx
+| `keywordReviewApi.js` | `utils/keywordReviewApi.js` | API đánh giá/khôi phục keyword (`POST /api/seo/keywords/{id}/review`, `reason_id` hoặc `custom_reason_text`) |
+| `keywordReviewReasonUtils.js` | `utils/keywordReviewReasonUtils.js` | Xếp hạng/lọc lý do + recent reason (`sessionStorage`) cho popover |
+| `KeywordReviewPopover.jsx` | `components/KeywordReviewPopover.jsx` | Popover inline cạnh dòng gợi ý: 2 nút warning/danger, combobox lý do, submit ngay (không modal) |
 │   ├── ArticleAiChatPanel.jsx
 │   ├── MediaLibraryTools.jsx       # (chỉ qua orphan entry)
 │   ├── ImageWatermarkEditor.jsx    # Canvas WM đơn giản (modal cũ)
@@ -188,11 +190,11 @@ flowchart TB
 |-----|-----------|---------|
 | Left rail | `ArticleGoogleSerpPreview` | SERP preview, focus keyword |
 | Left rail | `ArticleOutlineTab` | Outline tree, REST outline API |
-| Center | `BlockFormatToolbar`, `BlockInsertMenu`, `LinkEditBubble` | TipTap formatting |
-| Center | `ImageBlockEditor`, `BlockImagesPanel` | Khối ảnh trong editor |
-| Portal tabs | `ArticleImagesTab` | Quản lý ảnh bài, AI jobs, mở media editor |
+| Center | `BlockFormatToolbar`, `BlockInsertMenu`, `LinkEditBubble` | TipTap formatting; link bubble tìm bài + **Phân vào Content Projects** |
+| Center | `ImageBlockEditor`, `BlockImagesPanel` | Khối ảnh; `ImageBlockPickerBox` **Quick download** → `importSeoMediaFromUrl({ randomFilename: true })` |
+| Portal tabs | `ArticleImagesTab` | Quản lý ảnh bài, AI jobs, mở media editor; UI hàng: **Except** + menu `⋯` (`.seo-article-images-more-menu`) |
 | Portal tabs | `SeoScorePanel` | Phân tích SEO client-side + violations |
-| Portal tabs | `ArticleReviewsTab` | Virtual reviews (product) |
+| Portal tabs | `ArticleReviewsTab` | Virtual reviews (product): header `{count} bình luận` + **Tạo bình luận nhanh** + **Làm mới**; Livewire `generateQuickPostReviews` / `refreshVirtualReviewsForEditor` |
 | Modal | `GenerateImageModal` → `ImageSplitterPanel` | Tạo ảnh AI + split album |
 | Overlay | `EditorBusyOverlay` | Lock UI khi heavy action |
 
@@ -213,9 +215,11 @@ flowchart TB
 | Method | Caller |
 |--------|--------|
 | `searchInternalLinkArticles` | `LinkEditBubble.jsx` |
+| `mountAction('assignKeywordAnchorToContentProject')` | `LinkEditBubble.jsx` — `anchorPhrase` từ text bôi đen editor (không lấy ô search) |
 | `persistProductAlbumFromClient` | `articleProductAlbumStorage.js` |
 | `renameAttachmentSlugsOnWordPress` | `SeoArticleEditor.jsx` |
-| `refreshVirtualReviewsForEditor` | `SeoArticleEditor.jsx` |
+| `refreshVirtualReviewsForEditor` | `SeoArticleEditor.jsx` → `ArticleReviewsTab` |
+| `generateQuickPostReviews` | `SeoArticleEditor.jsx` → `ArticleReviewsTab` (quick create) |
 | `mountEditArticleAction` | Filament header actions (qua `articleEditorLivewire.js`) |
 
 #### Assistant Dock (Alpine — cùng bundle `article-editor.jsx`)
@@ -438,7 +442,7 @@ flowchart LR
 | `saveArticleViaApi` | POST | `/{article}/save` | Filament header Save, `__seoExecuteHeavyArticleAction` |
 | `syncArticleToWordPressViaApi` | POST | `/{article}/sync-wp` | Filament header Sync WP |
 
-**Controller:** `ArticleEditorSyncController` · **Wrapper:** `seoArticleApi.js` (CSRF + JSON)
+**Controller:** `ArticleEditorSyncController` · **Wrapper:** `seoArticleApi.js` (tự gắn `X-CSRF-TOKEN` cho POST/PUT/PATCH/DELETE + JSON)
 
 ### 5.4 Outline API (inline fetch)
 

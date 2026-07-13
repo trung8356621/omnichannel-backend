@@ -1410,9 +1410,6 @@ class ArticleResource extends SeoPanelResource
             ->send();
     }
 
-    /**
-     * @return Tables\Actions\Action
-     */
     public static function makeApproveArticleTableAction(): Tables\Actions\Action
     {
         return Tables\Actions\Action::make('approve_article')
@@ -1597,8 +1594,9 @@ class ArticleResource extends SeoPanelResource
     public static function assignContentProjectSelectField(
         callable $resolveSiteId,
         ?callable $resolveHelperText = null,
+        string $fieldName = 'project_id',
     ): Forms\Components\Select {
-        $select = Forms\Components\Select::make('project_id')
+        $select = Forms\Components\Select::make($fieldName)
             ->label(__('seo-content-ai::filament.article_list.content_project'))
             ->options(fn (Get $get): array => static::contentProjectOptions(
                 static::resolveAssignContentProjectSiteId($resolveSiteId, $get),
@@ -1623,7 +1621,7 @@ class ArticleResource extends SeoPanelResource
                             ->dehydrated()
                             ->native(false),
                     ])
-                    ->action(function (array $data, Set $set, Get $get) use ($resolveSiteId): void {
+                    ->action(function (array $data, Set $set, Get $get) use ($resolveSiteId, $fieldName): void {
                         $siteId = (int) (static::resolveAssignContentProjectSiteId($resolveSiteId, $get) ?? 0);
                         if ($siteId <= 0) {
                             Notification::make()
@@ -1637,7 +1635,7 @@ class ArticleResource extends SeoPanelResource
 
                         try {
                             $project = static::quickCreateContentProject($siteId, (int) ($data['user_id'] ?? 0));
-                            $set('project_id', $project->id);
+                            $set($fieldName, $project->id);
 
                             Notification::make()
                                 ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_success'))
@@ -1821,20 +1819,23 @@ class ArticleResource extends SeoPanelResource
      */
     public static function contentProjectOptions(?int $siteId = null): array
     {
-        $query = SeoProject::query()
-            ->with(['site', 'user'])
-            ->orderByDesc('month')
-            ->orderBy('id');
-
-        if (! SeoAccessControl::isContentManager()) {
-            $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
-        }
-
         if ($siteId === null || $siteId <= 0) {
             return [];
         }
 
-        $query->where('site_id', $siteId);
+        if (! SeoAccessControl::canAccessSite($siteId)) {
+            return [];
+        }
+
+        $query = SeoProject::query()
+            ->with(['site', 'user'])
+            ->orderByDesc('month')
+            ->orderBy('id')
+            ->where('site_id', $siteId);
+
+        if (SeoAccessControl::isContentManager()) {
+            $query->where('user_id', (int) auth()->id());
+        }
 
         return $query
             ->get()

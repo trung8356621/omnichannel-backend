@@ -75,7 +75,7 @@ final class ListSeoProjectRuns extends Page
 
     protected function getHeaderActions(): array
     {
-        return [
+        $actions = [
             Actions\Action::make('run_workflow')
                 ->label(__('seo-content-ai::filament.projects.run_workflow'))
                 ->icon('heroicon-o-play')
@@ -161,11 +161,31 @@ final class ListSeoProjectRuns extends Page
                             ->send();
                     }
                 }),
-            Actions\Action::make('back_to_project')
-                ->label(__('seo-content-ai::filament.projects.back_to_project'))
-                ->icon('heroicon-o-arrow-left')
+            Actions\Action::make('view_archives')
+                ->label(fn (): string => __('seo-content-ai::filament.projects.view_archives', [
+                    'count' => $this->project instanceof SeoProject
+                        ? SeoProjectResource::archivesCountFor($this->project)
+                        : 0,
+                ]))
+                ->icon('heroicon-o-archive-box')
                 ->color('gray')
-                ->url(fn (): string => SeoProjectResource::projectRecordUrl($this->project)),
+                ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives()
+                    && $this->project instanceof SeoProject)
+                ->url(fn (): string => $this->project instanceof SeoProject
+                    ? SeoProjectResource::projectArchivesUrl($this->project)
+                    : '#'),
         ];
+
+        if ($this->project instanceof SeoProject) {
+            $actions[] = SeoProjectResource::makeArchiveProjectPageAction($this->project);
+        }
+
+        $actions[] = Actions\Action::make('back_to_project')
+            ->label(__('seo-content-ai::filament.projects.back_to_project'))
+            ->icon('heroicon-o-arrow-left')
+            ->color('gray')
+            ->url(fn (): string => SeoProjectResource::projectRecordUrl($this->project));
+
+        return $actions;
     }
 }

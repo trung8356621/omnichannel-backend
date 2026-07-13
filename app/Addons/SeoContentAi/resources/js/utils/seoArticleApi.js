@@ -60,12 +60,17 @@ export function seoArticleApiHeaders(extraHeaders = {}) {
  * @param {RequestInit & { headers?: Record<string, string> }} [options]
  */
 export async function seoArticleApiFetch(url, options = {}) {
+    const method = String(options.method ?? 'GET').toUpperCase();
+    const token = csrfToken();
+    const needsCsrf = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+
     const response = await fetch(url, {
         credentials: 'same-origin',
         ...options,
         headers: {
             Accept: 'application/json',
             ...seoArticleApiHeaders(),
+            ...(needsCsrf && token !== '' ? { 'X-CSRF-TOKEN': token } : {}),
             ...(options.headers ?? {}),
         },
     });

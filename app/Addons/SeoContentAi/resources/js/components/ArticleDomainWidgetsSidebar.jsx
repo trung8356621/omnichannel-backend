@@ -144,10 +144,10 @@ function WidgetBox({ title, subtitle, collapsed, onToggle, children }) {
     );
 }
 
-const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks) => {
+const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks, externalLinks = []) => {
     const inArticle = filterDomainLinksInArticleContent(allLinks, articlePlainText);
 
-    return filterSuggestedInternalLinks(inArticle, internalLinks).map((item) => ({
+    return filterSuggestedInternalLinks(inArticle, internalLinks, externalLinks).map((item) => ({
         ...item,
         can_insert: item.can_insert !== false,
     }));
@@ -198,10 +198,15 @@ export default function ArticleDomainWidgetsSidebar({
                 : Array.isArray(event.detail?.extracted_links?.internal)
                   ? event.detail.extracted_links.internal
                   : [];
+            const external = Array.isArray(event.detail?.links?.external)
+                ? event.detail.links.external
+                : Array.isArray(event.detail?.extracted_links?.external)
+                  ? event.detail.extracted_links.external
+                  : [];
             const articlePlainText = String(event.detail?.article_plain_text ?? '');
 
             setDomainLinks(
-                applyDomainLinkFilters(allDomainLinksRef.current, articlePlainText, internal),
+                applyDomainLinkFilters(allDomainLinksRef.current, articlePlainText, internal, external),
             );
         };
 
@@ -221,12 +226,16 @@ export default function ArticleDomainWidgetsSidebar({
                 const internal = Array.isArray(detail.extracted_links?.internal)
                     ? detail.extracted_links.internal
                     : [];
+                const external = Array.isArray(detail.extracted_links?.external)
+                    ? detail.extracted_links.external
+                    : [];
                 const articlePlainText = String(detail.article_plain_text ?? '');
                 setDomainLinks(
                     applyDomainLinkFilters(
                         allDomainLinksRef.current,
                         articlePlainText,
                         internal,
+                        external,
                     ),
                 );
             }

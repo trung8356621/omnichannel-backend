@@ -199,6 +199,27 @@
                         <p class="sm:col-span-2 text-gray-500">{{ __('Tổng') }}: {{ $stats['total'] }} {{ __('bản ghi') }}</p>
                     </div>
 
+                    @php $seoScoring = $this->getSeoScoringProgress(); @endphp
+                    <div class="mt-4 space-y-1 border-t border-gray-200 pt-4 text-sm dark:border-gray-700">
+                        <p class="font-semibold text-gray-700 dark:text-gray-200">
+                            {{ __('seo-content-ai::filament.domain.seo_scoring_progress', [
+                                'completed' => number_format((int) ($seoScoring['completed'] ?? 0)),
+                                'total' => number_format((int) ($seoScoring['total'] ?? 0)),
+                            ]) }}
+                        </p>
+                        <p class="text-gray-600 dark:text-gray-300">
+                            {{ __('seo-content-ai::filament.domain.seo_scoring_pending', ['count' => number_format((int) (($seoScoring['pending'] ?? 0) + ($seoScoring['remaining'] ?? 0)))]) }}
+                        </p>
+                        <p class="text-gray-600 dark:text-gray-300">
+                            {{ __('seo-content-ai::filament.domain.seo_scoring_processing', ['count' => number_format((int) ($seoScoring['processing'] ?? 0))]) }}
+                        </p>
+                        @if (($seoScoring['failed'] ?? 0) > 0)
+                            <p class="text-warning-600 dark:text-warning-400">
+                                {{ __('seo-content-ai::filament.domain.seo_scoring_failed', ['count' => number_format((int) $seoScoring['failed'])]) }}
+                            </p>
+                        @endif
+                    </div>
+
                     @include('seo-content-ai::filament.resources.domain-resource.pages.partials.domain-sync-actions', [
                         'showTest' => auth()->user()?->role === 'admin'
                         && ! \App\Addons\SeoContentAi\Support\SeoAccessControl::isSeoPanelReadOnly(),

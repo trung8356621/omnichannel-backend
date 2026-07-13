@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Services\WordPressLocalMediaSyncService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,6 +42,7 @@ final class SyncArticleBodyMediaToWordPressJob implements ShouldQueue
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,
         WordPressArticleSyncService $syncService,
+        WordPressLocalMediaSyncService $localMediaSync,
         ArticleWordPressSyncFlagService $syncFlags,
     ): void {
         $databaseConnection->bootstrapLegacySharedConnection();
@@ -75,6 +77,11 @@ final class SyncArticleBodyMediaToWordPressJob implements ShouldQueue
                 'defer_inline_media_sync' => false,
                 'defer_finalize_media' => false,
             ]);
+
+            if ($localMediaSync->htmlContainsLocalSeoMedia((string) ($prepared['post_content'] ?? ''))) {
+                $prepared['skip_editor_sync'] = false;
+                $prepared['skip_editor_sync_reason'] = 'pending_local_media';
+            }
 
             $httpResult = $syncService->executeEditorSyncRequest($article, $context, $prepared);
             if (! ($httpResult['success'] ?? false)) {

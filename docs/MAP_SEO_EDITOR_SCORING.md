@@ -116,6 +116,8 @@ Bài được save/analyze lại sẽ ghi format mới.
 
 ## 5. Audit (`ArticlesOptimal`)
 
+Audit **chỉ đọc cache** (`seo_rule_violations`, `seo_score`). Populate cache qua `AnalyzeArticleSeoJob` (xem [MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md)).
+
 Filters map sang violation keys:
 
 | Filter | Violation key |
@@ -124,4 +126,4 @@ Filters map sang violation keys:
 | Poor image | `image_ratio_*`, `image_alt_missing` |
 | Missing H2 | `h2_missing` |
 | Missing FAQ | `faq_missing` |
-| Low score | `score < 60` (từ engine runtime) |
+| Low score | `articles.seo_score < 60` (aggregate, không phải rule key) |

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages;
 
 use App\Addons\SeoContentAi\Exceptions\FaqManualExtractException;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
@@ -642,37 +643,7 @@ class EditArticle extends SeoEditRecord
                 ->icon('heroicon-o-folder-plus')
                 ->color('warning')
                 ->visible(fn (): bool => ! ArticleResource::articleIsInContentProject($this->record))
-                ->form(function (): array {
-                    $siteId = ArticleResource::resolveArticleSiteId($this->record);
-
-                    if (ArticleResource::resolveDirectAssignContentProjectId($siteId) !== null) {
-                        return ArticleResource::assignArticleTaskFormFields();
-                    }
-
-                    return ArticleResource::assignContentProjectFormFields(
-                        fn (): ?int => $siteId,
-                    );
-                })
-                ->requiresConfirmation(false)
-                ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                ->modalDescription(__('seo-content-ai::filament.article_list.assign_to_content_project_description'))
-                ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
-                ->action(function (array $data): void {
-                    $siteId = ArticleResource::resolveArticleSiteId($this->record);
-                    $projectId = ArticleResource::resolveDirectAssignContentProjectId($siteId)
-                        ?? (int) ($data['project_id'] ?? 0);
-                    $summary = ArticleResource::assignArticlesFromFormData(
-                        collect([$this->record]),
-                        $projectId,
-                        $data,
-                    );
-
-                    Notification::make()
-                        ->title(__('seo-content-ai::filament.article_list.assign_completed'))
-                        ->body(ArticleResource::buildAssignContentProjectBody($summary))
-                        ->success()
-                        ->send();
-                }),
+                ->alpineClickHandler('$dispatch(\'open-article-assign-content-project-modal\')'),
         ];
     }
 
@@ -1624,6 +1595,7 @@ class EditArticle extends SeoEditRecord
                 url: $url,
                 alt: trim($alt),
                 slug: trim($slug),
+                pickerTab: $resolvedTab,
             );
 
             $this->mediaPickerTargetBlockId = null;
@@ -2575,12 +2547,10 @@ class EditArticle extends SeoEditRecord
         return app(SeoCreateArticleSettingsService::class)->getPostReviewTaskId() !== null;
     }
 
-    public function shouldShowQuickCreateReviewsButton(): bool
-    {
-        return $this->canGenerateQuickPostReviews() && $this->getReviewsCountForEditor() === 0;
-    }
-
-    public function generateQuickPostReviews(): void
+    /**
+     * @return list<array{author: string, content: string, rating?: int|null, date: string}>
+     */
+    public function generateQuickPostReviews(): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
@@ -2591,7 +2561,7 @@ class EditArticle extends SeoEditRecord
                 ->warning()
                 ->send();
 
-            return;
+            return $this->getVirtualReviewsPayload();
         }
 
         if ($this->getReviewsCountForEditor() > 0) {
@@ -2601,7 +2571,7 @@ class EditArticle extends SeoEditRecord
                 ->warning()
                 ->send();
 
-            return;
+            return $this->getVirtualReviewsPayload();
         }
 
         $this->quickReviewsJobPending = true;
@@ -2612,13 +2582,16 @@ class EditArticle extends SeoEditRecord
             }
 
             $result = app(ArticleQuickPostReviewService::class)->runForArticle($this->record->fresh());
-            $this->applyQuickPostReviewsResult($result);
+
+            return $this->applyQuickPostReviewsResult($result);
         } catch (\Throwable $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
+
+            return $this->getVirtualReviewsPayload();
         } finally {
             $this->quickReviewsJobPending = false;
         }
@@ -2626,15 +2599,15 @@ class EditArticle extends SeoEditRecord
 
     /**
      * @param  array{success?: bool, message?: string, created_count?: int|null}  $result
+     * @return list<array{author: string, content: string, rating?: int|null, date: string}>
      */
-    private function applyQuickPostReviewsResult(array $result): void
+    private function applyQuickPostReviewsResult(array $result): array
     {
         $this->record->refresh();
 
         $reviews = $this->getVirtualReviewsPayload();
-        if ($reviews !== []) {
-            $this->dispatch('virtual-reviews-updated', reviews: $reviews);
-        }
+        $this->reviewsCountForEditor = count($reviews);
+        $this->dispatch('virtual-reviews-updated', reviews: $reviews);
 
         $success = (bool) ($result['success'] ?? false);
         $message = trim((string) ($result['message'] ?? ''));
@@ -2660,6 +2633,8 @@ class EditArticle extends SeoEditRecord
         }
 
         $notification->send();
+
+        return $reviews;
     }
 
     /**
@@ -3661,6 +3636,9 @@ class EditArticle extends SeoEditRecord
             'seo_rule_messages' => \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::messagesForLocale(),
             'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
             'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
+            'can_quick_create_reviews' => ! SeoAccessControl::isContentManager() && $this->canGenerateQuickPostReviews(),
+            'show_configure_reviews_link' => ! SeoAccessControl::isContentManager() && ! $this->canGenerateQuickPostReviews(),
+            'quick_create_reviews_config_url' => SeoSettingsWorkflows::getUrl(),
             'show_link_widgets' => ! SeoAccessControl::isContentManager(),
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
             'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
@@ -4490,43 +4468,71 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
-     * Mở modal Filament «Assign to Content Projects» (cùng form keyword list).
+     * @param  array<string, mixed>  $data
      */
-    public function assignKeywordAnchorToContentProjectAction(): Actions\Action
+    public function assignCurrentArticleToContentProject(array $data): void
     {
-        return Actions\Action::make('assignKeywordAnchorToContentProject')
-            ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-            ->icon('heroicon-o-folder-plus')
-            ->modalHeading(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-            ->modalDescription(__('seo-content-ai::filament.keyword.assign_to_content_project_description'))
-            ->modalSubmitActionLabel(__('seo-content-ai::filament.article_list.assign'))
-            ->form(function (): array {
-                $siteId = (int) ($this->record->site_id ?? 0);
+        $siteId = ArticleResource::resolveArticleSiteId($this->record);
+        $projectId = ArticleResource::resolveDirectAssignContentProjectId($siteId)
+            ?? (int) ($data['project_id'] ?? 0);
+        $summary = ArticleResource::assignArticlesFromFormData(
+            collect([$this->record]),
+            $projectId,
+            $data,
+        );
 
-                if (KeywordResource::resolveKeywordDirectAssignData($siteId) !== null) {
-                    return [];
-                }
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.assign_completed'))
+            ->body(ArticleResource::buildAssignContentProjectBody($summary))
+            ->success()
+            ->send();
+    }
 
-                return KeywordResource::assignKeywordContentProjectFormSchema(
-                    $siteId > 0 ? [$siteId] : [],
-                );
-            })
-            ->requiresConfirmation(function (): bool {
-                $siteId = (int) ($this->record->site_id ?? 0);
+    /**
+     * @return array{project_id:int, options: array<int, string>}
+     */
+    public function quickCreateArticleContentProject(?int $writerId = null): array
+    {
+        $siteId = ArticleResource::resolveArticleSiteId($this->record);
+        if ($siteId === null || $siteId <= 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                ->body(__('seo-content-ai::filament.article_list.assign_projects_mixed_domains'))
+                ->danger()
+                ->send();
 
-                return KeywordResource::resolveKeywordDirectAssignData($siteId) === null;
-            })
-            ->modalHidden(function (): bool {
-                $siteId = (int) ($this->record->site_id ?? 0);
+            return ['project_id' => 0, 'options' => []];
+        }
 
-                return KeywordResource::resolveKeywordDirectAssignData($siteId) !== null;
-            })
-            ->action(function (array $arguments, array $data): void {
-                $this->completeKeywordAnchorContentProjectAssign(
-                    trim((string) ($arguments['anchorPhrase'] ?? '')),
-                    $data,
-                );
-            });
+        try {
+            $project = ArticleResource::quickCreateContentProject($siteId, $writerId);
+        } catch (\Throwable $exception) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_failed'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return ['project_id' => 0, 'options' => ArticleResource::contentProjectOptions($siteId)];
+        }
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.quick_create_content_project_success'))
+            ->success()
+            ->send();
+
+        return [
+            'project_id' => (int) $project->getKey(),
+            'options' => ArticleResource::contentProjectOptions($siteId),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function assignKeywordAnchorToContentProjectFromEditor(string $anchorPhrase, array $data = []): void
+    {
+        $this->completeKeywordAnchorContentProjectAssign(trim($anchorPhrase), $data);
     }
 
     /**
@@ -4592,19 +4598,27 @@ class EditArticle extends SeoEditRecord
 
         if (! ($result['success'] ?? false)) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.keyword.workspace_assign_denied'))
-                ->body((string) ($result['message'] ?? ''))
-                ->warning()
+                ->title(__('seo-content-ai::filament.article_list.assign_failed'))
+                ->body((string) ($result['message'] ?? __('seo-content-ai::filament.keyword.workspace_assign_denied')))
+                ->danger()
                 ->send();
 
             return;
         }
 
-        Notification::make()
-            ->title(__('seo-content-ai::filament.keyword.assign_completed'))
-            ->body((string) ($result['message'] ?? ''))
-            ->success()
-            ->send();
+        if (! ($result['assigned_to_project'] ?? false)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.pending_link_created'))
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->send();
+        } else {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.keyword.assign_completed'))
+                ->body((string) ($result['message'] ?? ''))
+                ->success()
+                ->send();
+        }
 
         $this->dispatch(
             'pending-internal-link-ready',
@@ -4637,11 +4651,23 @@ class EditArticle extends SeoEditRecord
      */
     private function resolveContentProjectIdFromAssignData(array $data, int $siteId): ?int
     {
-        if ($siteId > 0) {
-            $projectId = (int) ($data['project_id_'.$siteId] ?? 0);
+        $siteIds = collect($data['site_ids'] ?? [])
+            ->filter(static fn (mixed $value): bool => is_numeric($value) && (int) $value > 0)
+            ->map(static fn (mixed $value): int => (int) $value)
+            ->when($siteId > 0, fn ($collection) => $collection->prepend($siteId))
+            ->unique()
+            ->values();
+
+        foreach ($siteIds as $resolvedSiteId) {
+            $projectId = (int) ($data['project_id_'.$resolvedSiteId] ?? 0);
             if ($projectId > 0) {
                 return $projectId;
             }
+        }
+
+        $fallbackProjectId = (int) ($data['project_id'] ?? 0);
+        if ($fallbackProjectId > 0) {
+            return $fallbackProjectId;
         }
 
         foreach ($data as $key => $value) {
@@ -4876,6 +4902,7 @@ class EditArticle extends SeoEditRecord
         $result = app(WordPressAttachmentRenameService::class)->renameBatch($this->record, $items);
 
         $renamed = is_array($result['renamed'] ?? null) ? $result['renamed'] : [];
+        $renamed = $this->enrichAttachmentRenameResultsWithRequestMeta($items, $renamed);
 
         if ($result['success']) {
             $this->dispatch('seo-attachment-slugs-rename-finished', success: true, renamed: $renamed, message: $result['message']);
@@ -4896,6 +4923,86 @@ class EditArticle extends SeoEditRecord
             ->body($result['message'])
             ->danger()
             ->send();
+    }
+
+    /**
+     * Gắn block_id / old_url từ request vào kết quả rename WordPress (plugin không echo block_id).
+     *
+     * @param  array<int, array<string, mixed>>  $items
+     * @param  array<int, array<string, mixed>>  $renamed
+     * @return array<int, array<string, mixed>>
+     */
+    private function enrichAttachmentRenameResultsWithRequestMeta(array $items, array $renamed): array
+    {
+        $byAttachmentId = [];
+        $byOldUrl = [];
+
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $attachmentId = (int) ($item['attachment_id'] ?? $item['wp_attachment_id'] ?? 0);
+            $blockId = trim((string) ($item['block_id'] ?? $item['blockId'] ?? ''));
+            $oldUrl = trim((string) ($item['old_url'] ?? $item['oldUrl'] ?? $item['src'] ?? ''));
+            $oldUrlKey = $oldUrl !== '' ? $this->normalizeAttachmentRenameUrlKey($oldUrl) : '';
+
+            $meta = [
+                'block_id' => $blockId,
+                'old_url' => $oldUrl,
+            ];
+
+            if ($attachmentId > 0) {
+                $byAttachmentId[$attachmentId] = $meta;
+            }
+            if ($oldUrlKey !== '') {
+                $byOldUrl[$oldUrlKey] = $meta;
+            }
+        }
+
+        $enriched = [];
+        foreach ($renamed as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $attachmentId = (int) ($row['attachment_id'] ?? 0);
+            $responseOldUrl = trim((string) ($row['old_url'] ?? ''));
+            $responseOldUrlKey = $responseOldUrl !== '' ? $this->normalizeAttachmentRenameUrlKey($responseOldUrl) : '';
+            $meta = ($attachmentId > 0 ? ($byAttachmentId[$attachmentId] ?? null) : null)
+                ?? ($responseOldUrlKey !== '' ? ($byOldUrl[$responseOldUrlKey] ?? null) : null);
+
+            if ($meta === null) {
+                $enriched[] = $row;
+
+                continue;
+            }
+
+            $existingBlockId = trim((string) ($row['block_id'] ?? $row['blockId'] ?? ''));
+            if ($existingBlockId !== '') {
+                $row['block_id'] = $existingBlockId;
+            } elseif (($meta['block_id'] ?? '') !== '') {
+                $row['block_id'] = $meta['block_id'];
+            }
+
+            if ($responseOldUrl === '' && ($meta['old_url'] ?? '') !== '') {
+                $row['old_url'] = $meta['old_url'];
+            }
+
+            $enriched[] = $row;
+        }
+
+        return $enriched;
+    }
+
+    private function normalizeAttachmentRenameUrlKey(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH);
+        if (! is_string($path) || $path === '') {
+            return strtolower($url);
+        }
+
+        return strtolower($path);
     }
 
     /**

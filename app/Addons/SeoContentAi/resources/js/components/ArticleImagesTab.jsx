@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, Loader2, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
+import { ExternalLink, Link2, Loader2, MoreHorizontal, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
 import {
     assignInArticleQuickFixIndices,
     collectImagesFromBlocks,
@@ -254,6 +254,8 @@ function ImageRow({
     const [alt, setAlt] = useState(row.alt ?? '');
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
+    const [moreOpen, setMoreOpen] = useState(false);
+    const moreMenuRef = useRef(null);
     const canPatchInEditor = Boolean(row.blockId);
     const canRemove = canPatchInEditor || Boolean(onRemoveSupplementalImage);
     const slugText = (row.slug || '').trim();
@@ -269,6 +271,24 @@ function ImageRow({
     useEffect(() => {
         setAlt(row.alt ?? '');
     }, [row.alt, row.src]);
+
+    useEffect(() => {
+        if (!moreOpen) {
+            return undefined;
+        }
+
+        const onMouseDown = (event) => {
+            if (moreMenuRef.current?.contains(event.target)) {
+                return;
+            }
+
+            setMoreOpen(false);
+        };
+
+        document.addEventListener('mousedown', onMouseDown);
+
+        return () => document.removeEventListener('mousedown', onMouseDown);
+    }, [moreOpen]);
 
     const openImageEditor = async () => {
         if (!siteId || busy) {
@@ -443,38 +463,6 @@ function ImageRow({
                     <div className="seo-article-images-actions">
                         <button
                             type="button"
-                            className="seo-article-images-quick-fix-btn"
-                            disabled={busy || excluded || !canQuickFix}
-                            onClick={() => onQuickFixSlug?.(row)}
-                            title={
-                                excluded
-                                    ? t('image_except_quick_fix_hint')
-                                    : canQuickFix
-                                      ? t('image_quick_fix_slug_hint')
-                                      : t('image_quick_fix_missing_keyword')
-                            }
-                        >
-                            <Link2 size={14} />
-                            {t('fix_slug')}
-                        </button>
-                        <button
-                            type="button"
-                            className="seo-article-images-quick-fix-btn"
-                            disabled={busy || excluded || !canQuickFix}
-                            onClick={() => onQuickFixAltTitle?.(row)}
-                            title={
-                                excluded
-                                    ? t('image_except_quick_fix_hint')
-                                    : canQuickFix
-                                      ? t('image_quick_fix_alt_title_hint')
-                                      : t('image_quick_fix_missing_keyword')
-                            }
-                        >
-                            <Type size={14} />
-                            {t('fix_alt_title')}
-                        </button>
-                        <button
-                            type="button"
                             className={`seo-article-images-watermark-btn${excluded ? ' is-except' : ''}`}
                             disabled={busy || !canPatchInEditor}
                             onClick={() => onPatch?.(row.blockId, { excludeQuickFix: !excluded })}
@@ -487,54 +475,106 @@ function ImageRow({
                             <ShieldOff size={14} />
                             {t('except')}
                         </button>
-                        <button
-                            type="button"
-                            className="seo-article-images-delete-btn"
-                            disabled={busy || !canRemove}
-                            onClick={() => {
-                                if (canPatchInEditor) {
-                                    onRemoveImage?.(row);
-                                    return;
-                                }
 
-                                onRemoveSupplementalImage?.(row);
-                            }}
-                            title={
-                                canPatchInEditor
-                                    ? t('image_tab_remove_hint')
-                                    : canRemove
-                                      ? t('image_tab_remove_supplemental_hint')
-                                      : t('image_tab_remove_no_block')
-                            }
-                        >
-                            <Trash2 size={14} />
-                            {t('remove_image')}
-                        </button>
-                        <button
-                            type="button"
-                            className="seo-article-images-edit-btn"
-                            disabled={!siteId || busy}
-                            onClick={openImageEditor}
-                        >
-                            {openingEditor ? t('processing') : t('open_image_editor')}
-                        </button>
-                        <button
-                            type="button"
-                            className="seo-article-images-watermark-btn"
-                            disabled={!siteId || busy}
-                            onClick={handleApplyWatermark}
-                        >
-                            {applyingWatermark ? t('processing') : t('apply_watermark')}
-                        </button>
-                        <button
-                            type="button"
-                            className="seo-article-images-watermark-btn"
-                            disabled={!siteId || busy}
-                            onClick={openImageSplitter}
-                        >
-                            <Scissors size={14} />
-                            {t('split_grid')}
-                        </button>
+                        <div className="seo-article-images-more-wrap" ref={moreMenuRef}>
+                            <button
+                                type="button"
+                                className={`seo-article-images-more-btn${moreOpen ? ' is-open' : ''}`}
+                                disabled={busy}
+                                aria-expanded={moreOpen}
+                                aria-haspopup="menu"
+                                title={t('image_more_actions')}
+                                onClick={() => setMoreOpen((open) => !open)}
+                            >
+                                <MoreHorizontal size={16} />
+                            </button>
+
+                            {moreOpen ? (
+                                <div className="seo-article-images-more-menu" role="menu">
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={busy || excluded || !canQuickFix}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            onQuickFixSlug?.(row);
+                                        }}
+                                    >
+                                        <Link2 size={14} />
+                                        {t('fix_slug')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={busy || excluded || !canQuickFix}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            onQuickFixAltTitle?.(row);
+                                        }}
+                                    >
+                                        <Type size={14} />
+                                        {t('fix_alt_title')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item seo-article-images-more-item--danger"
+                                        role="menuitem"
+                                        disabled={busy || !canRemove}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            if (canPatchInEditor) {
+                                                onRemoveImage?.(row);
+                                                return;
+                                            }
+
+                                            onRemoveSupplementalImage?.(row);
+                                        }}
+                                    >
+                                        <Trash2 size={14} />
+                                        {t('remove_image')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={!siteId || busy}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            openImageEditor();
+                                        }}
+                                    >
+                                        {openingEditor ? t('processing') : t('open_image_editor')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={!siteId || busy}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            handleApplyWatermark();
+                                        }}
+                                    >
+                                        {applyingWatermark ? t('processing') : t('apply_watermark')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={!siteId || busy}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            openImageSplitter();
+                                        }}
+                                    >
+                                        <Scissors size={14} />
+                                        {t('split_grid')}
+                                    </button>
+                                </div>
+                            ) : null}
+                        </div>
                     </div>
                 ) : canPatchInEditor ? (
                     <div className="seo-article-images-actions">

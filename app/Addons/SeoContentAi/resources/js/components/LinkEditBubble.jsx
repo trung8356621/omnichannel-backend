@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ExternalLink, Loader2, Search, Trash2 } from 'lucide-react';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
-import { callEditArticleLivewire, mountEditArticleAction } from '../utils/articleEditorLivewire';
+import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { computeLinkBubblePosition } from '../utils/linkEditorAnchor';
 import { t } from '../utils/i18n';
 
@@ -33,6 +33,7 @@ function isFilamentModalTarget(target) {
 
 export default function LinkEditBubble({ editor, anchorRect, containerRef, onClose, articleId = null, siteId = null }) {
     const [url, setUrl] = useState('');
+    const [anchorPhrase, setAnchorPhrase] = useState('');
     const [articleQuery, setArticleQuery] = useState('');
     const [articleResults, setArticleResults] = useState([]);
     const [articleLoading, setArticleLoading] = useState(false);
@@ -115,14 +116,18 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
         searchSeqRef.current += 1;
         captureEditorSelection();
 
+        const selectedPhrase = readEditorSelectionText(editor);
+
         if (editor.isActive('link')) {
             editor.chain().focus().extendMarkRange('link').run();
             setUrl(editor.getAttributes('link').href ?? '');
-            setArticleQuery(readEditorSelectionText(editor));
+            setAnchorPhrase(selectedPhrase);
+            setArticleQuery(selectedPhrase);
             setTimeout(() => inputRef.current?.focus(), 0);
         } else {
             setUrl('');
-            setArticleQuery(readEditorSelectionText(editor));
+            setAnchorPhrase(selectedPhrase);
+            setArticleQuery(selectedPhrase);
             setTimeout(() => {
                 if (canSearchArticles) {
                     articleInputRef.current?.focus();
@@ -280,8 +285,9 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
     };
 
     const handleAssignToContentProject = async () => {
-        const phrase = articleQuery.trim();
+        const phrase = (readEditorSelectionText(editor) || anchorPhrase).trim();
         if (!canSearchArticles || phrase === '') {
+            setArticleSearchError(t('link_bubble_assign_select_text'));
             return;
         }
 
@@ -291,9 +297,9 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
         setAssignNotice('');
 
         try {
-            await mountEditArticleAction('assignKeywordAnchorToContentProject', {
-                anchorPhrase: phrase,
-            });
+            window.dispatchEvent(new CustomEvent('open-keyword-assign-content-project-modal', {
+                detail: { anchorPhrase: phrase },
+            }));
         } catch (error) {
             const message = error instanceof Error ? error.message : t('link_bubble_assign_failed');
             setArticleSearchError(message);
@@ -335,7 +341,7 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
                         <button
                             type="button"
                             className="seo-link-bubble-assign-btn"
-                            disabled={assigning || articleQuery.trim() === ''}
+                            disabled={assigning || anchorPhrase.trim() === ''}
                             title={t('link_bubble_assign_content_project')}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => void handleAssignToContentProject()}

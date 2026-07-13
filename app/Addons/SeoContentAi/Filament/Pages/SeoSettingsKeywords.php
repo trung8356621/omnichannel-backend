@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Pages;
 
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
+use App\Addons\SeoContentAi\Models\KeywordReviewReason;
 use App\Addons\SeoContentAi\Services\CtaKeywordBlacklistDebugService;
+use App\Addons\SeoContentAi\Services\KeywordReviewReasonService;
 use App\Addons\SeoContentAi\Services\SeoKeywordSettingsService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
@@ -33,13 +36,35 @@ class SeoSettingsKeywords extends Page implements HasForms
     /** @var array<string, mixed>|null */
     public ?array $debugReport = null;
 
-    public function mount(SeoKeywordSettingsService $settings): void
+    /** @var list<array<string, mixed>> */
+    public array $reviewReasonRows = [];
+
+    public function mount(SeoKeywordSettingsService $settings, KeywordReviewReasonService $reviewReasons): void
     {
         $this->keywordSettingsData = [
             SeoKeywordSettingsService::KEY_CTA_BLACKLIST => $settings->getCtaBlacklist(),
         ];
 
         $this->form->fill($this->keywordSettingsData);
+        $reviewReasons->ensureDefaultReasons();
+        $this->loadReviewReasonRows();
+    }
+
+    public function loadReviewReasonRows(): void
+    {
+        $this->reviewReasonRows = app(KeywordReviewReasonService::class)
+            ->allReasonsForWorkspace()
+            ->map(static fn (KeywordReviewReason $reason): array => [
+                'id' => (int) $reason->id,
+                'name' => (string) $reason->name,
+                'default_severity' => (string) $reason->default_severity,
+                'description' => (string) ($reason->description ?? ''),
+                'is_active' => (bool) $reason->is_active,
+                'sort_order' => (int) $reason->sort_order,
+                'is_used' => $reason->isUsed(),
+            ])
+            ->values()
+            ->all();
     }
 
     public function form(Form $form): Form
@@ -73,6 +98,87 @@ class SeoSettingsKeywords extends Page implements HasForms
             ->title(__('seo-content-ai::filament.settings_keywords.saved'))
             ->success()
             ->send();
+    }
+
+    public function saveReviewReasons(KeywordReviewReasonService $reasonService): void
+    {
+        abort_unless(SeoAccessControl::canManageKeywordReviewReasons(), 403);
+
+        foreach ($this->reviewReasonRows as $row) {
+            $reasonId = (int) ($row['id'] ?? 0);
+            if ($reasonId <= 0) {
+                $reasonService->createReason([
+                    'name' => (string) ($row['name'] ?? ''),
+                    'default_severity' => (string) ($row['default_severity'] ?? KeywordReviewStatus::Warning->value),
+                    'description' => $row['description'] ?? null,
+                    'is_active' => (bool) ($row['is_active'] ?? true),
+                    'sort_order' => (int) ($row['sort_order'] ?? 0),
+                ]);
+
+                continue;
+            }
+
+            $reason = $reasonService->findAccessibleReason($reasonId);
+            if (! $reason instanceof KeywordReviewReason) {
+                continue;
+            }
+
+            $reasonService->updateReason($reason, [
+                'name' => (string) ($row['name'] ?? ''),
+                'default_severity' => (string) ($row['default_severity'] ?? KeywordReviewStatus::Warning->value),
+                'description' => $row['description'] ?? null,
+                'is_active' => (bool) ($row['is_active'] ?? true),
+                'sort_order' => (int) ($row['sort_order'] ?? 0),
+            ]);
+        }
+
+        $this->loadReviewReasonRows();
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.settings_keywords.review_reasons_saved'))
+            ->success()
+            ->send();
+    }
+
+    public function addReviewReasonRow(): void
+    {
+        abort_unless(SeoAccessControl::canManageKeywordReviewReasons(), 403);
+
+        $this->reviewReasonRows[] = [
+            'id' => 0,
+            'name' => '',
+            'default_severity' => KeywordReviewStatus::Warning->value,
+            'description' => '',
+            'is_active' => true,
+            'sort_order' => count($this->reviewReasonRows),
+            'is_used' => false,
+        ];
+    }
+
+    public function removeReviewReasonRow(int $index): void
+    {
+        abort_unless(SeoAccessControl::canManageKeywordReviewReasons(), 403);
+
+        $row = $this->reviewReasonRows[$index] ?? null;
+        if (! is_array($row)) {
+            return;
+        }
+
+        $reasonId = (int) ($row['id'] ?? 0);
+        if ($reasonId > 0) {
+            $reason = app(KeywordReviewReasonService::class)->findAccessibleReason($reasonId);
+            if ($reason instanceof KeywordReviewReason) {
+                if ($reason->isUsed()) {
+                    app(KeywordReviewReasonService::class)->updateReason($reason, ['is_active' => false]);
+                } else {
+                    app(KeywordReviewReasonService::class)->deleteReason($reason);
+                }
+            }
+        }
+
+        unset($this->reviewReasonRows[$index]);
+        $this->reviewReasonRows = array_values($this->reviewReasonRows);
+        $this->loadReviewReasonRows();
     }
 
     public function debugCtaBlacklist(
@@ -114,5 +220,10 @@ class SeoSettingsKeywords extends Page implements HasForms
     public static function canAccess(): bool
     {
         return SeoAccessControl::canAccessManagerFeatures();
+    }
+
+    public function canManageReviewReasons(): bool
+    {
+        return SeoAccessControl::canManageKeywordReviewReasons();
     }
 }

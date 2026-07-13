@@ -1,3 +1,5 @@
+import { resolveWpRenameOldUrl } from './articleImagesUtils';
+
 export const SLUG_RENAME_WARNING = `THAO TÁC NGUY HIỂM
 
 Đổi slug ảnh sẽ:
@@ -17,8 +19,12 @@ export function confirmSlugRename({ count = 1, isQuickFix = false } = {}) {
 export function buildRenameQueueFromImages(images, getNewSlug) {
     const queue = [];
 
-    images.forEach((row, index) => {
-        const newSlug = getNewSlug(row, index);
+    images.forEach((row) => {
+        if (row?.excludeQuickFix) {
+            return;
+        }
+
+        const newSlug = getNewSlug(row);
         if (!newSlug || !row.wpAttachmentId) {
             return;
         }
@@ -31,7 +37,9 @@ export function buildRenameQueueFromImages(images, getNewSlug) {
         queue.push({
             attachment_id: row.wpAttachmentId,
             new_slug: newSlug,
-            old_url: row.src,
+            old_url: resolveWpRenameOldUrl(row),
+            old_slug: oldSlug,
+            block_id: String(row?.blockId ?? row?.block_id ?? '').trim(),
         });
     });
 

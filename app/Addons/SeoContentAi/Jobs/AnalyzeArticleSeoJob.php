@@ -5,39 +5,43 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Jobs;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Throwable;
 
-final class AnalyzeArticleSeoJob implements ShouldQueue
+final class AnalyzeArticleSeoJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
     use Queueable;
     use SerializesModels;
 
+    public int $tries = 3;
+
     public int $timeout = 120;
 
-    /**
-     * @param  array<string, mixed>|null  $seoAnalysis
-     */
+    public int $uniqueFor = 300;
+
     public function __construct(
         public int $articleId,
-        public string $html,
-        public ?array $seoAnalysis,
-        public string $seoTitle,
-        public string $slug,
-        public ?string $metaDescription,
     ) {}
+
+    public function uniqueId(): string
+    {
+        return 'analyze-article-seo:'.$this->articleId;
+    }
 
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,
-        \App\Addons\SeoContentAi\Services\SeoAnalyzerService $analyzer,
+        SeoAnalyzerService $analyzer,
+        SeoArticleScoringQueueService $scoringQueue,
     ): void {
         $databaseConnection->bootstrapLegacySharedConnection();
 
@@ -51,27 +55,19 @@ final class AnalyzeArticleSeoJob implements ShouldQueue
             $article = SeoArticle::query()->find($this->articleId);
         }
 
-        if (! $article instanceof SeoArticle) {
+        if (! $article instanceof SeoArticle || ! $article->countsTowardSeoScore()) {
             return;
         }
 
+        $scoringQueue->markProcessing($article);
+
         try {
-            if (is_array($this->seoAnalysis) && array_key_exists('score', $this->seoAnalysis)) {
-                $analyzer->persistClientAnalysis($article, $this->html, $this->seoAnalysis);
-            } else {
-                $analyzer->analyzeSubmittedContent(
-                    $article,
-                    $this->html,
-                    $this->seoTitle,
-                    $this->slug,
-                    $this->metaDescription,
-                );
-            }
+            $analyzer->analyze($article);
+            $scoringQueue->markCompleted($article->fresh() ?? $article);
         } catch (Throwable $exception) {
-            Log::warning('AnalyzeArticleSeoJob failed', [
-                'article_id' => $this->articleId,
-                'error' => $exception->getMessage(),
-            ]);
+            $scoringQueue->markFailed($article, $exception->getMessage());
+
+            throw $exception;
         }
     }
 }

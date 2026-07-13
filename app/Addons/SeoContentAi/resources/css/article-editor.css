@@ -6591,7 +6591,122 @@ section[data-seo-section-id].is-outline-jump-highlight {
     margin-top: 0.35rem;
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 0.5rem;
+}
+
+.seo-article-images-more-wrap {
+    position: relative;
+    margin-left: auto;
+}
+
+.seo-article-images-more-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    color: #4b5563;
+    background: #fff;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.seo-article-images-more-btn:hover:not(:disabled),
+.seo-article-images-more-btn.is-open {
+    border-color: #93c5fd;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.seo-article-images-more-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.seo-article-images-more-menu {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.35rem);
+    z-index: 30;
+    min-width: 11.5rem;
+    padding: 0.35rem;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.12);
+}
+
+.seo-article-images-more-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    padding: 0.45rem 0.55rem;
+    border: 0;
+    border-radius: 6px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.25;
+    text-align: left;
+    color: #374151;
+    background: transparent;
+    cursor: pointer;
+}
+
+.seo-article-images-more-item:hover:not(:disabled) {
+    background: #f3f4f6;
+}
+
+.seo-article-images-more-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.seo-article-images-more-item--danger {
+    color: #dc2626;
+}
+
+.seo-article-images-more-item--danger:hover:not(:disabled) {
+    background: #fef2f2;
+}
+
+.dark .seo-article-images-more-btn {
+    border-color: #4b5563;
+    color: #e5e7eb;
+    background: #1f2937;
+}
+
+.dark .seo-article-images-more-btn:hover:not(:disabled),
+.dark .seo-article-images-more-btn.is-open {
+    border-color: #60a5fa;
+    background: #1e3a5f;
+    color: #dbeafe;
+}
+
+.dark .seo-article-images-more-menu {
+    border-color: #374151;
+    background: #111827;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.dark .seo-article-images-more-item {
+    color: #e5e7eb;
+}
+
+.dark .seo-article-images-more-item:hover:not(:disabled) {
+    background: #1f2937;
+}
+
+.dark .seo-article-images-more-item--danger {
+    color: #f87171;
+}
+
+.dark .seo-article-images-more-item--danger:hover:not(:disabled) {
+    background: #450a0a;
 }
 
 .seo-article-images-edit-btn {
@@ -7075,6 +7190,15 @@ section[data-seo-section-id].is-outline-jump-highlight {
     color: #d1d5db;
 }
 
+.seo-reviews-tab__actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.seo-reviews-tab__quick-create,
 .seo-reviews-tab__refresh {
     display: inline-flex;
     align-items: center;
@@ -7087,8 +7211,32 @@ section[data-seo-section-id].is-outline-jump-highlight {
     color: #1d4ed8;
 }
 
+.seo-reviews-tab__quick-create:disabled,
+.seo-reviews-tab__refresh:disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.seo-reviews-tab__quick-create .is-spinning,
 .seo-reviews-tab__refresh .is-spinning {
     animation: seo-publish-spin 0.8s linear infinite;
+}
+
+.seo-reviews-tab__configure {
+    font-size: 0.75rem;
+    color: #1d4ed8;
+    text-decoration: none;
+}
+
+.seo-reviews-tab__configure:hover {
+    text-decoration: underline;
+}
+
+.dark .seo-reviews-tab__quick-create,
+.dark .seo-reviews-tab__refresh {
+    background: #111827;
+    border-color: #374151;
+    color: #93c5fd;
 }
 
 .seo-reviews-tab__empty {
@@ -8379,4 +8527,186 @@ section[data-seo-section-id].is-outline-jump-highlight {
         display: flex;
         flex-direction: column;
     }
+}
+
+.wp-article-links-review-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.wp-article-links-review-btn.is-warning {
+    border-color: #fde68a;
+    background: #fffbeb;
+    color: #b45309;
+}
+
+.wp-article-links-review-btn.is-warning:hover:not(:disabled) {
+    background: #fef3c7;
+    border-color: #fbbf24;
+    color: #92400e;
+}
+
+.wp-article-links-review-btn.is-danger {
+    border-color: #fecaca;
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+.wp-article-links-review-btn.is-danger:hover:not(:disabled) {
+    background: #fee2e2;
+    border-color: #f87171;
+    color: #991b1b;
+}
+
+.wp-article-links-review-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.wp-article-links-review-btn .is-spinning {
+    animation: seo-keyword-review-spin 0.8s linear infinite;
+}
+
+.wp-article-links-keyword-row.is-review-loading {
+    opacity: 0.75;
+}
+
+.dark .wp-article-links-review-btn.is-warning {
+    border-color: rgb(251 191 36 / 0.45);
+    background: rgb(69 26 3 / 0.45);
+    color: #fcd34d;
+}
+
+.dark .wp-article-links-review-btn.is-danger {
+    border-color: rgb(248 113 113 / 0.45);
+    background: rgb(69 10 10 / 0.45);
+    color: #fca5a5;
+}
+
+.seo-keyword-review-popover {
+    position: absolute;
+    z-index: 70;
+    border-radius: 0.5rem;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+    padding: 0.55rem 0.6rem 0.45rem;
+}
+
+.seo-keyword-review-popover.is-warning {
+    border-color: #fde68a;
+}
+
+.seo-keyword-review-popover.is-danger {
+    border-color: #fecaca;
+}
+
+.seo-keyword-review-popover__label {
+    display: block;
+    margin-bottom: 0.3rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.seo-keyword-review-popover__input {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    padding: 0.4rem 0.55rem;
+    font-size: 0.8125rem;
+}
+
+.seo-keyword-review-popover__options {
+    margin: 0.35rem 0 0;
+    padding: 0;
+    list-style: none;
+    max-height: 11rem;
+    overflow-y: auto;
+}
+
+.seo-keyword-review-popover__option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    background: transparent;
+    border-radius: 0.3rem;
+    padding: 0.35rem 0.45rem;
+    font-size: 0.8125rem;
+    color: #111827;
+    cursor: pointer;
+}
+
+.seo-keyword-review-popover__option.is-active,
+.seo-keyword-review-popover__option:hover {
+    background: #f3f4f6;
+}
+
+.seo-keyword-review-popover__option.is-custom {
+    color: #6b7280;
+    font-style: italic;
+}
+
+.seo-keyword-review-popover__loading {
+    display: grid;
+    gap: 0.3rem;
+    margin-top: 0.4rem;
+}
+
+.seo-keyword-review-popover__loading span {
+    display: block;
+    height: 0.55rem;
+    border-radius: 0.25rem;
+    background: #e5e7eb;
+}
+
+.seo-keyword-review-popover__hint,
+.seo-keyword-review-popover__error {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+}
+
+.seo-keyword-review-popover__hint {
+    color: #6b7280;
+}
+
+.seo-keyword-review-popover__error {
+    color: #b91c1c;
+}
+
+@keyframes seo-keyword-review-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.dark .seo-keyword-review-popover {
+    background: #0f172a;
+    border-color: #334155;
+}
+
+.dark .seo-keyword-review-popover__input {
+    background: #111827;
+    border-color: #475569;
+    color: #e2e8f0;
+}
+
+.dark .seo-keyword-review-popover__option {
+    color: #e2e8f0;
+}
+
+.dark .seo-keyword-review-popover__option.is-active,
+.dark .seo-keyword-review-popover__option:hover {
+    background: #1e293b;
 }

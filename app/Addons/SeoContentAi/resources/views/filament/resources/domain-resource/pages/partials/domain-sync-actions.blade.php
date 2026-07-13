@@ -149,6 +149,68 @@
         </div>
     </div>
 
+    {{-- Chấm điểm SEO --}}
+    <div class="grid grid-cols-1 gap-2 border-t border-gray-200 py-3 dark:border-gray-700 sm:grid-cols-2 sm:items-center sm:gap-4">
+        <div class="flex flex-col gap-2 sm:flex-row">
+            <x-filament::button
+                type="button"
+                color="primary"
+                icon="heroicon-o-chart-bar"
+                class="w-full justify-center"
+                wire:click="runQueueMissingSeoScoringAction"
+                wire:loading.attr="disabled"
+                wire:target="runQueueMissingSeoScoringAction,runRetryFailedSeoScoringAction,runRequeueAllSeoScoringAction"
+                :disabled="$syncDisabled"
+            >
+                <span wire:loading.remove wire:target="runQueueMissingSeoScoringAction">
+                    {{ __('seo-content-ai::filament.domain.seo_scoring_queue_missing') }}
+                </span>
+                <span wire:loading wire:target="runQueueMissingSeoScoringAction">
+                    {{ __('seo-content-ai::filament.articles_optimal.processing') }}
+                </span>
+            </x-filament::button>
+            @if (($this->getSeoScoringProgress()['failed'] ?? 0) > 0)
+                <x-filament::button
+                    type="button"
+                    color="warning"
+                    icon="heroicon-o-arrow-path"
+                    class="w-full justify-center"
+                    wire:click="runRetryFailedSeoScoringAction"
+                    wire:loading.attr="disabled"
+                    wire:target="runRetryFailedSeoScoringAction"
+                    :disabled="$syncDisabled"
+                >
+                    <span wire:loading.remove wire:target="runRetryFailedSeoScoringAction">
+                        {{ __('seo-content-ai::filament.domain.seo_scoring_retry_failed') }}
+                    </span>
+                    <span wire:loading wire:target="runRetryFailedSeoScoringAction">
+                        {{ __('seo-content-ai::filament.articles_optimal.processing') }}
+                    </span>
+                </x-filament::button>
+            @endif
+        </div>
+        <div class="flex flex-col gap-2 sm:items-end">
+            <x-filament::button
+                type="button"
+                color="gray"
+                icon="heroicon-o-arrow-path-rounded-square"
+                class="w-full justify-center sm:w-auto"
+                wire:click="runRequeueAllSeoScoringAction"
+                wire:confirm="{{ __('seo-content-ai::filament.domain.seo_scoring_requeue_all_confirm') }}"
+                wire:loading.attr="disabled"
+                wire:target="runRequeueAllSeoScoringAction"
+                :disabled="$syncDisabled"
+            >
+                <span wire:loading.remove wire:target="runRequeueAllSeoScoringAction">
+                    {{ __('seo-content-ai::filament.domain.seo_scoring_requeue_all') }}
+                </span>
+                <span wire:loading wire:target="runRequeueAllSeoScoringAction">
+                    {{ __('seo-content-ai::filament.articles_optimal.processing') }}
+                </span>
+            </x-filament::button>
+        </div>
+    </div>
+
     @if ($showTest)
         <div class="grid grid-cols-1 gap-2 py-3 sm:grid-cols-2 sm:items-center sm:gap-4">
             <div>

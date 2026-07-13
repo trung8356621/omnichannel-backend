@@ -9,24 +9,22 @@ use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
-use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
+use App\Addons\SeoContentAi\Services\SeoAuditKeywordFlagService;
+use App\Addons\SeoContentAi\Services\SeoAuditScanService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
+use App\Addons\SeoContentAi\Services\SeoScoringSettingsService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
-use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use App\Addons\SeoContentAi\Support\SeoScoringRuleMessageResolver;
-use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use App\Models\Site;
-use App\Services\SeoEngineService;
 use Filament\Notifications\Notification;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Url;
 use Livewire\WithPagination;
+use Throwable;
 
 final class ArticlesOptimal extends SeoPanelPage
 {
@@ -51,17 +49,9 @@ final class ArticlesOptimal extends SeoPanelPage
     #[Url(as: 'site')]
     public ?int $filterSiteId = null;
 
-    #[Url(as: 'thin')]
-    public bool $filterThinContent = false;
-
-    #[Url(as: 'img')]
-    public bool $filterPoorImageDensity = false;
-
-    #[Url(as: 'h2')]
-    public bool $filterMissingH2 = false;
-
-    #[Url(as: 'faq')]
-    public bool $filterMissingFaq = false;
+    /** @var list<string> */
+    #[Url(as: 'rules')]
+    public array $selectedScoringRuleKeys = [];
 
     #[Url(as: 'low')]
     public bool $filterLowSeoScore = false;
@@ -75,12 +65,23 @@ final class ArticlesOptimal extends SeoPanelPage
     #[Url(as: 'scan')]
     public bool $hasScanned = false;
 
-    public bool $scanning = false;
+    public string $scanState = 'idle';
+
+    public ?string $scanError = null;
+
+    public ?string $scanNotice = null;
+
+    /** @var array<string, int>|null */
+    public ?array $cacheStatusCounts = null;
 
     /** @var array<int, int> */
     public array $selectedArticleIds = [];
 
     public ?int $sidebarProjectId = null;
+
+    public bool $scanning = false;
+
+    public bool $defaultLoading = false;
 
     public static function canAccess(array $parameters = []): bool
     {
@@ -100,6 +101,43 @@ final class ArticlesOptimal extends SeoPanelPage
     public static function getNavigationParentItem(): ?string
     {
         return __('seo-content-ai::filament.nav.articles');
+    }
+
+    public function updatedFilterSiteId(): void
+    {
+        $this->invalidateScanResults();
+    }
+
+    public function updatedFilterLanguage(): void
+    {
+        $this->invalidateScanResults();
+    }
+
+    public function updatedSelectedScoringRuleKeys(): void
+    {
+        if ($this->scanState === 'scanning') {
+            return;
+        }
+
+        $this->invalidateScanResults();
+    }
+
+    public function updatedFilterLowSeoScore(): void
+    {
+        if ($this->scanState === 'scanning') {
+            return;
+        }
+
+        $this->invalidateScanResults();
+    }
+
+    public function updatedFilterTechnicalSeoScore(): void
+    {
+        if ($this->scanState === 'scanning') {
+            return;
+        }
+
+        $this->invalidateScanResults();
     }
 
     /**
@@ -148,12 +186,129 @@ final class ArticlesOptimal extends SeoPanelPage
         return $options;
     }
 
+    /**
+     * @return list<array{key: string, label: string, category: string}>
+     */
+    public function getScoringRuleFilterDefinitions(): array
+    {
+        return app(SeoScoringSettingsService::class)->auditFilterDefinitions(
+            app(SeoPromptSettingsService::class)->resolveArticleLengthTarget('article'),
+        );
+    }
+
+    /**
+     * @return list<array{key: string, label: string, threshold: int}>
+     */
+    public function getAggregateFilterDefinitions(): array
+    {
+        return app(SeoScoringSettingsService::class)->aggregateFilterDefinitions();
+    }
+
     public function runScan(): void
     {
+        if ($this->scanState === 'scanning') {
+            return;
+        }
+
+        $this->scanState = 'scanning';
+        $this->scanError = null;
+        $this->scanNotice = null;
         $this->scanning = true;
-        $this->hasScanned = true;
-        $this->resetPage();
-        $this->scanning = false;
+
+        try {
+            if (SeoAccessControl::shouldScopeToAccountOwner()) {
+                $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));
+                if ($siteIds === []) {
+                    throw new \RuntimeException(__('seo-content-ai::filament.articles_optimal.scan_no_accessible_sites'));
+                }
+            }
+
+            $scanService = app(SeoAuditScanService::class);
+            $this->cacheStatusCounts = $scanService->cacheStatusCounts($this->baseArticleQuery());
+
+            $total = (int) ($this->cacheStatusCounts['total'] ?? 0);
+            $analyzed = (int) ($this->cacheStatusCounts['analyzed'] ?? 0);
+            $pending = (int) ($this->cacheStatusCounts['pending'] ?? 0);
+            $processing = (int) ($this->cacheStatusCounts['processing'] ?? 0);
+            $remaining = (int) ($this->cacheStatusCounts['remaining'] ?? 0);
+
+            if ($total > 0 && $analyzed === 0) {
+                $this->hasScanned = true;
+                $this->scanState = 'empty';
+                $this->scanNotice = __('seo-content-ai::filament.articles_optimal.scan_no_cached_data', [
+                    'pending' => $pending + $processing + $remaining,
+                ]);
+
+                return;
+            }
+
+            $filteredTotal = $scanService->buildFilteredQuery(
+                $this->baseArticleQuery(),
+                $this->selectedScoringRuleKeys,
+                $this->filterLowSeoScore,
+                $this->filterTechnicalSeoScore,
+            )->count();
+
+            $this->hasScanned = true;
+            $this->resetPage();
+            unset($this->resultsPaginator);
+
+            if ($filteredTotal === 0) {
+                $this->scanState = 'empty';
+            } else {
+                $this->scanState = 'completed';
+            }
+
+            if ($pending > 0 || $processing > 0 || $remaining > 0) {
+                $this->scanNotice = __('seo-content-ai::filament.articles_optimal.scan_partial_cache_notice', [
+                    'pending' => $pending + $remaining,
+                    'processing' => $processing,
+                ]);
+            }
+        } catch (Throwable $exception) {
+            report($exception);
+            $this->scanState = 'failed';
+            $this->scanError = __('seo-content-ai::filament.articles_optimal.scan_failed');
+            $this->hasScanned = false;
+            $this->cacheStatusCounts = null;
+        } finally {
+            $this->scanning = false;
+        }
+    }
+
+    public function mount(): void
+    {
+        $this->loadDefaultAuditResults();
+    }
+
+    public function loadDefaultAuditResults(): void
+    {
+        if ($this->defaultLoading) {
+            return;
+        }
+
+        $this->defaultLoading = true;
+        $this->scanError = null;
+
+        try {
+            $scanService = app(SeoAuditScanService::class);
+            $this->cacheStatusCounts = $scanService->cacheStatusCounts($this->baseArticleQuery());
+
+            $keywordFlaggedTotal = app(SeoAuditKeywordFlagService::class)
+                ->applyKeywordFlagScope($this->baseArticleQuery())
+                ->count();
+
+            $this->hasScanned = true;
+            $this->scanState = $keywordFlaggedTotal > 0 ? 'completed' : 'empty';
+            unset($this->resultsPaginator);
+        } catch (Throwable $exception) {
+            report($exception);
+            $this->scanState = 'failed';
+            $this->scanError = __('seo-content-ai::filament.articles_optimal.scan_failed');
+            $this->hasScanned = false;
+        } finally {
+            $this->defaultLoading = false;
+        }
     }
 
     /**
@@ -355,6 +510,31 @@ final class ArticlesOptimal extends SeoPanelPage
             ->send();
     }
 
+    public function queueMissingScoringForFilterSite(): void
+    {
+        $siteId = (int) ($this->filterSiteId ?? 0);
+        if ($siteId <= 0 || ! SeoAccessControl::canAccessSite($siteId)) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.articles_optimal.queue_missing_scoring'))
+                ->body(__('seo-content-ai::filament.articles_optimal.scan_no_accessible_sites'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $result = app(\App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService::class)
+            ->queueMissingForSite($siteId);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.articles_optimal.queue_missing_scoring'))
+            ->body(__('seo-content-ai::filament.articles_optimal.queue_missing_scoring_success', [
+                'count' => $result['queued'],
+            ]))
+            ->success()
+            ->send();
+    }
+
     public function demoteToDraft(int $articleId): void
     {
         $article = $this->findAccessibleArticle($articleId);
@@ -404,164 +584,24 @@ final class ArticlesOptimal extends SeoPanelPage
             return new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
         }
 
-        $analyzer = app(SeoAnalyzerService::class);
-        $engine = app(SeoEngineService::class);
-
-        $rows = [];
-        foreach ($this->baseArticleQuery()->get() as $article) {
-            if (! $article instanceof SeoArticle) {
-                continue;
-            }
-
-            if ((bool) ($article->is_reviewed ?? false) || ArticleResource::articleIsInContentProject($article)) {
-                continue;
-            }
-
-            $row = $this->mapArticleRow($article, $analyzer, $engine);
-            if ($row['matches_filters']) {
-                $rows[] = $row;
-            }
-        }
-
-        $perPage = 15;
-        $page = max(1, (int) $this->getPage());
-        $total = count($rows);
-        $slice = array_slice($rows, ($page - 1) * $perPage, $perPage);
-
-        return new \Illuminate\Pagination\LengthAwarePaginator(
-            $slice,
-            $total,
-            $perPage,
-            $page,
-            ['path' => request()->url(), 'query' => request()->query()],
-        );
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function mapArticleRow(
-        SeoArticle $article,
-        SeoAnalyzerService $analyzer,
-        SeoEngineService $engine,
-    ): array {
-        $article->loadMissing(['site', 'articleMetas', 'faqs']);
-        $body = (string) ($article->body ?? '');
-        $focusKeyword = $analyzer->resolveFocusKeywordForArticle($article) ?? '';
-
-        $analysis = $engine->analyzeHtml(
-            $body,
-            $focusKeyword,
-            $article->resolveFaqs(),
-            [
-                'seo_title' => (string) ($article->title ?? ''),
-                'meta_description' => $this->resolveMetaDescription($article),
-                'slug' => (string) ($article->slug ?? ''),
-                'domain' => (string) ($article->site?->domain ?? ''),
-                'article_length_target' => app(SeoPromptSettingsService::class)->resolveArticleLengthTarget(
-                    ArticlePostTypeResolver::resolve($article),
-                ),
-            ],
-        );
-
-        $violations = $analysis['violations'] ?? $analysis['reason_keys'] ?? [];
-        $score = (int) ($analysis['seo_score'] ?? $analysis['score'] ?? 0);
-
-        return [
-            'id' => (int) $article->id,
-            'site_id' => (int) ($article->site_id ?? 0),
-            'title' => (string) ($article->title ?? ''),
-            'domain' => (string) ($article->site?->domain ?? ''),
-            'permalink' => $this->resolveCachedPermalink($article),
-            'edit_url' => ArticleResource::getUrl('edit', ['record' => $article]),
-            'score' => $score,
-            'violations' => $violations,
-            'reason_keys' => $violations,
-            'reason_labels' => array_map(
-                static fn (string $key): string => SeoScoringRuleMessageResolver::messageForKey($key),
-                SeoScoringRulesRegistry::sanitizeViolations($violations),
-            ),
-            'matches_filters' => $this->articleMatchesActiveFilters($analysis, $body, $article),
-        ];
-    }
-
-    /**
-     * @param  array<string, mixed>  $analysis
-     */
-    private function articleMatchesActiveFilters(array $analysis, string $body, SeoArticle $article): bool
-    {
-        $activeFilters = array_filter([
-            $this->filterThinContent,
-            $this->filterPoorImageDensity,
-            $this->filterMissingH2,
-            $this->filterMissingFaq,
+        return app(SeoAuditKeywordFlagService::class)->paginateMergedResults(
+            $this->baseArticleQuery(),
+            $this->selectedScoringRuleKeys,
             $this->filterLowSeoScore,
             $this->filterTechnicalSeoScore,
-        ]);
-
-        if ($activeFilters === []) {
-            return true;
-        }
-
-        $violations = is_array($analysis['violations'] ?? null)
-            ? $analysis['violations']
-            : ($analysis['reason_keys'] ?? []);
-        $score = (int) ($analysis['seo_score'] ?? $analysis['score'] ?? 0);
-        $matched = false;
-
-        if ($this->filterThinContent && in_array('content_length_low', $violations, true)) {
-            $matched = true;
-        }
-
-        if ($this->filterPoorImageDensity && $this->hasImageRatioViolation($violations)) {
-            $matched = true;
-        }
-
-        if ($this->filterMissingH2 && in_array('h2_missing', $violations, true)) {
-            $matched = true;
-        }
-
-        if ($this->filterMissingFaq && in_array('faq_missing', $violations, true)) {
-            $matched = true;
-        }
-
-        if ($this->filterLowSeoScore && $score < 60) {
-            $matched = true;
-        }
-
-        if ($this->filterTechnicalSeoScore && $score < 60) {
-            $matched = true;
-        }
-
-        return $matched;
+            max(1, (int) $this->getPage()),
+            15,
+        );
     }
 
-    /**
-     * @param  list<string>  $violations
-     */
-    private function hasImageRatioViolation(array $violations): bool
+    private function invalidateScanResults(): void
     {
-        foreach ([
-            'image_ratio_missing',
-            'image_ratio_poor',
-            'image_ratio_low',
-            'image_ratio_suboptimal',
-            'image_alt_missing',
-        ] as $key) {
-            if (in_array($key, $violations, true)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function resolveCachedPermalink(SeoArticle $article): ?string
-    {
-        $meta = $article->articleMetas->firstWhere('meta_key', 'wp_permalink');
-        $permalink = trim((string) ($meta?->meta_value ?? ''));
-
-        return $permalink !== '' ? $permalink : null;
+        $this->hasScanned = false;
+        $this->cacheStatusCounts = null;
+        $this->scanState = 'idle';
+        $this->scanError = null;
+        $this->scanNotice = null;
+        unset($this->resultsPaginator);
     }
 
     /**
@@ -581,7 +621,6 @@ final class ArticlesOptimal extends SeoPanelPage
                     ->from('seo_project_tasks')
                     ->whereColumn('seo_project_tasks.article_id', 'articles.id');
             })
-            ->with(['site:id,domain', 'articleMetas', 'faqs'])
             ->orderByDesc('updated_at');
 
         if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
@@ -620,23 +659,5 @@ final class ArticlesOptimal extends SeoPanelPage
         }
 
         return $query;
-    }
-
-    private function resolveMetaDescription(SeoArticle $article): string
-    {
-        $meta = $article->articleMetas->first(
-            static fn ($item): bool => in_array((string) $item->meta_key, [
-                'meta_description',
-                'seo_meta_description',
-                '_yoast_wpseo_metadesc',
-                'rank_math_description',
-            ], true),
-        );
-
-        if ($meta && is_string($meta->meta_value) && trim($meta->meta_value) !== '') {
-            return trim($meta->meta_value);
-        }
-
-        return trim((string) ($article->excerpt ?? ''));
     }
 }

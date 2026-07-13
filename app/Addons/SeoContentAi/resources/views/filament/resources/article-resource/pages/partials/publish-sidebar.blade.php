@@ -539,30 +539,6 @@
                         <span class="text-gray-500 dark:text-gray-400">
                             · {{ __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => $this->getVirtualCommentsCount()]) }}
                         </span>
-                    @elseif ($this->shouldShowQuickCreateReviewsButton())
-                        <button
-                            type="button"
-                            wire:click.stop="generateQuickPostReviews"
-                            wire:loading.attr="disabled"
-                            wire:target="generateQuickPostReviews"
-                            class="ml-1 text-sky-600 hover:underline disabled:opacity-50"
-                            title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_hint') }}"
-                        >
-                            <span wire:loading.remove wire:target="generateQuickPostReviews">
-                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews') }}
-                            </span>
-                            <span wire:loading wire:target="generateQuickPostReviews">
-                                {{ __('seo-content-ai::filament.article_list.quick_create_reviews_loading') }}
-                            </span>
-                        </button>
-                    @elseif (! $this->canGenerateQuickPostReviews())
-                        <a
-                            href="{{ \App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows::getUrl() }}"
-                            class="ml-1 text-sky-600 hover:underline"
-                            title="{{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure_hint') }}"
-                        >
-                            {{ __('seo-content-ai::filament.article_list.quick_create_reviews_configure') }}
-                        </a>
                     @endif
                 </div>
             @endif

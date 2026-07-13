@@ -300,12 +300,16 @@ export default function ImageBlockEditor({
     );
 
     const handleImportFromUrl = useCallback(
-        async (remoteUrl) => {
+        async (remoteUrl, options = {}) => {
             if (importLoading) return;
 
             setImportLoading(true);
             try {
-                const data = await importSeoMediaFromUrl(remoteUrl, { articleId, siteId });
+                const data = await importSeoMediaFromUrl(remoteUrl, {
+                    articleId,
+                    siteId,
+                    randomFilename: Boolean(options?.randomFilename),
+                });
                 applyUploadedImageToBlock(data);
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {

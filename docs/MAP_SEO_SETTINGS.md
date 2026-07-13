@@ -35,7 +35,8 @@ flowchart TB
 |------|------|------|-------|
 | **SeoSettingsOverview** | `settings/overview` | `Filament/Pages/SeoSettingsOverview.php` | Tổng quan: chọn default article workflow, SEO analyzer API key, WP REST API key |
 | **SeoSettingsEditor** | `settings/editor` | `Filament/Pages/SeoSettingsEditor.php` | Cấu hình Editor: auto-save interval, editor height, publish behavior |
-| **SeoSettingsKeywords** | `settings/keywords` | `Filament/Pages/SeoSettingsKeywords.php` | Cấu hình keywords: cluster settings, suggestion sources |
+| **SeoSettingsKeywords** | `settings/keywords` | `Filament/Pages/SeoSettingsKeywords.php` | CTA blacklist + **Lý do đánh giá từ khóa** (`keyword_review_reasons`, `KeywordReviewReasonService`) |
+| **KeywordReviewService** | — | `Services/KeywordReviewService.php` | `submitReview()` lưu `review_status` + history; `article_suggestion` không `assertKeywordLinkedToArticle`; custom reason → `review_note`, `reason_id` null |
 | **SeoSettingsPrompt** | `settings/prompt` | `Filament/Pages/SeoSettingsPrompt.php` | Cấu hình prompt mặc định, model selection, system prompts |
 | **SeoSettingsScoring** | `settings/scoring` | `Filament/Pages/SeoSettingsScoring.php` | **Quy tắc chấm điểm SEO** — bật/tắt từng rule, chỉnh điểm trừ (lưu `wp_options.seo_scoring_rules_settings`) |
 | **SeoSettingsWorkflows** | `settings/workflows` | `Filament/Pages/SeoSettingsWorkflows.php` | **Cấu hình workflow quan trọng nhất** — gán task cho từng bước |
@@ -65,9 +66,14 @@ Page quản lý **quy tắc trừ điểm** khi chấm SEO on-page. Rules cố �
 | Thành phần | File | Mô tả |
 |------------|------|-------|
 | Page | `Filament/Pages/SeoSettingsScoring.php` | Repeater: label, toggle enabled, deduction |
-| Service | `Services/SeoScoringSettingsService.php` | Đọc/ghi override, `effectiveRules()` merge default |
-| Registry | `Support/SeoScoringRulesRegistry.php` | `defaultRules()` + `rules()` đọc settings runtime |
-| Messages | `Support/SeoScoringRuleMessageResolver.php` | Map legacy `seo.*` → `seo_rules.*` cho hiển thị |
+| Service | `Services/SeoScoringSettingsService.php` | `effectiveRules()`, `auditFilterDefinitions()`, `aggregateFilterDefinitions()` |
+| Registry | `Support/SeoScoringRulesRegistry.php` | `defaultRules()`, `effectiveRuleDefinitions()`, `auditFilterDefinitions()`, `activeViolations()`, `AUDIT_LOW_SCORE_THRESHOLD` |
+| Messages | `Support/SeoScoringRuleMessageResolver.php` | Map legacy `seo.*` → canonical rule key |
+| Violations DB | `Support/SeoRuleViolationsResolver.php` | Đọc `seo_rule_violations`; runtime bỏ rule disabled |
+
+**Effective rule contract** (mỗi rule qua `enrichRuleDefinition()`): `key`, `label`, `short_label`, `category`, `enabled`, `deduction`, `filterable`, `violation_keys`, `threshold` (resolve từ `SeoPromptSettingsService` cho độ dài bài).
+
+**Rule disabled:** không trừ điểm, không filter audit, không hiển thị badge; violation cũ trong DB vẫn giữ nguyên nhưng runtime bỏ qua.
 
 **Hành vi quan trọng:** Lưu settings **không** bulk cập nhật `article_meta.seo_rule_violations`. Điểm hiển thị tính động từ violations đã lưu + rules hiện tại. Violations trong DB chỉ đổi khi analyze/save bài hoặc **Refresh article metadata (domain)**.
 

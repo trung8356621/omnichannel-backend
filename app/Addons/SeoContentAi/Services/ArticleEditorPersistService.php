@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Jobs\AnalyzeArticleSeoJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
@@ -40,14 +39,7 @@ final class ArticleEditorPersistService
         }
 
         if ($deferSeoAnalysis) {
-            AnalyzeArticleSeoJob::dispatch(
-                (int) $article->id,
-                $html,
-                $seoAnalysis,
-                trim($context->title),
-                $context->normalizedSlug() !== '' ? $context->normalizedSlug() : trim((string) ($article->slug ?? '')),
-                $context->seoMetaDescription !== '' ? $context->seoMetaDescription : null,
-            );
+            app(SeoArticleScoringQueueService::class)->dispatchForArticle($article->fresh() ?? $article, force: true);
         }
 
         $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';

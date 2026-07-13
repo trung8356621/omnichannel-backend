@@ -347,12 +347,12 @@ export function createSeoAssistantNavigator() {
         chipBadge(chipId) {
             const value = this.badges[chipId];
             if (value === null || value === undefined || value === '') {
-                return null;
+                return chipId === 'reviews' ? 0 : null;
             }
 
             const numeric = Number(value);
             if (!Number.isNaN(numeric) && numeric === 0) {
-                return null;
+                return chipId === 'reviews' ? 0 : null;
             }
 
             return value;
@@ -373,7 +373,7 @@ export function createSeoAssistantNavigator() {
                     const next = badge.textContent.trim();
                     const numeric = Number(next);
                     if (!Number.isNaN(numeric) && numeric === 0) {
-                        this.badges[chip.id] = null;
+                        this.badges[chip.id] = chip.id === 'reviews' ? 0 : null;
                     } else {
                         this.badges[chip.id] = next;
                     }

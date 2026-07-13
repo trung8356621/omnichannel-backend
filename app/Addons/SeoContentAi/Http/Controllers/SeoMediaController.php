@@ -80,6 +80,7 @@ class SeoMediaController extends Controller
             'url' => ['required', 'string', 'max:2048', 'url'],
             'site_id' => 'nullable|integer',
             'article_id' => 'nullable|integer',
+            'random_filename' => 'sometimes|boolean',
         ]);
 
         $siteId = isset($validated['site_id']) ? (int) $validated['site_id'] : null;
@@ -108,6 +109,7 @@ class SeoMediaController extends Controller
                 (string) $validated['url'],
                 $siteId,
                 $articleId,
+                (bool) ($validated['random_filename'] ?? false),
             );
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['url' => $e->getMessage()]);

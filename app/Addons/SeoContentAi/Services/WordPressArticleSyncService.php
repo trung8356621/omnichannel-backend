@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use App\Addons\SeoContentAi\Support\WordPressRestResponseParser;
 use App\Models\Site;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -1041,6 +1042,11 @@ final class WordPressArticleSyncService
             return ['skip' => false, 'reason' => 'media_sync_errors'];
         }
 
+        $postContent = (string) ($prepared['post_content'] ?? '');
+        if (app(WordPressLocalMediaSyncService::class)->htmlContainsLocalSeoMedia($postContent)) {
+            return ['skip' => false, 'reason' => 'pending_local_media'];
+        }
+
         $article->loadMissing('articleMetas');
         $storedFingerprint = trim((string) ($article->articleMetas
             ->firstWhere('meta_key', self::META_WP_EDITOR_SYNC_FINGERPRINT)?->meta_value ?? ''));
@@ -1603,6 +1609,10 @@ final class WordPressArticleSyncService
      */
     private function blockContentManagerWordPressSync(): ?array
     {
+        if (SeoQueueContext::isWpSyncFromQueue()) {
+            return null;
+        }
+
         if (SeoAccessControl::canSyncArticlesToWordPress()) {
             return null;
         }

@@ -171,7 +171,7 @@ export function BlockInsertMenuBar({
  *
  * @param {string} [blockId]
  * @param {() => void} onOpenMediaLibrary
- * @param {(url: string) => void|Promise<void>} [onImportFromUrl]
+ * @param {(url: string, options?: { randomFilename?: boolean }) => void|Promise<void>} [onImportFromUrl]
  * @param {boolean} [importLoading]
  */
 export function ImageBlockPickerBox({
@@ -237,7 +237,7 @@ export function ImageBlockPickerBox({
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && importUrl.trim() && !importLoading) {
                                 e.preventDefault();
-                                onImportFromUrl?.(importUrl.trim());
+                                onImportFromUrl?.(importUrl.trim(), { randomFilename: true });
                             }
                         }}
                     />
@@ -246,7 +246,7 @@ export function ImageBlockPickerBox({
                         className="seo-image-block-picker__choice"
                         disabled={!importUrl.trim() || importLoading || !onImportFromUrl}
                         onMouseDown={(e) => e.stopPropagation()}
-                        onClick={() => onImportFromUrl?.(importUrl.trim())}
+                        onClick={() => onImportFromUrl?.(importUrl.trim(), { randomFilename: true })}
                     >
                         {importLoading ? t('processing') : 'Import'}
                     </button>

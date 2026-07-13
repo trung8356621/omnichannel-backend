@@ -64,17 +64,16 @@ Các filter SEO Audit được persist qua `#[Url]`:
 
 | Property | URL key | Mô tả |
 |----------|---------|-------|
-| `filterSiteId` | `site` | Lọc theo `site_id` |
-| `filterThinContent` | `thin` | Nội dung mỏng |
-| `filterPoorImageDensity` | `img` | Mật độ ảnh kém |
-| `filterMissingH2` | `h2` | Thiếu H2 |
-| `filterMissingFaq` | `faq` | Thiếu FAQ → violation `faq_missing` |
-| `filterLowSeoScore` | `low` | Điểm SEO < 60 (runtime từ violations + rules) |
-| `filterTechnicalSeoScore` | `tech` | Điểm SEO kỹ thuật < 60 |
-| `filterLanguage` | `lang` | Ngôn ngữ bài viết |
-| `hasScanned` | `scan` | Đã bấm Quét ít nhất một lần |
+| `filterSiteId` | `site` | Lọc theo `site_id` (phạm vi — AND) |
+| `selectedScoringRuleKeys` | `rules` | Danh sách rule key từ `SeoScoringSettingsService::auditFilterDefinitions()` |
+| `filterLowSeoScore` | `low` | Aggregate: điểm SEO `< SeoScoringRulesRegistry::AUDIT_LOW_SCORE_THRESHOLD` (60) |
+| `filterTechnicalSeoScore` | `tech` | Aggregate: điểm kỹ thuật `< AUDIT_LOW_SCORE_THRESHOLD` |
+| `filterLanguage` | `lang` | Ngôn ngữ bài viết (phạm vi — AND) |
+| `hasScanned` | `scan` | Đã bấm Quét ít nhất một lần (hoặc auto-load mặc định khi mở trang) |
 
-State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanning`.
+**Kết quả mặc định (keyword review):** `mount()` → `loadDefaultAuditResults()` load ngay bài có keyword `review_status` warning/danger qua `SeoAuditKeywordFlagService::paginateMergedResults()` — không cần bấm Quét. Khi user chọn thêm rule SEO rồi Quét, merge với nhóm keyword xấu (dedupe theo `article.id`, sort `danger_count DESC`, `warning_count DESC`, `updated_at DESC`). Nguồn hiển thị: `audit_sources` = `keyword_review` | `seo_rules`.
+
+State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanState` (`idle\|scanning\|completed\|empty\|failed`), `scanError`, `cachedScanRows`.
 
 ### 3.2 Computed properties
 
@@ -87,7 +86,9 @@ State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanning`.
 
 | Method | Mô tả |
 |--------|-------|
-| `runScan()` | Set `hasScanned=true`, reset pagination |
+| `runScan()` | Phân tích toàn bộ scope → cache `cachedScanRows`, set `scanState`, try/catch/finally |
+| `getScoringRuleFilterDefinitions()` | Checkbox quy tắc chấm điểm (enabled + filterable từ registry) |
+| `getAggregateFilterDefinitions()` | Checkbox điểm tổng hợp (ngưỡng từ registry) |
 | `demoteToDraft($articleId)` | `status=draft` + `WordPressArticleSyncService::syncForArticle` |
 | `assignArticleToContentProject` | Assign 1 bài qua `ArticleResource::assignArticlesFromFormData` |
 | `assignArticleToSelectedProject` | Assign 1 bài vào `sidebarProjectId` |
@@ -119,49 +120,61 @@ Sau khi load collection, **loại thêm** trong PHP (không nằm trong SQL):
 - `is_reviewed = true`
 - `ArticleResource::articleIsInContentProject($article)` — đã có task trong Content Project
 
-### 4.2 Phân tích SEO (`mapArticleRow`)
+### 4.2 Query cache SEO — không analyze HTML trong request (`SeoAuditScanService`)
 
-Mỗi bài còn lại được analyze runtime qua:
+Kiến trúc **cache + queue** (2026-07):
+
+| Nguồn cache | Cột/meta |
+|-------------|----------|
+| Violations | `article_meta.seo_rule_violations` (JSON array `rule_key`) |
+| Score | `articles.seo_score` |
+| Trạng thái queue | `article_meta.seo_scoring_status` (`pending` / `processing` / `completed` / `failed`) |
+| Fingerprint đổi nội dung | `article_meta.seo_scoring_fingerprint` |
 
 | Service | Vai trò |
 |---------|---------|
-| `SeoAnalyzerService` | `resolveFocusKeywordForArticle()` |
-| `SeoEngineService` | `analyzeHtml()` → `seo_score`, `reason_keys` |
-| `SeoPromptSettingsService` | `resolveArticleLengthTarget()` theo `ArticlePostTypeResolver` |
+| `SeoArticleScoringQueueService` | Dispatch `AnalyzeArticleSeoJob`, backfill domain, `domainProgress()` |
+| `AnalyzeArticleSeoJob` | Gọi `SeoAnalyzerService::analyze()` → persist violations + score (unique per article) |
+| `SeoAuditScanService` | `buildFilteredQuery()` + `paginateResults()` — filter SQL (`JSON_CONTAINS`, `seo_score`) |
+| `SeoRuleViolationsResolver` | Đọc cache violations (format mới + legacy) |
+| `SeoAuditRuleMatcher` | OR semantics cho checkbox; scope AND qua `baseArticleQuery()` |
+| `SeoScoringRulesRegistry` | Source of truth rule keys + audit filter definitions |
 
-Context truyền vào engine: `seo_title`, `meta_description`, `slug`, `domain`, `article_length_target`.
+**Không còn** `scanWithHtmlAnalysis()` / `SeoEngineService::analyzeHtml()` trong request Audit.
 
-Output mỗi row:
+Trigger populate cache:
+
+- WP sync (`SyncDomainContentService::importSingleSyncItem`) → `dispatchIfSyncItemChanged()`
+- Editor save (`ArticleEditorPersistService`) → `dispatchForArticle(force: true)`
+- Domain actions (`GeneralDomain`) → queue missing / retry failed / requeue all
+
+Output mỗi row (map từ DB, không parse body):
 
 | Key | Mô tả |
 |-----|-------|
 | `id`, `title`, `domain` | Thông tin cơ bản |
 | `permalink` | Từ `article_metas.meta_key = wp_permalink` |
 | `edit_url` | `ArticleResource::getUrl('edit', …)` |
-| `score` | Điểm SEO kỹ thuật 0–100 |
-| `reason_keys` / `reason_labels` | Cảnh báo (i18n qua `__($key)`) |
-| `matches_filters` | Có khớp checkbox đang bật không |
+| `score` | Từ `articles.seo_score` + `SeoScoringCalculator` |
+| `matched_rule_keys` / `reason_labels` | Từ cache `seo_rule_violations` (active rules only) |
 
-### 4.3 Logic filter checkbox (`articleMatchesActiveFilters`)
+### 4.3 Logic filter (`SeoAuditRuleMatcher`)
 
-- **Không tick checkbox nào** → mọi bài trong scope đều hiển thị (`matches_filters = true`).
-- **Có ít nhất 1 checkbox** → bài phải khớp **ít nhất một** điều kiện (OR):
+- **Phạm vi** (`site`, `lang`): AND qua SQL `baseArticleQuery()`.
+- **Không chọn rule/aggregate nào** → mọi bài trong scope hiển thị.
+- **Quy tắc chấm điểm** (`selectedScoringRuleKeys`): match **ANY** — canonical rule key từ `SeoScoringRulesRegistry::activeViolations()`.
+- **Aggregate** (`low`): so sánh `articles.seo_score` với `AUDIT_LOW_SCORE_THRESHOLD` (60). Checkbox **technical score đã ẩn** — hệ thống chỉ cache một `seo_score` tổng.
+- Rule **disabled** tại `/settings/scoring`: không filter, không badge, không trừ điểm runtime; violation cũ trong DB bị bỏ qua.
 
-| Checkbox | Điều kiện |
-|----------|-----------|
-| Thin content | `reason_keys` chứa `seo.length` |
-| Poor image | `seo.image_ratio` |
-| Missing H2 | `seo.heading` |
-| Missing FAQ | `seo.faq_schema` |
-| Low SEO score | `score < 60` |
-| Technical SEO score | `score < 60` |
+Checkbox UI sinh từ `SeoScoringSettingsService::auditFilterDefinitions()` — label threshold (vd. độ dài bài) lấy từ `SeoPromptSettingsService`, không hard-code 600.
 
-> Lưu ý: hai filter điểm (`low` và `tech`) hiện dùng cùng ngưỡng `< 60`.
+### 4.4 Scan state & pagination
 
-### 4.4 Pagination
-
-- Phân tích **toàn bộ** collection trong memory → slice 15 bài/trang (`WithPagination`).
-- Không chạy analyze khi `hasScanned = false` (trả paginator rỗng).
+- `runScan()` chỉ validate filter + đếm cache status; **không** analyze HTML.
+- `getResultsPaginator()` → `SeoAuditScanService::paginateResults()` — pagination SQL.
+- `scanState`: `idle` → `scanning` → `completed` \| `empty` \| `failed`; `scanNotice` khi còn bài pending queue.
+- Bài chưa có cache: empty state + nút «Chấm SEO còn thiếu» (domain filter) hoặc action trên GeneralDomain.
+- Đổi filter → `invalidateScanResults()` (phải quét lại).
 
 ### 4.5 Bảng kết quả & hành động
 
@@ -191,6 +204,10 @@ Fixed panel phải (~30% width), Alpine `sidebarCollapsed` toggle.
 | Danh sách bài trong project | `getSidebarProjectArticles()` — `SeoProjectTask` + `article` |
 
 Assign nhanh: nếu đã chọn project sidebar → icon folder gọi thẳng `assignArticleToSelectedProject`; ngược lại mở modal assign.
+
+**i18n:** Chuỗi sidebar/modal dùng `lang/*/filament.php` → `articles_optimal.sidebar_*` (UTF-8). Không hard-code tiếng Việt trong Blade (tránh mojibake).
+
+Sidebar `wire:target` tách khỏi `runScan` — mở/đóng drawer không reset kết quả quét.
 
 ---
 
@@ -314,10 +331,18 @@ Chi tiết RBAC: [MAP_SEO_TEAM.md](MAP_SEO_TEAM.md).
 | Model | `app/Addons/SeoContentAi/Models/SeoArticle.php` |
 | Assign / review helpers | `app/Addons/SeoContentAi/Filament/Resources/ArticleResource.php` |
 | SEO engine | `app/Services/SeoEngineService.php` |
+| Quality assessment | `app/Addons/SeoContentAi/Services/SeoArticleQualityAssessmentService.php` |
+| Audit scan strategies | `app/Addons/SeoContentAi/Services/SeoAuditScanService.php` |
+| SEO scoring queue | `app/Addons/SeoContentAi/Services/SeoArticleScoringQueueService.php` |
+| Analyze job | `app/Addons/SeoContentAi/Jobs/AnalyzeArticleSeoJob.php` |
+| Scoring status meta | `app/Addons/SeoContentAi/Support/SeoScoringStatus.php` |
+| Audit filter matcher | `app/Addons/SeoContentAi/Services/SeoAuditRuleMatcher.php` |
+| Scoring registry / filters | `app/Addons/SeoContentAi/Support/SeoScoringRulesRegistry.php` |
 | Analyzer | `app/Addons/SeoContentAi/Services/SeoAnalyzerService.php` |
 | WP sync (demote) | `app/Addons/SeoContentAi/Services/WordPressArticleSyncService.php` |
 | Migration review fields | `app/Addons/SeoContentAi/database/migrations/2026_06_03_090000_add_review_fields_to_articles_table.php` |
 | Translations | `app/Addons/SeoContentAi/lang/{en,vi}/filament.php` → `articles_optimal` |
+| Tests | `SeoAuditScoringIntegrationTest.php`, `SeoAuditScanServiceTest.php`, `SeoAuditCacheArchitectureTest.php` |
 
 ---
 
@@ -328,7 +353,7 @@ Chi tiết RBAC: [MAP_SEO_TEAM.md](MAP_SEO_TEAM.md).
 ```
 Page: Filament/Pages/ArticlesOptimal.php
 View: resources/views/filament/pages/articles-optimal.blade.php
-Thêm checkbox: property #[Url] + articleMatchesActiveFilters() map reason_keys từ SeoEngineService
+Thêm checkbox: bật `filterable` + metadata trong `SeoScoringRulesRegistry::ruleCatalog()` — UI tự sinh qua `auditFilterDefinitions()`. Match qua `SeoAuditRuleMatcher` + canonical rule key, không hard-code trong Blade.
 Phân tích: mapArticleRow() → SeoEngineService::analyzeHtml()
 i18n: lang/{en,vi}/filament.php articles_optimal.*
 ```
@@ -367,8 +392,8 @@ Chi tiết project: docs/MAP_SEO_PROJECTS.md
 
 | Chủ đề | Chi tiết |
 |--------|----------|
-| **Performance** | Scan load toàn bộ candidate + analyze HTML in-memory; không cache score trên audit page |
+| **Performance** | Audit chỉ query cache DB; scoring chạy qua `AnalyzeArticleSeoJob` (sync/save/domain actions) |
 | **Trùng filter điểm** | `filterLowSeoScore` và `filterTechnicalSeoScore` cùng điều kiện `< 60` |
 | **Category** | Loại `category`, `product_category` khỏi cả Audit và Reviewed |
 | **Đã trong project** | Có row `seo_project_tasks` → loại khỏi SQL audit query |
-| **Tests** | Chưa có unit test riêng cho `ArticlesOptimal` (verify thủ công trên `/seo/articles/optimal`) |
+| **Tests** | `SeoAuditScoringIntegrationTest` — registry filters, disabled rules, matcher ANY/aggregate |

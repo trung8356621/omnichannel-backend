@@ -40,7 +40,12 @@ final class ViewSeoProject extends EditSeoProject
 
     protected function getHeaderActions(): array
     {
+        /** @var SeoProject $record */
+        $record = $this->getRecord();
+
         return [
+            SeoProjectResource::makeViewProjectArchivesPageAction($record),
+            SeoProjectResource::makeArchiveProjectPageAction($record),
             Actions\Action::make('view_runs')
                 ->label(__('seo-content-ai::filament.projects.view_runs'))
                 ->icon('heroicon-o-queue-list')

@@ -119,6 +119,33 @@ final class WordPressArticleSyncStatusTest extends TestCase
         $this->assertSame('local_edit_pending', $result['reason']);
     }
 
+    public function test_should_not_skip_editor_sync_when_post_content_has_local_seo_media(): void
+    {
+        $article = new SeoArticle([
+            'id' => 1,
+            'wp_post_id' => 99,
+        ]);
+        $article->setRelation('articleMetas', collect([
+            new ArticleMeta([
+                'meta_key' => WordPressArticleSyncService::META_WP_EDITOR_SYNC_FINGERPRINT,
+                'meta_value' => hash('sha256', 'same-fingerprint'),
+            ]),
+        ]));
+
+        $service = app(WordPressArticleSyncService::class);
+        $prepared = [
+            'request_payload' => ['title' => 'A'],
+            'post_content' => '<p><img src="/storage/uploads/seo_media/new-image.webp" alt=""></p>',
+            'faqs' => [],
+            'local_media_sync_errors' => [],
+        ];
+
+        $result = $service->shouldSkipEditorSyncRequest($article, $prepared);
+
+        $this->assertFalse($result['skip']);
+        $this->assertSame('pending_local_media', $result['reason']);
+    }
+
     public function test_create_for_article_accepts_optional_editor_payload(): void
     {
         $method = new ReflectionMethod(WordPressArticleSyncService::class, 'createForArticle');

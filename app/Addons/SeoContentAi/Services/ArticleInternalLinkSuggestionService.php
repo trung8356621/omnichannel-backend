@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Enums\KeywordMetaKey;
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -24,16 +25,17 @@ final class ArticleInternalLinkSuggestionService
      * Gợi ý từ khóa focus có trong bài nhưng chưa là link nội bộ (khi số link nội bộ &lt; 10).
      *
      * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
      * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
      */
-    public function suggest(SeoArticle $article, string $content, array $internalLinks): array
+    public function suggest(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
     {
         if (count($internalLinks) >= self::MAX_INTERNAL_LINKS) {
             return [];
         }
 
         return array_slice(
-            $this->collectCandidates($article, $content, $internalLinks),
+            $this->collectCandidates($article, $content, $internalLinks, $externalLinks),
             0,
             self::MAX_SUGGESTION_DISPLAY,
         );
@@ -44,18 +46,20 @@ final class ArticleInternalLinkSuggestionService
      * Dùng cho client exclude / refill danh sách gợi ý.
      *
      * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
      * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
      */
-    public function suggestCatalog(SeoArticle $article, string $content, array $internalLinks): array
+    public function suggestCatalog(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
     {
-        return $this->collectCandidates($article, $content, $internalLinks);
+        return $this->collectCandidates($article, $content, $internalLinks, $externalLinks);
     }
 
     /**
      * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
      * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
      */
-    private function collectCandidates(SeoArticle $article, string $content, array $internalLinks): array
+    private function collectCandidates(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
     {
         $siteId = (int) ($article->site_id ?? 0);
         if ($siteId <= 0) {
@@ -67,7 +71,7 @@ final class ArticleInternalLinkSuggestionService
             return [];
         }
 
-        $linkedContext = $this->collectLinkedContext($internalLinks);
+        $linkedContext = $this->collectLinkedContext(array_merge($internalLinks, $externalLinks));
         $linkedLabels = $linkedContext['labels'];
         $linkedHrefs = $linkedContext['hrefs'];
         $ownArticlePhrases = $this->ownArticlePhraseBlocklist($article);
@@ -84,6 +88,7 @@ final class ArticleInternalLinkSuggestionService
         $keywordsQuery = Keyword::query()
             ->forSite($siteId)
             ->where('type', Keyword::TYPE_NORMAL)
+            ->where('review_status', KeywordReviewStatus::Active->value)
             ->whereNotNull('phrase')
             ->where('phrase', '!=', '')
             ->orderByRaw('CHAR_LENGTH(phrase) DESC');

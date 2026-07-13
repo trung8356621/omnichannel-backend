@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\SeoRuleViolationsResolver;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
@@ -29,16 +28,19 @@ final class ArticleEditorSeoPayloadService
         $extractedLinks = $article->resolveExtractedLinks();
         $bodyHtml = (string) ($article->body ?? '');
         $internalLinks = $extractedLinks['internal'] ?? [];
+        $externalLinks = $extractedLinks['external'] ?? [];
         $suggestionService = app(ArticleInternalLinkSuggestionService::class);
         $suggestedInternalLinks = $suggestionService->suggest(
             $article,
             $bodyHtml,
             $internalLinks,
+            $externalLinks,
         );
         $suggestedInternalLinksCatalog = $suggestionService->suggestCatalog(
             $article,
             $bodyHtml,
             $internalLinks,
+            $externalLinks,
         );
         $contentBonus = $this->contentBonus->resolveForArticle($article);
 

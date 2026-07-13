@@ -1,0 +1,69 @@
+---
+description: Never run local tests or artisan automatically. Output commands for manual execution instead.
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# Remote-first Development Rule
+
+Dự án này KHÔNG sử dụng môi trường local để verify.
+
+## Tuyệt đối KHÔNG tự chạy
+
+Không được tự động thực hiện bất kỳ command nào như:
+
+- php artisan *
+- phpunit
+- pest
+- composer test
+- composer install
+- composer update
+- npm install
+- npm run *
+- yarn *
+- pnpm *
+- vite
+- docker *
+- sail *
+- mysql
+- redis-cli
+- curl localhost
+- ping local service
+
+Không được cố kiểm tra server đang chạy hay không.
+
+Không được báo lỗi chỉ vì không chạy được command local.
+
+---
+
+## Sau khi sửa code
+
+Sau khi hoàn thành thay đổi:
+
+- KHÔNG verify bằng execution.
+- KHÔNG chạy test.
+- KHÔNG build.
+- KHÔNG cache.
+- KHÔNG migrate.
+
+Chỉ phân tích source code và trả lời dựa trên logic.
+
+---
+
+## Nếu cần xác nhận
+
+Thay vì chạy command, luôn in ra block:
+
+```text
+Manual verification:
+
+php artisan optimize:clear
+
+php artisan migrate
+
+php artisan queue:restart
+
+php artisan config:clear
+
+php artisan cache:clear

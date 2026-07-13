@@ -74,15 +74,17 @@ import {
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
     executeSeoMediaSlugRenamesTwoPhase,
+    enrichWpRenamedWithRequestMeta,
     finalizeBlocksAfterWpRename,
     reconcileSupplementalImagesWithBlocks,
     resetSupplementalImagesAfterSlugRename,
     enrichBlocksWithPostImages,
-    imageSlugFromKeyword,
+    resolveWpRenameOldUrl,
     resolveImageRefIds,
     shouldRenameSlugOnWordPress,
     syncProductAlbumUrlsFromBlockImages,
     slugFromUrl,
+    withWpPickerExcludeQuickFix,
 } from '../utils/articleImagesUtils';
 import {
     confirmSlugRename,
@@ -1984,6 +1986,9 @@ export default function SeoArticleEditor({
     );
     const isProductPost = String(initialPostType ?? '').trim() === 'product' || Boolean(supportsProductGallery);
     const showReviewsTab = editorSettings?.show_reviews_tab !== false;
+    const canQuickCreateReviews = editorSettings?.can_quick_create_reviews === true;
+    const showConfigureReviewsLink = editorSettings?.show_configure_reviews_link === true;
+    const quickCreateReviewsConfigUrl = String(editorSettings?.quick_create_reviews_config_url ?? '').trim();
     const canGenerateFeaturedSnippet = editorSettings?.can_generate_featured_snippet === true;
     const canGenerateOutlineHeading = editorSettings?.can_generate_outline_heading === true;
     useEffect(() => {
@@ -2014,6 +2019,16 @@ export default function SeoArticleEditor({
 
         return () => window.removeEventListener('virtual-reviews-updated', onReviewsUpdated);
     }, []);
+
+    const refreshVirtualReviews = useCallback(
+        () => callEditArticleLivewire('refreshVirtualReviewsForEditor'),
+        [],
+    );
+
+    const generateQuickPostReviews = useCallback(
+        () => callEditArticleLivewire('generateQuickPostReviews'),
+        [],
+    );
 
     const [saveStatus, setSaveStatus] = useState('saved');
     const [analyzing, setAnalyzing] = useState(false);
@@ -2059,6 +2074,7 @@ export default function SeoArticleEditor({
     panelFaqsRef.current = panelFaqs;
     const pendingQuickFixKeywordRef = useRef('');
     const pendingLocalRenameResultsRef = useRef([]);
+    const pendingWpRenameRequestRef = useRef([]);
     const slugRenameManagedByBatchRef = useRef(false);
     const generateImageTargetRef = useRef('editor');
     const [generateImageModalOpen, setGenerateImageModalOpen] = useState(false);
@@ -2180,6 +2196,7 @@ export default function SeoArticleEditor({
         filterSuggestedInternalLinks(
             initialSeo?.suggested_internal_links ?? [],
             initialSeo?.extracted_links?.internal ?? [],
+            initialSeo?.extracted_links?.external ?? [],
         ),
     );
     const domainLinkCatalogRef = useRef(
@@ -2343,6 +2360,7 @@ export default function SeoArticleEditor({
         const filteredSuggested = filterSuggestedInternalLinks(
             suggestedInternal,
             enrichedLinks.internal ?? [],
+            enrichedLinks.external ?? [],
         );
         const articlePlainText = htmlToPlainText(exportBlocksToHtml(blocksRef.current));
         window.dispatchEvent(
@@ -2546,10 +2564,11 @@ export default function SeoArticleEditor({
                 detail: {
                     seo: seoFailedCount > 0 ? seoFailedCount : null,
                     images: imageTabCount > 0 ? imageTabCount : null,
+                    reviews: showReviewsTab && isProductPost ? virtualReviews.length : null,
                 },
             }),
         );
-    }, [seoFailedCount, imageTabCount]);
+    }, [seoFailedCount, imageTabCount, virtualReviews.length, showReviewsTab, isProductPost]);
 
     const applySeoAnalysisResult = useCallback((result) => {
         if (!result || typeof result !== 'object') {
@@ -2592,6 +2611,7 @@ export default function SeoArticleEditor({
                 const filteredSuggested = filterSuggestedInternalLinks(
                     prevSuggested,
                     payload.extracted_links.internal ?? [],
+                    payload.extracted_links.external ?? [],
                 );
                 setExtractedLinks(payload.extracted_links);
                 publishExtractedLinks(payload.extracted_links, filteredSuggested);
@@ -2814,6 +2834,7 @@ export default function SeoArticleEditor({
             filterSuggestedInternalLinks(
                 initialSeo.suggested_internal_links ?? [],
                 initialSeo.extracted_links?.internal ?? [],
+                initialSeo.extracted_links?.external ?? [],
             ),
         );
     }, [initialSeo]);
@@ -3041,6 +3062,8 @@ export default function SeoArticleEditor({
             return;
         }
 
+        pendingWpRenameRequestRef.current = Array.isArray(items) ? [...items] : [];
+
         window.dispatchEvent(
             new CustomEvent('seo-rename-attachment-slugs-loading', {
                 detail: { count: items.length },
@@ -3048,6 +3071,7 @@ export default function SeoArticleEditor({
         );
 
         callEditArticleLivewire('renameAttachmentSlugsOnWordPress', items).catch((error) => {
+            pendingWpRenameRequestRef.current = [];
             window.dispatchEvent(
                 new CustomEvent('seo-attachment-slugs-rename-finished', {
                     detail: {
@@ -3136,7 +3160,9 @@ export default function SeoArticleEditor({
                     {
                         attachment_id: wpAttachmentId,
                         new_slug: trimmed,
-                        old_url: row.src,
+                        old_url: resolveWpRenameOldUrl(row),
+                        old_slug: (row.slug || '').trim(),
+                        block_id: String(row?.blockId ?? row?.block_id ?? '').trim(),
                     },
                 ]);
 
@@ -3465,7 +3491,11 @@ export default function SeoArticleEditor({
     );
 
     const applySlugRenameFinished = useCallback((detail) => {
-        const wpRenamed = Array.isArray(detail?.renamed) ? detail.renamed : [];
+        const wpRenamed = enrichWpRenamedWithRequestMeta(
+            Array.isArray(detail?.renamed) ? detail.renamed : [],
+            pendingWpRenameRequestRef.current,
+        );
+        pendingWpRenameRequestRef.current = [];
         const localResults = [...(pendingLocalRenameResultsRef.current ?? [])];
         pendingLocalRenameResultsRef.current = [];
         pendingQuickFixKeywordRef.current = '';
@@ -3476,7 +3506,8 @@ export default function SeoArticleEditor({
             resetSupplementalImagesAfterSlugRename(prev, nextBlocks, wpRenamed, localResults),
         );
         setImagesReloadKey((k) => k + 1);
-    }, []);
+        scheduleAutosave();
+    }, [scheduleAutosave]);
 
     const waitForWordPressSlugRenameFinished = useCallback((batchCount = 1) => {
         const total = Number(batchCount);
@@ -6690,15 +6721,19 @@ export default function SeoArticleEditor({
             if (seoMediaId > 0) {
                 dismissedEditorImageMediaIdsRef.current.delete(seoMediaId);
             }
-            const image = withDefaultImageInsertAlign({
-                src: url,
-                alt,
-                title: alt,
-                wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
-                seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
-                slug: slug || undefined,
-                wpSrc: url,
-            });
+            const image = withWpPickerExcludeQuickFix(
+                withDefaultImageInsertAlign({
+                    src: url,
+                    alt,
+                    title: alt,
+                    wpAttachmentId: attachmentId > 0 ? attachmentId : undefined,
+                    seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+                    slug: slug || undefined,
+                    wpSrc: url,
+                }),
+                event.detail?.pickerTab,
+                attachmentId,
+            );
             const html = renderImageFigure(image);
             persistSelectedMediaBlock(blockId, html, image, 'image');
             syncWpPickerSelectionToImagesTab(event.detail?.pickerTab);
@@ -8613,6 +8648,7 @@ export default function SeoArticleEditor({
                                                                     insertMenu?.position === 'before' ? (
                                                                         <BlockInsertMenuBar
                                                                             faqShortcodeDisabled={articleHasFaqShortcode(blocks)}
+                                                                            imageInsertDisabled={section.isIntro}
                                                                             onClose={() => setInsertMenu(null)}
                                                                             onInsert={(type) =>
                                                                                 insertBlockRelative(block.id, 'before', type)
@@ -8799,13 +8835,17 @@ export default function SeoArticleEditor({
                           widgetId="reviews"
                           title={t('reviews_tab_label')}
                           icon={Star}
-                          badge={virtualReviews.length > 0 ? virtualReviews.length : null}
+                          badge={virtualReviews.length}
                           defaultCollapsed
                           className="seo-assistant-widget--reviews"
                       >
                           <ArticleReviewsTab
                               initialReviews={virtualReviews}
-                              onRefresh={() => callEditArticleLivewire('refreshVirtualReviewsForEditor')}
+                              onRefresh={refreshVirtualReviews}
+                              canQuickCreate={canQuickCreateReviews}
+                              showConfigureReviews={showConfigureReviewsLink}
+                              quickCreateConfigUrl={quickCreateReviewsConfigUrl}
+                              onQuickCreate={canQuickCreateReviews ? generateQuickPostReviews : undefined}
                           />
                       </ArticleAssistantWidget>,
                       assistantPortalRoots.reviews,

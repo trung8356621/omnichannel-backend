@@ -19,7 +19,7 @@ final class SeoRuleViolationsResolver
 
         $fromNew = self::readViolationsMeta($article, SeoScoringRulesRegistry::META_KEY_VIOLATIONS);
         if ($fromNew !== null) {
-            return $fromNew;
+            return SeoScoringRulesRegistry::activeViolations($fromNew);
         }
 
         $legacy = self::convertLegacyRankMathScore(
@@ -29,7 +29,18 @@ final class SeoRuleViolationsResolver
             self::decodeMetaJson($article, 'seo_scoring_details'),
         );
 
-        return SeoScoringRulesRegistry::sanitizeViolations(array_merge($legacy, $legacyBonus));
+        return SeoScoringRulesRegistry::activeViolations(
+            SeoScoringRulesRegistry::sanitizeViolations(array_merge($legacy, $legacyBonus)),
+        );
+    }
+
+    /**
+     * @param  list<string>  $violations
+     * @return list<string>
+     */
+    public static function activeViolationsForArticle(SeoArticle $article): array
+    {
+        return self::forArticle($article);
     }
 
     public static function scoreForArticle(SeoArticle $article): ?int
@@ -63,9 +74,6 @@ final class SeoRuleViolationsResolver
         return null;
     }
 
-    /**
-     * @param  mixed  $decoded
-     */
     private static function isViolationList(mixed $decoded): bool
     {
         if (! is_array($decoded) || $decoded === []) {

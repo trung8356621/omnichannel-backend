@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
+use App\Addons\SeoContentAi\Filament\Pages\SeoQueueManager;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
@@ -15,19 +16,19 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleSeoPreviewController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
+use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
 use App\Addons\SeoContentAi\Http\Controllers\WorkspaceMediaPickerController;
-use App\Addons\SeoContentAi\Filament\Pages\SeoQueueManager;
 use App\Addons\SeoContentAi\Http\Middleware\CheckMainRole;
-use App\Addons\SeoContentAi\Services\SeoQueueControlService;
 use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Services\SeoQueueControlService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
@@ -337,6 +338,19 @@ class SeoPanelProvider extends PanelProvider
                     ->whereNumber('article')
                     ->whereNumber('revision')
                     ->name('seo.articles.revisions.show');
+            });
+
+        Route::middleware($seoWebApiMiddleware)
+            ->prefix('api/seo/keywords')
+            ->group(function (): void {
+                Route::get('/review-reasons', [KeywordReviewController::class, 'reasons'])
+                    ->name('seo.keywords.review-reasons');
+                Route::post('/{keyword}/review', [KeywordReviewController::class, 'review'])
+                    ->whereNumber('keyword')
+                    ->name('seo.keywords.review');
+                Route::post('/{keyword}/restore', [KeywordReviewController::class, 'restore'])
+                    ->whereNumber('keyword')
+                    ->name('seo.keywords.restore');
             });
 
         Route::middleware($seoWebApiMiddleware)

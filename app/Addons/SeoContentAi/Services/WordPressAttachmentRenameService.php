@@ -141,6 +141,7 @@ final class WordPressAttachmentRenameService
             $attachmentId = (int) ($item['attachment_id'] ?? $item['wp_attachment_id'] ?? 0);
             $newSlug = trim((string) ($item['new_slug'] ?? $item['slug'] ?? ''));
             $oldUrl = trim((string) ($item['old_url'] ?? $item['old_src'] ?? $item['src'] ?? ''));
+            $blockId = trim((string) ($item['block_id'] ?? $item['blockId'] ?? ''));
 
             if ($attachmentId <= 0 || $newSlug === '') {
                 continue;
@@ -150,6 +151,7 @@ final class WordPressAttachmentRenameService
                 'attachment_id' => $attachmentId,
                 'new_slug' => $newSlug,
                 'old_url' => $oldUrl,
+                'block_id' => $blockId,
             ];
         }
 

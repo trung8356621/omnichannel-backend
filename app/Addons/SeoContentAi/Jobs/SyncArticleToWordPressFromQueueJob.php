@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorSyncOrchestrator;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -64,31 +65,40 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
             return;
         }
 
-        $queueService->markProcessing($article);
+        SeoQueueContext::runWpSyncFromQueue(function () use ($queueService, $syncOrchestrator, $article, $bundle): void {
+            $queueService->markProcessing($article);
 
-        try {
-            $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle, fromQueue: true);
+            try {
+                $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle, fromQueue: true);
 
-            if (! ($result['success'] ?? false)) {
-                $queueService->markFailed(
-                    $article->fresh() ?? $article,
-                    (string) ($result['message'] ?? 'Đồng bộ WordPress thất bại.'),
-                );
+                if (! ($result['success'] ?? false)) {
+                    $message = (string) ($result['message'] ?? 'Đồng bộ WordPress thất bại.');
 
-                return;
+                    Log::warning('SyncArticleToWordPressFromQueueJob sync failed', [
+                        'article_id' => $this->articleId,
+                        'error' => $message,
+                    ]);
+
+                    $queueService->markFailed(
+                        $article->fresh() ?? $article,
+                        $message,
+                    );
+
+                    return;
+                }
+
+                $queueService->markCompleted($article->fresh() ?? $article, $result);
+            } catch (Throwable $exception) {
+                Log::warning('SyncArticleToWordPressFromQueueJob failed', [
+                    'article_id' => $this->articleId,
+                    'error' => $exception->getMessage(),
+                ]);
+
+                $fresh = SeoArticle::query()->find($this->articleId);
+                if ($fresh instanceof SeoArticle) {
+                    $queueService->markFailed($fresh, $exception->getMessage());
+                }
             }
-
-            $queueService->markCompleted($article->fresh() ?? $article, $result);
-        } catch (Throwable $exception) {
-            Log::warning('SyncArticleToWordPressFromQueueJob failed', [
-                'article_id' => $this->articleId,
-                'error' => $exception->getMessage(),
-            ]);
-
-            $fresh = SeoArticle::query()->find($this->articleId);
-            if ($fresh instanceof SeoArticle) {
-                $queueService->markFailed($fresh, $exception->getMessage());
-            }
-        }
+        });
     }
 }

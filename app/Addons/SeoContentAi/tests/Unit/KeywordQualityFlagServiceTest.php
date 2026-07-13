@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
@@ -19,7 +20,7 @@ final class KeywordQualityFlagServiceTest extends TestCase
 
     protected $connectionsToTransact = ['omi_seo_ai'];
 
-    public function test_short_phrase_gets_danger_flag(): void
+    public function test_short_phrase_no_longer_gets_auto_danger_flag(): void
     {
         $this->requireSeoDatabaseConnection();
 
@@ -30,10 +31,11 @@ final class KeywordQualityFlagServiceTest extends TestCase
 
         app(KeywordQualityFlagService::class)->recomputeForKeywordFromMaps((int) $keyword->id);
 
-        $this->assertSame(['danger'], app(KeywordMetaRepository::class)->getQualityFlags((int) $keyword->id));
+        $this->assertSame([], app(KeywordMetaRepository::class)->getQualityFlags((int) $keyword->id));
+        $this->assertSame(KeywordReviewStatus::Active->value, (string) $keyword->fresh()?->review_status);
     }
 
-    public function test_long_phrase_gets_warning_flag(): void
+    public function test_long_phrase_no_longer_gets_auto_warning_flag(): void
     {
         $this->requireSeoDatabaseConnection();
 
@@ -44,10 +46,25 @@ final class KeywordQualityFlagServiceTest extends TestCase
 
         app(KeywordQualityFlagService::class)->recomputeForKeywordFromMaps((int) $keyword->id);
 
-        $this->assertSame(['warning'], app(KeywordMetaRepository::class)->getQualityFlags((int) $keyword->id));
+        $this->assertSame([], app(KeywordMetaRepository::class)->getQualityFlags((int) $keyword->id));
+        $this->assertSame(KeywordReviewStatus::Active->value, (string) $keyword->fresh()?->review_status);
     }
 
-    public function test_empty_context_before_adds_danger_flag(): void
+    public function test_special_phrase_no_longer_gets_auto_flag(): void
+    {
+        $this->requireSeoDatabaseConnection();
+
+        $keyword = Keyword::query()->create([
+            'phrase' => ': "keyword (test)"',
+            'type' => Keyword::TYPE_NORMAL,
+        ]);
+
+        app(KeywordQualityFlagService::class)->recomputeForKeywordFromMaps((int) $keyword->id);
+
+        $this->assertSame(KeywordReviewStatus::Active->value, (string) $keyword->fresh()?->review_status);
+    }
+
+    public function test_empty_context_before_no_longer_adds_auto_danger(): void
     {
         $this->requireSeoDatabaseConnection();
 
@@ -56,25 +73,16 @@ final class KeywordQualityFlagServiceTest extends TestCase
             'type' => Keyword::TYPE_NORMAL,
         ]);
 
-        $article = \App\Addons\SeoContentAi\Models\SeoArticle::query()->create([
-            'site_id' => 2,
-            'title' => 'Quality test',
-            'body' => '<p>Text</p>',
-            'status' => 'publish',
-            'type' => 'article',
-        ]);
-
         SeoLinkMap::query()->create([
-            'keyword_id' => $keyword->id,
-            'source_article_id' => $article->id,
+            'keyword_id' => (int) $keyword->id,
             'anchor_text' => 'valid keyword phrase',
             'context_before' => '',
-            'link_type' => \App\Addons\SeoContentAi\Enums\SeoLinkMapType::Internal,
-            'status' => \App\Addons\SeoContentAi\Enums\SeoLinkMapStatus::Active,
+            'link_type' => 'internal',
+            'status' => 'active',
         ]);
 
         app(KeywordQualityFlagService::class)->recomputeForKeywordFromMaps((int) $keyword->id);
 
-        $this->assertContains('danger', app(KeywordMetaRepository::class)->getQualityFlags((int) $keyword->id));
+        $this->assertSame(KeywordReviewStatus::Active->value, (string) $keyword->fresh()?->review_status);
     }
 }

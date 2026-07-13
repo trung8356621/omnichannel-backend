@@ -2502,5 +2502,7 @@
             </script>
         @endif
     @endpush
+
+    @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-assign-content-project-modals', ['record' => $record])
 @endif
 </x-filament-panels::page>

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Jobs\AnalyzeArticleSeoJob;
 use App\Addons\SeoContentAi\Jobs\SyncArticleBodyMediaToWordPressJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
@@ -25,6 +24,7 @@ final class ArticleEditorSyncOrchestrator
         private readonly WordPressArticleSyncService $syncService,
         private readonly WordPressArticleContentService $wpContent,
         private readonly SeoImageOptimizationService $imageOptimization,
+        private readonly WordPressLocalMediaSyncService $localMediaSync,
     ) {}
 
     /**
@@ -87,19 +87,13 @@ final class ArticleEditorSyncOrchestrator
         } else {
             $html = $this->persist->persistLocalSilent($article, $context, $html);
             $this->syncService->storeLocalSaveFingerprint($article->fresh(), $html, $seoAnalysis);
-            AnalyzeArticleSeoJob::dispatch(
-                (int) $article->id,
-                $html,
-                $seoAnalysis,
-                trim($context->title),
-                $context->normalizedSlug() !== '' ? $context->normalizedSlug() : trim((string) ($article->slug ?? '')),
-                $context->seoMetaDescription !== '' ? $context->seoMetaDescription : null,
-            );
+            app(SeoArticleScoringQueueService::class)->dispatchForArticle($article->fresh() ?? $article, force: true);
             $steps[] = $this->step('save_local', 'done', 'Đã lưu bản nháp Laravel.');
         }
 
         $article = $article->fresh() ?? $article;
-        $ensure = $this->syncService->ensureWordPressPostForArticle($article, $seoOverride, self::EDITOR_SYNC_OPTIONS);
+        $syncOptions = $this->resolveEditorSyncOptions($article);
+        $ensure = $this->syncService->ensureWordPressPostForArticle($article, $seoOverride, $syncOptions);
         if (! ($ensure['success'] ?? false)) {
             $steps[] = $this->step('prepare_payload', 'error', (string) ($ensure['message'] ?? 'Không liên kết được WordPress.'));
 
@@ -113,7 +107,7 @@ final class ArticleEditorSyncOrchestrator
             return $this->failureResponse((string) ($wpContext['message'] ?? 'Không lấy được context WordPress.'), $steps);
         }
 
-        $prepared = $this->syncService->prepareEditorSyncPayload($article->fresh(), $seoOverride, self::EDITOR_SYNC_OPTIONS);
+        $prepared = $this->syncService->prepareEditorSyncPayload($article->fresh(), $seoOverride, $syncOptions);
         $mediaErrors = is_array($prepared['local_media_sync_errors'] ?? null)
             ? $prepared['local_media_sync_errors']
             : [];
@@ -164,7 +158,7 @@ final class ArticleEditorSyncOrchestrator
             $article->fresh(),
             $prepared,
             $decoded,
-            self::EDITOR_SYNC_OPTIONS,
+            $syncOptions,
         );
 
         if (! ($finalize['success'] ?? false)) {
@@ -173,14 +167,19 @@ final class ArticleEditorSyncOrchestrator
             return $this->failureResponse((string) ($finalize['message'] ?? 'Hoàn tất đồng bộ thất bại.'), $steps);
         }
 
-        SyncArticleBodyMediaToWordPressJob::dispatch((int) $article->id, $seoOverride);
+        $deferInlineMedia = (bool) ($syncOptions['defer_inline_media_sync'] ?? false);
+        if ($deferInlineMedia) {
+            SyncArticleBodyMediaToWordPressJob::dispatch((int) $article->id, $seoOverride);
+        }
 
         $remoteIdentity = $this->wpContent->refreshSlugAndPermalinkFromWordPress($article->fresh());
         $syncBody = (string) ($finalize['message'] ?? 'Đã đồng bộ lên WordPress.');
         if (! ($remoteIdentity['success'] ?? false)) {
             $syncBody .= ' Chưa tải lại được slug/permalink mới nhất từ WordPress.';
         }
-        $syncBody .= ' Ảnh trong nội dung đang được đồng bộ nền.';
+        if ($deferInlineMedia) {
+            $syncBody .= ' Ảnh trong nội dung đang được đồng bộ nền.';
+        }
 
         $steps[] = $this->step('finalize', 'done', (string) ($finalize['step_detail'] ?? $syncBody));
 
@@ -191,13 +190,29 @@ final class ArticleEditorSyncOrchestrator
             'warnings' => $warnings,
             'reload' => true,
             'clear_local_state' => true,
-            'media_sync_queued' => true,
+            'media_sync_queued' => $deferInlineMedia,
             'notification' => [
                 'title' => 'WordPress synced',
                 'body' => $syncBody,
                 'status' => 'success',
             ],
         ];
+    }
+
+    /**
+     * @return array{defer_inline_media_sync: bool, defer_finalize_media: bool}
+     */
+    private function resolveEditorSyncOptions(SeoArticle $article): array
+    {
+        $body = trim((string) ($article->body ?? ''));
+        if ($body !== '' && $this->localMediaSync->htmlContainsLocalSeoMedia($body)) {
+            return [
+                'defer_inline_media_sync' => false,
+                'defer_finalize_media' => false,
+            ];
+        }
+
+        return self::EDITOR_SYNC_OPTIONS;
     }
 
     /**

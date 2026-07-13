@@ -112,7 +112,7 @@ flowchart TB
 | --------- | ----------------------------------------------------------------- | ---------------------------- |
 | `editor`  | `BlockEditor` / `ActiveBlockEditor` (TipTap) / `ImageBlockEditor` | Luôn có                      |
 | `images`  | `ArticleImagesTab`                                                | Luôn có                      |
-| `reviews` | `ArticleReviewsTab`                                               | product + `show_reviews_tab` |
+| `reviews` | `ArticleReviewsTab` — quick create + refresh qua `articleEditorLivewire.js` | product + `show_reviews_tab` |
 | `seo`     | `SeoScorePanel`                                                   | Luôn có                      |
 
 
@@ -159,6 +159,9 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 | AI image / snippet               | `generateArticleImageFromEditor`, `generateFeaturedSnippetFromEditor`                                                |
 | AI video                         | `generateArticleVideoFromEditor`                                                                                     |
 | Links                            | `searchInternalLinkArticles`                                                                                         |
+| Assign keyword → Content Project | `mountAction('assignKeywordAnchorToContentProject')` (`LinkEditBubble`) → `completeKeywordAnchorContentProjectAssign()` → `ArticlePendingInternalLinkService::assignFromEditor()` |
+| Pending internal link event      | `pending-internal-link-ready` → chèn placeholder `#hash` vào anchor đã bôi đen                                      |
+| Reviews                          | `generateQuickPostReviews`, `refreshVirtualReviewsForEditor` → event `virtual-reviews-updated`                       |
 | Keyboard shortcuts               | `requestSaveArticle`, `requestSyncToWordPress` (bridge → collect HTML → action)                                      |
 | Polylang                         | `quickTranslateLinkedArticle`, `importMissingTranslation`, `requestTranslationGeneration`                            |
 | WP Attachment meta               | `renameAttachmentSlugsOnWordPress`, `updateAttachmentMetaOnWordPress`                                                |
@@ -199,11 +202,14 @@ sequenceDiagram
 
 | Nút                       | Phạm vi                                            | Hành vi                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Slug `{kebab-keyword}-1`, `-2`… theo thứ tự ảnh **trong bài**, bỏ qua ảnh Except. Rename local qua `renameSeoMedia` / WP qua Livewire `renameAttachmentSlugsOnWordPress` (gọi trực tiếp `callEditArticleLivewire`, không qua Alpine khi overlay). Sau rename: `syncSupplementalRowsFromBlockImages`, `syncProductAlbumUrlsFromBlockImages`, autosave. |
-| **Fix slug** (1 ảnh)      | Một dòng                                           | Cùng logic slug index như all; confirm WP nếu attachment WP.                                                                                                                                                                                                                                                                                          |
+| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | JS chỉ dùng `{kebab-keyword}-N` để **gửi** `new_slug` lên WP (N theo thứ tự block, bỏ Except). **Không** patch URL/slug block trước khi API xong. Sau WP/local rename: `finalizeBlocksAfterWpRename` / `applyRenameResultsToBlocks` map theo `attachment_id` / `seo_media_id` / `block_id` / `old_url` từ response PHP — không `replaceUrlSlug` theo index. Queue gửi kèm `block_id`; `enrichWpRenamedWithRequestMeta` + `EditArticle::enrichAttachmentRenameResultsWithRequestMeta` gắn lại `block_id` trước khi React apply. |
+| **Fix slug** (1 ảnh)      | Một dòng                                           | Cùng luồng queue + finalize; confirm WP nếu attachment WP.                                                                                                                                                                                                                                                                                          |
 | **Fix alt/title all**     | Ảnh không Except                                   | `alt` + `title` = focus keyword; đẩy meta lên SEO media + WP attachment.                                                                                                                                                                                                                                                                              |
 | **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + meta stores.                                                                                                                                                                                                                                                                                                   |
-| **Except**                | Ảnh có `blockId`                                   | Toggle `excludeQuickFix` trên block image → lưu `localStorage` draft + `data-exclude-quick-fix="1"` trên `<img>`/`<figure>`. Ảnh Except: disable Fix slug/alt; **không** tính vào thứ tự slug `-N`; không bị `finalizeBlocksAfterWpRename` ghi đè.                                                                                                    |
+| **Except**                | Ảnh có `blockId`                                   | Toggle `excludeQuickFix` trên block image → lưu `localStorage` draft + `data-exclude-quick-fix="1"` trên `<img>`/`<figure>`. **Tự động Except** khi chọn ảnh tab **Gốc (WP)** (`pickerTab === 'original'`, `withWpPickerExcludeQuickFix` trong `onEditorBlockImageSelected`). Ảnh Except: disable Fix slug/alt; không tính slug `-N`; không bị `finalizeBlocksAfterWpRename` ghi đè.                                                                                                    |
+| **UI hàng ảnh**           | Mỗi dòng trong tab                                 | Chỉ nút **Except** hiển thị trực tiếp; các thao tác còn lại (Fix slug, Fix alt/title, Xóa, Chỉnh sửa, Đóng dấu, Tách lưới) gom menu `⋯` (`.seo-article-images-more-*` trong `ArticleImagesTab.jsx` + `article-editor.css`). Cần `npm run build` bundle `article-editor` sau đổi JS/CSS. |
+
+**Mở đầu — không chèn ảnh:** `BlockInsertMenuBar` (`BlockInsertMenu.jsx`) nhận `imageInsertDisabled={section.isIntro}` cho menu **trước** và **sau** block (`SeoArticleEditor.jsx`). `ImageBlockEditor` `imagesLocked` khi block thuộc section intro.
 
 
 Logic slug/index: `assignInArticleQuickFixIndices`, `quickFixSlugIndexForBlock`, `applyQuickFixSlugToBlocks` / `applyQuickFixAltTitleToBlocks` đều filter `!excludeQuickFix`.
@@ -271,7 +277,7 @@ Cache trang (không search): `articleMediaPickerCache.js` → `localStorage`. Bo
 
 | Bước                         | Hành vi                                                                                                                               |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| Chọn ảnh tab `original` (WP) | `selectPickerImage` gửi `pickerTab: 'original'` trong `editor-block-image-selected` / `article-media-selected`                        |
+| Chọn ảnh tab `original` (WP) | `selectPickerImage` gửi `pickerTab: 'original'`; `withWpPickerExcludeQuickFix` → `excludeQuickFix: true` + `data-exclude-quick-fix` qua `renderImageFigure` + draft `localStorage` |
 | React                        | `SeoArticleEditor` cập nhật block/supplemental, `publishEditorImagesCatalog()` → event `seo-editor-images-catalog` (`autoSync: true`) |
 | Tab Hình ảnh                 | `ArticleImagesTab` nhận `blocks` + `supplementalImages` mới; `imagesReloadKey++` khi nguồn WP                                         |
 | Tab «Trong bài» (picker)     | Alpine lắng `seo-editor-images-catalog` → cập nhật `pickerCatalog` nếu modal đang mở                                                  |
@@ -291,7 +297,8 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 |------------|------|---------|
 | Host + slots | `edit-article.blade.php` | `.seo-assistant-host` — mỗi widget có `data-assistant-widget`, `data-assistant-widget-id`, `data-assistant-tab-label` |
 | Navigator | `seoAssistantNavigator.js` | `discoverWidgets()`, `switchPanel()`, search, badge; **không** scroll-to-widget |
-| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`) |
+| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`). Gợi ý keyword: 2 nút **Cảnh báo** / **Nguy hiểm** → `KeywordReviewPopover.jsx` → `POST /api/seo/keywords/{id}/review` (`KeywordReviewController`, `source=article_suggestion`, không bắt buộc link map). Keyword `review_status` warning/danger bị loại khỏi gợi ý server (`ArticleInternalLinkSuggestionService`). |
+| Keywords dictionary tabs | `ListKeywords.php` + `KeywordResource::getReviewedDictionaryQuery()` | Thẻ **Cần tối ưu** / **Không hiệu quả** lọc `review_status` warning/danger; scope site qua `forSite` hoặc `keyword_review_histories.article_id` (keyword đánh dấu từ editor chưa có link map vẫn hiện). |
 | Portals React | `SeoArticleEditor.jsx` | `createPortal` → `#seo-article-seo-assistant-root`, `#seo-article-image-assistant-root`, `#seo-article-links-root`, … |
 
 **Tabs:** auto-discover từ DOM; chip ảo **FAQ** / **CTA** inject sau tab **Links** (cùng slot `links`, filter section).
@@ -316,12 +323,26 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Event | Publisher | Subscriber |
 |-------|-----------|------------|
 | `seo-assistant-switch-panel` | `SeoArticleEditor` (mở tab ảnh), … | `seoAssistantNavigator` → `switchPanel()` |
-| `seo-assistant-navigator-badges` | `SeoArticleEditor`, `ArticleLinksSidebar` | Cập nhật badge tab (SEO, Images, Links, FAQ, CTA) |
+| `seo-assistant-navigator-badges` | `SeoArticleEditor`, `ArticleLinksSidebar` | Cập nhật badge tab (SEO, Images, **Reviews** `{count}` kể cả 0, Links, FAQ, CTA) |
+| `virtual-reviews-updated` | `EditArticle::generateQuickPostReviews`, `refreshVirtualReviewsForEditor` | `ArticleReviewsTab`, `SeoArticleEditor` — đồng bộ danh sách + count |
 | `seo-assistant-link-section` | `seoAssistantNavigator` | `ArticleLinksSidebar` filter section |
 | `seo-assistant-widget-control` | `seoAssistantNavigator` | React widgets (`set-collapsed`) |
 | `seo-sidebar-open-publish-tab` | Widget xuất bản / shortcut | Mở panel Publishing |
 
 **Lưu ý perf:** badge chỉ cập nhật qua event — không dùng `MutationObserver` + `characterData` trên subtree sidebar (gây freeze khi React SEO render).
+
+**Reviews / Tạo bình luận nhanh:**
+
+| Thành phần | File | Vai trò |
+|------------|------|---------|
+| UI panel | `ArticleReviewsTab.jsx` | Header: `{count} bình luận` + nút **Tạo bình luận nhanh** + **Làm mới** |
+| Livewire | `EditArticle::generateQuickPostReviews()` | Gọi `ArticleQuickPostReviewService::runForArticle()`; `abort_if` Content Manager |
+| Service | `ArticleQuickPostReviewService` | Workflow Đăng bình luận → `WordPressCommentReviewService` |
+| Service | `VirtualCommentService::getFromWordPress()` | GET `omi-seo-ai/v1/posts/{id}/comment-reviews` — đọc meta `_omi_seo_virtual_comments` + `wp_comments` |
+| WP plugin | `Rest_Controller::handle_get_comment_reviews` (≥ 1.0.51) | Trả virtual meta trước, merge review DB thật |
+| Job (async cũ) | `GenerateArticleReviewsJob` | Hàng đợi + cache notify — vẫn dùng khi flow queue |
+| Settings | `getEditorSettingsPayload()` | `can_quick_create_reviews`, `show_configure_reviews_link`, `quick_create_reviews_config_url` |
+| Metadata | `publish-sidebar.blade.php` | Chỉ hiển thị trạng thái duyệt / số bình luận — **không** còn nút tạo nhanh |
 
 ### 2.5.5 Publish sidebar — lên lịch & SEO score (gap / cần sửa)
 
@@ -621,7 +642,7 @@ Sau sync thành công: `body` Laravel có thể set `null` (nội dung authorita
 
 | Livewire method | Service | Khi dùng |
 |-----------------|---------|----------|
-| `renameAttachmentSlugsOnWordPress` | `WordPressArticleAttachmentService` | Fix slug all / từng ảnh |
+| `renameAttachmentSlugsOnWordPress` | `WordPressAttachmentRenameService` | Fix slug all / từng ảnh — enrich `renamed[]` với `block_id`/`old_url` từ request |
 | `updateAttachmentMetaOnWordPress` | `WordPressArticleAttachmentService` | Fix alt/title |
 
 ### 2.6.6 Entry points khác (ngoài editor)

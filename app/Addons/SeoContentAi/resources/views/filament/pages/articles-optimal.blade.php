@@ -1,13 +1,23 @@
 ﻿@php
-    $paginator = $this->resultsPaginator;
     $projectOptions = $this->getContentProjectOptions();
     $projectSiteOptions = $this->getSidebarProjectSiteOptions();
     $writerOptions = $this->getWriterOptions();
     $assignTypeOptions = $this->getAssignTypeOptions();
     $rewriteModeOptions = $this->getRewriteModeOptions();
     $sidebarArticles = $this->getSidebarProjectArticles();
+    $scoringFilters = $this->getScoringRuleFilterDefinitions();
+    $aggregateFilters = $this->getAggregateFilterDefinitions();
+    $paginator = $hasScanned ? $this->resultsPaginator : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
     $visibleIds = collect($paginator->items())->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
 @endphp
+
+@if ($defaultLoading)
+    <div class="mb-4 space-y-3 animate-pulse" wire:loading.class.remove="hidden">
+        @foreach (range(1, 5) as $skeletonRow)
+            <div class="h-12 rounded-lg bg-gray-200 dark:bg-gray-800"></div>
+        @endforeach
+    </div>
+@endif
 
 <div
     class="fi-page articles-optimal-page"
@@ -26,6 +36,8 @@
         quickSiteId: @js((int) ($filterSiteId ?: \App\Addons\SeoContentAi\Support\SeoAccessControl::globalSiteId() ?: 0)),
         quickWriterId: '',
         quickCreateSubmitting: false,
+        sidebarShowLabel: @js(__('seo-content-ai::filament.articles_optimal.sidebar_show')),
+        sidebarHideLabel: @js(__('seo-content-ai::filament.articles_optimal.sidebar_hide')),
         visibleIds: @js($visibleIds),
         visibleSelected() {
             return this.visibleIds.length > 0 && this.visibleIds.every((id) => this.selectedArticleIds.map(Number).includes(Number(id)));
@@ -118,42 +130,101 @@
                     </div>
                 </div>
 
-                <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterThinContent" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_thin_content') }}
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterPoorImageDensity" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_poor_image') }}
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterMissingH2" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_missing_h2') }}
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterMissingFaq" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_missing_faq') }}
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterLowSeoScore" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_low_score') }}
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
-                        <input type="checkbox" wire:model="filterTechnicalSeoScore" class="rounded border-gray-300">
-                        {{ __('seo-content-ai::filament.articles_optimal.filter_technical_seo_score') }}
-                    </label>
+                <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                        {{ __('seo-content-ai::filament.articles_optimal.filter_group_scoring_rules') }}
+                        @if (count($scoringFilters) > 0)
+                            <span class="font-normal text-gray-500">({{ count($scoringFilters) }})</span>
+                        @endif
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ __('seo-content-ai::filament.articles_optimal.filter_scoring_any_hint') }}
+                    </p>
+                    @if ($scoringFilters === [])
+                        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                            {{ __('seo-content-ai::filament.articles_optimal.filter_scoring_empty') }}
+                        </p>
+                    @else
+                        <div class="mt-2 grid gap-3 md:grid-cols-2">
+                            @foreach ($scoringFilters as $filter)
+                                <label wire:key="audit-filter-{{ $filter['key'] }}" class="inline-flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
+                                    <input
+                                        type="checkbox"
+                                        value="{{ $filter['key'] }}"
+                                        wire:model="selectedScoringRuleKeys"
+                                        class="mt-0.5 rounded border-gray-300"
+                                    >
+                                    <span>{{ $filter['label'] }}</span>
+                                </label>
+                            @endforeach
+                        </div>
+                    @endif
+                </div>
+
+                <div>
+                    <p class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                        {{ __('seo-content-ai::filament.articles_optimal.filter_group_aggregate') }}
+                    </p>
+                    <div class="mt-2 grid gap-3 md:grid-cols-2">
+                        @foreach ($aggregateFilters as $aggregate)
+                            <label wire:key="audit-aggregate-{{ $aggregate['key'] }}" class="inline-flex items-start gap-2 text-sm text-gray-700 dark:text-gray-200">
+                                <input
+                                    type="checkbox"
+                                    wire:model="{{ $aggregate['key'] === \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::AGGREGATE_FILTER_LOW_SEO_SCORE ? 'filterLowSeoScore' : 'filterTechnicalSeoScore' }}"
+                                    class="mt-0.5 rounded border-gray-300"
+                                >
+                                <span>{{ $aggregate['label'] }}</span>
+                            </label>
+                        @endforeach
+                    </div>
                 </div>
 
                 <div>
                     <x-filament::button type="submit" wire:loading.attr="disabled" wire:target="runScan">
-                        <span wire:loading.remove wire:target="runScan">
-                            {{ __('seo-content-ai::filament.articles_optimal.scan_button') }}
-                        </span>
-                        <span wire:loading wire:target="runScan">
-                            {{ __('seo-content-ai::filament.articles_optimal.scanning') }}
-                        </span>
+                        @if ($scanState === 'failed')
+                            <span>{{ __('seo-content-ai::filament.articles_optimal.scan_retry') }}</span>
+                        @else
+                            <span wire:loading.remove wire:target="runScan">
+                                {{ __('seo-content-ai::filament.articles_optimal.scan_button') }}
+                            </span>
+                            <span wire:loading wire:target="runScan" class="inline-flex items-center gap-2">
+                                <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                </svg>
+                                {{ __('seo-content-ai::filament.articles_optimal.scanning') }}
+                            </span>
+                        @endif
                     </x-filament::button>
+                    @if ($scanError)
+                        <p class="mt-2 text-sm text-danger-600 dark:text-danger-400">{{ $scanError }}</p>
+                    @endif
+                    @if ($scanNotice)
+                        <p class="mt-2 text-sm text-warning-600 dark:text-warning-400">{{ $scanNotice }}</p>
+                    @endif
+                    @if ($scanState === 'empty' && $filterSiteId)
+                        <div class="mt-3">
+                            <x-filament::button
+                                type="button"
+                                size="sm"
+                                color="gray"
+                                wire:click="queueMissingScoringForFilterSite"
+                                wire:loading.attr="disabled"
+                                wire:target="queueMissingScoringForFilterSite"
+                            >
+                                <span wire:loading.remove wire:target="queueMissingScoringForFilterSite">
+                                    {{ __('seo-content-ai::filament.articles_optimal.queue_missing_scoring') }}
+                                </span>
+                                <span wire:loading wire:target="queueMissingScoringForFilterSite" class="inline-flex items-center gap-2">
+                                    <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                                    </svg>
+                                    {{ __('seo-content-ai::filament.articles_optimal.processing') }}
+                                </span>
+                            </x-filament::button>
+                        </div>
+                    @endif
                 </div>
             </form>
         </x-filament::section>
@@ -162,6 +233,12 @@
             <x-slot name="heading">
                 {{ __('seo-content-ai::filament.articles_optimal.results_heading') }}
             </x-slot>
+
+            @if ($hasScanned)
+                <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
+                    {{ __('seo-content-ai::filament.articles_optimal.stale_metadata_notice') }}
+                </p>
+            @endif
 
             @if (! $hasScanned)
                 <p class="text-sm text-gray-600 dark:text-gray-300">
@@ -192,7 +269,7 @@
                             Assigning...
                         </span>
                     </x-filament::button>
-                    <span class="text-xs text-gray-500">Chá»n project á»Ÿ sidebar Ä‘á»ƒ bulk assign nhanh.</span>
+                    <span class="text-xs text-gray-500">{{ __('seo-content-ai::filament.articles_optimal.bulk_assign_hint') }}</span>
                 </div>
 
                 <div class="overflow-x-auto">
@@ -243,9 +320,31 @@
                                     <td class="px-3 py-3 align-top text-gray-600 dark:text-gray-300">{{ $row['domain'] }}</td>
                                     <td class="px-3 py-3 align-top">
                                         <ul class="list-disc pl-4 space-y-1 text-gray-700 dark:text-gray-300">
-                                            @foreach ($row['reason_labels'] as $label)
-                                                <li>{{ $label }}</li>
-                                            @endforeach
+                                            @if (! empty($row['has_keyword_flags']))
+                                                <li class="font-medium text-amber-700 dark:text-amber-300">
+                                                    {{ __('seo-content-ai::filament.articles_optimal.source_keyword_review') }}
+                                                    ({{ __('seo-content-ai::filament.articles_optimal.keyword_warning_count', ['count' => (int) ($row['warning_count'] ?? 0)]) }},
+                                                    {{ __('seo-content-ai::filament.articles_optimal.keyword_danger_count', ['count' => (int) ($row['danger_count'] ?? 0)]) }})
+                                                </li>
+                                                @foreach (($row['flagged_keywords'] ?? []) as $flaggedKeyword)
+                                                    <li>
+                                                        <span class="font-medium">{{ $flaggedKeyword['phrase'] ?? '' }}</span>
+                                                        @if (! empty($flaggedKeyword['reason']))
+                                                            — {{ $flaggedKeyword['reason'] }}
+                                                        @endif
+                                                    </li>
+                                                @endforeach
+                                            @endif
+                                            @if (! empty($row['has_seo_rule_matches']))
+                                                <li class="font-medium text-sky-700 dark:text-sky-300">{{ __('seo-content-ai::filament.articles_optimal.source_seo_rules') }}</li>
+                                                @foreach ($row['reason_labels'] as $label)
+                                                    <li>{{ $label }}</li>
+                                                @endforeach
+                                            @elseif (empty($row['has_keyword_flags']))
+                                                @foreach ($row['reason_labels'] as $label)
+                                                    <li>{{ $label }}</li>
+                                                @endforeach
+                                            @endif
                                         </ul>
                                     </td>
                                     <td class="px-3 py-3 align-top">
@@ -258,7 +357,7 @@
                                     </td>
                                     <td class="px-3 py-3 align-top">
                                         <div class="flex flex-wrap gap-2">
-                                            <x-filament::icon-button tag="a" href="{{ $row['edit_url'] }}" icon="heroicon-o-pencil-square" size="sm" color="gray" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_edit') }}" />
+                                            <x-filament::icon-button tag="a" href="{{ $row['edit_url'] }}" icon="heroicon-o-pencil-square" size="sm" color="gray" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_edit') }}" label="{{ __('seo-content-ai::filament.articles_optimal.action_open_article') }}" />
                                             <x-filament::icon-button icon="heroicon-o-archive-box-arrow-down" size="sm" color="warning" wire:click="demoteToDraft({{ $row['id'] }})" wire:loading.attr="disabled" wire:loading.class="opacity-50 pointer-events-none" wire:target="demoteToDraft" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_demote_draft') }}" />
                                             <x-filament::icon-button
                                                 icon="heroicon-o-folder-plus"
@@ -291,7 +390,7 @@
         class="fixed right-0 top-24 z-40 rounded-l-lg border border-r-0 border-gray-200 bg-white px-2 py-3 text-gray-600 shadow dark:border-white/10 dark:bg-gray-900 dark:text-gray-300"
 x-bind:style="sidebarCollapsed ? 'transform: translateX(0);' : 'transform: translateX(-30vw);'"
         x-on:click="sidebarCollapsed = ! sidebarCollapsed"
-        x-bind:title="sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'"
+        x-bind:title="sidebarCollapsed ? sidebarShowLabel : sidebarHideLabel"
     >
         <span x-show="! sidebarCollapsed">&gt;</span>
         <span x-show="sidebarCollapsed">&lt;</span>
@@ -311,19 +410,19 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
                     icon="heroicon-o-chevron-right"
                     color="gray"
                     x-on:click="sidebarCollapsed = true"
-                    tooltip="Thu gá»n sidebar"
+                    tooltip="{{ __('seo-content-ai::filament.articles_optimal.sidebar_collapse') }}"
                 />
             </div>
 
             <div class="flex items-end gap-2">
                 <div class="min-w-0 flex-1">
-                    <label class="text-sm font-medium text-gray-700 dark:text-gray-200">Content Project</label>
+                    <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.articles_optimal.sidebar_project_label') }}</label>
                     <x-select
                         x-model="sidebarProjectId"
                         x-on:change="$wire.selectSidebarProject($event.target.value)"
                         class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-950"
                     >
-                        <option value="">-- Chá»n project --</option>
+                        <option value="">{{ __('seo-content-ai::filament.articles_optimal.sidebar_select_project') }}</option>
                         @foreach ($projectOptions as $projectId => $projectLabel)
                             <option value="{{ $projectId }}">{{ $projectLabel }}</option>
                         @endforeach
@@ -334,17 +433,17 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
 
             <div class="rounded-lg border border-gray-200 dark:border-white/10">
                 <div class="border-b border-gray-100 px-3 py-2 text-sm font-semibold dark:border-white/10">
-                    BÃ i viáº¿t trong project
+                    {{ __('seo-content-ai::filament.articles_optimal.sidebar_articles_heading') }}
                 </div>
                 <div wire:loading.class="opacity-50" wire:target="selectSidebarProject,assignArticleToSelectedProject,assignSelectedArticlesToSelectedProject,quickCreateSidebarProject" class="divide-y divide-gray-100 dark:divide-white/10">
                     @forelse ($sidebarArticles as $article)
                         <div class="px-3 py-2">
                             <div class="truncate text-sm font-medium">{{ $article['title'] }}</div>
-                            <div class="text-xs text-gray-500">{{ $article['type'] }} Â· {{ $article['status'] }}</div>
+                            <div class="text-xs text-gray-500">{{ $article['type'] }} · {{ $article['status'] }}</div>
                         </div>
                     @empty
                         <div class="px-3 py-8 text-center text-sm text-gray-500">
-                            ChÆ°a chá»n project hoáº·c project chÆ°a cÃ³ bÃ i.
+                            {{ __('seo-content-ai::filament.articles_optimal.sidebar_empty') }}
                         </div>
                     @endforelse
                 </div>
@@ -352,12 +451,10 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
         </div>
     </aside>
 
-    <div x-show="assignOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-
-    {{-- Loading overlay toÃ n trang cho cÃ¡c Livewire action --}}
+    {{-- Loading overlay cho assign / demote — không gắn runScan hay pagination --}}
     <div
         wire:loading
-        wire:target="runScan,demoteToDraft,assignArticleToContentProject,assignArticleToSelectedProject,assignSelectedArticlesToSelectedProject,quickCreateSidebarProject,selectSidebarProject,resultsPaginator,nextPage,previousPage,gotoPage"
+        wire:target="demoteToDraft,assignArticleToContentProject,assignArticleToSelectedProject,assignSelectedArticlesToSelectedProject,quickCreateSidebarProject"
         class="fixed inset-0 z-[100] flex items-center justify-center bg-white/70 dark:bg-gray-950/70"
         style="backdrop-filter: blur(2px);"
     >
@@ -366,18 +463,18 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
             </svg>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-200">Äang xá»­ lÃ½â€¦</span>
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.articles_optimal.processing') }}</span>
         </div>
     </div>
 
-    <div x-show="assignOpen" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
+    <div x-show="assignOpen" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 articles-optimal-assign-content-project-modal">
         <form x-on:submit.prevent="submitAssign()" class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
-            <h3 class="text-base font-semibold">Assign to Content Project</h3>
+            <h3 class="text-base font-semibold">{{ __('seo-content-ai::filament.articles_optimal.assign_modal_heading') }}</h3>
             <div class="mt-4 space-y-4">
                 <div>
-                    <label class="text-sm font-medium">Content Project</label>
+                    <label class="text-sm font-medium">{{ __('seo-content-ai::filament.articles_optimal.sidebar_project_label') }}</label>
                     <x-select x-model="assignProjectId" required class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                        <option value="">-- Chá»n project --</option>
+                        <option value="">{{ __('seo-content-ai::filament.articles_optimal.sidebar_select_project') }}</option>
                         @foreach ($projectOptions as $projectId => $projectLabel)
                             <option value="{{ $projectId }}">{{ $projectLabel }}</option>
                         @endforeach

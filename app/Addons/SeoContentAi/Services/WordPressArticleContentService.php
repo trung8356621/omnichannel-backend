@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\ArticleContentSslUrlNormalizer;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
@@ -19,13 +20,16 @@ class WordPressArticleContentService
     public function __construct(
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
         private readonly WordPressArticleTimestampService $timestampService,
+        private readonly ArticleContentSslUrlNormalizer $sslUrlNormalizer,
     ) {}
 
     public function resolveEditorHtml(SeoArticle $article): string
     {
+        $article->loadMissing('site');
+
         $body = trim((string) ($article->body ?? ''));
         if ($body !== '') {
-            return (string) $article->body;
+            return $this->normalizeEditorHtmlForSite($body, $article->site);
         }
 
         $cached = trim((string) $this->getMeta($article, 'wp_post_content', ''));
@@ -36,7 +40,7 @@ class WordPressArticleContentService
             $remote = $this->fetchFromWordPress($article, importFaqs: false);
             $fresh = trim((string) ($remote['post_content'] ?? ''));
             if ($fresh !== '') {
-                return $fresh;
+                return $this->normalizeEditorHtmlForSite($fresh, $article->site);
             }
         }
 
@@ -44,17 +48,25 @@ class WordPressArticleContentService
         // Tránh hiển thị nhầm nội dung post WP trùng term_id (vd. JSON font family).
         if ($this->isTaxonomyRecord($article)) {
             if ($entity === 'term' && $cached !== '') {
-                return $cached;
+                return $this->normalizeEditorHtmlForSite($cached, $article->site);
             }
 
-            return $cached;
+            return $this->normalizeEditorHtmlForSite($cached, $article->site);
         }
 
         if ($cached !== '') {
-            return $cached;
+            return $this->normalizeEditorHtmlForSite($cached, $article->site);
         }
 
         return '';
+    }
+
+    private function normalizeEditorHtmlForSite(string $html, mixed $site): string
+    {
+        return $this->sslUrlNormalizer->normalizeForSite(
+            $html,
+            $site instanceof Site ? $site : null,
+        );
     }
 
     public function resolveSlug(SeoArticle $article): string

@@ -16,8 +16,6 @@ use App\Addons\SeoContentAi\Support\KeywordOrphanCleanup;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\KeywordSyncIsolation;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
-use App\Addons\SeoContentAi\Services\SeoScoringCalculator;
-use App\Addons\SeoContentAi\Services\SeoScoringEngine;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
 use DOMXPath;
@@ -55,7 +53,7 @@ class SeoAnalyzerService
             $article,
             $focusKeyword,
             $this->resolveSeoTitle($article),
-            (string) ($article->body ?? ''),
+            $this->resolveScoringContentForArticle($article),
             trim((string) ($article->slug ?? '')),
             $this->resolveMetaDescription($article),
             $this->resolveArticleDomain($article, $domainOverride)
@@ -134,6 +132,7 @@ class SeoAnalyzerService
                         $article,
                         $content,
                         $emptyLinks['internal'] ?? [],
+                        $emptyLinks['external'] ?? [],
                     ),
                 ],
             );
@@ -160,6 +159,7 @@ class SeoAnalyzerService
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
+                $extractedLinks['external'] ?? [],
             ),
         ]);
     }
@@ -216,6 +216,7 @@ class SeoAnalyzerService
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
+                $extractedLinks['external'] ?? [],
             ),
         ]);
     }
@@ -252,6 +253,7 @@ class SeoAnalyzerService
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
+                $extractedLinks['external'] ?? [],
             ),
         ]);
     }
@@ -709,6 +711,33 @@ class SeoAnalyzerService
     public function resolveFocusKeywordForArticle(SeoArticle $article): ?string
     {
         return $this->resolveFocusKeyword($article);
+    }
+
+    public function resolveSeoTitleForArticle(SeoArticle $article): string
+    {
+        return $this->resolveSeoTitle($article);
+    }
+
+    public function resolveMetaDescriptionForArticle(SeoArticle $article): string
+    {
+        return $this->resolveMetaDescription($article);
+    }
+
+    public function resolveScoringContentForArticle(SeoArticle $article): string
+    {
+        $body = trim((string) ($article->body ?? ''));
+        if ($body !== '') {
+            return $body;
+        }
+
+        $article->loadMissing('articleMetas');
+        $wpContent = $article->articleMetas->firstWhere('meta_key', 'wp_post_content');
+
+        if ($wpContent && is_string($wpContent->meta_value) && trim($wpContent->meta_value) !== '') {
+            return trim($wpContent->meta_value);
+        }
+
+        return '';
     }
 
     private function resolveFocusKeyword(SeoArticle $article): ?string

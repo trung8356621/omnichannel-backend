@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources;
 
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 use App\Addons\SeoContentAi\Models\Keyword;
+use App\Addons\SeoContentAi\Models\KeywordReviewHistory;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLink;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
@@ -17,6 +19,7 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
+use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\SeoRankKeywordGroupService;
 use App\Addons\SeoContentAi\Services\TagPersistenceService;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
@@ -1408,6 +1411,15 @@ class KeywordResource extends SeoPanelResource
 
     public static function resolveDictionaryStatusKey(Keyword $record): string
     {
+        $reviewStatus = KeywordReviewStatus::tryFrom((string) ($record->review_status ?? ''));
+        if ($reviewStatus === KeywordReviewStatus::Danger) {
+            return 'error';
+        }
+
+        if ($reviewStatus === KeywordReviewStatus::Warning) {
+            return 'needs_optimization';
+        }
+
         $hasBroken = $record->relationLoaded('linkMaps')
             ? $record->linkMaps->contains(static fn (SeoLinkMap $map): bool => $map->status === SeoLinkMapStatus::Broken)
             : $record->linkMaps()->where('status', SeoLinkMapStatus::Broken)->exists();
@@ -1420,7 +1432,7 @@ class KeywordResource extends SeoPanelResource
             return 'active';
         }
 
-        return 'needs_optimization';
+        return 'active';
     }
 
     public static function resolveDictionaryStatusLabel(string $statusKey): string
@@ -1954,6 +1966,63 @@ class KeywordResource extends SeoPanelResource
     }
 
     /**
+     * Query từ điển cho tab Cần tối ưu / Không hiệu quả — không lọc word-count, anchor giả, hay bắt buộc link map.
+     */
+    public static function getReviewedDictionaryQuery(): Builder
+    {
+        $query = parent::getEloquentQuery()
+            ->with([
+                'linkMaps' => static fn ($mapQuery): mixed => $mapQuery
+                    ->orderBy('id')
+                    ->with([
+                        'sourceArticle:id,site_id,title,slug',
+                        'targetArticle:id,site_id,title,slug',
+                    ]),
+                'mainArticles.site',
+                'parent:id,phrase',
+                'children' => fn (HasMany $query): HasMany => $query->orderBy('phrase'),
+                'reviewReason:id,name,default_severity',
+            ])
+            ->selectRaw('keywords.*, '.static::wordCountExpression().' as word_count')
+            ->withCount([
+                'mainArticles as main_articles_count',
+                ...Keyword::linkMapCountRelations(),
+                'linkMaps as inbound_links_count',
+                'children as children_count',
+            ])
+            ->whereIn('review_status', [
+                KeywordReviewStatus::Warning->value,
+                KeywordReviewStatus::Danger->value,
+            ]);
+
+        if (SeoAccessControl::shouldScopeToAccountOwner()) {
+            $siteIds = SeoAccessControl::accessibleSiteIds();
+            $query->forSites($siteIds);
+        }
+
+        return $query;
+    }
+
+    public static function applyReviewedDictionarySiteScope(Builder $query, int $siteId): Builder
+    {
+        if ($siteId <= 0) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $builder) use ($siteId): void {
+            $builder
+                ->where(function (Builder $siteScope) use ($siteId): void {
+                    $siteScope->forSite($siteId);
+                })
+                ->orWhereIn('keywords.id', KeywordReviewHistory::query()
+                    ->select('keyword_id')
+                    ->whereIn('article_id', SeoArticle::query()
+                        ->where('site_id', $siteId)
+                        ->select('id')));
+        });
+    }
+
+    /**
      * @return list<Forms\Components\Component>
      */
     public static function editKeywordFormSchema(Keyword $record): array
@@ -2205,6 +2274,46 @@ class KeywordResource extends SeoPanelResource
 
         $domainOptions = static::siteSelectOptions();
 
+        $projectFields = collect($domainOptions)
+            ->map(function (string $label, int|string $siteId) use ($defaultSiteIds): Forms\Components\Select {
+                $siteId = (int) $siteId;
+                $fieldName = 'project_id_'.$siteId;
+
+                return ArticleResource::assignContentProjectSelectField(
+                    fn (): ?int => $siteId,
+                    fieldName: $fieldName,
+                )
+                    ->key('keyword-assign-project-'.$siteId)
+                    ->label(__('seo-content-ai::filament.article_list.content_project').' — '.trim($label))
+                    ->default(function () use ($siteId, $defaultSiteIds): mixed {
+                        if (! in_array($siteId, $defaultSiteIds, true)) {
+                            return null;
+                        }
+
+                        $direct = ArticleResource::resolveDirectAssignContentProjectId($siteId);
+
+                        return $direct !== null && $direct > 0 ? $direct : null;
+                    })
+                    ->required(fn (Get $get): bool => in_array(
+                        $siteId,
+                        collect($get('site_ids') ?? [])
+                            ->filter(static fn (mixed $value): bool => is_numeric($value) && (int) $value > 0)
+                            ->map(static fn (mixed $value): int => (int) $value)
+                            ->all(),
+                        true,
+                    ))
+                    ->visible(fn (Get $get): bool => in_array(
+                        $siteId,
+                        collect($get('site_ids') ?? [])
+                            ->filter(static fn (mixed $value): bool => is_numeric($value) && (int) $value > 0)
+                            ->map(static fn (mixed $value): int => (int) $value)
+                            ->all(),
+                        true,
+                    ));
+            })
+            ->values()
+            ->all();
+
         return [
             Forms\Components\Select::make('site_ids')
                 ->label(__('seo-content-ai::filament.keyword.domain'))
@@ -2217,29 +2326,35 @@ class KeywordResource extends SeoPanelResource
                 ->native(false)
                 ->live()
                 ->helperText(__('seo-content-ai::filament.keyword.assign_to_content_project_sites_hint')),
-            Forms\Components\Group::make()
-                ->schema(function (Get $get) use ($domainOptions): array {
-                    $siteIds = collect($get('site_ids') ?? [])
-                        ->filter(static fn (mixed $siteId): bool => is_numeric($siteId) && (int) $siteId > 0)
-                        ->map(static fn (mixed $siteId): int => (int) $siteId)
-                        ->unique()
-                        ->values();
+            ...$projectFields,
+        ];
+    }
 
-                    return $siteIds
-                        ->map(function (int $siteId) use ($domainOptions): Forms\Components\Select {
-                            $label = trim((string) ($domainOptions[$siteId] ?? ('#'.$siteId)));
+    /**
+     * Form gọn cho editor bài viết: domain cố định theo bài, tránh schema động mất state.
+     *
+     * @return list<Forms\Components\Component>
+     */
+    public static function assignKeywordContentProjectFormSchemaForSite(int $siteId): array
+    {
+        if ($siteId <= 0) {
+            return static::assignKeywordContentProjectFormSchema();
+        }
 
-                            return ArticleResource::assignContentProjectSelectField(
-                                fn (): ?int => $siteId,
-                            )
-                                ->name('project_id_'.$siteId)
-                                ->label(__('seo-content-ai::filament.article_list.content_project').' — '.$label);
-                        })
-                        ->all();
-                })
-                ->visible(fn (Get $get): bool => collect($get('site_ids') ?? [])
-                    ->filter(static fn (mixed $siteId): bool => is_numeric($siteId) && (int) $siteId > 0)
-                    ->isNotEmpty()),
+        $domainOptions = static::siteSelectOptions();
+        $label = trim((string) ($domainOptions[$siteId] ?? ('#'.$siteId)));
+        $fieldName = 'project_id_'.$siteId;
+
+        return [
+            Forms\Components\Hidden::make('site_ids')
+                ->default([$siteId])
+                ->dehydrated(),
+            ArticleResource::assignContentProjectSelectField(
+                fn (): ?int => $siteId,
+                fieldName: $fieldName,
+            )
+                ->key('keyword-assign-project-'.$siteId)
+                ->label(__('seo-content-ai::filament.article_list.content_project').' — '.$label),
         ];
     }
 
@@ -2344,7 +2459,7 @@ class KeywordResource extends SeoPanelResource
         $projectSiteId = (int) ($project->site_id ?? 0);
         $targetProjectId = (int) $project->id;
 
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
+        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, $targetSiteId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
             $project->refresh();
             $max = $project->maxTasksAllowed();
             $currentTotal = $project->registeredTaskCount();

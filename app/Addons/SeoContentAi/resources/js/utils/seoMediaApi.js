@@ -242,9 +242,9 @@ export async function uploadSeoMediaFromFile(file, { articleId = null, siteId = 
 /**
  * Tải ảnh từ URL bên ngoài, tối ưu theo cấu hình site và lưu thư viện.
  * @param {string} remoteUrl
- * @param {{ articleId?: number|null, siteId?: number|null }} options
+ * @param {{ articleId?: number|null, siteId?: number|null, randomFilename?: boolean }} options
  */
-export async function importSeoMediaFromUrl(remoteUrl, { articleId = null, siteId = null } = {}) {
+export async function importSeoMediaFromUrl(remoteUrl, { articleId = null, siteId = null, randomFilename = false } = {}) {
     const url = String(remoteUrl ?? '').trim();
     if (!url) {
         throw new Error('Vui lòng nhập URL ảnh.');
@@ -260,6 +260,7 @@ export async function importSeoMediaFromUrl(remoteUrl, { articleId = null, siteI
         credentials: 'same-origin',
         body: JSON.stringify({
             url,
+            ...(randomFilename ? { random_filename: true } : {}),
             ...(articleId != null && !Number.isNaN(Number(articleId))
                 ? { article_id: Number(articleId) }
                 : {}),

@@ -32,6 +32,26 @@ export function slugFromUrl(src) {
     }
 }
 
+export function isWordPressOriginalPickerTab(pickerTab) {
+    return String(pickerTab ?? '').trim() === 'original';
+}
+
+/** Ảnh chọn từ tab Gốc (WP) trong media picker → tự Except khỏi quick-fix hàng loạt. */
+export function shouldAutoExcludeQuickFixFromWpPicker(pickerTab, wpAttachmentId = 0) {
+    return isWordPressOriginalPickerTab(pickerTab) && Number(wpAttachmentId ?? 0) > 0;
+}
+
+export function withWpPickerExcludeQuickFix(image, pickerTab, wpAttachmentId = 0) {
+    if (!shouldAutoExcludeQuickFixFromWpPicker(pickerTab, wpAttachmentId)) {
+        return image;
+    }
+
+    return {
+        ...image,
+        excludeQuickFix: true,
+    };
+}
+
 export function replaceUrlSlug(src, newSlug) {
     if (!src || !newSlug) return src;
     try {
@@ -509,6 +529,7 @@ export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
             new_slug: suggestedSlug,
             old_url: oldUrlForWp,
             old_slug: oldSlug,
+            block_id: String(row?.blockId ?? row?.block_id ?? '').trim(),
         };
     }
 
@@ -623,6 +644,7 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
             new_slug: slug,
             old_url: oldUrlForWp,
             old_slug: oldSlug,
+            block_id: String(row?.blockId ?? '').trim(),
         });
     }
 
@@ -857,12 +879,59 @@ export function applyQuickFixImagesToBlocks(blocks, keyword) {
  * @param {Array} wpRenamed
  * @param {Array} localResults
  */
+/**
+ * Gắn block_id / old_url từ request rename vào kết quả WordPress (plugin không echo block_id).
+ */
+export function enrichWpRenamedWithRequestMeta(renamed = [], requestItems = []) {
+    const byAttachmentId = new Map();
+    const byOldUrl = new Map();
+
+    (Array.isArray(requestItems) ? requestItems : []).forEach((item) => {
+        const attachmentId = Number(item?.attachment_id ?? item?.wp_attachment_id ?? 0);
+        const blockId = String(item?.block_id ?? item?.blockId ?? '').trim();
+        const oldUrl = String(item?.old_url ?? item?.oldUrl ?? item?.src ?? '').trim();
+        const oldUrlKey = oldUrl ? normalizeSrcKey(oldUrl) : '';
+        const meta = { block_id: blockId, old_url: oldUrl };
+
+        if (attachmentId > 0) {
+            byAttachmentId.set(attachmentId, meta);
+        }
+        if (oldUrlKey !== '') {
+            byOldUrl.set(oldUrlKey, meta);
+        }
+    });
+
+    return (Array.isArray(renamed) ? renamed : []).map((row) => {
+        const attachmentId = Number(row?.attachment_id ?? row?.attachmentId ?? 0);
+        const responseOldUrl = String(row?.old_url ?? row?.oldUrl ?? '').trim();
+        const responseOldUrlKey = responseOldUrl ? normalizeSrcKey(responseOldUrl) : '';
+        const meta =
+            (attachmentId > 0 && byAttachmentId.get(attachmentId)) ||
+            (responseOldUrlKey !== '' && byOldUrl.get(responseOldUrlKey)) ||
+            null;
+
+        if (!meta) {
+            return row;
+        }
+
+        return {
+            ...row,
+            block_id: String(row?.block_id ?? row?.blockId ?? meta.block_id ?? '').trim(),
+            old_url: responseOldUrl || meta.old_url,
+        };
+    });
+}
+
 export function normalizeRenameEntries(wpRenamed = [], localResults = []) {
     const entries = [];
 
     (Array.isArray(wpRenamed) ? wpRenamed : []).forEach((row) => {
         const attachmentId = Number(row?.attachment_id ?? row?.attachmentId ?? 0);
         const newUrl = String(row?.new_url ?? row?.newUrl ?? '').trim();
+        const success = row?.success;
+        if (success === false) {
+            return;
+        }
         if (attachmentId <= 0 || newUrl === '') {
             return;
         }
@@ -931,7 +1000,10 @@ function findRenameEntryForImageRow(row, maps) {
     const wpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
     const seoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
     const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
-    const srcKey = normalizeSrcKey(String(row?.src ?? ''));
+    const srcCandidates = [
+        normalizeSrcKey(String(row?.src ?? '')),
+        normalizeSrcKey(String(row?.wpSrc ?? row?.wp_src ?? row?.wp_url ?? '')),
+    ].filter((key) => key !== '');
 
     if (wpId > 0 && maps.byAttachmentId.has(wpId)) {
         return maps.byAttachmentId.get(wpId);
@@ -942,8 +1014,10 @@ function findRenameEntryForImageRow(row, maps) {
     if (blockId !== '' && maps.byBlockId.has(blockId)) {
         return maps.byBlockId.get(blockId);
     }
-    if (srcKey !== '' && maps.byOldUrl.has(srcKey)) {
-        return maps.byOldUrl.get(srcKey);
+    for (const srcKey of srcCandidates) {
+        if (maps.byOldUrl.has(srcKey)) {
+            return maps.byOldUrl.get(srcKey);
+        }
     }
 
     return null;
@@ -974,6 +1048,10 @@ export function resetSupplementalImagesAfterSlugRename(supplementalRows, blocks,
             return key === '' || !blockIdentityKeys.has(key);
         })
         .map((row) => {
+            if (row?.excludeQuickFix) {
+                return row;
+            }
+
             const entry = findRenameEntryForImageRow(row, maps);
             if (!entry) {
                 return row;
@@ -1177,11 +1255,16 @@ export function applyRenameResultsToBlocks(blocks, wpRenamed = [], localResults 
             return block;
         }
 
+        if (image.excludeQuickFix) {
+            return block;
+        }
+
         const row = {
             blockId: block.id,
             wpAttachmentId: image.wpAttachmentId,
             seoMediaId: image.seoMediaId,
             src: image.src,
+            wpSrc: image.wpSrc,
         };
         const entry = findRenameEntryForImageRow(row, maps);
         if (!entry) {
@@ -1190,16 +1273,21 @@ export function applyRenameResultsToBlocks(blocks, wpRenamed = [], localResults 
 
         const newUrl = String(entry.new_url ?? '').trim();
         const newSlug = String(entry.new_slug ?? slugFromUrl(newUrl)).trim();
-        if (!newUrl || (newUrl === image.src && newSlug === String(image.slug ?? '').trim())) {
+        if (!newUrl) {
             return block;
         }
 
         const resolvedSeoId = Number(entry?.seo_media_id ?? image.seoMediaId ?? 0);
+        const isLocal = isLocalSeoMediaSrc(newUrl);
         const nextImage = {
             ...image,
             src: newUrl,
-            slug: newSlug || image.slug || slugFromUrl(newUrl),
+            slug: newSlug || slugFromUrl(newUrl),
             seoMediaId: resolvedSeoId > 0 ? resolvedSeoId : image.seoMediaId,
+            wpSrc: isLocal
+                ? String(image.wpSrc ?? '').trim()
+                : resolveFullWordPressImageUrl(newUrl),
+            localSrc: isLocal ? newUrl : String(image.localSrc ?? '').trim(),
         };
 
         return {
@@ -1218,10 +1306,16 @@ export function applyImagePatchToBlocks(blocks, blockId, patch) {
         if (!image) return block;
 
         let nextSrc = image.src;
-        if (patch.slug !== undefined && patch.slug !== image.slug) {
-            nextSrc = replaceUrlSlug(image.src, patch.slug);
-        } else if (patch.src !== undefined) {
+        if (patch.src !== undefined) {
             nextSrc = patch.src;
+        } else if (patch.slug !== undefined && patch.slug !== image.slug) {
+            const wpAttachmentId = Number(image.wpAttachmentId ?? 0);
+            const hasWordPressSrc =
+                wpAttachmentId > 0 ||
+                (String(image.wpSrc ?? '').trim() !== '' && !isLocalSeoMediaSrc(image.src));
+            if (!hasWordPressSrc && !shouldRenameSlugOnWordPress({ ...image, blockId: block.id })) {
+                nextSrc = replaceUrlSlug(image.src, patch.slug);
+            }
         }
 
         const nextImage = withDefaultImageInsertAlign({

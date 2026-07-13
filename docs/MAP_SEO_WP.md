@@ -156,10 +156,10 @@ Core hub đọc `services.config.external_plugins`. Trong addon: `GeneralDomain.
 **Service:** `WordPressArticleAttachmentService.php`
 
 Các Livewire methods trong `EditArticle`:
-- `renameAttachmentSlugsOnWordPress(array)` — đổi slug của WP attachment (dùng cho SEO URL)
+- `renameAttachmentSlugsOnWordPress(array)` — `WordPressAttachmentRenameService::renameBatch` → WP `POST …/attachments/rename`; response `renamed[]` gồm `attachment_id`, `old_url`, `new_url`, `new_slug` (slug thực tế trên đĩa, có thể ≠ `new_slug` request nếu WP dedupe). Livewire enrich `block_id` từ request trước event `seo-attachment-slugs-rename-finished`.
 - `updateAttachmentMetaOnWordPress(array)` — cập nhật alt text + title của WP media
 
-Luồng: Alpine event `seo-rename-attachment-slugs` / `seo-update-attachment-meta` → Livewire → `WordPressArticleAttachmentService` → WP REST API.
+Luồng editor: `callEditArticleLivewire('renameAttachmentSlugsOnWordPress')` → `WordPressAttachmentRenameService` → WP REST. Legacy Alpine `seo-rename-attachment-slugs` vẫn có cho flow khác.
 
 ---
 
@@ -200,6 +200,8 @@ flowchart TB
 | `POST …/attachments/import` | Ảnh chưa có trên WP, hoặc attachment cũ đã mất |
 | `POST …/attachments/{id}/replace-binary` | Đã có `wp_attachment_id` + URL WP còn sống |
 | `POST …/attachments/{id}/delete` | Sau `reimportWebpRetiringOldAttachment` (replace giữ URL JPG) |
+
+**Plugin `omi-seo-ai-bridge` ≥ 1.0.51:** `GET /omi-seo-ai/v1/posts/{id}/comment-reviews` đọc `_omi_seo_virtual_comments` (meta) + merge `wp_comments` — editor Reviews tab dùng endpoint này khi bấm **Làm mới**.
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.50:** `class-attachment-binary-replacer.php` đổi extension file sang `.webp` khi mime `image/webp`.
 
@@ -253,6 +255,7 @@ WP plugin repo: wp-seo-ai (omi-seo-ai-bridge.php).
 ```
 Inbound API: routes/api.php → SeoWpBridgeController (Api/ subfolder).
 Service: SyncDomainContentService.php.
+Sau `importSingleSyncItem`, dispatch `AnalyzeArticleSeoJob` qua `SeoArticleScoringQueueService::dispatchIfSyncItemChanged()` (fingerprint sync payload) — không còn `analyzeFromSyncItem()` đồng bộ trong HTTP.
 Auth: site seo_read_token (mysql.sites).
 DB bootstrap: SeoDatabaseConnectionService.bootstrapBySiteId().
 ```

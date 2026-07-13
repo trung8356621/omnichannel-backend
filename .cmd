@@ -10,6 +10,6 @@ mysql -u lzxzdusj_omi_seo_ai -p lzxzdusj_omi_seo_ai < seo.teamviahe.com/public_h
 ztARSSpNQj5vpJ7MmHZj
 
 #Để chạy queue (bắt buộc gồm queue seo cho rank check)
-nohup php artisan queue:work --queue=seo,media_generation,default --timeout=360 > storage/logs/queue-worker.log 2>&1 &
+nohup php artisan queue:work --timeout=360 > storage/logs/queue-worker.log 2>&1 &
 pkill -f "queue:work"
 

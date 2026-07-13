@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages;
 
-use App\Addons\SeoContentAi\Enums\SeoLinkMapStatus;
+use App\Addons\SeoContentAi\Enums\KeywordReviewSource;
+use App\Addons\SeoContentAi\Enums\KeywordReviewStatus;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Filament\Resources\KeywordResource\Pages\Concerns\HasKeywordWorkspaceNavigation;
@@ -13,6 +14,7 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordPersistenceService;
+use App\Addons\SeoContentAi\Services\KeywordReviewService;
 use App\Addons\SeoContentAi\Support\CtaKeywordBlacklistFilter;
 use App\Addons\SeoContentAi\Support\InternalAnchorKeywordFilter;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -414,6 +416,11 @@ class ListKeywords extends ListRecords
             ];
         }
 
+        $reviewScopeQuery = $this->buildDictionaryReviewStatusQuery();
+        if (! $reviewScopeQuery instanceof Builder) {
+            $reviewScopeQuery = $query;
+        }
+
         return [
             'total' => (clone $query)->count(),
             'active' => (clone $query)->where(function (Builder $builder): void {
@@ -423,18 +430,13 @@ class ListKeywords extends ListRecords
                         'linkMaps',
                         static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
                     );
-            })->count(),
-            'needs_optimization' => (clone $query)
-                ->whereDoesntHave('mainArticles')
-                ->whereDoesntHave(
-                    'linkMaps',
-                    static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
-                )
+            })->where('review_status', KeywordReviewStatus::Active->value)->count(),
+            'needs_optimization' => (clone $reviewScopeQuery)
+                ->where('review_status', KeywordReviewStatus::Warning->value)
                 ->count(),
-            'errors' => (clone $query)->whereHas(
-                'linkMaps',
-                static fn (Builder $mapQuery): Builder => $mapQuery->where('status', SeoLinkMapStatus::Broken),
-            )->count(),
+            'errors' => (clone $reviewScopeQuery)
+                ->where('review_status', KeywordReviewStatus::Danger->value)
+                ->count(),
         ];
     }
 
@@ -489,6 +491,31 @@ class ListKeywords extends ListRecords
                 ->after(function (): void {
                     $this->selectedKeywordId = null;
                     $this->dispatch('keyword-detail-close');
+                }),
+            Tables\Actions\Action::make('restore_keyword')
+                ->label(__('seo-content-ai::filament.keyword.restore_keyword'))
+                ->icon('heroicon-o-arrow-path')
+                ->color('success')
+                ->visible(fn (Keyword $record): bool => in_array((string) ($record->review_status ?? ''), [
+                    KeywordReviewStatus::Warning->value,
+                    KeywordReviewStatus::Danger->value,
+                ], true) && SeoAccessControl::canRestoreKeywords())
+                ->requiresConfirmation()
+                ->modalHeading(__('seo-content-ai::filament.keyword.restore_keyword_heading'))
+                ->modalDescription(__('seo-content-ai::filament.keyword.restore_keyword_description'))
+                ->action(function (Keyword $record): void {
+                    app(KeywordReviewService::class)->restoreKeyword(
+                        $record,
+                        (int) (auth()->id() ?? 0),
+                        KeywordReviewSource::KeywordsTable,
+                    );
+
+                    Notification::make()
+                        ->title(__('seo-content-ai::filament.keyword.restore_keyword_success'))
+                        ->success()
+                        ->send();
+
+                    $this->flushCachedTableRecords();
                 }),
             Tables\Actions\Action::make('move_parent')
                 ->label(__('seo-content-ai::filament.keyword.drawer_move'))
@@ -567,15 +594,47 @@ class ListKeywords extends ListRecords
      */
     protected function getTableQuery(): ?Builder
     {
+        if ($this->parentId !== null && $this->parentId > 0) {
+            return $this->buildDictionaryListingQuery();
+        }
+
+        if (! $this->dictionaryListingRequiresLinkedScope()) {
+            return $this->buildDictionaryReviewStatusQuery();
+        }
+
         return $this->buildDictionaryListingQuery();
     }
 
-    protected function buildDictionaryListingQuery(): ?Builder
+    protected function dictionaryListingRequiresLinkedScope(): bool
+    {
+        return ! in_array((string) ($this->dictionaryStatFilter ?? ''), [
+            'needs_optimization',
+            'errors',
+        ], true);
+    }
+
+    protected function buildDictionaryReviewStatusQuery(): ?Builder
+    {
+        $query = KeywordResource::getReviewedDictionaryQuery();
+
+        $siteId = (int) ($this->resolveKeywordWorkspaceSiteId() ?? 0);
+        if ($siteId > 0) {
+            $query = KeywordResource::applyReviewedDictionarySiteScope($query, $siteId);
+        }
+
+        return $query->orderByDesc('reviewed_at')->orderBy('phrase');
+    }
+
+    protected function buildDictionaryListingQuery(?bool $requireLinkedScope = null): ?Builder
     {
         $query = parent::getTableQuery();
 
         if (! $query instanceof Builder) {
             return $query;
+        }
+
+        if ($requireLinkedScope === null) {
+            $requireLinkedScope = $this->dictionaryListingRequiresLinkedScope();
         }
 
         if ($this->parentId !== null && $this->parentId > 0) {
@@ -588,7 +647,7 @@ class ListKeywords extends ListRecords
             $query->forSite($siteId);
         }
 
-        if ($this->parentId === null) {
+        if ($requireLinkedScope && $this->parentId === null) {
             if ($this->getKeywordWorkspaceMode() === 'focus') {
                 $query->whereHas('mainArticles');
             } else {
@@ -636,16 +695,8 @@ class ListKeywords extends ListRecords
                         static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
                     );
             }),
-            'needs_optimization' => $query
-                ->whereDoesntHave('mainArticles')
-                ->whereDoesntHave(
-                    'linkMaps',
-                    static fn (Builder $mapQuery): Builder => $mapQuery->whereNotNull('source_article_id'),
-                ),
-            'errors' => $query->whereHas(
-                'linkMaps',
-                static fn (Builder $mapQuery): Builder => $mapQuery->where('status', SeoLinkMapStatus::Broken),
-            ),
+            'needs_optimization' => $query->where('review_status', KeywordReviewStatus::Warning->value),
+            'errors' => $query->where('review_status', KeywordReviewStatus::Danger->value),
             default => $query,
         };
     }

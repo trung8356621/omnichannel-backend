@@ -58,6 +58,7 @@ class SeoMediaStorageService
         string $remoteUrl,
         ?int $siteId = null,
         ?int $articleId = null,
+        bool $randomFilename = false,
     ): SeoMedia {
         $remoteUrl = trim($remoteUrl);
         if ($remoteUrl === '' || ! filter_var($remoteUrl, FILTER_VALIDATE_URL)) {
@@ -69,9 +70,15 @@ class SeoMediaStorageService
             throw new \InvalidArgumentException('Chỉ hỗ trợ URL http hoặc https.');
         }
 
+        $fetchUrl = $remoteUrl;
+        if ($randomFilename) {
+            $separator = str_contains($remoteUrl, '?') ? '&' : '?';
+            $fetchUrl = $remoteUrl . $separator . 'seo_cb=' . uniqid('', true);
+        }
+
         $response = Http::timeout(120)
             ->withHeaders(['User-Agent' => 'OmiSeoAi/1.0'])
-            ->get($remoteUrl);
+            ->get($fetchUrl);
 
         if (! $response->successful()) {
             throw new \RuntimeException('Không tải được ảnh (HTTP ' . $response->status() . ').');
@@ -109,7 +116,9 @@ class SeoMediaStorageService
             };
         }
 
-        $slugSeed = pathinfo(parse_url($remoteUrl, PHP_URL_PATH) ?? '', PATHINFO_FILENAME);
+        $slugSeed = $randomFilename
+            ? 'import-' . bin2hex(random_bytes(8))
+            : pathinfo(parse_url($remoteUrl, PHP_URL_PATH) ?? '', PATHINFO_FILENAME);
 
         $config = $this->optimization->resolveForSite($siteId);
         $processed = $this->optimization->processBinary(

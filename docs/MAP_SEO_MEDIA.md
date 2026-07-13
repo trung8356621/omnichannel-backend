@@ -41,7 +41,7 @@ flowchart TB
 
     subgraph Controller["SeoMediaController"]
         UPLOAD["upload()"]
-        IMPORT["importFromUrl()"]
+        IMPORT["importFromUrl()<br/>random_filename? → storeFromRemoteUrl"]
         RENAME_URL["renameByUrl()"]
         META["updateMeta()"]
         SPLIT["saveSplit()"]
@@ -274,7 +274,7 @@ Dashboard: cảnh báo thiếu Imagick/GD khi mount Filament Dashboard.
 
 | Client module | Endpoints |
 |---------------|-----------|
-| `seoMediaApi.js` | `POST upload`, `import-url`, `prepare-editor`, `apply-watermark`, `rename-by-url`, `update-meta`, `save-split`, `save-edited`, `rename`, `retry-generation`, `delete-ai-job`; `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
+| `seoMediaApi.js` | `POST upload`, `import-url` (body `random_filename` → slug `import-{hex}` + cache-bust fetch), `prepare-editor`, `apply-watermark`, `rename-by-url`, `update-meta`, `save-split`, `save-edited`, `rename`, `retry-generation`, `delete-ai-job`; `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
 | `watermarkApi.js` | `POST /api/seo/watermark/*` (settings, batch, save, save-new) |
 
 **Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — tab Images, media picker modal, video generation.
