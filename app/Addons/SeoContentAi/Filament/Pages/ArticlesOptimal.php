@@ -80,6 +80,9 @@ final class ArticlesOptimal extends SeoPanelPage
 
     public ?int $sidebarProjectId = null;
 
+    /** Sidebar assign: true = ẩn. Persist qua Livewire để remorph không reset Alpine. */
+    public bool $sidebarCollapsed = true;
+
     public bool $scanning = false;
 
     public bool $defaultLoading = false;
@@ -371,6 +374,7 @@ final class ArticlesOptimal extends SeoPanelPage
     public function selectSidebarProject(mixed $projectId): void
     {
         $this->sidebarProjectId = (int) $projectId > 0 ? (int) $projectId : null;
+        $this->skipRender();
     }
 
     /**
@@ -446,13 +450,37 @@ final class ArticlesOptimal extends SeoPanelPage
      * @param  array<int, int|string>  $articleIds
      * @param  array<string, mixed>  $data
      */
-    public function assignFromSidebar(array $articleIds, array $data = []): void
+    /**
+     * @return array{project_id:int, remaining:int}
+     */
+    public function assignFromSidebar(array $articleIds, array $data = []): array
     {
         if (! isset($data['project_id']) || (int) $data['project_id'] <= 0) {
             $data['project_id'] = $this->sidebarProjectId;
         }
 
         $this->assignArticlesToContentProject($articleIds, $data);
+
+        $projectId = (int) ($data['project_id'] ?? 0);
+        $project = $projectId > 0 ? SeoProject::query()->find($projectId) : null;
+        $remaining = $project?->remainingTaskCapacity() ?? 0;
+
+        if ($project instanceof SeoProject && $remaining <= 2) {
+            Notification::make()
+                ->title($remaining === 0
+                    ? __('seo-content-ai::filament.articles_optimal.project_capacity_full')
+                    : __('seo-content-ai::filament.articles_optimal.project_capacity_near'))
+                ->body(__('seo-content-ai::filament.articles_optimal.project_capacity_remaining', [
+                    'count' => $remaining,
+                ]))
+                ->warning()
+                ->send();
+        }
+
+        return [
+            'project_id' => $projectId,
+            'remaining' => $remaining,
+        ];
     }
 
     public function notifyAssignBlockedMissingKeyword(): void
@@ -462,6 +490,8 @@ final class ArticlesOptimal extends SeoPanelPage
             ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_bulk'))
             ->warning()
             ->send();
+
+        $this->skipRender();
     }
 
     /**
@@ -503,12 +533,15 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->body(__('seo-content-ai::filament.articles_optimal.assign_no_project'))
                 ->warning()
                 ->send();
+            $this->skipRender();
 
             return;
         }
 
         $ids = array_values(array_unique(array_filter(array_map('intval', $articleIds), static fn (int $id): bool => $id > 0)));
         if ($ids === []) {
+            $this->skipRender();
+
             return;
         }
 
@@ -520,6 +553,8 @@ final class ArticlesOptimal extends SeoPanelPage
             ->get();
 
         if ($records->isEmpty()) {
+            $this->skipRender();
+
             return;
         }
 
@@ -535,6 +570,7 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_bulk'))
                 ->warning()
                 ->send();
+            $this->skipRender();
 
             return;
         }
@@ -545,6 +581,7 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_required'))
                 ->warning()
                 ->send();
+            $this->skipRender();
 
             return;
         }
@@ -570,13 +607,14 @@ final class ArticlesOptimal extends SeoPanelPage
 
         $this->selectedArticleIds = array_values(array_diff(array_map('intval', $this->selectedArticleIds), $ids));
         $this->sidebarProjectId = $projectId;
-        unset($this->resultsPaginator);
 
         Notification::make()
             ->title(__('seo-content-ai::filament.article_list.assign_completed'))
             ->body(ArticleResource::buildAssignContentProjectBody($summary))
             ->success()
             ->send();
+
+        $this->skipRender();
     }
 
     public function queueMissingScoringForFilterSite(): void
@@ -612,6 +650,7 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_failed'))
                 ->danger()
                 ->send();
+            $this->skipRender();
 
             return;
         }
@@ -620,6 +659,7 @@ final class ArticlesOptimal extends SeoPanelPage
             ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_success'))
             ->success()
             ->send();
+        $this->skipRender();
     }
 
     /**
@@ -635,6 +675,7 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_none_selected'))
                 ->warning()
                 ->send();
+            $this->skipRender();
 
             return;
         }
@@ -647,6 +688,7 @@ final class ArticlesOptimal extends SeoPanelPage
                 ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_failed'))
                 ->danger()
                 ->send();
+            $this->skipRender();
 
             return;
         }
@@ -655,6 +697,7 @@ final class ArticlesOptimal extends SeoPanelPage
             ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_bulk_success', ['count' => $skipped]))
             ->success()
             ->send();
+        $this->skipRender();
     }
 
     /**
@@ -675,11 +718,6 @@ final class ArticlesOptimal extends SeoPanelPage
                 ['meta_value' => '1'],
             );
             $skipped++;
-        }
-
-        if ($skipped > 0) {
-            unset($this->resultsPaginator);
-            $this->resetPage();
         }
 
         return $skipped;

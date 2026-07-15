@@ -50,6 +50,12 @@ function registerSeoProjectRunQueue() {
                 return;
             }
 
+            // Tránh Alpine re-init (Livewire refresh) spawn queue thứ 2 chỉ còn vài task cuối.
+            const store = Alpine.store('seoRunQueue');
+            if (store?.isRunning) {
+                return;
+            }
+
             this.$nextTick(() => {
                 queueMicrotask(() => this.processQueue());
             });
@@ -274,6 +280,15 @@ function registerSeoProjectRunQueue() {
 
             while (attempts < maxAttempts) {
                 attempts += 1;
+
+                // Đừng refresh Livewire khi queue đang chạy — gây mất DOM hàng đã OK / Alpine re-init lệch.
+                if (Alpine.store('seoRunQueue')?.isRunning) {
+                    await new Promise((resolve) => {
+                        window.setTimeout(resolve, 3000);
+                    });
+                    continue;
+                }
+
                 const response = await wire.checkArticleEditorReady(articleId);
                 if (response?.ready) {
                     await wire.refresh();

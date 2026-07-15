@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\DB;
 
 final class SeoProjectWorkflowRunService
 {
@@ -58,14 +59,14 @@ final class SeoProjectWorkflowRunService
 
         $project->loadMissing('site');
         $projectSiteId = (int) ($project->site_id ?? 0);
-        $improveItems = $this->seedImproveManualItems($project, $projectSiteId, $limit);
+        $plannedItems = $this->seedPlannedItems($project, $projectSiteId, $limit);
 
         $run->update([
             'status' => SeoProjectRun::STATUS_RUNNING,
-            'total' => $plannedTotal,
+            'total' => count($plannedItems) > 0 ? count($plannedItems) : $plannedTotal,
             'succeeded' => 0,
             'failed' => 0,
-            'items' => $improveItems,
+            'items' => $plannedItems,
             'finished_at' => null,
         ]);
 
@@ -94,37 +95,140 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
+     * Seed toàn bộ task trong batch vào run.items (pending/manual) để UI không mất hàng giữa chừng.
+     *
      * @return list<array<string, mixed>>
      */
-    private function seedImproveManualItems(SeoProject $project, int $projectSiteId, ?int $limit = null): array
+    private function seedPlannedItems(SeoProject $project, int $projectSiteId, ?int $limit = null): array
     {
         $query = $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->where('type', SeoProjectTask::TYPE_IMPROVE)
             ->orderBy('target_date')
             ->orderBy('id');
 
         if ($limit !== null && $limit > 0) {
-            $batchTaskIds = $project->tasks()
-                ->where('status', SeoProjectTask::STATUS_PENDING)
-                ->orderBy('target_date')
-                ->orderBy('id')
-                ->limit($limit)
-                ->pluck('id')
-                ->all();
-
-            if ($batchTaskIds === []) {
-                return [];
-            }
-
-            $query->whereIn('id', $batchTaskIds);
+            $query->limit($limit);
         }
 
         return $query
             ->get()
-            ->map(fn (SeoProjectTask $task): array => $this->buildImproveManualItemRow($task, $projectSiteId))
+            ->map(function (SeoProjectTask $task) use ($projectSiteId): array {
+                if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
+                    return $this->buildImproveManualItemRow($task, $projectSiteId);
+                }
+
+                return $this->buildPendingItemRow($task);
+            })
             ->values()
             ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildPendingItemRow(SeoProjectTask $task): array
+    {
+        return [
+            'task_id' => (int) $task->id,
+            'type' => (string) $task->type,
+            'source_content' => (string) $task->source_content,
+            'post_type' => SeoProjectTask::isNewArticleType($task->type)
+                ? SeoProjectTask::normalizePostType($task->post_type)
+                : null,
+            'loai_san_pham' => SeoProjectTask::isNewArticleType($task->type)
+                && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                    ? (string) ($task->loai_san_pham ?? '')
+                    : null,
+            'gallery_description' => SeoProjectTask::isNewArticleType($task->type)
+                && SeoProjectTask::normalizePostType($task->post_type) === SeoProjectTask::POST_TYPE_PRODUCT
+                    ? (string) ($task->description ?? '')
+                    : null,
+            'target_date' => $task->target_date?->format('Y-m-d'),
+            'rewrite_mode' => $task->type === SeoProjectTask::TYPE_REWRITE
+                ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
+                : null,
+            'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
+                ? $task->rewrite_notes
+                : null,
+            'status' => 'pending',
+            'article_id' => null,
+            'article_edit_url' => null,
+            'message' => '',
+            'steps' => [],
+        ];
+    }
+
+    /**
+     * Gắn lại các task đã completed sau khi run bắt đầu nhưng bị thiếu trong items (run cũ / race).
+     */
+    public function reconcileMissingCompletedItems(SeoProjectRun $run): SeoProjectRun
+    {
+        $run->loadMissing('project.site');
+        $project = $run->project;
+        if (! $project instanceof SeoProject) {
+            return $run;
+        }
+
+        $items = is_array($run->items) ? $run->items : [];
+        $knownTaskIds = collect($items)
+            ->map(static fn (mixed $item): int => is_array($item) ? (int) ($item['task_id'] ?? 0) : 0)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->values()
+            ->all();
+
+        $completedQuery = $project->tasks()
+            ->where('status', SeoProjectTask::STATUS_COMPLETED)
+            ->orderBy('target_date')
+            ->orderBy('id');
+
+        if ($knownTaskIds !== []) {
+            $completedQuery->whereNotIn('id', $knownTaskIds);
+        }
+
+        if ($run->started_at !== null) {
+            $completedQuery->where(function ($query) use ($run): void {
+                $query->where('updated_at', '>=', $run->started_at)
+                    ->orWhere('created_at', '>=', $run->started_at);
+            });
+        }
+
+        $missing = $completedQuery->get();
+        if ($missing->isEmpty()) {
+            return $run;
+        }
+
+        $projectSiteId = (int) ($project->site_id ?? 0);
+
+        foreach ($missing as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
+                $items[] = $this->buildImproveManualItemRow($task, $projectSiteId);
+                continue;
+            }
+
+            $articleId = (int) ($task->article_id ?? 0);
+            $items[] = $this->buildItemRow(
+                $task,
+                true,
+                $articleId > 0 ? $articleId : null,
+                'Đã chạy quy trình và tạo/cập nhật bài.',
+            );
+        }
+
+        $succeeded = collect($items)->where('status', 'success')->count();
+        $failed = collect($items)->where('status', 'failed')->count();
+
+        $run->update([
+            'items' => array_values($items),
+            'succeeded' => $succeeded,
+            'failed' => $failed,
+            'total' => max((int) $run->total, count($items)),
+        ]);
+
+        return $run->fresh(['project.site', 'user', 'project.tasks']) ?? $run;
     }
 
     public function completeRunQueue(SeoProjectRun $run): SeoProjectRun
@@ -241,7 +345,11 @@ final class SeoProjectWorkflowRunService
             throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong dự án.');
         }
 
-        $existingItem = collect(is_array($run->items) ? $run->items : [])
+        // Luôn đọc items mới nhất từ DB trước khi merge — tránh Livewire stale ghi đè mất hàng đã OK.
+        $run->refresh();
+        $items = is_array($run->items) ? $run->items : [];
+
+        $existingItem = collect($items)
             ->first(fn (mixed $item): bool => is_array($item) && (int) ($item['task_id'] ?? 0) === $taskId);
 
         $retryTaskId = is_array($existingItem)
@@ -263,6 +371,8 @@ final class SeoProjectWorkflowRunService
         $itemRow['task_id'] = $taskId;
         unset($itemRow['retry_task_id']);
 
+        // Refresh lần nữa sau AI (có thể dài) rồi merge — chống mất item do request song song.
+        $run->refresh();
         $items = is_array($run->items) ? $run->items : [];
         $replaced = false;
 
@@ -593,9 +703,115 @@ final class SeoProjectWorkflowRunService
             $payload['finished_at'] = null;
         }
 
-        $run->update($payload);
+        return DB::connection('omi_seo_ai')->transaction(function () use ($run, $payload): SeoProjectRun {
+            /** @var SeoProjectRun|null $locked */
+            $locked = SeoProjectRun::query()
+                ->whereKey((int) $run->id)
+                ->lockForUpdate()
+                ->first();
 
-        return $run->fresh(['project']);
+            if (! $locked instanceof SeoProjectRun) {
+                $run->update($payload);
+
+                return $run->fresh(['project']) ?? $run;
+            }
+
+            // Merge theo task_id với bản DB mới nhất trong lock — không để request cũ ghi đè mất hàng.
+            $dbItems = is_array($locked->items) ? $locked->items : [];
+            $incoming = is_array($payload['items'] ?? null) ? $payload['items'] : [];
+            $payload['items'] = $this->mergeRunItemsByTaskId($dbItems, $incoming);
+            $payload['succeeded'] = collect($payload['items'])->where('status', 'success')->count();
+            $payload['failed'] = collect($payload['items'])->where('status', 'failed')->count();
+
+            if (array_key_exists('total', $payload)) {
+                $payload['total'] = max((int) $locked->total, (int) $payload['total'], count($payload['items']));
+            }
+
+            $locked->update($payload);
+
+            return $locked->fresh(['project']) ?? $locked;
+        });
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $dbItems
+     * @param  list<array<string, mixed>>  $incoming
+     * @return list<array<string, mixed>>
+     */
+    private function mergeRunItemsByTaskId(array $dbItems, array $incoming): array
+    {
+        /** @var array<int, array<string, mixed>> $byTaskId */
+        $byTaskId = [];
+        /** @var list<int|array<string, mixed>> $order */
+        $order = [];
+        /** @var array<int, true> $seenTaskIds */
+        $seenTaskIds = [];
+
+        foreach (array_merge($dbItems, $incoming) as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $taskId = (int) ($item['task_id'] ?? 0);
+            if ($taskId <= 0) {
+                $order[] = $item;
+                continue;
+            }
+
+            if (! isset($seenTaskIds[$taskId])) {
+                $seenTaskIds[$taskId] = true;
+                $order[] = $taskId;
+                $byTaskId[$taskId] = $item;
+                continue;
+            }
+
+            $byTaskId[$taskId] = $this->preferRicherRunItem($byTaskId[$taskId], $item);
+        }
+
+        $merged = [];
+        foreach ($order as $entry) {
+            if (is_int($entry)) {
+                $merged[] = $byTaskId[$entry];
+                continue;
+            }
+            $merged[] = $entry;
+        }
+
+        return array_values($merged);
+    }
+
+    /**
+     * @param  array<string, mixed>  $a
+     * @param  array<string, mixed>  $b
+     * @return array<string, mixed>
+     */
+    private function preferRicherRunItem(array $a, array $b): array
+    {
+        $score = static function (array $item): int {
+            return match ((string) ($item['status'] ?? '')) {
+                'success' => 300,
+                'failed' => 200,
+                'manual' => 100,
+                'pending' => 50,
+                default => 0,
+            };
+        };
+
+        if ($score($b) !== $score($a)) {
+            return $score($b) > $score($a) ? $b : $a;
+        }
+
+        // Cùng rank: ưu tiên bản có article_id / message mới hơn.
+        $aArticle = (int) ($a['article_id'] ?? 0);
+        $bArticle = (int) ($b['article_id'] ?? 0);
+        if ($bArticle > 0 && $aArticle <= 0) {
+            return $b;
+        }
+        if ($aArticle > 0 && $bArticle <= 0) {
+            return $a;
+        }
+
+        return $b;
     }
 
     /**

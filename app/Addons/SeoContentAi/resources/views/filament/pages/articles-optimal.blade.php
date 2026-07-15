@@ -4,7 +4,6 @@
     $writerOptions = $this->getWriterOptions();
     $assignTypeOptions = $this->getAssignTypeOptions();
     $rewriteModeOptions = $this->getRewriteModeOptions();
-    $sidebarArticles = $this->getSidebarProjectArticles();
     $scoringFilters = $this->getScoringRuleFilterDefinitions();
     $aggregateFilters = $this->getAggregateFilterDefinitions();
     $paginator = $hasScanned ? $this->resultsPaginator : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
@@ -17,7 +16,11 @@
 @endphp
 
 @if ($defaultLoading)
-    <div class="mb-4 space-y-3 animate-pulse" wire:loading.class.remove="hidden">
+    <div
+        class="mb-4 space-y-3 animate-pulse"
+        wire:loading.class.remove="hidden"
+        wire:target="runScan,loadDefaultAuditResults"
+    >
         @foreach (range(1, 5) as $skeletonRow)
             <div class="h-12 rounded-lg bg-gray-200 dark:bg-gray-800"></div>
         @endforeach
@@ -27,9 +30,9 @@
 <div
     class="fi-page articles-optimal-page"
     x-data="{
-        sidebarProjectId: @entangle('sidebarProjectId').live,
-        selectedArticleIds: @entangle('selectedArticleIds').live,
-        sidebarCollapsed: true,
+        sidebarProjectId: @entangle('sidebarProjectId'),
+        selectedArticleIds: @entangle('selectedArticleIds'),
+        sidebarCollapsed: @entangle('sidebarCollapsed'),
         bulkMenuOpen: false,
         quickCreateOpen: false,
         assignArticleId: null,
@@ -38,12 +41,25 @@
         rewriteNotes: '',
         assignFocusKeyword: '',
         assignNeedsKeyword: false,
-        assignSubmitting: false,
         quickSiteId: @js((int) ($filterSiteId ?: \App\Addons\SeoContentAi\Support\SeoAccessControl::globalSiteId() ?: 0)),
         quickWriterId: '',
         quickCreateSubmitting: false,
         visibleIds: @js($visibleIds),
         articleFocusMap: @js($articleFocusMap),
+        removedIds: [],
+        hideRows(ids) {
+            const nums = (Array.isArray(ids) ? ids : [ids]).map(Number).filter((id) => id > 0);
+            this.removedIds = Array.from(new Set([...this.removedIds.map(Number), ...nums]));
+            this.selectedArticleIds = this.selectedArticleIds.map(Number).filter((id) => ! this.removedIds.includes(id));
+        },
+        runSkipRow(articleId) {
+            const id = Number(articleId);
+            if (id <= 0) {
+                return;
+            }
+            this.hideRows([id]);
+            this.$wire.skipSeoAudit(id);
+        },
         init() {
             this.$watch('selectedArticleIds', (value) => {
                 if (! Array.isArray(value) || value.length === 0) {
@@ -94,7 +110,11 @@
             this.assignArticleId = null;
             this.assignNeedsKeyword = false;
             this.assignFocusKeyword = '';
-            this.assignSubmitting = false;
+        },
+        clearAssignTarget() {
+            this.assignArticleId = null;
+            this.assignNeedsKeyword = false;
+            this.assignFocusKeyword = '';
         },
         assignTargetIds() {
             if (this.assignArticleId) {
@@ -103,28 +123,45 @@
 
             return this.assignableSelectedIds();
         },
+        canSubmitAssign() {
+            return !! this.sidebarProjectId
+                && this.assignTargetIds().length > 0
+                && (! this.assignNeedsKeyword || String(this.assignFocusKeyword || '').trim() !== '');
+        },
+        hideFullProject(projectId) {
+            const id = Number(projectId);
+            const option = this.$refs.projectSelect?.querySelector(`option[value='${id}']`);
+            option?.remove();
+
+            if (Number(this.sidebarProjectId) === id) {
+                this.sidebarProjectId = null;
+            }
+        },
         submitSidebarAssign() {
             const ids = this.assignTargetIds();
             if (ids.length === 0 || ! this.sidebarProjectId) {
                 return;
             }
 
-            if (this.assignNeedsKeyword && ! String(this.assignFocusKeyword || '').trim()) {
+            const focusKeyword = String(this.assignFocusKeyword || '').trim();
+            if (this.assignNeedsKeyword && focusKeyword === '') {
                 return;
             }
 
-            this.assignSubmitting = true;
-            this.$wire.assignFromSidebar(ids, {
+            const payload = {
                 project_id: this.sidebarProjectId,
                 type: this.assignType,
                 rewrite_mode: this.rewriteMode,
                 rewrite_notes: this.rewriteNotes,
-                focus_keyword: String(this.assignFocusKeyword || '').trim(),
-            }).then(() => {
-                this.closeAssignSidebar();
-                window.location.reload();
-            }).finally(() => {
-                this.assignSubmitting = false;
+                focus_keyword: focusKeyword,
+            };
+
+            this.hideRows(ids);
+            this.clearAssignTarget();
+            this.$wire.assignFromSidebar(ids, payload).then((capacity) => {
+                if (Number(capacity?.remaining) <= 0) {
+                    this.hideFullProject(capacity?.project_id);
+                }
             });
         },
         submitQuickCreate() {
@@ -137,7 +174,12 @@
         },
         runSkipSelected() {
             this.bulkMenuOpen = false;
-            this.$wire.skipSelectedSeoAudit(this.selectedArticleIds.map(Number));
+            const ids = this.selectedArticleIds.map(Number);
+            if (ids.length === 0) {
+                return;
+            }
+            this.hideRows(ids);
+            this.$wire.skipSelectedSeoAudit(ids);
         },
         runAssignSelected() {
             this.bulkMenuOpen = false;
@@ -337,8 +379,6 @@
                                 type="button"
                                 class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5"
                                 x-on:click="runSkipSelected()"
-                                wire:loading.attr="disabled"
-                                wire:target="skipSelectedSeoAudit"
                             >
                                 <x-filament::icon icon="heroicon-o-eye-slash" class="h-4 w-4 shrink-0 text-warning-600" />
                                 {{ __('seo-content-ai::filament.articles_optimal.action_skip_audit') }}
@@ -378,7 +418,7 @@
                         </thead>
                         <tbody class="divide-y divide-gray-100 dark:divide-white/5">
                             @foreach ($paginator as $row)
-                                <tr wire:key="article-optimal-{{ $row['id'] }}">
+                                <tr wire:key="article-optimal-{{ $row['id'] }}" x-show="! removedIds.map(Number).includes({{ (int) $row['id'] }})">
                                     <td class="px-3 py-3 align-top">
                                         <input
                                             type="checkbox"
@@ -443,7 +483,7 @@
                                     <td class="px-3 py-3 align-top">
                                         <div class="flex flex-wrap gap-2">
                                             <x-filament::icon-button tag="a" href="{{ $row['edit_url'] }}" icon="heroicon-o-pencil-square" size="sm" color="gray" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_edit') }}" label="{{ __('seo-content-ai::filament.articles_optimal.action_open_article') }}" />
-                                            <x-filament::icon-button icon="heroicon-o-eye-slash" size="sm" color="warning" wire:click="skipSeoAudit({{ $row['id'] }})" wire:loading.attr="disabled" wire:loading.class="opacity-50 pointer-events-none" wire:target="skipSeoAudit" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_skip_audit') }}" />
+                                            <x-filament::icon-button icon="heroicon-o-eye-slash" size="sm" color="warning" x-on:click="runSkipRow({{ (int) $row['id'] }})" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_skip_audit') }}" />
                                             <x-filament::icon-button
                                                 icon="heroicon-o-folder-plus"
                                                 size="sm"
@@ -495,8 +535,8 @@
                 <div class="min-w-0 flex-1">
                     <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.articles_optimal.sidebar_project_label') }}</label>
                     <x-select
+                        x-ref="projectSelect"
                         x-model="sidebarProjectId"
-                        x-on:change="$wire.selectSidebarProject($event.target.value)"
                         class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-950"
                     >
                         <option value="">{{ __('seo-content-ai::filament.articles_optimal.sidebar_select_project') }}</option>
@@ -551,55 +591,13 @@
                 color="info"
                 class="w-full"
                 x-on:click="submitSidebarAssign()"
-                x-bind:disabled="assignSubmitting || ! sidebarProjectId || assignTargetIds().length === 0 || (assignNeedsKeyword && ! String(assignFocusKeyword || '').trim())"
-                wire:loading.attr="disabled"
-                wire:target="assignFromSidebar"
+                x-bind:disabled="! canSubmitAssign()"
+                x-bind:class="canSubmitAssign() ? '' : 'opacity-50 pointer-events-none'"
             >
-                <span x-show="! assignSubmitting">{{ __('seo-content-ai::filament.article_list.assign') }}</span>
-                <span x-show="assignSubmitting" class="inline-flex items-center gap-2" x-cloak>
-                    <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                    </svg>
-                    {{ __('seo-content-ai::filament.articles_optimal.assign_selected_loading') }}
-                </span>
+                {{ __('seo-content-ai::filament.article_list.assign') }}
             </x-filament::button>
-
-            <div class="rounded-lg border border-gray-200 dark:border-white/10">
-                <div class="border-b border-gray-100 px-3 py-2 text-sm font-semibold dark:border-white/10">
-                    {{ __('seo-content-ai::filament.articles_optimal.sidebar_articles_heading') }}
-                </div>
-                <div wire:loading.class="opacity-50" wire:target="selectSidebarProject,assignFromSidebar,quickCreateSidebarProject" class="divide-y divide-gray-100 dark:divide-white/10">
-                    @forelse ($sidebarArticles as $article)
-                        <div class="px-3 py-2">
-                            <div class="truncate text-sm font-medium">{{ $article['title'] }}</div>
-                            <div class="text-xs text-gray-500">{{ $article['type'] }} · {{ $article['status'] }}</div>
-                        </div>
-                    @empty
-                        <div class="px-3 py-8 text-center text-sm text-gray-500">
-                            {{ __('seo-content-ai::filament.articles_optimal.sidebar_empty') }}
-                        </div>
-                    @endforelse
-                </div>
-            </div>
         </div>
     </aside>
-
-    {{-- Loading overlay cho assign / skip audit — không gắn runScan hay pagination --}}
-    <div
-        wire:loading
-        wire:target="skipSeoAudit,skipSelectedSeoAudit,assignFromSidebar,assignArticleToContentProject,quickCreateSidebarProject"
-        class="fixed inset-0 z-[100] flex items-center justify-center bg-white/70 dark:bg-gray-950/70"
-        style="backdrop-filter: blur(2px);"
-    >
-        <div class="flex flex-col items-center gap-3 rounded-xl bg-white px-8 py-6 shadow-2xl dark:bg-gray-900">
-            <svg class="h-10 w-10 animate-spin text-primary-600" viewBox="0 0 24 24" fill="none">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-            </svg>
-            <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.articles_optimal.processing') }}</span>
-        </div>
-    </div>
 
     <div x-show="quickCreateOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
         <form x-on:submit.prevent="submitQuickCreate()" class="w-full max-w-xl rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900">

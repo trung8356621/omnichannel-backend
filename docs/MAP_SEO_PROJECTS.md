@@ -230,8 +230,10 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 - Routes: `/runs/{run}`
 - Custom view với queue heading (partial Blade)
 - Query param `?autorun=1` → tự động start workflow execution
-- Hiển thị: project info + task queue (pending/running/succeeded/failed)
-- Gọi `SeoProjectWorkflowRunService::ensureFailedTasksQueued()` để đưa failed tasks về queue
+- Hiển thị: stats (total/succeeded/failed/pending) từ `getRunStatsPayload()` + bảng `getAllItems()` (merge `run.items` + pending chưa có trong items)
+- Mount: `ensureFailedTasksQueued()` + `reconcileMissingCompletedItems()` (khôi phục hàng completed bị thiếu trên run cũ)
+- Gọi `SeoProjectWorkflowRunService::retryTask()` qua Livewire `runItemQueued` / `completeRunQueue`
+- Frontend: `project-run-queue.js` — không `$refresh` Livewire khi queue đang chạy; chặn Alpine re-init spawn queue thứ 2
 
 ### 3.7 ViewSeoProjectRunStep (`Filament/.../Pages/ViewSeoProjectRunStep.php`)
 
@@ -317,7 +319,7 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` (825 dòng) | Điều phối toàn bộ run: startRun() → prepareRunQueue() → executeBatchTasks() → completeRunQueue(). Gọi CreateArticlesFromTaskService cho mỗi task pending. |
+| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` | Điều phối run: `startRun()` → `prepareRunQueue()` (seed toàn bộ pending vào `run.items`) → autorun `retryTask()` → `completeRunQueue()`. `persistRunItems()` lock + merge theo `task_id`; `reconcileMissingCompletedItems()` sửa run cũ thiếu hàng. |
 | **SeoProjectRunPreflightService** | `SeoProjectRunPreflightService.php` | Kiểm tra preflight trước khi chạy: tìm conflict keyword/title giữa các pending task. formatWarningsForModal() sinh HTML cảnh báo. |
 | **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Hợp nhất sau run. Các method: hasRunnablePendingTasks(), isProjectFullyCompleted(), syncObsoleteTaskStatuses(), maybeConsolidate(). |
 | **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` (310 dòng) | Đồng bộ task vào project: sync(), sanitizeTasksData(), tasksDataFromProject(). assertWithinMonthlyLimit() kiểm tra giới hạn tháng. tasksSignature() chống save trùng. |
@@ -352,6 +354,7 @@ flowchart TB
 | **ArticlePendingInternalLinkService** | `ArticlePendingInternalLinkService.php` | Gán keyword vào `SeoProjectTask` + tạo pending link `#hash` từ editor (`assignFromEditor`). |
 | **PromptResultLinkService** | `PromptResultLinkService.php` | Liên kết PromptResult với task/article của project để truy xuất nguồn gốc output AI. |
 | **ArticlePromptRunHistoryService** | `ArticlePromptRunHistoryService.php` | build() → xây dựng timeline lịch sử run cho một article (project runs đã ảnh hưởng). |
+| **WorkflowKeywordResearchService** | `WorkflowKeywordResearchService.php` | `syncTopicCluster()` — lưu Topic Cluster từ action workflow `save_vocabulary_research`; không throw khi focus keyword khớp CTA blacklist. |
 | **AllDomainsDashboardService** | `AllDomainsDashboardService.php` | Tổng hợp thống kê article/project/task trên tất cả sites cho All-Domains Dashboard. |
 
 ---

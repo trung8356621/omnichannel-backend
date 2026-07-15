@@ -54,10 +54,6 @@ final class WorkflowKeywordResearchService
             throw new \InvalidArgumentException('Từ khóa chính quá rộng, cần ít nhất 2 từ để lưu Topic Cluster.');
         }
 
-        if ($this->ctaKeywordBlacklistFilter->isBlocked($focusPhrase)) {
-            throw new \InvalidArgumentException('Từ khóa chính khớp CTA blacklist, không lưu Topic Cluster.');
-        }
-
         KeywordFocusAttach::syncMainKeyword(
             $article,
             $siteId,

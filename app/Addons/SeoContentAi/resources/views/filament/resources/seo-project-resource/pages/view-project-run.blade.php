@@ -1,5 +1,6 @@
 @php
     $queueBootstrap = $this->getQueueBootstrapData();
+    $runStats = $this->getRunStatsPayload();
 @endphp
 
 <x-filament-panels::page>
@@ -23,22 +24,22 @@
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_total') }}</p>
-                <p class="mt-1 text-lg font-semibold text-gray-950 dark:text-white" data-run-stat="total">{{ (int) $this->projectRun->total }}</p>
+                <p class="mt-1 text-lg font-semibold text-gray-950 dark:text-white" data-run-stat="total">{{ (int) $runStats['total'] }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_succeeded') }}</p>
-                <p class="mt-1 text-lg font-semibold text-success-600 dark:text-success-400" data-run-stat="succeeded">{{ (int) $this->projectRun->succeeded }}</p>
+                <p class="mt-1 text-lg font-semibold text-success-600 dark:text-success-400" data-run-stat="succeeded">{{ (int) $runStats['succeeded'] }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_failed_count') }}</p>
-                <p class="mt-1 text-lg font-semibold text-danger-600 dark:text-danger-400" data-run-stat="failed">{{ (int) $this->projectRun->failed }}</p>
+                <p class="mt-1 text-lg font-semibold text-danger-600 dark:text-danger-400" data-run-stat="failed">{{ (int) $runStats['failed'] }}</p>
             </x-filament::section>
 
             <x-filament::section>
                 <p class="text-sm text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.projects.run_pending_count') }}</p>
-                <p class="mt-1 text-lg font-semibold text-warning-600 dark:text-warning-400" data-run-stat="pending">{{ $this->getPendingCount() }}</p>
+                <p class="mt-1 text-lg font-semibold text-warning-600 dark:text-warning-400" data-run-stat="pending">{{ (int) $runStats['pending'] }}</p>
             </x-filament::section>
         </div>
 

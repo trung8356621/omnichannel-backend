@@ -77,7 +77,7 @@ Các filter SEO Audit được persist qua `#[Url]`:
 
 **Kết quả mặc định (keyword review):** `mount()` → `loadDefaultAuditResults()` load ngay bài có keyword `review_status` warning/danger qua `SeoAuditKeywordFlagService::paginateMergedResults()` — không cần bấm Quét. Khi user chọn thêm rule SEO rồi Quét, merge với nhóm keyword xấu (dedupe theo `article.id`, sort `danger_count DESC`, `warning_count DESC`, `updated_at DESC`). Nguồn hiển thị: `audit_sources` = `keyword_review` | `seo_rules`.
 
-State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanState` (`idle\|scanning\|completed\|empty\|failed`), `scanError`, `cachedScanRows`.
+State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `sidebarCollapsed` (persist Livewire + Alpine `@entangle`, tránh remorph reset drawer), `scanState` (`idle\|scanning\|completed\|empty\|failed`), `scanError`, `cachedScanRows`.
 
 ### 3.2 Computed properties
 
@@ -93,13 +93,14 @@ State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanState` 
 | `runScan()` | Phân tích toàn bộ scope → cache `cachedScanRows`, set `scanState`, try/catch/finally |
 | `getScoringRuleFilterDefinitions()` | Checkbox quy tắc chấm điểm (enabled + filterable từ registry) |
 | `getAggregateFilterDefinitions()` | Checkbox điểm tổng hợp (ngưỡng từ registry) |
-| `skipSeoAudit($articleId)` | Set `article_meta.skip_seo_audit=1` — loại khỏi audit, **không** đổi status / **không** sync WP |
-| `skipSelectedSeoAudit()` | Bulk skip theo `selectedArticleIds` (cùng meta, clear selection) |
+| `skipSeoAudit($articleId)` | Set `article_meta.skip_seo_audit=1` — loại khỏi audit, **không** đổi status / **không** sync WP; `skipRender()` + toast |
+| `skipSelectedSeoAudit($articleIds?)` | Bulk skip (IDs từ Alpine); `skipRender()` + toast |
+| `assignFromSidebar($articleIds, $data)` | Assign qua sidebar; trả `{project_id, remaining}`; cảnh báo capacity ≤2; `skipRender()` |
 | `assignArticleToContentProject` | Assign 1 bài qua `ArticleResource::assignArticlesFromFormData` |
 | `assignArticleToSelectedProject` | Assign 1 bài vào `sidebarProjectId` |
 | `assignSelectedArticlesToSelectedProject` | Bulk assign `selectedArticleIds` |
 | `quickCreateSidebarProject` | Tạo project nhanh qua `ArticleResource::quickCreateContentProject` |
-| `selectSidebarProject` | Cập nhật `sidebarProjectId` |
+| `selectSidebarProject` | Cập nhật `sidebarProjectId`; `skipRender()` |
 
 ---
 
@@ -193,27 +194,29 @@ Checkbox UI sinh từ `SeoScoringSettingsService::auditFilterDefinitions()` — 
 | Score | Màu theo ngưỡng: `<50` đỏ, `50–70` vàng, `>70` xanh |
 | Actions | Edit · Skip audit · Assign project |
 
-**Skip audit:** `ArticlesOptimal::skipSeoAudit` → `article_meta.skip_seo_audit=1` (Laravel only). Không hạ draft / không sync WordPress. Hằng số: `ArticleResource::META_SKIP_SEO_AUDIT`.
+**Skip audit:** Alpine `hideRows()` ẩn row ngay → `$wire.skipSeoAudit` / `skipSelectedSeoAudit` ngầm (`skipRender()`). Toast Filament khi xong. Không overlay chặn trang.
 
-**Assign project:** delegate `ArticleResource::assignArticlesFromFormData` — xem [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
+**Assign project:** Icon folder mở sidebar; `submitSidebarAssign()` ẩn row + xóa focus keyword → `$wire.assignFromSidebar` ngầm. Nút **Phân bài** disable khi chưa chọn bài (`canSubmitAssign()`). Delegate `ArticleResource::assignArticlesFromFormData` — xem [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
+
+**Project capacity:** Sau assign, `remaining ≤ 2` → toast cảnh báo (`articles_optimal.project_capacity_*`); `remaining = 0` → Alpine `hideFullProject()` xóa option khỏi select. Options ban đầu từ `ArticleResource::contentProjectOptions()` (chỉ project `canRegisterMoreTasks()`).
 
 ---
 
 ## 5. Sidebar Content Project
 
-Fixed panel phải (~30% width), Alpine `sidebarCollapsed` toggle.
+Fixed panel phải (~30% width). `sidebarCollapsed` sync Livewire + Alpine — drawer không bị reset sau skip/assign.
 
 | Thành phần | Nguồn dữ liệu |
 |------------|---------------|
-| Dropdown project | `getContentProjectOptions()` — theo `filterSiteId` hoặc global site |
+| Dropdown project | `getContentProjectOptions()` → `ArticleResource::contentProjectOptions($siteId)`; label có `còn N` |
 | Nút tạo nhanh | Modal → `quickCreateSidebarProject` |
-| Danh sách bài trong project | `getSidebarProjectArticles()` — `SeoProjectTask` + `article` |
+| Form assign | Loại bài, rewrite mode, focus keyword (khi thiếu), nút Phân bài |
 
-Assign nhanh: nếu đã chọn project sidebar → icon folder gọi thẳng `assignArticleToSelectedProject`; ngược lại mở modal assign.
+Assign: chọn bài (checkbox hoặc icon folder) → mở sidebar → chọn project → Phân bài. Không còn block «Bài viết trong dự án» dưới form.
 
-**i18n:** Chuỗi sidebar/modal dùng `lang/*/filament.php` → `articles_optimal.sidebar_*` (UTF-8). Không hard-code tiếng Việt trong Blade (tránh mojibake).
+**i18n:** Chuỗi sidebar dùng `lang/*/filament.php` → `articles_optimal.*` (UTF-8).
 
-Sidebar `wire:target` tách khỏi `runScan` — mở/đóng drawer không reset kết quả quét.
+Skip/assign dùng `skipRender()` — không remorph DOM, sidebar giữ trạng thái mở.
 
 ---
 
@@ -321,9 +324,10 @@ Chi tiết RBAC: [MAP_SEO_TEAM.md](MAP_SEO_TEAM.md).
 | Tab Reviewed dashboard | Inline CSS `reviewed-*` (stat cards, toolbar, day cards, list items) |
 | Tab toggle | Alpine `activeTab` |
 | Reviewed filter/search | Alpine only — `filteredReviewedGroups()`, không Livewire |
-| Checkbox bulk | Alpine + `@entangle('selectedArticleIds')` |
-| Modals assign / quick create | Alpine `assignOpen`, `quickCreateOpen` |
-| Loading overlay | `wire:loading` target các action Livewire |
+| Checkbox bulk | Alpine `removedIds` + `@entangle('selectedArticleIds')` (không `.live`) |
+| Sidebar assign | Alpine `hideRows`, `canSubmitAssign`, `hideFullProject`; `@entangle('sidebarCollapsed')` |
+| Modals quick create | Alpine `quickCreateOpen` |
+| Loading | Chỉ `runScan` / `queueMissingScoring` dùng `wire:loading`; skip/assign **không** overlay toàn trang |
 | i18n | `lang/{en,vi}/filament.php` → key `articles_optimal.*` |
 
 ---

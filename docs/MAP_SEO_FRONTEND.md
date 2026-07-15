@@ -378,9 +378,9 @@ flowchart LR
 |------------|---------|
 | `Alpine.store('seoRunQueue')` | `isRunning`, `stopRequested`, `currentTaskId` |
 | `Alpine.data('seoProjectRunQueue')` | Queue `taskIds`, gọi `runItemQueued` / `completeRunQueue` |
-| Livewire | `ViewProjectRun` page methods |
+| Livewire | `ViewSeoProjectRun` page methods |
 
-**Không** gọi REST — orchestration workflow qua Livewire. Chi tiết: [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
+**Không** gọi REST — orchestration workflow qua Livewire. Không `$refresh` khi `seoRunQueue.isRunning`; `init()` bỏ qua nếu queue đang chạy (tránh re-init mất hàng). Chi tiết: [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
 
 ---
 

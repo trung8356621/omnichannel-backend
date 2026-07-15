@@ -49,7 +49,9 @@ class ViewSeoProjectRun extends Page
             403,
         );
 
-        app(SeoProjectWorkflowRunService::class)->ensureFailedTasksQueued($this->projectRun);
+        $runner = app(SeoProjectWorkflowRunService::class);
+        $runner->ensureFailedTasksQueued($this->projectRun);
+        $this->projectRun = $runner->reconcileMissingCompletedItems($this->projectRun);
         $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
     }
 
@@ -81,8 +83,12 @@ class ViewSeoProjectRun extends Page
             return [];
         }
 
+        // Chỉ đếm hạng mục đã kết thúc (không tính pending đã seed) để remainingSlots đúng.
+        $processedInRun = collect($this->getResultItems())
+            ->filter(static fn (array $item): bool => ! in_array((string) ($item['status'] ?? ''), ['pending'], true))
+            ->count();
+
         $plannedTotal = (int) $this->projectRun->total;
-        $processedInRun = count($this->getResultItems());
         $remainingSlots = $plannedTotal > 0
             ? max(0, $plannedTotal - $processedInRun)
             : PHP_INT_MAX;
@@ -145,11 +151,17 @@ class ViewSeoProjectRun extends Page
      */
     public function getRunStatsPayload(): array
     {
+        $allItems = $this->getAllItems();
+        $succeeded = collect($allItems)->where('status', 'success')->count();
+        $failed = collect($allItems)->where('status', 'failed')->count();
+        $pending = collect($allItems)->where('status', 'pending')->count();
+        $total = max((int) ($this->projectRun?->total ?? 0), count($allItems));
+
         return [
-            'total' => (int) ($this->projectRun?->total ?? 0),
-            'succeeded' => (int) ($this->projectRun?->succeeded ?? 0),
-            'failed' => (int) ($this->projectRun?->failed ?? 0),
-            'pending' => $this->getPendingCount(),
+            'total' => $total,
+            'succeeded' => $succeeded,
+            'failed' => $failed,
+            'pending' => $pending,
             'status' => (string) ($this->projectRun?->status ?? ''),
         ];
     }
