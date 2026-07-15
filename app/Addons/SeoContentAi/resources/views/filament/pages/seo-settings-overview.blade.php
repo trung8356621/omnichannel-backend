@@ -9,7 +9,29 @@
                     <p>{{ __('General settings and AI model status (sync, priority, quota).') }}</p>
                 </header>
 
-                <section class="seo-ai-models-panel">
+                <section class="seo-rec-overview-teaser">
+                    <div class="seo-rec-overview-teaser__content">
+                        <h2 class="seo-rec-overview-teaser__title">
+                            <x-filament::icon icon="heroicon-o-book-open" class="seo-rec-overview-teaser__icon" />
+                            {{ __('seo-content-ai::filament.settings_recommendations.overview_teaser_title') }}
+                        </h2>
+                        <p class="seo-rec-overview-teaser__body">
+                            {{ __('seo-content-ai::filament.settings_recommendations.overview_teaser_body') }}
+                        </p>
+                    </div>
+                    <x-filament::button
+                        tag="a"
+                        :href="\App\Addons\SeoContentAi\Filament\Pages\SeoSettingsRecommendations::getUrl()"
+                        color="gray"
+                        outlined
+                        icon="heroicon-o-arrow-right"
+                        icon-position="after"
+                    >
+                        {{ __('seo-content-ai::filament.settings_recommendations.overview_teaser_link') }}
+                    </x-filament::button>
+                </section>
+
+                <section class="seo-ai-models-panel" x-data="{ advanced: false }">
                     <div class="seo-ai-models-panel__head">
                         <div>
                             <h2 class="seo-ai-models-panel__title">AI model status</h2>
@@ -18,19 +40,40 @@
                                 @if (filled($aiModelsOverview['last_synced_at'] ?? null))
                                     · Last updated: {{ $aiModelsOverview['last_synced_at'] }}
                                 @endif
+                                · Nhóm theo capability (Unknown không vào routing mặc định)
                             </p>
                         </div>
-                        <x-filament::button
-                            type="button"
-                            icon="heroicon-o-arrow-path"
-                            wire:click="syncAllAiModels"
-                            wire:loading.attr="disabled"
-                            wire:target="syncAllAiModels"
-                        >
-                            <span wire:loading.remove wire:target="syncAllAiModels">Sync all</span>
-                            <span wire:loading wire:target="syncAllAiModels">Syncing...</span>
-                        </x-filament::button>
+                        <div class="flex items-center gap-2">
+                            <x-filament::button
+                                type="button"
+                                color="gray"
+                                size="sm"
+                                x-on:click="advanced = ! advanced"
+                            >
+                                <span x-text="advanced ? 'Ẩn nâng cao' : 'Nâng cao'"></span>
+                            </x-filament::button>
+                            <x-filament::button
+                                type="button"
+                                icon="heroicon-o-arrow-path"
+                                wire:click="syncAllAiModels"
+                                wire:loading.attr="disabled"
+                                wire:target="syncAllAiModels"
+                            >
+                                <span wire:loading.remove wire:target="syncAllAiModels">Sync all</span>
+                                <span wire:loading wire:target="syncAllAiModels">Syncing...</span>
+                            </x-filament::button>
+                        </div>
                     </div>
+
+                    @php
+                        $groupLabels = [
+                            'text' => 'Text',
+                            'image' => 'Image',
+                            'image_typography' => 'Image Typography',
+                            'video' => 'Video',
+                            'unknown' => 'Unknown',
+                        ];
+                    @endphp
 
                     @forelse ($aiModelsOverview['connections'] ?? [] as $connection)
                         <div class="seo-ai-connection-block" wire:key="ai-conn-{{ $connection['id'] }}">
@@ -67,56 +110,83 @@
                             </div>
 
                             @php
-                                $models = is_array($connection['models'] ?? null) ? $connection['models'] : [];
-                                $modelPreviewLimit = 50;
-                                $visibleModels = array_slice($models, 0, $modelPreviewLimit);
+                                $groups = is_array($connection['groups'] ?? null) ? $connection['groups'] : [];
                             @endphp
 
-                            @if ($models === [])
+                            @if (($connection['model_count'] ?? 0) === 0)
                                 <p class="seo-ai-models-empty">
                                     No models in <code>seo_ai_models</code> yet. Click "Sync" - Imagen / Nano Banana are seeded from internal catalog (Google API often does not list Imagen).
                                 </p>
                             @else
-                                <div class="seo-ai-models-table-wrap">
-                                    <table class="seo-ai-models-table">
-                                        <thead>
-                                            <tr>
-                                                <th>Representative group</th>
-                                                <th>API model (raw)</th>
-                                                <th>Priority</th>
-                                                <th>Status</th>
-                                                <th>Updated</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            @foreach ($visibleModels as $model)
-                                                <tr wire:key="ai-model-{{ $model['id'] }}">
-                                                    <td>
-                                                        <span class="seo-ai-models-table__cat">{{ $model['category_label'] }}</span>
-                                                        <span class="seo-ai-models-table__sub">{{ $model['display_name'] }}</span>
-                                                    </td>
-                                                    <td><code>{{ $model['raw_model_name'] }}</code></td>
-                                                    <td>{{ $model['priority'] }}</td>
-                                                    <td>
-                                                        <span class="seo-ai-status seo-ai-status--{{ $model['status'] }}">
-                                                            {{ $model['status'] }}
-                                                        </span>
-                                                        @if (filled($model['last_error'] ?? null))
-                                                            <span class="seo-ai-models-table__err" title="{{ $model['last_error'] }}">Quota error</span>
-                                                        @endif
-                                                    </td>
-                                                    <td class="seo-ai-models-table__time">{{ $model['updated_at'] ?? '—' }}</td>
+                                @foreach ($groupLabels as $groupKey => $groupLabel)
+                                    @php $groupModels = is_array($groups[$groupKey] ?? null) ? $groups[$groupKey] : []; @endphp
+                                    @if ($groupModels === [])
+                                        @continue
+                                    @endif
+                                    <h4 class="mt-3 mb-1 text-sm font-semibold text-gray-700 dark:text-gray-200">{{ $groupLabel }} ({{ count($groupModels) }})</h4>
+                                    <div class="seo-ai-models-table-wrap">
+                                        <table class="seo-ai-models-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Model</th>
+                                                    <th>Status</th>
+                                                    <th x-show="advanced" x-cloak>Raw / Priority</th>
+                                                    <th x-show="advanced" x-cloak>Capabilities</th>
+                                                    @if ($groupKey === 'unknown')
+                                                        <th>Admin enable</th>
+                                                    @endif
+                                                    <th>Updated</th>
                                                 </tr>
-                                            @endforeach
-                                        </tbody>
-                                    </table>
-                                </div>
-                                @if (count($models) > $modelPreviewLimit)
-                                    <p class="seo-ai-models-empty mt-2">
-                                        Showing {{ $modelPreviewLimit }}/{{ count($models) }} models for performance.
-                                        Open <a href="{{ $this->aiConnectionEditUrl($connection['id']) }}" class="text-primary-600 underline">Edit connection</a> to manage all.
-                                    </p>
-                                @endif
+                                            </thead>
+                                            <tbody>
+                                                @foreach ($groupModels as $model)
+                                                    <tr wire:key="ai-model-{{ $model['id'] }}">
+                                                        <td>
+                                                            <span class="seo-ai-models-table__cat">{{ $model['display_name'] }}</span>
+                                                            <span class="seo-ai-models-table__sub">{{ $groupLabel }}</span>
+                                                        </td>
+                                                        <td>
+                                                            <span class="seo-ai-status seo-ai-status--{{ $model['status'] }}">
+                                                                {{ $model['status'] }}
+                                                            </span>
+                                                            @if (($model['routing_status'] ?? '') === 'disabled')
+                                                                <span class="seo-ai-models-table__err" title="{{ $model['disabled_reason'] ?? '' }}">
+                                                                    routing: disabled
+                                                                    @if (filled($model['disabled_reason'] ?? null))
+                                                                        ({{ $model['disabled_reason'] }})
+                                                                    @endif
+                                                                </span>
+                                                            @endif
+                                                            @if (filled($model['last_error'] ?? null))
+                                                                <span class="seo-ai-models-table__err" title="{{ $model['last_error'] }}">Quota error</span>
+                                                            @endif
+                                                        </td>
+                                                        <td x-show="advanced" x-cloak>
+                                                            <code>{{ $model['raw_model_name'] }}</code>
+                                                            · p{{ $model['priority'] }}
+                                                        </td>
+                                                        <td x-show="advanced" x-cloak>
+                                                            <code class="text-xs">{{ implode(', ', $model['capabilities_resolved'] ?? []) }}</code>
+                                                        </td>
+                                                        @if ($groupKey === 'unknown')
+                                                            <td>
+                                                                <x-filament::button
+                                                                    type="button"
+                                                                    size="xs"
+                                                                    color="{{ !empty($model['admin_enabled_unknown']) ? 'success' : 'gray' }}"
+                                                                    wire:click="toggleUnknownModelRouting(@js($model['raw_model_name']), {{ !empty($model['admin_enabled_unknown']) ? 'false' : 'true' }})"
+                                                                >
+                                                                    {{ !empty($model['admin_enabled_unknown']) ? 'Enabled' : 'Enable for test' }}
+                                                                </x-filament::button>
+                                                            </td>
+                                                        @endif
+                                                        <td class="seo-ai-models-table__time">{{ $model['updated_at'] ?? '—' }}</td>
+                                                    </tr>
+                                                @endforeach
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                @endforeach
                             @endif
                         </div>
                     @empty

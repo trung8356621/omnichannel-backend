@@ -94,9 +94,18 @@ final class TaskWorkflowTestRunner
         foreach ($ordered as $node) {
             if ((string) ($node['id'] ?? '') === $nodeId) {
                 if (filled($modelOverride)) {
-                    $data = is_array($node['data'] ?? null) ? $node['data'] : [];
-                    $data['aiModel'] = $modelOverride;
-                    $node['data'] = $data;
+                    $promptId = $node['data']['promptId'] ?? null;
+                    $prompt = $this->resolvePrompt($promptId);
+                    $isImagePipeline = $prompt !== null
+                        && \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default')
+                            ->isImagePipeline();
+
+                    // Image node: bỏ override category/text model (vd. gemini-3-flash-preview).
+                    if (! $isImagePipeline) {
+                        $data = is_array($node['data'] ?? null) ? $node['data'] : [];
+                        $data['aiModel'] = $modelOverride;
+                        $node['data'] = $data;
+                    }
                 }
 
                 return $this->executeNode($node, $context, $state, $edges);
@@ -347,7 +356,7 @@ final class TaskWorkflowTestRunner
                     'type' => $type,
                     'title' => $title,
                     'status' => 'failed',
-                    'message' => 'Không tìm thấy prompt #'.(string) $promptId,
+                    'message' => $this->missingPromptMessage($promptId),
                 ];
             }
 
@@ -414,6 +423,13 @@ final class TaskWorkflowTestRunner
                 }
 
                 $model = trim((string) ($node['data']['aiModel'] ?? ''));
+                $imageTool = \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default');
+                $isImagePipeline = $imageTool->isImagePipeline();
+
+                // Khớp Test Prompt (image): compile full + ImageRoutingStrategy.
+                // Không chạy chain planner (Flash text) — đó là nguyên nhân task hiện gemini-3-flash-preview
+                // trong khi Test Prompt ra imagen / Nano Banana.
+                // Node.aiModel category (gemini_flash, …) chỉ áp dụng cho prompt text.
                 $result = PromptMediaPersistContext::using(
                     $this->resolveMediaContextSiteId($context, $state),
                     $state->article?->id ?? $context->article?->id,
@@ -421,12 +437,20 @@ final class TaskWorkflowTestRunner
                     fn () => $this->promptRunner->run(
                         $prompt,
                         $variables,
-                        $model !== '' ? $model : null,
+                        $isImagePipeline
+                            ? null
+                            : ($model !== '' ? $model : null),
                         isTaskMode: true,
+                        runFullDependentChain: ! $isImagePipeline,
                     ),
                 );
                 $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
-                $rawModelUsed = trim((string) ($snapshot['raw_model_used'] ?? ''));
+                $rawModelUsed = trim((string) (
+                    $snapshot['render_model']
+                        ?? $snapshot['raw_model_used']
+                        ?? $snapshot['planner_model']
+                        ?? ''
+                ));
                 $output = trim((string) ($result->output_text ?? ''));
                 if ($output !== '') {
                     $output = $this->applyPromptPostProcessing($prompt, $output);
@@ -470,8 +494,13 @@ final class TaskWorkflowTestRunner
                     'status' => $result->status === 'completed' ? 'completed' : 'failed',
                     'prompt_id' => $prompt->id,
                     'prompt_name' => (string) $prompt->name,
-                    'ai_model' => $model !== '' ? $model : null,
+                    'ai_model' => $isImagePipeline
+                        ? null
+                        : ($model !== '' ? $model : null),
                     'raw_model_used' => $rawModelUsed !== '' ? $rawModelUsed : null,
+                    'render_model' => trim((string) ($snapshot['render_model'] ?? '')) ?: null,
+                    'planner_model' => trim((string) ($snapshot['planner_model'] ?? '')) ?: null,
+                    'tools' => $imageTool->value,
                     'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
                     'output' => $output,
                     'outputs' => $state->nodeOutputs[$nodeId] ?? [],
@@ -1519,7 +1548,7 @@ final class TaskWorkflowTestRunner
      */
     private function isProductGalleryPromptNode(string $nodeId, SeoPrompt $prompt, array $edges): bool
     {
-        if (trim((string) ($prompt->tools ?? 'default')) !== 'image') {
+        if (! \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline()) {
             return false;
         }
 
@@ -2193,6 +2222,36 @@ final class TaskWorkflowTestRunner
             ->first();
     }
 
+    private function missingPromptMessage(mixed $promptId): string
+    {
+        if ($promptId === null || $promptId === '') {
+            return 'Widget Prompt chưa chọn prompt. Mở Builder → chọn prompt tạo ảnh cho bước này.';
+        }
+
+        $numericId = null;
+        if (is_numeric($promptId)) {
+            $numericId = (int) $promptId;
+        } elseif (preg_match('/^p(\d+)$/', (string) $promptId, $matches)) {
+            $numericId = (int) $matches[1];
+        }
+
+        if ($numericId === null) {
+            return 'Không tìm thấy prompt «'.(string) $promptId.'». Mở Builder → gắn lại prompt cho widget này.';
+        }
+
+        $inactive = SeoPrompt::query()->whereKey($numericId)->where('is_active', false)->exists();
+        if ($inactive) {
+            return 'Prompt #'.$numericId.' đang tắt (is_active=0). Bật lại prompt hoặc chọn prompt khác trong Builder.';
+        }
+
+        $exists = SeoPrompt::query()->whereKey($numericId)->exists();
+        if (! $exists) {
+            return 'Prompt #'.$numericId.' không còn trong DB (đã xóa). Mở Builder → chọn lại prompt tạo ảnh cho widget 2.';
+        }
+
+        return 'Không resolve được prompt #'.$numericId.'. Mở Builder → gắn lại prompt.';
+    }
+
     /**
      * Prompt node tools=image cuối cùng theo thứ tự topo (editor «Tạo ảnh»).
      */
@@ -2211,7 +2270,7 @@ final class TaskWorkflowTestRunner
                 continue;
             }
 
-            if (strtolower(trim((string) ($prompt->tools ?? 'default'))) !== 'image') {
+            if (! \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline()) {
                 continue;
             }
 
@@ -2220,10 +2279,45 @@ final class TaskWorkflowTestRunner
 
         if ($imagePrompt === null) {
             throw new \InvalidArgumentException(
-                'Quy trình «'.(string) ($task->name ?? '').'» chưa có bước Prompt Hình ảnh (tools=image).',
+                'Quy trình «'.(string) ($task->name ?? '').'» chưa có bước Prompt Hình ảnh (tools=image|image_typography).',
             );
         }
 
         return $imagePrompt;
+    }
+
+    /**
+     * Prompt node tools=video cuối cùng theo thứ tự topo (editor «Tạo video» workflow).
+     * Phase 1: extract only — chưa execute full workflow graph.
+     */
+    public function resolveVideoPromptForTask(SeoTask $task): SeoPrompt
+    {
+        $ordered = $this->orderedNodesForTask($task);
+        $videoPrompt = null;
+
+        foreach ($ordered as $node) {
+            if ((string) ($node['type'] ?? '') !== 'prompt') {
+                continue;
+            }
+
+            $prompt = $this->resolvePrompt($node['data']['promptId'] ?? null);
+            if ($prompt === null) {
+                continue;
+            }
+
+            if (\App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default') !== \App\Addons\SeoContentAi\Support\ImageToolType::Video) {
+                continue;
+            }
+
+            $videoPrompt = $prompt;
+        }
+
+        if ($videoPrompt === null) {
+            throw new \InvalidArgumentException(
+                'Quy trình «'.(string) ($task->name ?? '').'» chưa có bước Prompt Video (tools=video).',
+            );
+        }
+
+        return $videoPrompt;
     }
 }

@@ -484,9 +484,7 @@ final class WordPressLocalMediaSyncService
 
         $uploadFile = $optimization->prepareWordPressUploadFile($absolutePath, $config);
         if ($uploadFile === null) {
-            $detail = (bool) $config->auto_convert_webp
-                ? 'Không tạo được WebP và không nén được ảnh dưới 100KB.'
-                : 'Không chuẩn bị được file upload.';
+            $detail = 'Không đọc được file ảnh gốc trên disk (thiếu hoặc undecodeable).';
 
             return $this->rememberMediaSyncResult($mediaId, $config, [
                 'success' => false,
@@ -542,12 +540,24 @@ final class WordPressLocalMediaSyncService
                         && ($replaceBody['success'] ?? false)
                         && $replaceUrl !== ''
                     ) {
-                        if (
-                            (bool) $config->auto_convert_webp
+                        $needsWebpReimport = (bool) $config->auto_convert_webp
                             && $uploadMime === 'image/webp'
-                            && ! $optimization->isWebpUrl($replaceUrl)
-                        ) {
-                            $reimported = $this->reimportWebpRetiringOldAttachment(
+                            && ! $optimization->isWebpUrl($replaceUrl);
+
+                        $needsMimeUrlFix = $this->uploadMimeMismatchesWpUrl($uploadMime, $replaceUrl);
+
+                        if ($needsWebpReimport || $needsMimeUrlFix) {
+                            if ($needsMimeUrlFix) {
+                                Log::warning('WordPress replace mime/URL mismatch — reimport attachment.', [
+                                    'article_id' => $article->id,
+                                    'seo_media_id' => $mediaId,
+                                    'wp_attachment_id' => $existingAttachmentId,
+                                    'upload_mime' => $uploadMime,
+                                    'wp_url' => $replaceUrl,
+                                ]);
+                            }
+
+                            $reimported = $this->reimportRetiringOldAttachment(
                                 $media,
                                 $writeToken,
                                 $base,
@@ -562,7 +572,7 @@ final class WordPressLocalMediaSyncService
                                 return $this->rememberMediaSyncResult($mediaId, $config, $reimported);
                             }
 
-                            Log::warning('WordPress replace kept non-WebP URL; reimport WebP fallback failed.', [
+                            Log::warning('WordPress replace URL mismatch; reimport fallback failed.', [
                                 'article_id' => $article->id,
                                 'seo_media_id' => $mediaId,
                                 'wp_attachment_id' => $existingAttachmentId,
@@ -746,9 +756,12 @@ final class WordPressLocalMediaSyncService
     }
 
     /**
+     * Import attachment mới rồi xóa bản cũ — khi replace giữ sai extension/mime
+     * (vd. JPEG ghi vào path .webp → ảnh trắng trên browser).
+     *
      * @return array{success: bool, attachment_id: int, wp_url: string, seo_media_id: int|null, message: string}|null
      */
-    private function reimportWebpRetiringOldAttachment(
+    private function reimportRetiringOldAttachment(
         SeoMedia $media,
         string $writeToken,
         string $base,
@@ -759,7 +772,7 @@ final class WordPressLocalMediaSyncService
         string $slug,
         string $altText,
     ): ?array {
-        if ($oldAttachmentId <= 0 || $uploadMime !== 'image/webp') {
+        if ($oldAttachmentId <= 0 || $binary === '') {
             return null;
         }
 
@@ -768,7 +781,7 @@ final class WordPressLocalMediaSyncService
                 ->acceptJson()
                 ->withToken($writeToken)
                 ->attach('file', $binary, $uploadFilename, [
-                    'Content-Type' => $uploadMime,
+                    'Content-Type' => $uploadMime !== '' ? $uploadMime : 'application/octet-stream',
                 ])
                 ->post($base.'/wp-json/omi-seo-ai/v1/attachments/import', [
                     'slug' => $slug !== '' ? $slug : pathinfo($uploadFilename, PATHINFO_FILENAME),
@@ -776,9 +789,10 @@ final class WordPressLocalMediaSyncService
                     'alt_text' => $altText !== '' ? $altText : ($slug !== '' ? $slug : $uploadFilename),
                 ]);
         } catch (Throwable $exception) {
-            Log::warning('WordPress WebP reimport failed', [
+            Log::warning('WordPress attachment reimport failed', [
                 'seo_media_id' => (int) $media->id,
                 'old_attachment_id' => $oldAttachmentId,
+                'upload_mime' => $uploadMime,
                 'error' => $exception->getMessage(),
             ]);
 
@@ -800,6 +814,16 @@ final class WordPressLocalMediaSyncService
             return null;
         }
 
+        if ($this->uploadMimeMismatchesWpUrl($uploadMime, $newUrl)) {
+            Log::warning('WordPress reimport still has mime/URL mismatch.', [
+                'seo_media_id' => (int) $media->id,
+                'upload_mime' => $uploadMime,
+                'wp_url' => $newUrl,
+            ]);
+
+            return null;
+        }
+
         $this->deleteWordPressAttachment($writeToken, $base, $oldAttachmentId);
 
         $media->update([
@@ -816,6 +840,39 @@ final class WordPressLocalMediaSyncService
         ];
     }
 
+    private function uploadMimeMismatchesWpUrl(string $uploadMime, string $wpUrl): bool
+    {
+        $uploadMime = strtolower(trim($uploadMime));
+        $wpUrl = trim($wpUrl);
+        if ($uploadMime === '' || $wpUrl === '') {
+            return false;
+        }
+
+        $path = parse_url($wpUrl, PHP_URL_PATH);
+        if (! is_string($path) || $path === '') {
+            return false;
+        }
+
+        $extension = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+        if ($extension === 'jpeg') {
+            $extension = 'jpg';
+        }
+
+        $expected = match ($uploadMime) {
+            'image/webp' => 'webp',
+            'image/png' => 'png',
+            'image/gif' => 'gif',
+            'image/jpeg', 'image/jpg' => 'jpg',
+            default => '',
+        };
+
+        if ($expected === '' || $extension === '') {
+            return false;
+        }
+
+        return $expected !== $extension;
+    }
+
     private function deleteWordPressAttachment(string $writeToken, string $base, int $attachmentId): void
     {
         if ($attachmentId <= 0) {
@@ -828,7 +885,7 @@ final class WordPressLocalMediaSyncService
                 ->withToken($writeToken)
                 ->post($base.'/wp-json/omi-seo-ai/v1/attachments/'.$attachmentId.'/delete');
         } catch (Throwable $exception) {
-            Log::warning('WordPress delete attachment failed after WebP reimport', [
+            Log::warning('WordPress delete attachment failed after reimport', [
                 'attachment_id' => $attachmentId,
                 'error' => $exception->getMessage(),
             ]);

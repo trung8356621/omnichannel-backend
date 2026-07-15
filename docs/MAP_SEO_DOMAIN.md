@@ -112,8 +112,8 @@ CreateDomain/EditDomain
 
 | Chức năng | Queue Job | Service gốc |
 |-----------|-----------|-------------|
-| **Incremental Sync** (đồng bộ bài viết mới/cập nhật từ WP) | `RunIncrementalDomainSyncJob` (queue, unique 2h) | → `IncrementalDomainSyncRunner::run()` |
-| **Refresh Article Metadata** (đồng bộ meta WP: ngôn ngữ, Polylang, SEO) | `RunMetadataDomainSyncJob` (queue, unique 2h) | → `MetadataDomainSyncRunner::run()` |
+| **Incremental Sync** (đồng bộ bài viết mới/cập nhật từ WP) | `RunIncrementalDomainSyncJob` (queue `seo`, unique 2h) | → `IncrementalDomainSyncRunner::run()` |
+| **Refresh Article Metadata** (đồng bộ meta WP: ngôn ngữ, Polylang, SEO) | `RunMetadataDomainSyncJob` (queue `seo`, unique 2h) | → `MetadataDomainSyncRunner::run()` |
 | **Rescrape Keywords** (reset + rescrape keywords từ articles) | `RunKeywordDomainResyncJob` (queue) | → `KeywordDomainResyncService::resetAndResync()` |
 | **SEO scoring (backfill)** | `AnalyzeArticleSeoJob` (unique per article) | → `SeoArticleScoringQueueService` |
 | **Audit Link Health** (kiểm tra HTTP status của link maps) | `AuditLinkStatusJob` (queue per link, chunk per domain) | → `LinkMapStatusAuditService::queueDomainAudit()` |

@@ -17,7 +17,6 @@ final class ArticleFaqWordPressRestoreService
         private readonly ArticleContentFaqService $contentFaq,
         private readonly ArticleFaqExtractDebugService $extractDebug,
         private readonly WorkflowParserService $workflowParser,
-        private readonly ArticleWordPressSyncFlagService $syncFlags,
     ) {}
 
     /**
@@ -53,117 +52,6 @@ final class ArticleFaqWordPressRestoreService
             'editor_html' => $html,
             'message' => 'Đã khôi phục nội dung gốc từ WordPress (kèm khối FAQ trong editor).',
         ];
-    }
-
-    /**
-     * Lấy lại toàn bộ bài gốc từ WordPress (editor + xóa FAQ panel).
-     *
-     * @return array{
-     *     restored: bool,
-     *     editor_html: ?string,
-     *     title: ?string,
-     *     slug: ?string,
-     *     message: string,
-     * }
-     */
-    public function restoreFullArticleFromWordPress(SeoArticle $article): array
-    {
-        if ((int) ($article->wp_post_id ?? 0) <= 0) {
-            return [
-                'restored' => false,
-                'editor_html' => null,
-                'title' => null,
-                'slug' => null,
-                'message' => 'Bài chưa liên kết WordPress.',
-            ];
-        }
-
-        $post = $this->wordpressContent->fetchFromWordPress($article, importFaqs: false, forceSeoImport: true);
-
-        if ($post === []) {
-            return [
-                'restored' => false,
-                'editor_html' => null,
-                'title' => null,
-                'slug' => null,
-                'message' => 'Không lấy được nội dung từ WordPress.',
-            ];
-        }
-
-        $html = $this->resolveRestoredEditorHtml($article, $post, preferFreshRemote: true);
-
-        if ($html === '') {
-            return [
-                'restored' => false,
-                'editor_html' => null,
-                'title' => null,
-                'slug' => null,
-                'message' => 'Không lấy được nội dung gốc từ WordPress.',
-            ];
-        }
-
-        $this->contentFaq->persistArticleBodyHtml($article, $html);
-        $this->persistFreshWordPressContentMeta($article, $post, $html);
-        $this->extractDebug->clear($article);
-
-        $wpFaqs = $this->normalizeWordPressFaqRows($post['faqs'] ?? null);
-        if ($wpFaqs !== []) {
-            app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $post);
-            $article->refresh();
-            $html = trim((string) ($article->body ?? $html));
-        } else {
-            $article->faqs()->delete();
-            $article->articleMetas()->where('meta_key', 'seo_article_faqs')->delete();
-        }
-
-        $title = $this->syncFlags->decodeWordPressText($this->wordpressContent->resolvePostTitle($post));
-        $slug = trim((string) ($post['slug'] ?? ''));
-
-        $this->applyRestoredTitleAndSlug($article, $title, $slug);
-        $this->syncFlags->clearAll($article);
-        $article->update(['body' => null]);
-
-        return [
-            'restored' => true,
-            'editor_html' => $html !== '' ? $html : null,
-            'title' => $title !== '' ? $title : null,
-            'slug' => $slug !== '' ? $slug : null,
-            'category_ids' => $this->wordpressContent->extractCategoryIdsFromPost($post),
-            'message' => $wpFaqs !== []
-                ? 'Đã khôi phục bài viết và FAQ từ WordPress.'
-                : 'Đã khôi phục bài viết gốc từ WordPress.',
-        ];
-    }
-
-    private function applyRestoredTitleAndSlug(SeoArticle $article, string $title, string $slug): void
-    {
-        $updates = [];
-
-        if ($title !== '') {
-            $updates['title'] = $title;
-        }
-
-        if ($slug !== '') {
-            $updates['slug'] = $slug;
-        }
-
-        if ($updates !== []) {
-            $article->update($updates);
-        }
-
-        if ($title !== '') {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'wp_post_title'],
-                ['meta_value' => $title],
-            );
-        }
-
-        if ($slug !== '') {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => 'wp_slug'],
-                ['meta_value' => $slug],
-            );
-        }
     }
 
     /**
@@ -328,22 +216,7 @@ final class ArticleFaqWordPressRestoreService
 
     private function pickRestoredContentSource(string $rawContent, string $renderedBody): string
     {
-        if ($rawContent === '') {
-            return $renderedBody;
-        }
-
-        if ($renderedBody === '') {
-            return $rawContent;
-        }
-
-        $rawImgCount = preg_match_all('/<img[\s>]/iu', $rawContent) ?: 0;
-        $renderedImgCount = preg_match_all('/<img[\s>]/iu', $renderedBody) ?: 0;
-
-        if ($renderedImgCount > $rawImgCount) {
-            return $renderedBody;
-        }
-
-        return $rawContent;
+        return app(ArticlePostImagesService::class)->preferImageRichHtml($rawContent, $renderedBody);
     }
 
     /**

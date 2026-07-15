@@ -211,10 +211,16 @@ export function enrichBlocksWithPostImages(blocks, postImages) {
 
     const byWpId = new Map();
     const bySrc = new Map();
+    const byLocalSrc = new Map();
+    const bySeoId = new Map();
     postImages.forEach((row) => {
         const wpId = row.wp_attachment_id ?? row.wp_id;
         if (wpId) byWpId.set(Number(wpId), row);
         if (row.src) bySrc.set(normalizeSrcKey(row.src), row);
+        const localSrc = String(row.local_src ?? row.localSrc ?? '').trim();
+        if (localSrc) byLocalSrc.set(normalizeSrcKey(localSrc), row);
+        const seoId = Number(row.seo_media_id ?? row.seoMediaId ?? 0);
+        if (seoId > 0) bySeoId.set(seoId, row);
     });
 
     return blocks.map((block) => {
@@ -224,8 +230,16 @@ export function enrichBlocksWithPostImages(blocks, postImages) {
         if (!image) return block;
 
         const wpId = image.wpAttachmentId;
+        const seoId = Number(image.seoMediaId ?? 0);
         const srcKey = image.src ? normalizeSrcKey(image.src) : '';
-        const meta = (wpId && byWpId.get(Number(wpId))) || (srcKey && bySrc.get(srcKey));
+        const localKey = image.localSrc ? normalizeSrcKey(image.localSrc) : '';
+        const meta =
+            (wpId && byWpId.get(Number(wpId)))
+            || (seoId > 0 && bySeoId.get(seoId))
+            || (srcKey && bySrc.get(srcKey))
+            || (srcKey && byLocalSrc.get(srcKey))
+            || (localKey && byLocalSrc.get(localKey))
+            || null;
 
         if (!meta) {
             const src = isLocalSeoMediaSrc(image.src)
@@ -458,14 +472,15 @@ export function resolveImageRefIds(row) {
     let seoMediaId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
 
     if (isLocal) {
-        if (seoMediaId <= 0 && wpAttachmentId > 0 && !hasWpUrl) {
+        if (seoMediaId > 0 && wpAttachmentId > 0) {
+            if (seoMediaId === wpAttachmentId) {
+                wpAttachmentId = 0;
+            }
+        } else if (seoMediaId <= 0 && wpAttachmentId > 0 && !hasWpUrl) {
             seoMediaId = wpAttachmentId;
-        }
-
-        if (!hasWpUrl) {
             wpAttachmentId = 0;
-        } else if (seoMediaId > 0 && wpAttachmentId > 0 && seoMediaId === wpAttachmentId) {
-            seoMediaId = 0;
+        } else if (!hasWpUrl && !(seoMediaId > 0 && wpAttachmentId > 0)) {
+            wpAttachmentId = 0;
         }
     } else if (seoMediaId > 0 && wpAttachmentId <= 0) {
         wpAttachmentId = 0;
@@ -481,11 +496,113 @@ export function resolveImageRefIds(row) {
     };
 }
 
-/** Chỉ đổi slug qua WordPress khi ảnh thật sự dùng URL WP (không phải file nội bộ Laravel). */
-export function shouldRenameSlugOnWordPress(row) {
-    const { wpAttachmentId, wpSrc, isLocal } = resolveImageRefIds(row);
+/**
+ * URL WordPress tin cậy — không phải `/storage/uploads/seo_media/`.
+ */
+export function hasTrustedWordPressUrl(row) {
+    const candidates = [
+        String(row?.wpSrc || row?.wp_url || '').trim(),
+        String(row?.src || '').trim(),
+    ];
 
-    return wpAttachmentId > 0 && wpSrc !== '' && !isLocal;
+    for (const url of candidates) {
+        if (url !== '' && !isLocalSeoMediaSrc(url)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Ảnh sẵn sàng Fix slug trên WordPress: có attachment id + URL WP thật.
+ */
+export function isImageReadyForWpSlugFix(row) {
+    if (!row || row?.excludeQuickFix) {
+        return true;
+    }
+
+    const { wpAttachmentId } = resolveImageRefIds(row);
+
+    return wpAttachmentId > 0 && hasTrustedWordPressUrl(row);
+}
+
+/**
+ * Còn ảnh trong bài (có blockId) chưa gắn URL WP thật → bắt Sync WP trước Fix slug.
+ */
+export function imagesNeedWpSyncBeforeFixSlug(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+
+    return list.some((row) => {
+        if (row?.excludeQuickFix) {
+            return false;
+        }
+
+        const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+        if (!blockId) {
+            return false;
+        }
+
+        return !isImageReadyForWpSlugFix(row);
+    });
+}
+
+/**
+ * Đổi slug attachment WordPress khi đã liên kết wp_attachment_id (kể cả src đang hiển thị file Laravel).
+ * Chỉ tin ID đã qua resolveImageRefIds — không fallback rawWp (tránh ID stale sau paste/reimport).
+ */
+export function shouldRenameSlugOnWordPress(row) {
+    const { wpAttachmentId } = resolveImageRefIds(row);
+
+    return wpAttachmentId > 0 && hasTrustedWordPressUrl(row);
+}
+
+function resolveWordPressAttachmentSlug(row) {
+    const wpUrl = resolveWpRenameOldUrl(row);
+    if (wpUrl && !isLocalSeoMediaSrc(wpUrl)) {
+        const fromUrl = slugFromUrl(wpUrl);
+        if (fromUrl) {
+            return fromUrl;
+        }
+    }
+
+    const wpSrc = String(row?.wpSrc || row?.wp_url || '').trim();
+    if (wpSrc && !isLocalSeoMediaSrc(wpSrc)) {
+        return slugFromUrl(wpSrc);
+    }
+
+    return '';
+}
+
+function resolveLocalMediaSlug(row) {
+    const localSrc = resolveLocalRenameSrc(row);
+    const src = String(row?.src || '').trim();
+    const localUrl = localSrc || (isLocalSeoMediaSrc(src) ? src : '');
+    if (localUrl) {
+        const fromUrl = slugFromUrl(localUrl);
+        if (fromUrl) {
+            return fromUrl;
+        }
+    }
+
+    return String(row?.slug ?? '').trim();
+}
+
+function enrichImageRowFromLookup(row, enrichmentByBlockId) {
+    const blockId = String(row?.blockId ?? '').trim();
+    const extra = blockId && enrichmentByBlockId ? enrichmentByBlockId[blockId] : null;
+    if (!extra) {
+        return row;
+    }
+
+    return {
+        ...row,
+        wpAttachmentId: row.wpAttachmentId ?? extra.wpAttachmentId ?? extra.wp_attachment_id ?? null,
+        seoMediaId: row.seoMediaId ?? extra.seoMediaId ?? extra.seo_media_id ?? null,
+        wpSrc: String(row.wpSrc || extra.wpSrc || extra.wp_url || '').trim(),
+        localSrc: String(row.localSrc || extra.localSrc || extra.local_src || '').trim(),
+        slug: row.slug || extra.slug || '',
+    };
 }
 
 /**
@@ -506,50 +623,59 @@ export function computeQuickFixSupplementalOutcome(row, keyword) {
 /**
  * @returns {{ patch: { slug?: string }, wpRename: object|null, localRename: object|null }}
  */
-export function computeQuickFixSlugSupplementalOutcome(row, keyword) {
+export function computeQuickFixSlugSupplementalOutcome(row, keyword, { wpOnly = true } = {}) {
     const phrase = String(keyword ?? '').trim();
     const fromRow = Number(row?.quickFixIndex ?? 0);
     const slugIndex = fromRow > 0 ? fromRow : 0;
     const suggestedSlug = slugIndex > 0 ? imageSlugFromKeyword(phrase, slugIndex) : '';
     const { wpAttachmentId, seoMediaId, isLocal } = resolveImageRefIds(row);
+    const effectiveWpId = wpAttachmentId > 0 ? wpAttachmentId : 0;
     const localFileSrc = resolveLocalRenameSrc(row);
-    const oldSlug = String(row?.slug ?? '').trim();
+    const rowSlug = String(row?.slug ?? '').trim();
+    const wpOldSlug = resolveWordPressAttachmentSlug(row);
+    const localOldSlug = resolveLocalMediaSlug(row);
     const oldUrlForWp = resolveWpRenameOldUrl(row);
 
-    if (!suggestedSlug || suggestedSlug === oldSlug) {
+    if (!suggestedSlug) {
         return { patch: {}, wpRename: null, localRename: null };
     }
 
     let wpRename = null;
     let localRename = null;
 
-    if (shouldRenameSlugOnWordPress(row)) {
+    if (shouldRenameSlugOnWordPress(row) && suggestedSlug !== wpOldSlug) {
         wpRename = {
-            attachment_id: wpAttachmentId,
+            attachment_id: effectiveWpId,
             new_slug: suggestedSlug,
             old_url: oldUrlForWp,
-            old_slug: oldSlug,
+            old_slug: wpOldSlug || rowSlug,
             block_id: String(row?.blockId ?? row?.block_id ?? '').trim(),
         };
     }
 
-    if (seoMediaId > 0) {
-        localRename = {
-            seo_media_id: seoMediaId,
-            src: localFileSrc || row?.src,
-            new_slug: suggestedSlug,
-            old_slug: oldSlug,
-        };
-    } else if (isLocal && localFileSrc) {
-        localRename = {
-            seo_media_id: null,
-            src: localFileSrc,
-            new_slug: suggestedSlug,
-            old_slug: oldSlug,
-        };
+    if (!wpOnly) {
+        if (seoMediaId > 0 && suggestedSlug !== localOldSlug) {
+            localRename = {
+                seo_media_id: seoMediaId,
+                src: localFileSrc || row?.src,
+                new_slug: suggestedSlug,
+                old_slug: localOldSlug || rowSlug,
+            };
+        } else if (isLocal && localFileSrc && suggestedSlug !== localOldSlug) {
+            localRename = {
+                seo_media_id: null,
+                src: localFileSrc,
+                new_slug: suggestedSlug,
+                old_slug: localOldSlug || rowSlug,
+            };
+        }
     }
 
     if (!wpRename && !localRename) {
+        if (suggestedSlug === rowSlug || (wpOnly && suggestedSlug === wpOldSlug)) {
+            return { patch: {}, wpRename: null, localRename: null };
+        }
+
         return {
             patch: { slug: suggestedSlug },
             wpRename: null,
@@ -622,7 +748,16 @@ export function appendCacheBustToSrc(src, cacheKey = Date.now()) {
     }
 }
 
-function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, renameQueue, localRenameQueue, localRenameSeen) {
+function buildSlugRenameQueuesForRow(
+    row,
+    images,
+    phrase,
+    slugIndexByBlockId,
+    renameQueue,
+    localRenameQueue,
+    localRenameSeen,
+    { wpOnly = true, includeWordPressRenames = true } = {},
+) {
     const mappedIndex =
         slugIndexByBlockId && slugIndexByBlockId[row.blockId] != null
             ? Number(slugIndexByBlockId[row.blockId])
@@ -633,22 +768,35 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
     }
 
     const slug = imageSlugFromKeyword(phrase, slugIndex);
-    const oldSlug = (row.slug || '').trim();
+    const rowSlug = (row.slug || '').trim();
+    const wpOldSlug = resolveWordPressAttachmentSlug(row);
+    const localOldSlug = resolveLocalMediaSlug(row);
     const { wpAttachmentId, seoMediaId } = resolveImageRefIds(row);
+    const effectiveWpId = wpAttachmentId > 0 ? wpAttachmentId : 0;
     const localFileSrc = resolveLocalRenameSrc(row);
     const oldUrlForWp = resolveWpRenameOldUrl(row);
 
-    if (shouldRenameSlugOnWordPress(row) && slug !== oldSlug) {
+    if (
+        includeWordPressRenames
+        && shouldRenameSlugOnWordPress(row)
+        && slug !== ''
+        && slug !== wpOldSlug
+    ) {
         renameQueue.push({
-            attachment_id: wpAttachmentId,
+            attachment_id: effectiveWpId,
             new_slug: slug,
             old_url: oldUrlForWp,
-            old_slug: oldSlug,
+            old_slug: wpOldSlug || rowSlug,
             block_id: String(row?.blockId ?? '').trim(),
         });
     }
 
-    if (slug !== oldSlug && (seoMediaId > 0 || localFileSrc)) {
+    if (
+        !wpOnly
+        && slug !== ''
+        && slug !== localOldSlug
+        && (seoMediaId > 0 || localFileSrc)
+    ) {
         const localKey =
             seoMediaId > 0 ? `id:${seoMediaId}` : `src:${localFileSrc || String(row.src || '').trim()}`;
         if (!localRenameSeen.has(localKey)) {
@@ -658,7 +806,7 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
                 src: localFileSrc || row.src,
                 block_id: row.blockId,
                 new_slug: slug,
-                old_slug: oldSlug,
+                old_slug: localOldSlug || rowSlug,
             });
         }
     }
@@ -671,14 +819,22 @@ function buildSlugRenameQueuesForRow(row, images, phrase, slugIndexByBlockId, re
  *
  * @returns {{ blocks: Array, applied: number, renameQueue: Array, localRenameQueue: Array }}
  */
-export function applyQuickFixSlugToBlocks(blocks, keyword, slugIndexByBlockId = null) {
+export function applyQuickFixSlugToBlocks(
+    blocks,
+    keyword,
+    slugIndexByBlockId = null,
+    enrichmentByBlockId = null,
+    { wpOnly = true, includeWordPressRenames = true } = {},
+) {
     const phrase = String(keyword ?? '').trim();
     const base = keywordToImageSlugBase(phrase);
     if (!base || !phrase) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
     }
 
-    const images = collectImagesFromBlocks(blocks);
+    const images = collectImagesFromBlocks(blocks).map((row) =>
+        enrichmentByBlockId ? enrichImageRowFromLookup(row, enrichmentByBlockId) : row,
+    );
     const eligible = images.filter((row) => !row.excludeQuickFix);
     if (!eligible.length) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
@@ -698,6 +854,7 @@ export function applyQuickFixSlugToBlocks(blocks, keyword, slugIndexByBlockId = 
             renameQueue,
             localRenameQueue,
             localRenameSeen,
+            { wpOnly, includeWordPressRenames },
         );
         if (!slug) {
             return;
@@ -769,7 +926,13 @@ export function applyQuickFixMetaToBlocks(blocks, keyword, slugIndexByBlockId = 
  *
  * @returns {{ blocks: Array, applied: number, renameQueue: Array, localRenameQueue: Array }}
  */
-export function applyQuickFixSlugToBlock(blocks, keyword, blockId) {
+export function applyQuickFixSlugToBlock(
+    blocks,
+    keyword,
+    blockId,
+    enrichmentRow = null,
+    { wpOnly = true, includeWordPressRenames = true } = {},
+) {
     const phrase = String(keyword ?? '').trim();
     const base = keywordToImageSlugBase(phrase);
     const targetId = String(blockId ?? '').trim();
@@ -778,7 +941,10 @@ export function applyQuickFixSlugToBlock(blocks, keyword, blockId) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
     }
 
-    const images = collectImagesFromBlocks(blocks);
+    const enrichmentByBlockId = enrichmentRow ? { [targetId]: enrichmentRow } : null;
+    const images = collectImagesFromBlocks(blocks).map((row) =>
+        enrichmentByBlockId ? enrichImageRowFromLookup(row, enrichmentByBlockId) : row,
+    );
     const row = images.find((entry) => entry.blockId === targetId);
     if (!row || row.excludeQuickFix) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };
@@ -794,6 +960,7 @@ export function applyQuickFixSlugToBlock(blocks, keyword, blockId) {
         renameQueue,
         localRenameQueue,
         new Set(),
+        { wpOnly, includeWordPressRenames },
     );
     if (!slug) {
         return { blocks, applied: 0, renameQueue: [], localRenameQueue: [] };

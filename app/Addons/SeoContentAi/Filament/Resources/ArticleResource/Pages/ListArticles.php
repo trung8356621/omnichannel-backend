@@ -33,6 +33,8 @@ class ListArticles extends ListRecords
 
     public const TAB_REVIEWED = 'reviewed';
 
+    public const TAB_SKIPPED = 'skipped';
+
     protected static string $resource = ArticleResource::class;
 
     protected static string $view = 'seo-content-ai::filament.resources.article-resource.pages.list-articles';
@@ -45,7 +47,13 @@ class ListArticles extends ListRecords
         parent::mount();
 
         $tab = request()->query('tab', self::TAB_POSTS);
-        if (is_string($tab) && in_array($tab, [self::TAB_POSTS, self::TAB_CATEGORIES, self::TAB_QUEUE, self::TAB_REVIEWED], true)) {
+        if (is_string($tab) && in_array($tab, [
+            self::TAB_POSTS,
+            self::TAB_CATEGORIES,
+            self::TAB_QUEUE,
+            self::TAB_REVIEWED,
+            self::TAB_SKIPPED,
+        ], true)) {
             $this->contentTab = $tab;
         }
 
@@ -53,6 +61,45 @@ class ListArticles extends ListRecords
         if ($categoryFilter !== null && $categoryFilter !== '') {
             $this->contentTab = self::TAB_POSTS;
         }
+
+        $this->ensureDefaultPostsTableFilters();
+    }
+
+    /**
+     * Default Articles (posts) filters: language=vi, post_type=post
+     * (same as ?tableFilters[language][value]=vi&tableFilters[post_type][value]=post).
+     */
+    protected function ensureDefaultPostsTableFilters(): void
+    {
+        if ($this->contentTab !== self::TAB_POSTS) {
+            return;
+        }
+
+        // Respect explicit query-string filters (including cleared empty values).
+        if (request()->has('tableFilters')) {
+            return;
+        }
+
+        $this->tableFilters ??= [];
+
+        $language = trim((string) ($this->tableFilters['language']['value'] ?? ''));
+        $postType = trim((string) ($this->tableFilters['post_type']['value'] ?? ''));
+
+        if ($language !== '' && $postType !== '') {
+            return;
+        }
+
+        if ($language === '') {
+            $this->tableFilters['language'] = ['value' => 'vi'];
+        }
+
+        if ($postType === '') {
+            $this->tableFilters['post_type'] = ['value' => 'post'];
+        }
+
+        // Chỉ set state — không gọi getTableFiltersForm()/handleTableFilterUpdates() ở mount:
+        // $this->table chưa init (bootedInteractsWithTable chạy sau mount).
+        // Form filters được fill trong bootedInteractsWithTable từ $this->tableFilters.
     }
 
     public function getContentTabUrl(string $tab): string
@@ -66,10 +113,16 @@ class ListArticles extends ListRecords
             unset($filters['category_id'], $filters['post_type']);
         } elseif ($tab === self::TAB_QUEUE) {
             unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type']);
-        } elseif ($tab === self::TAB_REVIEWED) {
+        } elseif ($tab === self::TAB_REVIEWED || $tab === self::TAB_SKIPPED) {
             unset($filters['category_id'], $filters['post_type'], $filters['taxonomy'], $filters['type'], $filters['is_reviewed']);
         } else {
             unset($filters['taxonomy']);
+            if (trim((string) ($filters['language']['value'] ?? '')) === '') {
+                $filters['language'] = ['value' => 'vi'];
+            }
+            if (trim((string) ($filters['post_type']['value'] ?? '')) === '') {
+                $filters['post_type'] = ['value' => 'post'];
+            }
         }
 
         if ($filters !== []) {
@@ -89,6 +142,12 @@ class ListArticles extends ListRecords
         return ArticleResource::table($table)
             ->modifyQueryUsing(function (Builder $query): Builder {
                 ArticleResource::applyContentTabScope($query, $this->contentTab);
+
+                if ($this->contentTab === self::TAB_SKIPPED) {
+                    return ArticleResource::applyOnlySkipSeoAuditScope($query);
+                }
+
+                ArticleResource::applyExcludeSkipSeoAuditScope($query);
 
                 if ($this->contentTab === self::TAB_CATEGORIES) {
                     return ArticleResource::appendArticlesInCategoryCountSelect($query);
@@ -160,19 +219,18 @@ class ListArticles extends ListRecords
 
         $current = trim((string) (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article) ?? ''));
         $phrase = trim($phrase);
+        $keywordChanged = $phrase !== $current;
 
-        if ($phrase === $current) {
-            return;
+        if ($keywordChanged) {
+            KeywordFocusAttach::syncMainKeyword(
+                $article,
+                $siteId,
+                (int) auth()->id(),
+                $phrase,
+            );
+
+            app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($article->fresh());
         }
-
-        KeywordFocusAttach::syncMainKeyword(
-            $article,
-            $siteId,
-            (int) auth()->id(),
-            $phrase,
-        );
-
-        app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($article->fresh());
 
         $article = $article->fresh();
         if (! $article instanceof SeoArticle) {
@@ -183,6 +241,11 @@ class ListArticles extends ListRecords
         $scoreResult = app(SeoAnalyzerService::class)->analyzeSubmittedContent($article, $content);
         $article = $article->fresh();
         $score = (int) ($scoreResult['score'] ?? $article?->seo_score ?? 0);
+        $this->flushCachedTableRecords();
+
+        if (! $keywordChanged) {
+            return;
+        }
 
         $wpPostId = (int) ($article?->wp_post_id ?? 0);
 
@@ -297,7 +360,7 @@ class ListArticles extends ListRecords
      *     date: string,
      *     date_label: string,
      *     count: int,
-     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>
+     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string, view_url: string|null}>
      * }>
      */
     public function getReviewedArticlesGrouped(): array

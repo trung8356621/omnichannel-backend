@@ -94,6 +94,7 @@ class SeoWpBridgeController extends Controller
             'items' => ['required', 'array', 'min:1'],
             'items.*.wp_id' => ['required', 'integer', 'min:1'],
             'items.*.type' => ['sometimes', 'string', 'max:64'],
+            'items.*.action' => ['sometimes', 'string', 'in:trash,force_delete,restore'],
         ]);
 
         /** @var array<int, array<string, mixed>> $items */

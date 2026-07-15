@@ -79,6 +79,8 @@ import {
     reconcileSupplementalImagesWithBlocks,
     resetSupplementalImagesAfterSlugRename,
     enrichBlocksWithPostImages,
+    imagesNeedWpSyncBeforeFixSlug,
+    isImageReadyForWpSlugFix,
     resolveWpRenameOldUrl,
     resolveImageRefIds,
     shouldRenameSlugOnWordPress,
@@ -116,6 +118,7 @@ import {
     parseImageFromBlockContent,
     parseFeaturedSnippetNewSectionBlocks,
     renderImageFigure,
+    splitHtmlIntoTextAndImageChunks,
     withDefaultImageInsertAlign,
 } from '../utils/blockImageUtils';
 import {
@@ -1072,14 +1075,35 @@ const parseHtmlToBlocks = (html) => {
             const textBefore = html.substring(lastIndex, match.index);
             if (textBefore.trim()) blocks.push(...splitClassic(textBefore));
         }
-        blocks.push({
-            id: newBlockId('wp'),
-            isWp: true,
-            type: 'text',
-            prefix: match[1],
-            content: match[2].trim(),
-            suffix: match[3],
-        });
+
+        const wpOpen = String(match[1] || '');
+        const wpInner = String(match[2] || '').trim();
+        const isWpImageBlock = /<!--\s*wp:image\b/i.test(wpOpen);
+        if (isWpImageBlock) {
+            const image = parseImageFromBlockContent(wpInner) ?? parseVideoMediaFromHtml(wpInner);
+            if (image && image.mediaType !== 'video' && image.src) {
+                blocks.push({
+                    id: newBlockId('image'),
+                    type: 'image',
+                    isWp: true,
+                    prefix: '',
+                    content: renderImageFigure(image),
+                    suffix: '',
+                    image,
+                });
+            } else if (wpInner) {
+                blocks.push(...splitClassic(wpInner));
+            }
+        } else {
+            blocks.push({
+                id: newBlockId('wp'),
+                isWp: true,
+                type: 'text',
+                prefix: wpOpen,
+                content: wpInner,
+                suffix: match[3],
+            });
+        }
         lastIndex = wpRegex.lastIndex;
     }
 
@@ -1088,7 +1112,68 @@ const parseHtmlToBlocks = (html) => {
         if (textAfter.trim()) blocks.push(...splitClassic(textAfter));
     }
 
-    return regroupParsedBlocksByH2(normalizeBlocks(blocks));
+    return hoistInlineImagesFromTextBlocks(regroupParsedBlocksByH2(normalizeBlocks(blocks)));
+};
+
+const hoistInlineImagesFromTextBlocks = (blocks) => {
+    if (!Array.isArray(blocks) || blocks.length === 0) {
+        return blocks;
+    }
+
+    const result = [];
+
+    blocks.forEach((block) => {
+        if (!block || block.type === 'image' || typeof block.content !== 'string') {
+            result.push(block);
+
+            return;
+        }
+
+        if (!/<img[\s>]/i.test(block.content)) {
+            result.push(block);
+
+            return;
+        }
+
+        const chunks = splitHtmlIntoTextAndImageChunks(block.content);
+        if (chunks.length <= 1 && chunks[0]?.type === 'text') {
+            result.push(block);
+
+            return;
+        }
+
+        chunks.forEach((chunk) => {
+            if (chunk.type === 'image' && chunk.image?.src) {
+                result.push({
+                    id: newBlockId('image'),
+                    type: 'image',
+                    isWp: Boolean(block.isWp),
+                    prefix: '',
+                    content: chunk.html || renderImageFigure(chunk.image),
+                    suffix: '',
+                    image: chunk.image,
+                });
+
+                return;
+            }
+
+            const html = String(chunk.html || '').trim();
+            if (!html || !isMeaningfulHtml(html)) {
+                return;
+            }
+
+            result.push({
+                id: newBlockId(block.isWp ? 'wp' : 'classic'),
+                type: 'text',
+                isWp: false,
+                prefix: '',
+                content: cleanBlockHtmlForEditorDisplay(html),
+                suffix: '',
+            });
+        });
+    });
+
+    return normalizeBlocks(result);
 };
 
 const splitHtmlAtH2Sections = (htmlContent) => {
@@ -2296,16 +2381,6 @@ export default function SeoArticleEditor({
                     },
                 }),
             );
-
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('generate_image'),
-                        body: t('generating_image'),
-                        status: 'success',
-                    },
-                }),
-            );
         },
         [],
     );
@@ -2517,6 +2592,7 @@ export default function SeoArticleEditor({
     const dismissedEditorImageMediaIdsRef = useRef(new Set());
     const resumedArticleAiJobsRef = useRef(null);
     const mediaPollTimersRef = useRef(new Map());
+    const generateImageInFlightRef = useRef(false);
 
     useEffect(() => {
         activeBlockIdRef.current = activeBlockId;
@@ -2795,13 +2871,21 @@ export default function SeoArticleEditor({
         const acceptsLegacyDraft =
             !requiresClassicInlineRegroup(initialHtml) ||
             draftParserVersion >= ARTICLE_EDITOR_DRAFT_VERSION;
+        const serverImageCount = countImagesFromHtml(initialHtml).withSrc;
+        const draftHtmlForCount =
+            typeof draft?.html === 'string' && draft.html.trim() !== ''
+                ? draft.html
+                : exportBlocksToHtml(Array.isArray(draft?.blocks) ? draft.blocks : []);
+        const draftImageCount = countImagesFromHtml(draftHtmlForCount).withSrc;
+        const draftMissingServerImages = serverImageCount > draftImageCount;
         const canUseDraft =
             draft &&
             acceptsLegacyDraft &&
+            !draftMissingServerImages &&
             (serverRevision === '' || draftRevision === serverRevision);
         let parsed = [];
         if (canUseDraft && draft?.blocks?.length) {
-            parsed = normalizeBlocks(draft.blocks);
+            parsed = hoistInlineImagesFromTextBlocks(normalizeBlocks(draft.blocks));
         } else if (canUseDraft && draft?.html) {
             parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(draft.html));
         } else {
@@ -3561,6 +3645,114 @@ export default function SeoArticleEditor({
         scheduleAutosave();
     }, [articleId, scheduleAutosave, supportsProductGallery]);
 
+    const prepareImageSlugsBeforeWpSync = useCallback(async () => {
+        if (quickFixSlugAllBusy) {
+            throw new Error(t('editor_try_again_later'));
+        }
+
+        const context = buildQuickFixContext();
+        if (!context) {
+            return false;
+        }
+
+        const { keyword, indexByBlockId, supplementalOnlyRows, sourceRows } = context;
+        const enrichmentByBlockId = {};
+        (sourceRows ?? []).forEach((row) => {
+            const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+            if (blockId) {
+                enrichmentByBlockId[blockId] = row;
+            }
+        });
+
+        const preview = applyQuickFixSlugToBlocks(
+            blocksRef.current,
+            keyword,
+            indexByBlockId,
+            enrichmentByBlockId,
+            { wpOnly: false, includeWordPressRenames: false },
+        );
+        const localRenameQueue = [...(preview.localRenameQueue ?? [])];
+        const blockEligibleCount = collectImagesFromBlocks(blocksRef.current).filter(
+            (row) => !row?.excludeQuickFix,
+        ).length;
+
+        let supplementalOrdinal = blockEligibleCount;
+        supplementalOnlyRows.forEach((row) => {
+            if (row?.excludeQuickFix) {
+                return;
+            }
+
+            supplementalOrdinal += 1;
+            const enriched = { ...row, quickFixIndex: supplementalOrdinal };
+            const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword, {
+                wpOnly: false,
+            });
+            if (outcome.localRename) {
+                localRenameQueue.push(outcome.localRename);
+            }
+        });
+
+        const uniqueLocalRenames = [];
+        const seenLocalRenames = new Set();
+        localRenameQueue.forEach((item) => {
+            const id = Number(item?.seo_media_id ?? 0);
+            const key = id > 0 ? `id:${id}` : `src:${normalizeImageSrcKey(item?.src)}`;
+            if (!key || seenLocalRenames.has(key)) {
+                return;
+            }
+
+            seenLocalRenames.add(key);
+            uniqueLocalRenames.push(item);
+        });
+
+        if (uniqueLocalRenames.length === 0) {
+            return false;
+        }
+
+        setQuickFixSlugAllBusy(true);
+        window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang chuẩn hóa tên ảnh…');
+
+        try {
+            const localResults = await executeSeoMediaSlugRenamesTwoPhase(uniqueLocalRenames, {
+                renameById: renameSeoMedia,
+                renameByUrl: (src, slug, opts) => renameLocalMediaByUrl(src, slug, opts),
+            });
+            const nextBlocks = finalizeBlocksAfterWpRename(blocksRef.current, [], localResults);
+            const nextSupplemental = resetSupplementalImagesAfterSlugRename(
+                supplementalImagesRef.current,
+                nextBlocks,
+                [],
+                localResults,
+            );
+
+            blocksRef.current = nextBlocks;
+            supplementalImagesRef.current = nextSupplemental;
+            setBlocks(nextBlocks);
+            setSupplementalImages(nextSupplemental);
+            finalizeSlugRenameSideEffects();
+
+            return localResults.length > 0;
+        } catch (error) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_cannot_rename_local_image_slug'),
+                        body: error?.message ?? t('editor_try_again_later'),
+                        status: 'danger',
+                    },
+                }),
+            );
+            throw error;
+        } finally {
+            setQuickFixSlugAllBusy(false);
+        }
+    }, [
+        buildQuickFixContext,
+        finalizeSlugRenameSideEffects,
+        quickFixSlugAllBusy,
+        renameLocalMediaByUrl,
+    ]);
+
     const quickFixSlugAllImages = useCallback(
         async (imageRows = null) => {
             if (quickFixSlugAllBusy) {
@@ -3572,24 +3764,35 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const { keyword, indexByBlockId, supplementalOnlyRows } = context;
+            const { keyword, indexByBlockId, supplementalOnlyRows, sourceRows } = context;
 
-            const preview = applyQuickFixSlugToBlocks(blocksRef.current, keyword, indexByBlockId);
+            const enrichmentByBlockId = {};
+            (sourceRows ?? []).forEach((row) => {
+                const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+                if (blockId) {
+                    enrichmentByBlockId[blockId] = row;
+                }
+            });
+
+            const preferLocalRename = imagesNeedWpSyncBeforeFixSlug(sourceRows ?? imageRows ?? []);
+            const preview = applyQuickFixSlugToBlocks(
+                blocksRef.current,
+                keyword,
+                indexByBlockId,
+                enrichmentByBlockId,
+                preferLocalRename
+                    ? { wpOnly: false, includeWordPressRenames: false }
+                    : { wpOnly: true, includeWordPressRenames: true },
+            );
 
             const blockEligibleCount = collectImagesFromBlocks(blocksRef.current).filter(
                 (row) => !row?.excludeQuickFix,
             ).length;
 
             const extraWpRenames = [];
-            const extraLocalRenames = [];
+            const extraLocalRenames = [...(preview.localRenameQueue ?? [])];
             const wpRenameSeen = new Set(
                 (preview.renameQueue ?? []).map((item) => Number(item.attachment_id ?? 0)).filter((id) => id > 0),
-            );
-            const localRenameSeen = new Set(
-                (preview.localRenameQueue ?? []).map((item) => {
-                    const id = Number(item.seo_media_id ?? 0);
-                    return id > 0 ? `id:${id}` : `src:${normalizeImageSrcKey(item.src)}`;
-                }),
             );
 
             let supplementalOrdinal = blockEligibleCount;
@@ -3600,13 +3803,15 @@ export default function SeoArticleEditor({
 
                 supplementalOrdinal += 1;
                 const enriched = { ...row, quickFixIndex: supplementalOrdinal };
-                const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword);
+                const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword, {
+                    wpOnly: !preferLocalRename,
+                });
 
                 if (Object.keys(outcome.patch ?? {}).length > 0) {
                     patchSupplementalImageRow(enriched, outcome.patch);
                 }
 
-                if (outcome.wpRename) {
+                if (!preferLocalRename && outcome.wpRename) {
                     const wpId = Number(outcome.wpRename.attachment_id ?? 0);
                     if (wpId > 0 && !wpRenameSeen.has(wpId)) {
                         wpRenameSeen.add(wpId);
@@ -3614,21 +3819,17 @@ export default function SeoArticleEditor({
                     }
                 }
 
-                if (outcome.localRename) {
-                    const id = Number(outcome.localRename.seo_media_id ?? 0);
-                    const key =
-                        id > 0 ? `id:${id}` : `src:${normalizeImageSrcKey(outcome.localRename.src)}`;
-                    if (!localRenameSeen.has(key)) {
-                        localRenameSeen.add(key);
-                        extraLocalRenames.push({ ...outcome.localRename, block_id: '' });
-                    }
+                if (preferLocalRename && outcome.localRename) {
+                    extraLocalRenames.push(outcome.localRename);
                 }
             });
 
             const mergedPreview = {
                 ...preview,
-                renameQueue: [...(preview.renameQueue ?? []), ...extraWpRenames],
-                localRenameQueue: [...(preview.localRenameQueue ?? []), ...extraLocalRenames],
+                renameQueue: preferLocalRename
+                    ? []
+                    : [...(preview.renameQueue ?? []), ...extraWpRenames],
+                localRenameQueue: preferLocalRename ? extraLocalRenames : [],
             };
 
             const totalWpRenames = mergedPreview.renameQueue.length;
@@ -3642,6 +3843,10 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            if (totalWpRenames === 0 && totalLocalRenames === 0) {
+                return;
+            }
+
             setQuickFixSlugAllBusy(true);
 
             await new Promise((resolve) => {
@@ -3652,10 +3857,6 @@ export default function SeoArticleEditor({
                 slugRenameManagedByBatchRef.current = true;
 
                 await applyQuickFixSlugPreview(mergedPreview, keyword);
-
-                if (extraLocalRenames.length > 0) {
-                    await runSupplementalLocalRenames(extraLocalRenames, supplementalOnlyRows);
-                }
 
                 const wpDetail =
                     totalWpRenames > 0 ? await waitForWordPressSlugRenameFinished(1) : null;
@@ -3678,7 +3879,6 @@ export default function SeoArticleEditor({
             finalizeSlugRenameSideEffects,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
-            runSupplementalLocalRenames,
             waitForWordPressSlugRenameFinished,
         ],
     );
@@ -3770,19 +3970,35 @@ export default function SeoArticleEditor({
     );
 
     const quickFixSlugSingleImage = useCallback(
-        (target) => {
+        async (target) => {
             const keyword = (focusKeyword || articleTitle || '').trim();
             if (!keyword || !target) {
                 return;
             }
 
+            const rowHint = typeof target === 'object' ? target : null;
             const blockId =
                 typeof target === 'string'
                     ? target
                     : String(target?.blockId ?? target?.block_id ?? '').trim();
 
             if (blockId) {
-                const preview = applyQuickFixSlugToBlock(blocksRef.current, keyword, blockId);
+                const enrichmentRow = rowHint ?? collectImagesFromBlocks(blocksRef.current).find(
+                    (entry) => entry.blockId === blockId,
+                );
+                const preferLocalRename = enrichmentRow
+                    ? !isImageReadyForWpSlugFix(enrichmentRow)
+                    : true;
+
+                const preview = applyQuickFixSlugToBlock(
+                    blocksRef.current,
+                    keyword,
+                    blockId,
+                    enrichmentRow,
+                    preferLocalRename
+                        ? { wpOnly: false, includeWordPressRenames: false }
+                        : { wpOnly: true, includeWordPressRenames: true },
+                );
                 if (preview.applied === 0) {
                     return;
                 }
@@ -3798,7 +4014,17 @@ export default function SeoArticleEditor({
                     return;
                 }
 
-                applyQuickFixSlugPreview(preview, keyword);
+                if (preferLocalRename) {
+                    await applyQuickFixSlugPreview({ ...preview, renameQueue: [] }, keyword);
+                    if ((pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
+                        applySlugRenameFinished({ renamed: [] });
+                    }
+                    finalizeSlugRenameSideEffects();
+
+                    return;
+                }
+
+                applyQuickFixSlugPreview({ ...preview, localRenameQueue: [] }, keyword);
 
                 return;
             }
@@ -3808,6 +4034,7 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            const preferLocalRename = !isImageReadyForWpSlugFix(row);
             const sourceRows = supplementalImages ?? [];
             const fallbackIndex = Math.max(
                 1,
@@ -3828,16 +4055,15 @@ export default function SeoArticleEditor({
             );
 
             const enrichedRow = enrichSupplementalRow(row, fallbackIndex);
-            const outcome = computeQuickFixSlugSupplementalOutcome(enrichedRow, keyword);
+            const outcome = computeQuickFixSlugSupplementalOutcome(enrichedRow, keyword, {
+                wpOnly: !preferLocalRename,
+            });
 
             if (Object.keys(outcome.patch ?? {}).length > 0) {
                 patchSupplementalImageRow(enrichedRow, outcome.patch);
             }
 
-            const hasWpRename = Boolean(outcome?.wpRename);
-            const hasLocalRename = Boolean(outcome?.localRename);
-
-            if (hasWpRename) {
+            if (!preferLocalRename && outcome?.wpRename) {
                 if (!confirmSlugRename({ count: 1, isQuickFix: true })) {
                     return;
                 }
@@ -3845,44 +4071,28 @@ export default function SeoArticleEditor({
                 requestWordPressRenames([outcome.wpRename]);
             }
 
-            if (outcome?.localRename) {
-                const newSlug = String(outcome.localRename.new_slug ?? '').trim();
-                const src = String(outcome.localRename.src ?? '').trim();
-                const id = Number(outcome.localRename.seo_media_id ?? 0);
-                if (!newSlug || !src) {
-                    return;
+            if (preferLocalRename && outcome?.localRename) {
+                await applyQuickFixSlugPreview(
+                    {
+                        applied: 1,
+                        renameQueue: [],
+                        localRenameQueue: [outcome.localRename],
+                    },
+                    keyword,
+                );
+                if ((pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
+                    applySlugRenameFinished({ renamed: [] });
                 }
-                const renamePromise =
-                    id > 0
-                        ? renameSeoMedia(id, newSlug)
-                        : renameLocalMediaByUrl(src, newSlug, { seoMediaId: id > 0 ? id : null });
-                renamePromise
-                    .then((data) => {
-                        patchSupplementalImageRow(row, {
-                            slug: data.slug,
-                            src: data.url,
-                            seoMediaId: data.id ?? id,
-                        });
-                        setImagesReloadKey((k) => k + 1);
-                    })
-                    .catch((error) => {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_rename_image_slug'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
-                    });
+                finalizeSlugRenameSideEffects();
             }
         },
         [
-            focusKeyword,
-            articleTitle,
             applyQuickFixSlugPreview,
+            applySlugRenameFinished,
+            articleTitle,
             enrichSupplementalRow,
+            finalizeSlugRenameSideEffects,
+            focusKeyword,
             patchSupplementalImageRow,
             requestWordPressRenames,
             supplementalImages,
@@ -4887,6 +5097,53 @@ export default function SeoArticleEditor({
         [articleId, removeImageBlock, scheduleAutosave, supportsProductGallery],
     );
 
+    const makeImageFeatured = useCallback(
+        async (row) => {
+            if (supportsProductGallery) {
+                throw new Error(t('make_featured_image_product_hint'));
+            }
+
+            const item = saveFeaturedImage(articleId, {
+                url: String(row?.localSrc || row?.src || '').trim(),
+                wpAttachmentId: Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0),
+                seoMediaId: Number(row?.seoMediaId ?? row?.seo_media_id ?? 0),
+                alt: String(row?.alt ?? '').trim(),
+                slug: String(row?.slug ?? '').trim(),
+            });
+
+            if (!item) {
+                throw new Error(t('make_featured_image_missing_source'));
+            }
+
+            await callEditArticleLivewire('persistFeaturedImageFromClient', item);
+
+            window.dispatchEvent(
+                new CustomEvent('article-media-selected', {
+                    detail: {
+                        mode: 'featured',
+                        url: item.url,
+                        wpAttachmentId: item.wp_attachment_id,
+                        seoMediaId: item.seo_media_id,
+                        alt: item.alt,
+                        slug: item.slug,
+                    },
+                }),
+            );
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('make_featured_image_success'),
+                        body: t('make_featured_image_success_body'),
+                        status: 'success',
+                    },
+                }),
+            );
+            setImagesReloadKey((key) => key + 1);
+            scheduleAutosave();
+        },
+        [articleId, scheduleAutosave, supportsProductGallery],
+    );
+
     useEffect(() => {
         const publishSelectionContext = () => {
             if (!activeBlockId) {
@@ -5168,24 +5425,51 @@ export default function SeoArticleEditor({
             return false;
         }
 
+        const trimmedUrl = String(finalUrl ?? '').trim();
+        if (!trimmedUrl || trimmedUrl.includes('placeholder-loading')) {
+            return false;
+        }
+
         const pending = pendingAiMediaRef.current.get(mediaId);
-        let targetBlockId = pending?.blockId ?? '';
+        let targetBlockId = String(pending?.blockId ?? '').trim();
 
         if (!targetBlockId && mediaId > 0) {
-            const fallback = blocksRef.current.find((block) => {
+            const byMediaId = blocksRef.current.find((block) => {
                 const image = block?.image ?? null;
                 const seoId = Number(image?.seoMediaId ?? image?.seo_media_id ?? 0);
                 return seoId === mediaId && Boolean(image?.isProcessing);
             });
-            targetBlockId = fallback?.id ?? '';
+            targetBlockId = byMediaId?.id ?? '';
         }
 
-        if (!targetBlockId || !finalUrl) {
+        // Client placeholder chưa gắn seoMediaId — lấy entry awaitingServer.
+        if (!targetBlockId) {
+            const awaitingEntry = [...pendingAiMediaRef.current.entries()].find(
+                ([, value]) => value?.awaitingServer && value?.blockId,
+            );
+            if (awaitingEntry) {
+                const [clientKey, awaiting] = awaitingEntry;
+                pendingAiMediaRef.current.delete(clientKey);
+                targetBlockId = String(awaiting.blockId ?? '').trim();
+            }
+        }
+
+        // Còn một block đang isProcessing — thay thế.
+        if (!targetBlockId) {
+            const processingBlocks = blocksRef.current.filter(
+                (block) => block?.type === 'image' && Boolean(block?.image?.isProcessing),
+            );
+            if (processingBlocks.length === 1) {
+                targetBlockId = processingBlocks[0].id;
+            }
+        }
+
+        if (!targetBlockId) {
             return false;
         }
 
         if (mediaType === 'video') {
-            const safeUrl = finalUrl
+            const safeUrl = trimmedUrl
                 .replace(/&/g, '&amp;')
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;')
@@ -5207,10 +5491,11 @@ export default function SeoArticleEditor({
             patchImageInBlocks(
                 targetBlockId,
                 {
-                    src: finalUrl,
+                    src: trimmedUrl,
                     title: '',
                     alt: '',
                     isProcessing: false,
+                    seoMediaId: mediaId > 0 ? mediaId : undefined,
                 },
                 true,
             );
@@ -5218,19 +5503,6 @@ export default function SeoArticleEditor({
 
         pendingAiMediaRef.current.delete(mediaId);
         window.dispatchEvent(new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }));
-        if (mediaType === 'image') {
-            window.dispatchEvent(
-                new CustomEvent('article-ai-image-generated', {
-                    detail: {
-                        status: 'completed',
-                        url: finalUrl,
-                        seoMediaId: mediaId,
-                        mediaType: 'image',
-                        target: 'editor',
-                    },
-                }),
-            );
-        }
         setImagesReloadKey((k) => k + 1);
         scheduleAutosave();
         return true;
@@ -5302,26 +5574,29 @@ export default function SeoArticleEditor({
                 const url = String(payload?.url ?? '').trim();
 
                 if (status === 'completed' && url) {
-                    if (isDismissedEditorImageMedia(mediaId)) {
+                    if (url.includes('placeholder-loading')) {
+                        // Job ghi completed nhưng URL vẫn placeholder — poll tiếp.
+                    } else if (isDismissedEditorImageMedia(mediaId)) {
                         clearMediaPolling(mediaId);
                         pendingAiMediaRef.current.delete(mediaId);
 
                         return;
+                    } else {
+                        const pending = pendingAiMediaRef.current.get(mediaId);
+                        if (pending?.target === 'product-gallery' && mediaType === 'image') {
+                            const galleryItems = Array.isArray(payload?.gallery_urls) && payload.gallery_urls.length > 0
+                                ? payload.gallery_urls
+                                : null;
+                            if (applyCompletedMediaToProductGallery(mediaId, url, galleryItems)) {
+                                clearMediaPolling(mediaId);
+                                return;
+                            }
+                        } else if (applyCompletedMediaToPlaceholder(mediaId, mediaType, url)) {
+                            clearMediaPolling(mediaId);
+                            return;
+                        }
+                        // completed nhưng chưa gắn được block — giữ poll, thử lại.
                     }
-
-                    const pending = pendingAiMediaRef.current.get(mediaId);
-                    if (pending?.target === 'product-gallery' && mediaType === 'image') {
-                        const galleryItems = Array.isArray(payload?.gallery_urls) && payload.gallery_urls.length > 0
-                            ? payload.gallery_urls
-                            : null;
-                        applyCompletedMediaToProductGallery(mediaId, url, galleryItems);
-                        clearMediaPolling(mediaId);
-                        return;
-                    }
-
-                    applyCompletedMediaToPlaceholder(mediaId, mediaType, url);
-                    clearMediaPolling(mediaId);
-                    return;
                 }
 
                 if (status === 'failed') {
@@ -5621,6 +5896,11 @@ export default function SeoArticleEditor({
                 return;
             }
 
+            if (generateImageInFlightRef.current) {
+                return;
+            }
+            generateImageInFlightRef.current = true;
+
             if (target !== 'product-gallery') {
                 const refBlockId = resolveAiRefBlockId(
                     activeBlockIdFromPayload || String(activeBlockIdRef.current ?? '').trim(),
@@ -5652,7 +5932,7 @@ export default function SeoArticleEditor({
             setArticleAutosaveLock('generate-image-request', true);
 
             try {
-                await callEditArticleLivewire(
+                const result = await callEditArticleLivewire(
                     'generateArticleImageFromEditor',
                     selectionText,
                     String(payload.selectionHtml ?? ''),
@@ -5663,38 +5943,125 @@ export default function SeoArticleEditor({
                     String(payload.loaiSanPhamCustom ?? '').trim(),
                 );
 
-                if (target !== 'product-gallery') {
+                if (result && typeof result === 'object' && result.ok === false) {
+                    clearAwaitingClientImagePlaceholders();
+                    const message = String(result.message ?? t('editor_generate_image_failed'));
                     window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                                title: t('generate_image'),
-                                body: t('editor_image_queued'),
-                                status: 'success',
-                            },
+                        new CustomEvent('article-ai-media-failed', {
+                            detail: { type: 'image', message },
                         }),
                     );
+                    window.alert(message);
+                } else if (target !== 'product-gallery') {
+                    // Không phụ thuộc Livewire event — gắn seoMediaId + poll từ return value / ai-jobs.
+                    let mediaId = Number(result?.seo_media_id ?? result?.seoMediaId ?? 0);
+                    let status = String(result?.status ?? 'processing').toLowerCase();
+                    let resultUrl = String(result?.url ?? '').trim();
+
+                    if (mediaId <= 0 && articleId) {
+                        try {
+                            const jobs = await fetchArticleAiMediaJobs(articleId);
+                            const newest = (Array.isArray(jobs) ? jobs : []).find((job) => {
+                                const jobStatus = String(job?.status ?? '').toLowerCase();
+                                const jobType = String(job?.media_type ?? 'image').toLowerCase();
+                                return jobType === 'image' && (jobStatus === 'processing' || jobStatus === 'completed');
+                            });
+                            if (newest) {
+                                mediaId = Number(newest.id ?? 0);
+                                status = String(newest.status ?? status).toLowerCase();
+                                resultUrl = String(newest.url ?? resultUrl).trim();
+                            }
+                        } catch {
+                            // ignore — event/poll path vẫn thử
+                        }
+                    }
+
+                    if (mediaId > 0) {
+                        const awaitingEntry = [...pendingAiMediaRef.current.entries()].find(
+                            ([, value]) => value?.awaitingServer && value?.blockId,
+                        );
+                        if (awaitingEntry) {
+                            const [clientKey, pending] = awaitingEntry;
+                            pendingAiMediaRef.current.delete(clientKey);
+                            patchImageInBlocks(
+                                pending.blockId,
+                                {
+                                    seoMediaId: mediaId,
+                                    isProcessing: status !== 'completed',
+                                    src:
+                                        status === 'completed' && resultUrl && !resultUrl.includes('placeholder-loading')
+                                            ? resultUrl
+                                            : AI_PLACEHOLDER_LOADING_URL,
+                                },
+                                true,
+                            );
+                            pendingAiMediaRef.current.set(mediaId, {
+                                blockId: pending.blockId,
+                                mediaType: 'image',
+                            });
+                        } else {
+                            const processingBlocks = blocksRef.current.filter(
+                                (block) => block?.type === 'image' && Boolean(block?.image?.isProcessing),
+                            );
+                            const unbound = processingBlocks.find((block) => {
+                                const seoId = Number(block?.image?.seoMediaId ?? block?.image?.seo_media_id ?? 0);
+                                return seoId <= 0;
+                            });
+                            const targetBlock = unbound ?? (processingBlocks.length === 1 ? processingBlocks[0] : null);
+                            if (targetBlock) {
+                                patchImageInBlocks(
+                                    targetBlock.id,
+                                    {
+                                        seoMediaId: mediaId,
+                                        isProcessing: status !== 'completed',
+                                        src:
+                                            status === 'completed' && resultUrl && !resultUrl.includes('placeholder-loading')
+                                                ? resultUrl
+                                                : AI_PLACEHOLDER_LOADING_URL,
+                                    },
+                                    true,
+                                );
+                                pendingAiMediaRef.current.set(mediaId, {
+                                    blockId: targetBlock.id,
+                                    mediaType: 'image',
+                                });
+                            }
+                        }
+
+                        if (status === 'completed' && resultUrl && !resultUrl.includes('placeholder-loading')) {
+                            applyCompletedMediaToPlaceholder(mediaId, 'image', resultUrl);
+                        } else {
+                            startMediaStatusPolling(mediaId, 'image');
+                        }
+                    }
                 }
             } catch (error) {
                 clearAwaitingClientImagePlaceholders();
+                const message = error?.message ?? t('editor_generate_image_failed');
                 window.dispatchEvent(
                     new CustomEvent('article-ai-media-failed', {
                         detail: {
                             type: 'image',
-                            message: error?.message ?? t('editor_generate_image_failed'),
+                            message,
                         },
                     }),
                 );
+                window.alert(message);
             } finally {
+                generateImageInFlightRef.current = false;
                 setArticleAutosaveLock('generate-image-request', false);
             }
         },
         [
+            applyCompletedMediaToPlaceholder,
             articleId,
             clearAwaitingClientImagePlaceholders,
             commitActiveBlock,
             getExportHtml,
+            patchImageInBlocks,
             placeProcessingImagePlaceholder,
             resolveAiRefBlockId,
+            startMediaStatusPolling,
         ],
     );
 
@@ -5717,12 +6084,29 @@ export default function SeoArticleEditor({
                     const mediaId = Number(job?.id ?? 0);
                     const status = String(job?.status ?? '').toLowerCase();
                     const mediaType = String(job?.media_type ?? 'image').toLowerCase();
+                    const jobUrl = String(job?.url ?? '').trim();
 
-                    if (mediaId <= 0 || status !== 'processing') {
+                    if (mediaId <= 0) {
                         continue;
                     }
 
                     if (dismissedEditorImageMediaIdsRef.current.has(mediaId)) {
+                        continue;
+                    }
+
+                    // Completed gần đây — thay placeholder đang spin (kể cả mất pending map).
+                    if (
+                        status === 'completed' &&
+                        jobUrl &&
+                        !jobUrl.includes('placeholder-loading') &&
+                        mediaType !== 'video'
+                    ) {
+                        if (applyCompletedMediaToPlaceholder(mediaId, 'image', jobUrl)) {
+                            continue;
+                        }
+                    }
+
+                    if (status !== 'processing') {
                         continue;
                     }
 
@@ -5741,13 +6125,39 @@ export default function SeoArticleEditor({
                         continue;
                     }
 
+                    // Placeholder client chưa gắn seoMediaId — bind job processing mới nhất.
+                    const unboundProcessing = blocksRef.current.find((block) => {
+                        if (block?.type !== 'image' || !block?.image?.isProcessing) {
+                            return false;
+                        }
+                        const seoId = Number(block.image?.seoMediaId ?? block.image?.seo_media_id ?? 0);
+                        return seoId <= 0;
+                    });
+                    if (unboundProcessing && mediaType !== 'video') {
+                        patchImageInBlocks(
+                            unboundProcessing.id,
+                            {
+                                seoMediaId: mediaId,
+                                isProcessing: true,
+                                src: jobUrl || AI_PLACEHOLDER_LOADING_URL,
+                            },
+                            true,
+                        );
+                        pendingAiMediaRef.current.set(mediaId, {
+                            blockId: unboundProcessing.id,
+                            mediaType: 'image',
+                        });
+                        startMediaStatusPolling(mediaId, 'image');
+                        continue;
+                    }
+
                     const editorBlockId = String(job?.editor_block_id ?? '').trim();
                     const refBlockId = resolveAiRefBlockId(editorBlockId);
                     if (!refBlockId) {
                         continue;
                     }
 
-                    const placeholderUrl = String(job?.url ?? '').trim() || AI_PLACEHOLDER_LOADING_URL;
+                    const placeholderUrl = jobUrl || AI_PLACEHOLDER_LOADING_URL;
                     const placeholderId =
                         mediaType === 'video'
                             ? insertImageAfterBlock(refBlockId, placeholderUrl, {
@@ -5777,10 +6187,102 @@ export default function SeoArticleEditor({
         };
     }, [
         articleId,
+        applyCompletedMediaToPlaceholder,
         findImageBlockByMediaId,
         insertImageAfterBlock,
+        patchImageInBlocks,
         placeProcessingImagePlaceholder,
         resolveAiRefBlockId,
+        startMediaStatusPolling,
+    ]);
+
+    // Đang còn placeholder spin — reconcile định kỳ (poll miss / mất pending map).
+    useEffect(() => {
+        if (!articleId) {
+            return undefined;
+        }
+
+        const hasProcessingPlaceholder = blocks.some(
+            (block) => block?.type === 'image' && Boolean(block?.image?.isProcessing),
+        );
+        if (!hasProcessingPlaceholder) {
+            return undefined;
+        }
+
+        let cancelled = false;
+
+        const reconcile = async () => {
+            try {
+                const jobs = await fetchArticleAiMediaJobs(articleId);
+                if (cancelled) {
+                    return;
+                }
+
+                for (const job of jobs) {
+                    const mediaId = Number(job?.id ?? 0);
+                    const status = String(job?.status ?? '').toLowerCase();
+                    const mediaType = String(job?.media_type ?? 'image').toLowerCase();
+                    const jobUrl = String(job?.url ?? '').trim();
+                    if (mediaId <= 0 || mediaType === 'video') {
+                        continue;
+                    }
+                    if (dismissedEditorImageMediaIdsRef.current.has(mediaId)) {
+                        continue;
+                    }
+
+                    if (status === 'completed' && jobUrl && !jobUrl.includes('placeholder-loading')) {
+                        if (applyCompletedMediaToPlaceholder(mediaId, 'image', jobUrl)) {
+                            return;
+                        }
+                    }
+
+                    if (status === 'processing') {
+                        const unbound = blocksRef.current.find((block) => {
+                            if (block?.type !== 'image' || !block?.image?.isProcessing) {
+                                return false;
+                            }
+                            const seoId = Number(block.image?.seoMediaId ?? block.image?.seo_media_id ?? 0);
+                            return seoId <= 0 || seoId === mediaId;
+                        });
+                        if (unbound) {
+                            const seoId = Number(unbound.image?.seoMediaId ?? unbound.image?.seo_media_id ?? 0);
+                            if (seoId !== mediaId) {
+                                patchImageInBlocks(
+                                    unbound.id,
+                                    {
+                                        seoMediaId: mediaId,
+                                        isProcessing: true,
+                                        src: jobUrl || AI_PLACEHOLDER_LOADING_URL,
+                                    },
+                                    true,
+                                );
+                            }
+                            pendingAiMediaRef.current.set(mediaId, {
+                                blockId: unbound.id,
+                                mediaType: 'image',
+                            });
+                            startMediaStatusPolling(mediaId, 'image');
+                            return;
+                        }
+                    }
+                }
+            } catch {
+                // ignore transient API errors
+            }
+        };
+
+        void reconcile();
+        const timer = window.setInterval(reconcile, 8_000);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+        };
+    }, [
+        articleId,
+        applyCompletedMediaToPlaceholder,
+        blocks,
+        patchImageInBlocks,
         startMediaStatusPolling,
     ]);
 
@@ -6382,6 +6884,8 @@ export default function SeoArticleEditor({
             }
             setPostImages(images);
             postImagesRef.current = images;
+            setBlocks((prev) => enrichBlocksWithPostImages(prev, images));
+            setImagesReloadKey((key) => key + 1);
         };
 
         const onSupplementalImagesSynced = (event) => {
@@ -6742,12 +7246,13 @@ export default function SeoArticleEditor({
         window.addEventListener('editor-block-image-selected', onEditorBlockImageSelected);
 
         const onArticleAiImageGenerated = (event) => {
-            const requestedBlockId = (event.detail?.activeBlockId ?? '').trim();
-            const url = (event.detail?.url ?? '').trim();
-            const status = String(event.detail?.status ?? '').toLowerCase();
-            const mediaId = Number(event.detail?.seoMediaId ?? 0);
-            const target = String(event.detail?.target ?? generateImageTargetRef.current ?? 'editor').trim() || 'editor';
-            if (!url && status !== 'processing') {
+            const detail = event.detail != null && typeof event.detail === 'object' ? event.detail : {};
+            const requestedBlockId = String(detail.activeBlockId ?? detail.active_block_id ?? '').trim();
+            const url = String(detail.url ?? '').trim();
+            const status = String(detail.status ?? '').toLowerCase();
+            const mediaId = Number(detail.seoMediaId ?? detail.seo_media_id ?? 0);
+            const target = String(detail.target ?? generateImageTargetRef.current ?? 'editor').trim() || 'editor';
+            if (!url && status !== 'processing' && status !== 'pending') {
                 return;
             }
 
@@ -6759,7 +7264,7 @@ export default function SeoArticleEditor({
             }
 
             if (target === 'product-gallery') {
-                if (status === 'processing' && mediaId > 0) {
+                if ((status === 'processing' || status === 'pending') && mediaId > 0) {
                     pendingAiMediaRef.current.set(mediaId, {
                         target: 'product-gallery',
                         mediaType: 'image',
@@ -6769,11 +7274,11 @@ export default function SeoArticleEditor({
                     return;
                 }
 
-                if (status === 'completed' && mediaId > 0) {
-                    const galleryItems = Array.isArray(event.detail?.gallery_urls) && event.detail.gallery_urls.length > 0
-                        ? event.detail.gallery_urls
-                        : (Array.isArray(event.detail?.galleryUrls) && event.detail.galleryUrls.length > 0
-                            ? event.detail.galleryUrls
+                if (status === 'completed' && mediaId > 0 && url && !url.includes('placeholder-loading')) {
+                    const galleryItems = Array.isArray(detail.gallery_urls) && detail.gallery_urls.length > 0
+                        ? detail.gallery_urls
+                        : (Array.isArray(detail.galleryUrls) && detail.galleryUrls.length > 0
+                            ? detail.galleryUrls
                             : null);
                     applyCompletedMediaToProductGallery(mediaId, url, galleryItems);
                     generateImageTargetRef.current = 'editor';
@@ -6782,14 +7287,37 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const fallbackActiveBlockId = String(activeBlockIdRef.current ?? '').trim();
-            const refBlockId = resolveAiRefBlockId(requestedBlockId || fallbackActiveBlockId);
-            if (!refBlockId) {
+            const isProcessingStatus = status === 'processing' || status === 'pending';
+
+            // Completed trước — không phụ thuộc refBlockId.
+            if (status === 'completed' && mediaId > 0 && url && !url.includes('placeholder-loading')) {
+                if (applyCompletedMediaToPlaceholder(mediaId, 'image', url)) {
+                    return;
+                }
+
+                const existingCompleted = findImageBlockByMediaId(mediaId);
+                if (existingCompleted) {
+                    patchImageInBlocks(
+                        existingCompleted.id,
+                        {
+                            src: url,
+                            title: '',
+                            alt: '',
+                            isProcessing: false,
+                            seoMediaId: mediaId,
+                        },
+                        true,
+                    );
+                    pendingAiMediaRef.current.delete(mediaId);
+                    clearMediaPolling(mediaId);
+                    setImagesReloadKey((k) => k + 1);
+                    scheduleAutosave();
+                }
+
                 return;
             }
 
-            const isProcessingStatus = status === 'processing' || status === 'pending';
-
+            // Processing: gắn awaiting client placeholder — không early-return vì thiếu refBlockId.
             if (isProcessingStatus && mediaId > 0) {
                 const awaitingEntry = [...pendingAiMediaRef.current.entries()].find(
                     ([, value]) => value?.awaitingServer && value?.blockId,
@@ -6817,9 +7345,7 @@ export default function SeoArticleEditor({
 
                     return;
                 }
-            }
 
-            if (mediaId > 0 && isProcessingStatus) {
                 const existingBlock = findImageBlockByMediaId(mediaId);
                 if (existingBlock) {
                     if (!pendingAiMediaRef.current.has(mediaId)) {
@@ -6831,11 +7357,8 @@ export default function SeoArticleEditor({
                     startMediaStatusPolling(mediaId, 'image');
                     return;
                 }
-            }
 
-            if (isProcessingStatus && mediaId > 0) {
                 if (pendingAiMediaRef.current.has(mediaId)) {
-                    // Đảm bảo luôn có polling kể cả khi event "processing" đến lặp/khôi phục.
                     const pending = pendingAiMediaRef.current.get(mediaId);
                     const pendingBlockId = String(pending?.blockId ?? '').trim();
                     const hasPendingBlock = pendingBlockId
@@ -6852,8 +7375,16 @@ export default function SeoArticleEditor({
                     startMediaStatusPolling(mediaId, 'image');
                     return;
                 }
+            }
 
-                const placeholderId = placeProcessingImagePlaceholder(refBlockId, url, {
+            const fallbackActiveBlockId = String(activeBlockIdRef.current ?? '').trim();
+            const refBlockId = resolveAiRefBlockId(requestedBlockId || fallbackActiveBlockId);
+            if (!refBlockId) {
+                return;
+            }
+
+            if (isProcessingStatus && mediaId > 0) {
+                const placeholderId = placeProcessingImagePlaceholder(refBlockId, url || AI_PLACEHOLDER_LOADING_URL, {
                     seoMediaId: mediaId,
                     isProcessing: true,
                 });
@@ -6868,46 +7399,6 @@ export default function SeoArticleEditor({
                 window.dispatchEvent(
                     new CustomEvent('article-ai-media-job-updated', { detail: { seoMediaId: mediaId } }),
                 );
-
-                return;
-            }
-
-            if (status === 'completed' && mediaId > 0 && url) {
-                if (applyCompletedMediaToPlaceholder(mediaId, 'image', url)) {
-                    return;
-                }
-
-                const existingBlock = findImageBlockByMediaId(mediaId);
-                if (existingBlock) {
-                    patchImageInBlocks(
-                        existingBlock.id,
-                        {
-                            src: url,
-                            title: '',
-                            alt: '',
-                            isProcessing: false,
-                        },
-                        true,
-                    );
-                    pendingAiMediaRef.current.delete(mediaId);
-                    setImagesReloadKey((k) => k + 1);
-                    return;
-                }
-
-                if (!pendingAiMediaRef.current.has(mediaId)) {
-                    return;
-                }
-
-                const insertedId = placeProcessingImagePlaceholder(refBlockId, url, {
-                    seoMediaId: mediaId,
-                    isProcessing: false,
-                });
-                if (insertedId) {
-                    pendingAiMediaRef.current.set(mediaId, {
-                        blockId: insertedId,
-                        mediaType: 'image',
-                    });
-                }
 
                 return;
             }
@@ -7050,6 +7541,7 @@ export default function SeoArticleEditor({
         insertVideoAfterBlock,
         requestAnalyze,
         runLocalSeoAnalysis,
+        scheduleAutosave,
         startMediaStatusPolling,
         clearMediaPolling,
         isDismissedEditorImageMedia,
@@ -7058,8 +7550,18 @@ export default function SeoArticleEditor({
     ]);
 
     useEffect(() => {
-        window.__seoCollectEditorHeavyBundle = async () => {
+        window.__seoCollectEditorHeavyBundle = async ({
+            renameImagesBeforeWpSync = false,
+        } = {}) => {
             blockFlushRef.current?.();
+
+            if (renameImagesBeforeWpSync) {
+                await prepareImageSlugsBeforeWpSync();
+                window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
+                    'Đang đồng bộ WordPress…',
+                );
+            }
+
             clearTempMerge();
             setActiveBlockId(null);
             setGlobalEditor(null);
@@ -7076,7 +7578,14 @@ export default function SeoArticleEditor({
         return () => {
             delete window.__seoCollectEditorHeavyBundle;
         };
-    }, [articleId, clearTempMerge, getExportHtml, resolveArticleFaqsSnapshot, runLocalSeoAnalysis]);
+    }, [
+        articleId,
+        clearTempMerge,
+        getExportHtml,
+        prepareImageSlugsBeforeWpSync,
+        resolveArticleFaqsSnapshot,
+        runLocalSeoAnalysis,
+    ]);
 
     useEffect(() => {
         if (blocks.length === 0) return;
@@ -8324,11 +8833,15 @@ export default function SeoArticleEditor({
                             onRequestEditorHtml={getExportHtml}
                         />
                     </aside>
+                    <div
+                        className="seo-article-editor-shortcuts-host"
+                        data-seo-outline-shortcuts-host
+                    />
                 </div>
 
                 <div className="seo-article-editor-mainpane">
             <div className="seo-editor-sticky-boundary">
-            <div className="seo-editor-toolbar">
+            <div className="seo-editor-toolbar seo-editor-toolbar--document">
                 <div className="seo-editor-toolbar__actions">
                     <button
                         type="button"
@@ -8818,6 +9331,7 @@ export default function SeoArticleEditor({
                               onRemoveImage={removeImageBlock}
                               onRemoveSupplementalImage={removeSupplementalImage}
                               onAltTitleChange={handleImageAltTitleChange}
+                              onMakeFeatured={makeImageFeatured}
                               onNotify={(payload) => {
                                   window.dispatchEvent(
                                       new CustomEvent('seo-article-editor-notify', { detail: payload }),

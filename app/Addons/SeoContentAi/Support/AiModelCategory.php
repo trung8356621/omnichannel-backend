@@ -70,17 +70,18 @@ final class AiModelCategory
     }
 
     /**
-     * Chọn category theo prompt + công cụ (image → imagen_pro).
+     * @deprecated Image rendering không dùng category này — dùng ImageRoutingStrategy.
+     * Text path: bỏ qua prompts.model_category (Representative Model đã gỡ khỏi form);
+     * caller nên map từ RenderingPreference thay vì field prompt.
      */
     public static function resolveForPrompt(?string $modelCategory, string $provider, string $toolType = 'default'): string
     {
-        if ($toolType === 'image') {
+        if (ImageToolType::fromMixed($toolType)->isImagePipeline()) {
             return self::IMAGEN_PRO;
         }
 
-        if ($modelCategory !== null && $modelCategory !== '' && self::isValid($modelCategory)) {
-            return $modelCategory;
-        }
+        // Phase 1: không còn tin prompts.model_category cho routing.
+        unset($modelCategory);
 
         return self::defaultForProvider($provider);
     }

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles, FileCode } from 'lucide-react';
+import { RefreshCw, Plus, Trash2, AlertCircle, Sparkles, FileCode, ListTree } from 'lucide-react';
 import FaqAnswerEditor from './FaqAnswerEditor';
 import { answerHtmlForEditor } from '../utils/faqAnswerHtml';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
@@ -210,7 +210,24 @@ export default function ArticleFaqEditor({
     const [markdownImportOpen, setMarkdownImportOpen] = useState(false);
     const [markdownImportDraft, setMarkdownImportDraft] = useState('');
     const [importingMarkdown, setImportingMarkdown] = useState(false);
+    const [hasEditorSelection, setHasEditorSelection] = useState(false);
     const [saveStatus, setSaveStatus] = useState('saved');
+
+    useEffect(() => {
+        const onSelection = (event) => {
+            setHasEditorSelection(Boolean(event.detail?.hasSelection && event.detail?.text));
+        };
+
+        window.addEventListener('seo-editor-text-selection', onSelection);
+
+        return () => {
+            window.removeEventListener('seo-editor-text-selection', onSelection);
+        };
+    }, []);
+
+    const extractFaqFromSelection = useCallback(() => {
+        window.dispatchEvent(new CustomEvent('extract-article-faqs-from-toolbar'));
+    }, []);
 
     const flushFaqs = useCallback(() => {
         if (!articleId) return;
@@ -475,6 +492,20 @@ export default function ArticleFaqEditor({
                 <h2>FAQ</h2>
                 <div className="flex items-center gap-2 flex-wrap justify-end">
                     <span className="text-xs text-gray-500">{saveLabel}</span>
+                    <button
+                        type="button"
+                        className="seo-faq-btn-extract"
+                        disabled={!hasEditorSelection}
+                        onClick={extractFaqFromSelection}
+                        title={
+                            hasEditorSelection
+                                ? t('toolbar_extract_faq')
+                                : t('faq_extract_need_selection')
+                        }
+                    >
+                        <ListTree size={14} />
+                        {t('faq_extract')}
+                    </button>
                     {canGenerateFaq ? (
                         <button
                             type="button"

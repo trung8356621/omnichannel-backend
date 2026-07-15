@@ -88,7 +88,6 @@ function defaultPromptNodeData(promptId) {
 
   return {
     promptId: config?.id ?? 'p1',
-    aiModel: config?.defaultModel ?? '',
     mergeOutlineToSave: false,
   };
 }
@@ -230,12 +229,12 @@ function normalizeNodes(nodes) {
     }
 
     if (next.type === 'prompt') {
-      const config = getPromptConfig(next.data?.promptId);
       const promptData = {
         ...next.data,
-        aiModel: next.data?.aiModel || config?.defaultModel || '',
         mergeOutlineToSave: Boolean(next.data?.mergeOutlineToSave),
       };
+      // Model routing thống nhất AI Advanced / PromptRunner — không lưu aiModel trên node.
+      delete promptData.aiModel;
 
       if (!isWriteFromOutlinePrompt(promptData.promptId)) {
         promptData.mergeOutlineToSave = false;
@@ -780,9 +779,6 @@ export default function ArticleFlowBuilder({
                   {node.type === 'prompt' && (
                     <>
                       <div className={`font-medium truncate ${t.accentViolet}`}>{mockPrompts.find(p => p.id === node.data.promptId)?.name}</div>
-                      {node.data.aiModel ? (
-                        <div className={`text-[10px] truncate mt-0.5 ${t.emptyHint}`}>{node.data.aiModel}</div>
-                      ) : null}
                       {node.data.mergeOutlineToSave && isWriteFromOutlinePrompt(node.data.promptId) ? (
                         <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold mt-1 block">
                           Gộp dàn ý → lưu bài
@@ -977,10 +973,8 @@ export default function ArticleFlowBuilder({
                       value={selectedNode.data.promptId}
                       onChange={(e) => {
                         const promptId = e.target.value;
-                        const config = getPromptConfig(promptId);
                         updateNodeDataFields(selectedNode.id, {
                           promptId,
-                          aiModel: config?.defaultModel ?? '',
                           mergeOutlineToSave: isWriteFromOutlinePrompt(promptId)
                             ? Boolean(selectedNode.data.mergeOutlineToSave)
                             : false,
@@ -1007,21 +1001,10 @@ export default function ArticleFlowBuilder({
                       </label>
                     </div>
                   ) : null}
-                  <div>
-                    <label className={`text-xs block mb-1 ${t.label}`}>Model AI</label>
-                    <SeoSelect
-                      value={selectedNode.data.aiModel || getPromptConfig(selectedNode.data.promptId)?.defaultModel || ''}
-                      onChange={(e) => updateNodeData(selectedNode.id, 'aiModel', e.target.value)}
-                      className="w-full"
-                      options={Object.entries(getPromptConfig(selectedNode.data.promptId)?.models || {}).map(([value, label]) => ({
-                        value,
-                        label,
-                      }))}
-                    />
-                    <p className={`text-[11px] mt-1.5 leading-relaxed ${t.emptyHint}`}>
-                      Kết nối AI lấy từ Prompt đã chọn. Dùng biến <code>{'{{input}}'}</code> trong prompt để nhận kết quả từ edge nối vào.
-                    </p>
-                  </div>
+                  <p className={`text-[11px] leading-relaxed ${t.emptyHint}`}>
+                    Model lấy từ Settings → AI Advanced / routing runtime. Kết nối AI lấy từ Prompt đã chọn.
+                    Dùng biến <code>{'{{input}}'}</code> trong prompt để nhận kết quả từ edge nối vào.
+                  </p>
                 </div>
               )}
 

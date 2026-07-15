@@ -190,8 +190,12 @@ flowchart TB
 |-----|-----------|---------|
 | Left rail | `ArticleGoogleSerpPreview` | SERP preview, focus keyword |
 | Left rail | `ArticleOutlineTab` | Outline tree, REST outline API |
-| Center | `BlockFormatToolbar`, `BlockInsertMenu`, `LinkEditBubble` | TipTap formatting; link bubble tìm bài + **Phân vào Content Projects** |
+| Left rail | `article-editor-shortcuts-rail.blade.php` → host `[data-seo-outline-shortcuts-host]` | Keyboard shortcuts dưới Outline; Prev/Next đổi nhóm; `mountShortcutsBelowOutline` trong `articleEditorHeaderActions.js` |
+| Top bar | `article-editor-page-actions.blade.php` | Primary: **Save → Sync WP → Preview (split WP/nội bộ) → Approve**; More: History, Prompts, Assign/Open project, Restore, Debug MD (icon+chữ), Delete. `EditArticle::getHeaderActions()` trống — UI More Blade |
+| Center | `BlockFormatToolbar`, `BlockInsertMenu`, `LinkEditBubble` | TipTap formatting; delete paragraph trong `.seo-toolbar-end-actions` (`margin-left: auto`); link bubble tìm bài + **Phân vào Content Projects** |
 | Center | `ImageBlockEditor`, `BlockImagesPanel` | Khối ảnh; `ImageBlockPickerBox` **Quick download** → `importSeoMediaFromUrl({ randomFilename: true })` |
+| Overlay | `ArticleAiFloatingLauncher` (`#seo-article-ai-launcher-root`) | Click → `seo-article-ai-chat-open` (AI images & videos); không menu phụ |
+| FAQ root | `ArticleFaqEditor` (`#seo-article-faq-root`) | FAQ bar: Generate / Import / Extract FAQ / Add; Extract disable tới khi có selection |
 | Portal tabs | `ArticleImagesTab` | Quản lý ảnh bài, AI jobs, mở media editor; UI hàng: **Except** + menu `⋯` (`.seo-article-images-more-menu`) |
 | Portal tabs | `SeoScorePanel` | Phân tích SEO client-side + violations |
 | Portal tabs | `ArticleReviewsTab` | Virtual reviews (product): header `{count} bình luận` + **Tạo bình luận nhanh** + **Làm mới**; Livewire `generateQuickPostReviews` / `refreshVirtualReviewsForEditor` |
@@ -248,7 +252,7 @@ flowchart LR
 | Thành phần | File | State |
 |------------|------|-------|
 | Entry + bridge | `task-builder.jsx` | `useState`: taskName, saving, toast |
-| Canvas | `ArticleFlowBuilder.jsx` | nodes, edges, zoom — `useState` + `useRef` |
+| Canvas | `ArticleFlowBuilder.jsx` | nodes, edges, zoom — `useState` + `useRef`; Prompt node **không** chọn model (routing từ Settings → AI Advanced) |
 | Theme/helpers | `flowTheme.js` | pure functions |
 | Prompt list SSR | `window.__SEO_PROMPTS__` | từ Blade, không REST lúc mở |
 
@@ -548,6 +552,9 @@ flowchart TB
 |-------|-----------|------------|
 | `save-task-flow` | `ArticleFlowBuilder` | Livewire task page |
 | `seo-open-generate-image-modal` | Editor / sidebar | `SeoArticleEditor` |
+| `generate-article-image` | `ArticleAiChatPanel`, quick section | `SeoArticleEditor` → `requestGenerateArticleImage` |
+| `article-ai-image-generated` | Livewire `EditArticle` (bridge `article-editor.jsx`) | `SeoArticleEditor` poll/replace placeholder |
+| `article-ai-media-job-updated` | Poll / apply completed | `ArticleImagesTab` refresh jobs |
 | `seo-open-workspace-media-picker` | Global AI chat | `seoWorkspaceMediaPicker` |
 | `seo-product-gallery-updated` | `GenerateImageModal` | Alpine album box |
 | `seo-magic-eraser-saved` | `media-image-editor-page` | `window.opener` |

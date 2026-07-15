@@ -8,6 +8,7 @@ import {
     isCustomPickerTab,
     customTabIdFromPickerTab,
     pickerTabFromCustomId,
+    normalizeArticleDomain,
     loadCustomPickerTabs,
     addCustomPickerTab,
     removeCustomPickerTab,
@@ -18,6 +19,7 @@ import {
     renameCustomPickerTab,
     readCustomTabFetchCache,
     writeCustomTabFetchCache,
+    CUSTOM_WP_TABS_COOKIE_NAME,
 } from './utils/articleMediaPickerCustomTabs';
 import { createSeoWorkspaceMediaPicker } from './utils/seoWorkspaceMediaPicker';
 
@@ -31,6 +33,8 @@ window.__seoArticleMediaPickerCustomTabs = {
     isCustomTab: isCustomPickerTab,
     customTabIdFromPickerTab,
     pickerTabFromCustomId,
+    normalizeDomain: normalizeArticleDomain,
+    cookieName: CUSTOM_WP_TABS_COOKIE_NAME,
     loadTabs: loadCustomPickerTabs,
     addTab: addCustomPickerTab,
     removeTab: removeCustomPickerTab,

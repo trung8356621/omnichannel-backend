@@ -53,6 +53,7 @@ use App\Addons\SeoContentAi\Services\SeoMediaLibraryService;
 use App\Addons\SeoContentAi\Services\SeoProjectApprovalService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SitePolylangService;
+use App\Addons\SeoContentAi\Services\SyncDomainContentService;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Addons\SeoContentAi\Services\VirtualCommentService;
@@ -307,12 +308,12 @@ class EditArticle extends SeoEditRecord
         $this->persistSeoMetaFields();
         $this->persistArticleSlugFromEditor(silent: true);
         $this->clearInvalidRankMathSeoTitleMeta();
-        $this->dispatchSeoAnalyzePreview();
+        $scoreResult = $this->rescoreAndDispatchSeoAnalysis();
 
         $preview = $this->getGoogleSerpPreview();
         $this->dispatch('google-serp-preview-updated', preview: $preview);
 
-        $score = $this->record->fresh()?->seo_score;
+        $score = $scoreResult['score'] ?? $this->record->fresh()?->seo_score;
 
         return [
             'google_serp_preview' => $preview,
@@ -407,6 +408,7 @@ class EditArticle extends SeoEditRecord
     {
         $this->persistFocusKeyword();
         $this->record->refresh();
+        $this->rescoreAndDispatchSeoAnalysis();
 
         $keyword = trim($this->focusKeyword);
         $this->js(sprintf(
@@ -625,43 +627,50 @@ class EditArticle extends SeoEditRecord
 
     protected function getHeaderActions(): array
     {
-        return [
-            Actions\Action::make('view_content_project_runs')
-                ->label('Prompts')
-                ->icon('heroicon-o-queue-list')
-                ->color('info')
-                ->url(fn (): string => ArticleResource::getUrl('prompts', ['record' => $this->record]))
-                ->openUrlInNewTab(),
-            Actions\Action::make('open_content_project')
-                ->label(__('seo-content-ai::filament.article_edit.open_content_project'))
-                ->icon('heroicon-o-folder-open')
-                ->color('gray')
-                ->visible(fn (): bool => ArticleResource::articleIsInContentProject($this->record))
-                ->url(fn (): ?string => ArticleResource::articleContentProjectUrl($this->record)),
-            Actions\Action::make('assign_to_content_project')
-                ->label(__('seo-content-ai::filament.article_list.assign_to_content_project'))
-                ->icon('heroicon-o-folder-plus')
-                ->color('warning')
-                ->visible(fn (): bool => ! ArticleResource::articleIsInContentProject($this->record))
-                ->alpineClickHandler('$dispatch(\'open-article-assign-content-project-modal\')'),
-        ];
+        // Prompts / Assign / Open project render in More menu (page-actions Blade).
+        // Header bị CSS ẩn — không phụ thuộc JS move từ .fi-header.
+        return [];
     }
 
-    public function restoreArticleFromWordPress(): bool
+    public function delete(): void
     {
-        $restore = app(ArticleFaqWordPressRestoreService::class)->restoreFullArticleFromWordPress($this->record);
+        $record = $this->record;
+        abort_unless(
+            $record instanceof SeoArticle && ArticleResource::canDelete($record),
+            403,
+        );
 
-        if (! ($restore['restored'] ?? false) || ! filled($restore['editor_html'] ?? null)) {
+        $title = trim((string) ($record->title ?? ''));
+        $record->delete();
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.article_list.delete_success'))
+            ->body($title !== ''
+                ? __('seo-content-ai::filament.article_list.delete_success_body', ['title' => $title])
+                : __('seo-content-ai::filament.article_list.delete_success_body_untitled'))
+            ->success()
+            ->send();
+
+        $this->redirect(ArticleResource::getUrl('index'));
+    }
+
+    public function syncArticleFromWordPress(): bool
+    {
+        abort_if(SeoAccessControl::isContentManager(), 403);
+
+        $result = app(SyncDomainContentService::class)->syncSingleArticleFromWordPress($this->record);
+
+        if (! ($result['success'] ?? false)) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.fetch_from_wordpress_failed'))
-                ->body((string) ($restore['message'] ?? __('seo-content-ai::filament.article_list.fetch_from_wordpress_failed_body')))
-                ->warning()
+                ->body((string) ($result['message'] ?? __('seo-content-ai::filament.article_list.fetch_from_wordpress_failed_body')))
+                ->danger()
                 ->send();
 
             return false;
         }
 
-        $categoryIds = is_array($restore['category_ids'] ?? null) ? $restore['category_ids'] : [];
+        $categoryIds = is_array($result['category_ids'] ?? null) ? $result['category_ids'] : [];
         $filteredCategoryIds = $this->filterPublishCategoryIds($categoryIds);
         if ($filteredCategoryIds !== []) {
             $this->applyArticleCategorySelection($filteredCategoryIds);
@@ -671,9 +680,12 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
         app(ArticleKeywordLinkReconcileService::class)->reconcileForArticle($this->record->fresh());
 
+        $inlineImages = (int) ($result['inline_images'] ?? 0);
         Notification::make()
             ->title(__('seo-content-ai::filament.article_list.fetch_from_wordpress_success'))
-            ->body((string) ($restore['message'] ?? __('seo-content-ai::filament.article_list.fetch_from_wordpress_success_body')))
+            ->body(__('seo-content-ai::filament.article_list.fetch_from_wordpress_success_body', [
+                'count' => $inlineImages,
+            ]))
             ->success()
             ->send();
 
@@ -1184,12 +1196,6 @@ class EditArticle extends SeoEditRecord
             slug: trim($slug),
             alt: trim($alt),
         );
-
-        Notification::make()
-            ->title('Đã thêm vào album sản phẩm')
-            ->body('Ảnh đã được append vào Album hình ảnh sản phẩm (lưu cục bộ).')
-            ->success()
-            ->send();
     }
 
     /**
@@ -1198,13 +1204,24 @@ class EditArticle extends SeoEditRecord
     #[On('seo-article-editor-notify')]
     public function handleEditorNotify(array $payload = []): void
     {
-        $notification = Notification::make()
-            ->title((string) ($payload['title'] ?? ''))
-            ->body((string) ($payload['body'] ?? ''));
+        $title = trim((string) ($payload['title'] ?? ''));
+        $body = trim((string) ($payload['body'] ?? ''));
+        if ($title === '' && $body === '') {
+            return;
+        }
+
+        $notification = Notification::make();
+        if ($title !== '') {
+            $notification->title($title);
+        }
+        if ($body !== '') {
+            $notification->body($body);
+        }
 
         match ((string) ($payload['status'] ?? 'success')) {
             'danger', 'error' => $notification->danger(),
             'warning' => $notification->warning(),
+            'info' => $notification->info(),
             default => $notification->success(),
         };
 
@@ -1600,11 +1617,6 @@ class EditArticle extends SeoEditRecord
 
             $this->mediaPickerTargetBlockId = null;
 
-            Notification::make()
-                ->title('Image selected for block')
-                ->success()
-                ->send();
-
             return;
         }
 
@@ -1629,7 +1641,6 @@ class EditArticle extends SeoEditRecord
 
         $localMedia->applyFeaturedLocal($this->record, $localRefId, $url);
         $this->featuredImageUrl = trim($url);
-        $title = 'Featured image selected (saved locally)';
 
         $this->record->refresh();
         $this->syncProductGalleryToEditor();
@@ -1644,12 +1655,6 @@ class EditArticle extends SeoEditRecord
         );
 
         $this->dispatch('close-article-media-modal');
-
-        Notification::make()
-            ->title($title)
-            ->body('Click "Sync" to upload images to WordPress.')
-            ->success()
-            ->send();
     }
 
     /**
@@ -1758,16 +1763,6 @@ class EditArticle extends SeoEditRecord
 
             return;
         }
-
-        Notification::make()
-            ->title('Đã thêm vào album sản phẩm')
-            ->body(sprintf(
-                'Đã thêm %d ảnh vào album%s.',
-                $added,
-                $skipped > 0 ? " ({$skipped} ảnh bỏ qua)" : '',
-            ))
-            ->success()
-            ->send();
     }
 
     public function removeProductGalleryImage(string $url): void
@@ -1782,11 +1777,6 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
         $this->syncProductGalleryToEditor();
         $this->dispatch('article-media-removed', mode: 'gallery', url: trim($url));
-
-        Notification::make()
-            ->title('Image removed from album')
-            ->success()
-            ->send();
     }
 
     /**
@@ -2822,7 +2812,7 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
-     * Cập nhật editor + meta ảnh sau khi body đã được thay URL WordPress.
+     * Cập nhật editor + meta ảnh sau khi body/wp_post_content đã có URL WordPress.
      */
     private function refreshEditorAfterWordPressSync(): void
     {
@@ -2830,6 +2820,14 @@ class EditArticle extends SeoEditRecord
         $this->record->loadMissing('articleMetas');
 
         $syncedHtml = trim((string) ($this->record->body ?? ''));
+        if ($syncedHtml === '') {
+            $syncedHtml = trim((string) ($this->record->articleMetas
+                ->firstWhere('meta_key', 'wp_post_content')?->meta_value ?? ''));
+        }
+        if ($syncedHtml === '') {
+            $syncedHtml = trim(app(WordPressArticleContentService::class)->resolveEditorHtml($this->record));
+        }
+
         if ($syncedHtml !== '') {
             app(ArticlePostImagesService::class)->syncFromHtml($this->record, $syncedHtml);
             $this->editorHtml = $syncedHtml;
@@ -3187,6 +3185,8 @@ class EditArticle extends SeoEditRecord
                     : 'Sync completed but 0 FAQ extracted - check FAQ debug block.').' '.$syncBody;
             }
 
+            $this->refreshEditorAfterWordPressSync();
+
             Notification::make()
                 ->title('WordPress synced')
                 ->body($syncBody)
@@ -3269,6 +3269,7 @@ class EditArticle extends SeoEditRecord
                     ->success()
                     ->send();
 
+                $this->refreshEditorAfterWordPressSync();
                 $this->finishHeavyArticleActionWithReload(clearLocalState: true);
 
                 return;
@@ -3579,26 +3580,39 @@ class EditArticle extends SeoEditRecord
         $this->dispatch('google-serp-preview-updated', preview: $this->getGoogleSerpPreview());
     }
 
-    private function dispatchSeoAnalyzePreview(?string $html = null): void
+    /**
+     * Chấm lại và lưu điểm SEO sau khi đổi focus keyword / meta SEO.
+     * Dùng analyzeSubmittedContent (persist DB), không chỉ analyzePreview.
+     *
+     * @return array{score:int,violations?:list<string>,good?:array<int,string>,errors?:array<int,string>,warnings?:array<int,string>}
+     */
+    private function rescoreAndDispatchSeoAnalysis(?string $html = null): array
     {
+        $this->record->unsetRelation('articleMetas');
+
         $html = trim((string) ($html ?? $this->editorHtml));
         if ($html === '') {
-            $html = trim((string) ($this->record->body ?? ''));
+            $html = app(ArticleKeywordLinkReconcileService::class)->resolveArticleContent($this->record);
         }
 
         $slug = Str::slug($this->articleSlug);
         $seoTitle = trim($this->articleTitle);
         $seoMetaDescription = trim($this->seoMetaDescription);
 
-        $result = app(SeoAnalyzerService::class)->analyzePreview(
-            $this->record,
+        $article = $this->record->fresh(['articleMetas']) ?? $this->record;
+
+        $result = app(SeoAnalyzerService::class)->analyzeSubmittedContent(
+            $article,
             $html,
             $seoTitle !== '' ? $seoTitle : null,
-            $slug !== '' ? $slug : trim((string) ($this->record->slug ?? '')),
+            $slug !== '' ? $slug : trim((string) ($article->slug ?? '')),
             $seoMetaDescription !== '' ? $seoMetaDescription : null,
         );
 
+        $this->record->refresh();
         $this->dispatch('seo-analyze-result', result: $result);
+
+        return $result;
     }
 
     /**
@@ -3611,13 +3625,7 @@ class EditArticle extends SeoEditRecord
      */
     public function getSeoAssistantPanelIds(): array
     {
-        $panelIds = ['seo', 'images'];
-
-        if (! SeoAccessControl::isContentManager()) {
-            $panelIds[] = 'links';
-        }
-
-        return array_merge($panelIds, ['publishing', 'article']);
+        return ['seo', 'images', 'links', 'publishing', 'article'];
     }
 
     public function getEditorSettingsPayload(): array
@@ -3635,11 +3643,11 @@ class EditArticle extends SeoEditRecord
             'seo_scoring_rules' => \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::publicRulesForClient(),
             'seo_rule_messages' => \App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry::messagesForLocale(),
             'seo_scoring_messages' => SeoEngineService::scoringMessagesForLocale(),
-            'show_reviews_tab' => ! SeoAccessControl::isContentManager(),
+            'show_reviews_tab' => true,
             'can_quick_create_reviews' => ! SeoAccessControl::isContentManager() && $this->canGenerateQuickPostReviews(),
             'show_configure_reviews_link' => ! SeoAccessControl::isContentManager() && ! $this->canGenerateQuickPostReviews(),
             'quick_create_reviews_config_url' => SeoSettingsWorkflows::getUrl(),
-            'show_link_widgets' => ! SeoAccessControl::isContentManager(),
+            'show_link_widgets' => true,
             'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
             'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
             'can_generate_outline_heading' => $this->canGenerateOutlineHeading(),
@@ -3655,7 +3663,12 @@ class EditArticle extends SeoEditRecord
 
     public function canGenerateEditorVideo(): bool
     {
-        return app(SeoCreateArticleSettingsService::class)->getCreateVideoPromptId() !== null;
+        $settings = app(SeoCreateArticleSettingsService::class);
+        $source = $settings->getCreateVideoSource();
+
+        return $source === SeoCreateArticleSettingsService::SOURCE_WORKFLOW
+            ? $settings->getCreateVideoWorkflowTaskId() !== null
+            : $settings->getCreateVideoPromptId() !== null;
     }
 
     public function canGenerateFeaturedSnippet(): bool
@@ -3728,13 +3741,16 @@ class EditArticle extends SeoEditRecord
     /**
      * Cấu hình JS cho modal chọn ảnh (upload thư viện nội bộ).
      *
-     * @return array{articleId: int, siteId: int, endpoint: string, wordPressLinked: bool, defaultSearchKeyword: string, i18n: array<string, string>}
+     * @return array{articleId: int, siteId: int, articleDomain: string, endpoint: string, wordPressLinked: bool, defaultSearchKeyword: string, i18n: array<string, string>}
      */
     public function getArticleMediaPickerPayload(): array
     {
         return [
             'articleId' => (int) $this->record->id,
             'siteId' => (int) $this->record->site_id,
+            'articleDomain' => $this->normalizeArticleMediaPickerDomain(
+                (string) ($this->record->site?->domain ?? ''),
+            ),
             'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
             'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
@@ -3749,6 +3765,26 @@ class EditArticle extends SeoEditRecord
                 'upload_failed_body' => __('seo-content-ai::filament.media_tools.upload_failed_body'),
             ],
         ];
+    }
+
+    /**
+     * Domain WP của bài viết đang sửa (không lấy domain header / hostname Laravel).
+     */
+    private function normalizeArticleMediaPickerDomain(string $domain): string
+    {
+        $value = strtolower(trim($domain));
+        if ($value === '') {
+            return '';
+        }
+
+        $value = (string) preg_replace('#^https?://#i', '', $value);
+        $value = (string) preg_replace('#^www\.#i', '', $value);
+        $value = explode('/', $value, 2)[0] ?? '';
+        $value = explode('?', $value, 2)[0] ?? '';
+        $value = explode('#', $value, 2)[0] ?? '';
+        $value = rtrim(trim($value), '.');
+
+        return $value;
     }
 
     /**
@@ -3881,8 +3917,12 @@ class EditArticle extends SeoEditRecord
 
     private function resolveEditorImageDebugPromptId(SeoCreateArticleSettingsService $settings): ?int
     {
-        $taskId = $settings->getCreateImageTaskId();
-        if ($taskId !== null) {
+        if ($settings->getCreateTypographyImageSource() === SeoCreateArticleSettingsService::SOURCE_WORKFLOW) {
+            $taskId = $settings->getCreateTypographyImageTaskId();
+            if ($taskId === null) {
+                return null;
+            }
+
             try {
                 return (int) app(EditorImageTaskResolverService::class)
                     ->resolveImagePrompt($taskId)
@@ -3892,7 +3932,7 @@ class EditArticle extends SeoEditRecord
             }
         }
 
-        return $settings->getLegacyCreateImagePromptId();
+        return $settings->getCreateTypographyImagePromptId();
     }
 
     /**
@@ -4231,6 +4271,9 @@ class EditArticle extends SeoEditRecord
         );
     }
 
+    /**
+     * @return array{ok: bool, message?: string, url?: string, seo_media_id?: int, status?: string}
+     */
     public function generateArticleImageFromEditor(
         string $selectionText,
         string $selectionHtml,
@@ -4239,7 +4282,7 @@ class EditArticle extends SeoEditRecord
         string $target = 'editor',
         int $loaiSanPhamCategoryArticleId = 0,
         string $loaiSanPhamCustom = '',
-    ): void {
+    ): array {
         try {
             $result = app(ArticleEditorMediaAiService::class)->generateImage(
                 $this->record,
@@ -4252,15 +4295,19 @@ class EditArticle extends SeoEditRecord
                 $loaiSanPhamCustom,
             );
         } catch (\Throwable $exception) {
-            $this->dispatch('article-ai-media-failed', type: 'image', message: $exception->getMessage());
+            $message = $exception->getMessage();
+            $this->dispatch('article-ai-media-failed', type: 'image', message: $message);
 
             Notification::make()
                 ->title(__('seo-content-ai::common.generate_image_failed'))
-                ->body($exception->getMessage())
+                ->body($message)
                 ->danger()
                 ->send();
 
-            return;
+            return [
+                'ok' => false,
+                'message' => $message,
+            ];
         }
 
         $seoMediaId = (int) ($result['seo_media_id'] ?? 0);
@@ -4287,6 +4334,13 @@ class EditArticle extends SeoEditRecord
                 ->success()
                 ->send();
         }
+
+        return [
+            'ok' => true,
+            'url' => (string) ($result['url'] ?? ''),
+            'seo_media_id' => $seoMediaId,
+            'status' => (string) ($result['status'] ?? 'processing'),
+        ];
     }
 
     /**
@@ -5196,6 +5250,9 @@ class EditArticle extends SeoEditRecord
             (int) auth()->id(),
             trim($this->focusKeyword),
         );
+
+        // updateOrCreate/delete trên relation — phải bỏ cache để resolveFocusKeyword thấy keyword mới.
+        $this->record->unsetRelation('articleMetas');
     }
 
     /**

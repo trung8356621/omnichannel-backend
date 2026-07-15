@@ -1,6 +1,6 @@
 /**
- * Di chuyển Filament header actions (Prompts, Assign, Restore, Delete)
- * vào toolbar SEO. Thứ tự: Debug → Prompts → … → Phím tắt → Xóa (ngoài cùng phải).
+ * Di chuyển Filament header actions vào More menu (secondary group).
+ * Thứ tự More: History / View WP (Blade) | Debug → Restore → Prompts/Assign | Delete
  */
 
 function actionFingerprint(element) {
@@ -12,50 +12,162 @@ function actionFingerprint(element) {
         return 'debug-md-import';
     }
 
-    if (element.hasAttribute('data-seo-shortcuts-wrap')) {
+    if (element.hasAttribute('data-seo-shortcuts-wrap') || element.closest?.('[data-seo-shortcuts-below]')) {
         return 'shortcuts';
     }
 
+    if (element.hasAttribute('data-seo-delete-action-wrap') || element.classList.contains('seo-editor-delete-action')) {
+        return 'delete-article';
+    }
+
+    if (element.hasAttribute('data-seo-restore-action-wrap') || element.classList.contains('seo-editor-restore-action')) {
+        return 'restore-wp';
+    }
+
+    if (element.closest?.('[data-seo-page-actions-primary]')) {
+        return `primary|${element.getAttribute('data-seo-page-action') ?? ''}`;
+    }
+
     const wireClick = element.getAttribute('wire:click') ?? '';
+    const alpineClick = element.getAttribute('x-on:click') ?? element.getAttribute('@click') ?? '';
     const href = element.getAttribute('href') ?? '';
-    const label =
-        element.querySelector('.fi-btn-label')?.textContent?.trim()
+    const label = normalizeActionLabel(
+        element.querySelector('.fi-btn-label')?.textContent
         ?? element.getAttribute('title')
         ?? element.getAttribute('aria-label')
-        ?? '';
+        ?? '',
+    );
 
-    return `${wireClick}|${href}|${label}`;
+    if (
+        alpineClick.includes('open-article-assign-content-project-modal')
+        || label.includes('assign to content project')
+        || label.includes('phân vào content project')
+    ) {
+        return 'assign-content-project';
+    }
+    if (label === 'prompts' || (href.includes('/prompts') && href.includes('/articles/'))) {
+        return 'prompts';
+    }
+    if (label.includes('open content project') || label.includes('mở content project')) {
+        return 'open-content-project';
+    }
+
+    return `${wireClick}|${alpineClick}|${href}|${label}`;
 }
 
-function findDeleteButton(slot) {
-    const custom = slot.querySelector('[data-seo-delete-article-btn]');
-    if (custom instanceof HTMLElement) {
-        return custom;
-    }
-
-    const wireDelete = slot.querySelector('[wire\\:click*="delete" i]');
-    if (wireDelete instanceof HTMLElement) {
-        return wireDelete;
-    }
-
-    const dangerIcon = slot.querySelector('.fi-icon-btn.fi-color-danger');
-    if (dangerIcon instanceof HTMLElement) {
-        return dangerIcon;
-    }
-
-    return [...slot.querySelectorAll('.fi-icon-btn')].find((button) => {
-        const hint = `${button.getAttribute('title') ?? ''} ${button.getAttribute('aria-label') ?? ''}`.toLowerCase();
-
-        return hint.includes('delete') || hint.includes('xóa');
-    }) ?? null;
+function normalizeActionLabel(text) {
+    return String(text ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
 }
 
-function dedupeSlotChildren(slot) {
+function getPageActionsSlot() {
+    return document.querySelector('[data-seo-page-actions-slot]');
+}
+
+function getSecondaryHost(slot = getPageActionsSlot()) {
+    return slot?.querySelector('[data-seo-page-actions-secondary]') ?? slot;
+}
+
+function getDangerHost(slot = getPageActionsSlot()) {
+    return slot?.querySelector('[data-seo-page-actions-danger]') ?? slot;
+}
+
+function isPersistentToolbarChild(child) {
+    if (!(child instanceof HTMLElement)) {
+        return false;
+    }
+
+    return child.hasAttribute('data-seo-page-actions-primary')
+        || child.hasAttribute('data-seo-page-actions-secondary')
+        || child.hasAttribute('data-seo-page-actions-danger')
+        || child.hasAttribute('data-seo-page-actions-more')
+        || child.classList.contains('seo-editor-page-actions__divider')
+        || child.hasAttribute('data-seo-shortcuts-wrap')
+        || child.hasAttribute('data-seo-debug-md-import')
+        || child.hasAttribute('data-seo-delete-action-wrap')
+        || child.hasAttribute('data-seo-restore-action-wrap')
+        || child.classList.contains('seo-editor-delete-action')
+        || child.classList.contains('seo-editor-restore-action')
+        || child.classList.contains('seo-editor-menu-item')
+        || child.classList.contains('seo-editor-menu-divider')
+        || child.classList.contains('seo-editor-preview-split');
+}
+
+function findDeleteAction(host) {
+    const wrap = host?.querySelector?.('[data-seo-delete-action-wrap], .seo-editor-delete-action');
+    if (wrap instanceof HTMLElement) {
+        return wrap;
+    }
+
+    const customBtn = host?.querySelector?.('[data-seo-delete-article-btn]');
+    if (customBtn instanceof HTMLElement) {
+        return customBtn.closest('.seo-editor-delete-action') ?? customBtn;
+    }
+
+    return null;
+}
+
+function findRestoreAction(host) {
+    const wrap = host?.querySelector?.('[data-seo-restore-action-wrap], .seo-editor-restore-action');
+    if (wrap instanceof HTMLElement) {
+        return wrap;
+    }
+
+    const btn = host?.querySelector?.('[data-seo-restore-wp-btn]');
+    if (btn instanceof HTMLElement) {
+        return btn.closest('.seo-editor-restore-action') ?? btn;
+    }
+
+    return null;
+}
+
+function styleAsMenuItem(button) {
+    if (!(button instanceof HTMLElement)) {
+        return;
+    }
+
+    button.classList.add('seo-editor-menu-item');
+    button.classList.remove('seo-editor-toolbar-btn');
+
+    const label =
+        button.querySelector('.fi-btn-label')?.textContent?.trim()
+        || button.getAttribute('title')
+        || button.getAttribute('aria-label')
+        || '';
+
+    if (label !== '') {
+        if (!button.getAttribute('title')) {
+            button.setAttribute('title', label);
+        }
+        if (!button.getAttribute('aria-label')) {
+            button.setAttribute('aria-label', label);
+        }
+    }
+
+    const fiLabel = button.querySelector('.fi-btn-label');
+    if (fiLabel instanceof HTMLElement) {
+        fiLabel.classList.add('seo-editor-menu-item__label');
+    }
+}
+
+function compactToolbarButtons(host) {
+    host?.querySelectorAll?.('.fi-btn, a.fi-btn, .fi-icon-btn').forEach((button) => {
+        styleAsMenuItem(button);
+    });
+}
+
+function dedupeHostChildren(host) {
+    if (!host) {
+        return;
+    }
+
     const seen = new Set();
 
-    [...slot.children].forEach((child) => {
+    [...host.children].forEach((child) => {
         const fingerprint = actionFingerprint(child);
-        if (fingerprint === '') {
+        if (fingerprint === '' || fingerprint.startsWith('primary|')) {
             return;
         }
 
@@ -68,46 +180,46 @@ function dedupeSlotChildren(slot) {
     });
 }
 
-function dedupeShortcutButtons() {
-    const slot = document.querySelector('[data-seo-page-actions-slot]');
-    const wraps = [...document.querySelectorAll('[data-seo-shortcuts-wrap]')];
-    if (wraps.length <= 1) {
-        return;
-    }
-
-    const keep = slot?.querySelector('[data-seo-shortcuts-wrap]') ?? wraps[0] ?? null;
-    wraps.forEach((wrap) => {
-        if (wrap !== keep) {
-            wrap.remove();
-        }
-    });
-}
-
 function clearMovedHeaderActionsFromSlot() {
-    const slot = document.querySelector('[data-seo-page-actions-slot]');
-    if (!slot) {
+    const secondary = getSecondaryHost();
+    if (!secondary) {
         return;
     }
 
-    [...slot.children].forEach((child) => {
+    [...secondary.children].forEach((child) => {
         if (
-            child.hasAttribute('data-seo-shortcuts-wrap')
+            child.hasAttribute('data-seo-restore-action-wrap')
+            || child.classList.contains('seo-editor-restore-action')
             || child.hasAttribute('data-seo-debug-md-import')
         ) {
             return;
         }
 
-        child.remove();
+        if (child.matches('.fi-btn, a.fi-btn, .fi-icon-btn, .seo-editor-menu-item') || child.querySelector?.('.fi-btn, a.fi-btn, .fi-icon-btn')) {
+            if (child.hasAttribute('data-seo-restore-action-wrap') || child.hasAttribute('data-seo-delete-action-wrap')) {
+                return;
+            }
+            if (child.matches('[data-seo-page-action="history"], [data-seo-page-action="view-wp"]')) {
+                return;
+            }
+            child.remove();
+        }
     });
 }
 
 function normalizeToolbarLayout() {
-    const slot = document.querySelector('[data-seo-page-actions-slot]');
+    const slot = getPageActionsSlot();
     if (!slot) {
         return;
     }
 
-    dedupeShortcutButtons();
+    const secondary = getSecondaryHost(slot);
+    const danger = getDangerHost(slot);
+    const morePanel = slot.querySelector('[data-seo-page-actions-more-panel]');
+
+    slot.querySelectorAll(':scope > [data-seo-shortcuts-wrap]').forEach((wrap) => {
+        wrap.remove();
+    });
 
     const strayShortcuts = document.querySelectorAll(
         '.wp-seo-fields-toolbar-end > [data-seo-shortcuts-wrap], .wp-seo-fields-toolbar-end > .relative',
@@ -118,39 +230,53 @@ function normalizeToolbarLayout() {
         }
     });
 
-    dedupeSlotChildren(slot);
+    [...slot.children].forEach((child) => {
+        if (!(child instanceof HTMLElement) || isPersistentToolbarChild(child)) {
+            return;
+        }
 
-    const debugButton = slot.querySelector('[data-seo-debug-md-import]');
-    const restoreButton = slot.querySelector('[data-seo-restore-wp-btn]');
-    const deleteButton = findDeleteButton(slot);
-    const shortcuts = slot.querySelector('[data-seo-shortcuts-wrap]');
+        if (
+            child.matches('.fi-btn, a.fi-btn, .fi-icon-btn, .seo-editor-toolbar-btn, .seo-editor-menu-item')
+            || child.hasAttribute('data-seo-debug-md-import')
+            || child.hasAttribute('data-seo-restore-action-wrap')
+        ) {
+            secondary?.appendChild(child);
+        }
+    });
 
-    const middleButtons = [...slot.children].filter(
-        (child) => child !== debugButton
-            && child !== restoreButton
-            && child !== deleteButton
-            && child !== shortcuts,
-    );
+    const deleteInSecondary = findDeleteAction(secondary);
+    if (deleteInSecondary && danger && !danger.contains(deleteInSecondary)) {
+        danger.appendChild(deleteInSecondary);
+    }
 
-    [debugButton, restoreButton, ...middleButtons, shortcuts, deleteButton]
+    dedupeHostChildren(secondary);
+    compactToolbarButtons(morePanel ?? slot);
+
+    const debugButton = secondary?.querySelector('[data-seo-debug-md-import]');
+    const restoreAction = findRestoreAction(secondary);
+    const middleButtons = secondary
+        ? [...secondary.children].filter((child) => child !== debugButton && child !== restoreAction)
+        : [];
+
+    [debugButton, restoreAction, ...middleButtons]
         .filter(Boolean)
-        .forEach((child) => slot.appendChild(child));
+        .forEach((child) => secondary.appendChild(child));
 }
 
 export function mountFilamentHeaderActionsToToolbar() {
     const page = document.querySelector('.seo-article-edit-page');
-    const slot = document.querySelector('[data-seo-page-actions-slot]');
+    const slot = getPageActionsSlot();
+    const secondary = getSecondaryHost(slot);
     const headerActions = page?.querySelector('.fi-header > div:last-child');
 
-    if (!page || !slot || !headerActions) {
+    if (!page || !slot || !secondary || !headerActions) {
         return false;
     }
 
     if (headerActions.childElementCount === 0) {
         normalizeToolbarLayout();
 
-        return slot.querySelector('[data-seo-shortcuts-wrap]') !== null
-            || slot.childElementCount > 0;
+        return secondary.childElementCount > 0 || slot.querySelector('[data-seo-page-actions-primary]') !== null;
     }
 
     clearMovedHeaderActionsFromSlot();
@@ -162,24 +288,65 @@ export function mountFilamentHeaderActionsToToolbar() {
         const fingerprint = actionFingerprint(child);
         const isDuplicate =
             fingerprint !== ''
-            && [...slot.children].some((existing) => actionFingerprint(existing) === fingerprint);
+            && [...secondary.children].some((existing) => actionFingerprint(existing) === fingerprint);
 
         if (isDuplicate) {
             continue;
         }
 
-        slot.appendChild(child);
+        secondary.appendChild(child);
     }
 
     normalizeToolbarLayout();
 
-    if (slot.childElementCount === 0) {
-        return false;
-    }
-
     window.dispatchEvent(new CustomEvent('seo-article-editor-header-actions-mounted'));
 
     return true;
+}
+
+export function mountShortcutsBelowOutline() {
+    const host = document.querySelector('[data-seo-outline-shortcuts-host]');
+    const panel = document.querySelector('[data-seo-shortcuts-rail]');
+    if (!(host instanceof HTMLElement) || !(panel instanceof HTMLElement)) {
+        return false;
+    }
+
+    if (host.contains(panel)) {
+        return true;
+    }
+
+    host.appendChild(panel);
+
+    return true;
+}
+
+export function observeShortcutsBelowOutline() {
+    let attempts = 0;
+    const maxAttempts = 60;
+
+    const tryMount = () => {
+        attempts += 1;
+        if (mountShortcutsBelowOutline() || attempts >= maxAttempts) {
+            return true;
+        }
+
+        return false;
+    };
+
+    if (tryMount()) {
+        return () => {};
+    }
+
+    const root = document.getElementById('seo-article-editor-root') ?? document.body;
+    const observer = new MutationObserver(() => {
+        if (tryMount()) {
+            observer.disconnect();
+        }
+    });
+
+    observer.observe(root, { childList: true, subtree: true });
+
+    return () => observer.disconnect();
 }
 
 let mountTimer = null;
@@ -193,6 +360,7 @@ export function scheduleMountFilamentHeaderActionsToToolbar() {
         mountTimer = null;
 
         const attempt = (retriesLeft) => {
+            mountShortcutsBelowOutline();
             if (mountFilamentHeaderActionsToToolbar() || retriesLeft <= 0) {
                 return;
             }
@@ -251,5 +419,6 @@ export function registerFilamentHeaderActionsPersistence() {
         observer.observe(header, { childList: true, subtree: true });
     }
 
+    observeShortcutsBelowOutline();
     scheduleMountFilamentHeaderActionsToToolbar();
 }

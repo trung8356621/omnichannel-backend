@@ -9,11 +9,12 @@ use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\SeoAnalyzerService;
 use App\Addons\SeoContentAi\Services\SeoAuditKeywordFlagService;
 use App\Addons\SeoContentAi\Services\SeoAuditScanService;
 use App\Addons\SeoContentAi\Services\SeoPromptSettingsService;
 use App\Addons\SeoContentAi\Services\SeoScoringSettingsService;
-use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Filament\Notifications\Notification;
@@ -145,7 +146,7 @@ final class ArticlesOptimal extends SeoPanelPage
      */
     public function getSiteFilterOptions(): array
     {
-        $query = Site::query()->orderBy('domain')->limit(5);
+        $query = Site::query()->orderBy('domain');
 
         if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
@@ -442,6 +443,28 @@ final class ArticlesOptimal extends SeoPanelPage
     }
 
     /**
+     * @param  array<int, int|string>  $articleIds
+     * @param  array<string, mixed>  $data
+     */
+    public function assignFromSidebar(array $articleIds, array $data = []): void
+    {
+        if (! isset($data['project_id']) || (int) $data['project_id'] <= 0) {
+            $data['project_id'] = $this->sidebarProjectId;
+        }
+
+        $this->assignArticlesToContentProject($articleIds, $data);
+    }
+
+    public function notifyAssignBlockedMissingKeyword(): void
+    {
+        Notification::make()
+            ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
+            ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_bulk'))
+            ->warning()
+            ->send();
+    }
+
+    /**
      * @param  array<string, mixed>  $data
      */
     public function assignArticleToContentProject(int $articleId, array $data): void
@@ -491,7 +514,53 @@ final class ArticlesOptimal extends SeoPanelPage
 
         $records = $this->accessibleArticleQuery()
             ->whereIn('id', $ids)
+            ->with(['articleMetas' => static function ($relation): void {
+                $relation->where('meta_key', 'seo_focus_keyword');
+            }])
             ->get();
+
+        if ($records->isEmpty()) {
+            return;
+        }
+
+        $analyzer = app(SeoAnalyzerService::class);
+        $focusKeywordInput = trim((string) ($data['focus_keyword'] ?? ''));
+        $missingFocus = $records->filter(static function (SeoArticle $article) use ($analyzer): bool {
+            return trim((string) ($analyzer->resolveFocusKeywordForArticle($article) ?? '')) === '';
+        });
+
+        if ($missingFocus->count() > 1) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
+                ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_bulk'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($missingFocus->count() === 1 && $focusKeywordInput === '') {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.articles_optimal.assign_failed'))
+                ->body(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_required'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        if ($focusKeywordInput !== '') {
+            $userId = (int) (auth()->id() ?? 0);
+            foreach ($missingFocus as $article) {
+                $siteId = (int) ($article->site_id ?? 0);
+                if ($siteId <= 0) {
+                    continue;
+                }
+
+                KeywordFocusAttach::syncMainKeyword($article, $siteId, $userId, $focusKeywordInput);
+                $article->unsetRelation('articleMetas');
+            }
+        }
 
         $summary = ArticleResource::assignArticlesFromFormData(
             Collection::make($records),
@@ -535,35 +604,85 @@ final class ArticlesOptimal extends SeoPanelPage
             ->send();
     }
 
-    public function demoteToDraft(int $articleId): void
+    public function skipSeoAudit(int $articleId): void
     {
-        $article = $this->findAccessibleArticle($articleId);
-        if ($article === null) {
+        $skipped = $this->skipSeoAuditForIds([$articleId]);
+        if ($skipped === 0) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.articles_optimal.demote_failed'))
+                ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_failed'))
                 ->danger()
                 ->send();
 
             return;
         }
 
-        $article->update(['status' => 'draft']);
-        $result = app(WordPressArticleSyncService::class)->syncForArticle($article->fresh());
+        Notification::make()
+            ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_success'))
+            ->success()
+            ->send();
+    }
 
-        if (($result['success'] ?? false) === true) {
+    /**
+     * @param  array<int, int|string>|null  $articleIds  Ưu tiên IDs từ Alpine (tránh race entangle).
+     */
+    public function skipSelectedSeoAudit(mixed $articleIds = null): void
+    {
+        $rawIds = is_array($articleIds) ? $articleIds : $this->selectedArticleIds;
+        $ids = array_values(array_unique(array_map('intval', $rawIds)));
+        $ids = array_values(array_filter($ids, static fn (int $id): bool => $id > 0));
+        if ($ids === []) {
             Notification::make()
-                ->title(__('seo-content-ai::filament.articles_optimal.demote_success'))
-                ->success()
+                ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_none_selected'))
+                ->warning()
+                ->send();
+
+            return;
+        }
+
+        $skipped = $this->skipSeoAuditForIds($ids);
+        $this->selectedArticleIds = [];
+
+        if ($skipped === 0) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_failed'))
+                ->danger()
                 ->send();
 
             return;
         }
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.articles_optimal.demote_failed'))
-            ->body((string) ($result['message'] ?? ''))
-            ->warning()
+            ->title(__('seo-content-ai::filament.articles_optimal.skip_audit_bulk_success', ['count' => $skipped]))
+            ->success()
             ->send();
+    }
+
+    /**
+     * @param  list<int>  $articleIds
+     */
+    private function skipSeoAuditForIds(array $articleIds): int
+    {
+        $skipped = 0;
+
+        foreach ($articleIds as $articleId) {
+            $article = $this->findAccessibleArticle((int) $articleId);
+            if ($article === null) {
+                continue;
+            }
+
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => ArticleResource::META_SKIP_SEO_AUDIT],
+                ['meta_value' => '1'],
+            );
+            $skipped++;
+        }
+
+        if ($skipped > 0) {
+            unset($this->resultsPaginator);
+            $this->resetPage();
+        }
+
+        return $skipped;
     }
 
     /**
@@ -613,15 +732,9 @@ final class ArticlesOptimal extends SeoPanelPage
             ->countsTowardSeoScore()
             ->whereNotIn('type', ['category', 'product_category'])
             ->where('status', '!=', 'trash')
-            ->where(function (Builder $sub): void {
-                $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
-            })
-            ->whereNotExists(function ($sub): void {
-                $sub->selectRaw('1')
-                    ->from('seo_project_tasks')
-                    ->whereColumn('seo_project_tasks.article_id', 'articles.id');
-            })
             ->orderByDesc('updated_at');
+
+        ArticleResource::applySeoAuditCandidateScope($query);
 
         if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
             $query->where('site_id', $this->filterSiteId);
@@ -650,6 +763,12 @@ final class ArticlesOptimal extends SeoPanelPage
     private function accessibleArticleQuery(): Builder
     {
         $query = SeoArticle::query();
+
+        if ($this->filterSiteId !== null && $this->filterSiteId > 0) {
+            $query->where('site_id', $this->filterSiteId);
+
+            return $query;
+        }
 
         if (SeoAccessControl::shouldScopeToAccountOwner()) {
             $siteIds = array_map('intval', array_keys($this->getSiteFilterOptions()));

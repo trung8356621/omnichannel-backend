@@ -38,9 +38,21 @@ class WordPressArticleContentService
         // With no local body, WordPress remains the content source until the next local save.
         if ((int) ($article->wp_post_id ?? 0) > 0) {
             $remote = $this->fetchFromWordPress($article, importFaqs: false);
-            $fresh = trim((string) ($remote['post_content'] ?? ''));
-            if ($fresh !== '') {
-                return $this->normalizeEditorHtmlForSite($fresh, $article->site);
+            $scoring = is_array($remote['scoring'] ?? null) ? $remote['scoring'] : [];
+            $prepared = app(ArticlePostImagesService::class)->prepareEditorHtmlFromWordPressSources(
+                $article,
+                trim((string) ($remote['post_content'] ?? '')),
+                trim((string) ($scoring['body'] ?? '')),
+                is_array($remote['post_images'] ?? null) ? $remote['post_images'] : [],
+            );
+            if ($prepared !== '') {
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_post_content'],
+                    ['meta_value' => $prepared],
+                );
+                app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $prepared);
+
+                return $this->normalizeEditorHtmlForSite($prepared, $article->site);
             }
         }
 

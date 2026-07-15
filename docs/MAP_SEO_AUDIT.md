@@ -22,6 +22,10 @@
 
 Trang **không** dùng React/Vite — toàn bộ UI là Blade + Alpine.js + Livewire.
 
+### Nguyên tắc bản ghi Laravel vs WordPress
+
+Bài trên Laravel là **bản tạm** để đồng bộ / sửa chữa SEO. Thao tác local (trash, xóa soft-delete, đổi draft) **được phép trên Laravel**. Outbound sync **không** được xóa / move-to-trash / hạ draft bài đã tồn tại trên WordPress. Bỏ bài khỏi audit dùng meta `skip_seo_audit`, không demote WP. Chi tiết outbound: [MAP_SEO_WP.md](MAP_SEO_WP.md).
+
 ---
 
 ## 2. Kiến trúc UI (2 tab)
@@ -89,7 +93,8 @@ State khác (không URL): `selectedArticleIds`, `sidebarProjectId`, `scanState` 
 | `runScan()` | Phân tích toàn bộ scope → cache `cachedScanRows`, set `scanState`, try/catch/finally |
 | `getScoringRuleFilterDefinitions()` | Checkbox quy tắc chấm điểm (enabled + filterable từ registry) |
 | `getAggregateFilterDefinitions()` | Checkbox điểm tổng hợp (ngưỡng từ registry) |
-| `demoteToDraft($articleId)` | `status=draft` + `WordPressArticleSyncService::syncForArticle` |
+| `skipSeoAudit($articleId)` | Set `article_meta.skip_seo_audit=1` — loại khỏi audit, **không** đổi status / **không** sync WP |
+| `skipSelectedSeoAudit()` | Bulk skip theo `selectedArticleIds` (cùng meta, clear selection) |
 | `assignArticleToContentProject` | Assign 1 bài qua `ArticleResource::assignArticlesFromFormData` |
 | `assignArticleToSelectedProject` | Assign 1 bài vào `sidebarProjectId` |
 | `assignSelectedArticlesToSelectedProject` | Bulk assign `selectedArticleIds` |
@@ -111,6 +116,7 @@ articles
     AND status != trash
     AND (is_reviewed = false OR is_reviewed IS NULL)
     AND NOT EXISTS (seo_project_tasks WHERE article_id = articles.id)
+    AND NOT EXISTS (article_meta WHERE meta_key = skip_seo_audit AND meta_value = 1)
   [+ filter site_id / language nếu có]
   ORDER BY updated_at DESC
 ```
@@ -185,9 +191,9 @@ Checkbox UI sinh từ `SeoScoringSettingsService::auditFilterDefinitions()` — 
 | Domain | `site.domain` |
 | Warnings | Danh sách `reason_labels` |
 | Score | Màu theo ngưỡng: `<50` đỏ, `50–70` vàng, `>70` xanh |
-| Actions | Edit · Demote draft · Assign project |
+| Actions | Edit · Skip audit · Assign project |
 
-**Demote draft:** cập nhật local + sync WP — xem [MAP_SEO_WP.md](MAP_SEO_WP.md) (`ArticlesOptimal::demoteToDraft`).
+**Skip audit:** `ArticlesOptimal::skipSeoAudit` → `article_meta.skip_seo_audit=1` (Laravel only). Không hạ draft / không sync WordPress. Hằng số: `ArticleResource::META_SKIP_SEO_AUDIT`.
 
 **Assign project:** delegate `ArticleResource::assignArticlesFromFormData` — xem [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md).
 
@@ -300,7 +306,7 @@ Bài đã duyệt **biến mất** khỏi tab SEO Audit (cả SQL filter lẫn P
 | Truy cập trang | `ArticleResource::canViewAny()` |
 | Site filter options | `Site::query()` — max 5 domain; scope `user_id` nếu `SeoAccessControl::shouldScopeToAccountOwner()` |
 | `accessibleArticleQuery()` | `whereIn(site_id, …)` cùng tập site accessible |
-| Assign / demote | `findAccessibleArticle()` qua `accessibleArticleQuery()` |
+| Assign / skip audit | `findAccessibleArticle()` qua `accessibleArticleQuery()` |
 
 Chi tiết RBAC: [MAP_SEO_TEAM.md](MAP_SEO_TEAM.md).
 
@@ -339,7 +345,7 @@ Chi tiết RBAC: [MAP_SEO_TEAM.md](MAP_SEO_TEAM.md).
 | Audit filter matcher | `app/Addons/SeoContentAi/Services/SeoAuditRuleMatcher.php` |
 | Scoring registry / filters | `app/Addons/SeoContentAi/Support/SeoScoringRulesRegistry.php` |
 | Analyzer | `app/Addons/SeoContentAi/Services/SeoAnalyzerService.php` |
-| WP sync (demote) | `app/Addons/SeoContentAi/Services/WordPressArticleSyncService.php` |
+| Skip audit meta | `ArticleResource::META_SKIP_SEO_AUDIT` (`skip_seo_audit`) — set bởi `ArticlesOptimal::skipSeoAudit` |
 | Migration review fields | `app/Addons/SeoContentAi/database/migrations/2026_06_03_090000_add_review_fields_to_articles_table.php` |
 | Translations | `app/Addons/SeoContentAi/lang/{en,vi}/filament.php` → `articles_optimal` |
 | Tests | `SeoAuditScoringIntegrationTest.php`, `SeoAuditScanServiceTest.php`, `SeoAuditCacheArchitectureTest.php` |
@@ -363,7 +369,7 @@ i18n: lang/{en,vi}/filament.php articles_optimal.*
 ```
 mapArticleRow() trả thêm key → foreach $paginator trong articles-optimal.blade.php
 Action server: public method trên ArticlesOptimal + authorize qua accessibleArticleQuery()
-Demote pattern: demoteToDraft() → update local + WordPressArticleSyncService::syncForArticle
+Skip audit: skipSeoAudit() → article_meta.skip_seo_audit=1 (không sync WP)
 ```
 
 ### Tab Reviewed — UI / filter client-side

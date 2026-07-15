@@ -20,7 +20,6 @@ use Filament\Forms\Get;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Eloquent\SoftDeletingScope;
 use Illuminate\Support\Collection;
 
 class PromptResource extends SeoPanelResource
@@ -103,19 +102,9 @@ class PromptResource extends SeoPanelResource
                                             ->live()
                                             ->native(false)
                                             ->placeholder('Choose AI connection for this prompt'),
-                                        Forms\Components\Select::make('model_category')
-                                            ->label(__('seo-content-ai::filament.prompt.model_category'))
-                                            ->options(fn (Get $get): array => self::modelCategoryOptionsForConnection($get('ai_connection_id')))
-                                            ->default(fn (Get $get): ?string => self::defaultModelCategoryForConnection($get('ai_connection_id')))
-                                            ->required()
-                                            ->native(false),
                                         Forms\Components\Radio::make('tools')
                                             ->label(__('seo-content-ai::filament.prompt.tool'))
-                                            ->options([
-                                                'default' => 'Default (text)',
-                                                'image' => 'Image (Gemini image generation)',
-                                                'video' => 'Video (manual URL)',
-                                            ])
+                                            ->options(fn (): array => \App\Addons\SeoContentAi\Support\ImageToolType::promptSelectOptions())
                                             ->default('default')
                                             ->inline()
                                             ->live(),
@@ -175,7 +164,7 @@ class PromptResource extends SeoPanelResource
                                     ]),
                                 Forms\Components\Section::make(__('seo-content-ai::filament.prompt.post_processing.title'))
                                     ->description(__('seo-content-ai::filament.prompt.post_processing.description'))
-                                    ->visible(fn (Get $get): bool => $get('tools') === 'image')
+                                    ->visible(fn (Get $get): bool => \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($get('tools'))->isImagePipeline())
                                     ->schema(self::postProcessingFormSchema()),
                             ]),
                     ]),
@@ -517,9 +506,9 @@ class PromptResource extends SeoPanelResource
             $query->where('user_id', SeoAccessControl::accountSiteOwnerId());
         }
 
-        return $query->withoutGlobalScopes([
-            SoftDeletingScope::class,
-        ]);
+        // SoftDeletes scope giữ nguyên: prompt đã xóa không hiện lại list
+        // (trước đây withoutGlobalScopes SoftDeletingScope → row còn, mất nút Xóa).
+        return $query;
     }
 
     public static function getPages(): array

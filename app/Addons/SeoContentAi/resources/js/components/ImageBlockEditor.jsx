@@ -257,6 +257,10 @@ export default function ImageBlockEditor({
                 title: altText,
                 slug: slug || undefined,
                 seoMediaId: seoMediaId > 0 ? seoMediaId : undefined,
+                // Paste/upload mới: xóa hẳn liên kết WP cũ của block (tránh rename ID stale).
+                wpAttachmentId: undefined,
+                wpSrc: undefined,
+                localSrc: undefined,
             });
         },
         // commitImage closes over onUpdate — stable enough per block session
@@ -276,15 +280,6 @@ export default function ImageBlockEditor({
                 onUploaded: (data) => {
                     setPasteUploading(false);
                     applyUploadedImageToBlock(data);
-                    window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                            title: t('image_pasted'),
-                            body: t('image_pasted_desc'),
-                                status: 'success',
-                            },
-                        }),
-                    );
                 },
                 onError: () => setPasteUploading(false),
             });
@@ -311,15 +306,6 @@ export default function ImageBlockEditor({
                     randomFilename: Boolean(options?.randomFilename),
                 });
                 applyUploadedImageToBlock(data);
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: t('image_pasted'),
-                            body: data.message ?? t('image_import_success'),
-                            status: 'success',
-                        },
-                    }),
-                );
             } catch (error) {
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
@@ -432,7 +418,7 @@ export default function ImageBlockEditor({
     };
 
     const copyCurrentImage = useCallback(
-        async (notify = true) => {
+        async (_notify = true) => {
             if (!image?.src) {
                 return false;
             }
@@ -458,18 +444,6 @@ export default function ImageBlockEditor({
                 // Browser can block clipboard API; keep internal clipboard only.
             }
 
-            if (notify) {
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: t('image_copied'),
-                            body: t('image_copied_desc'),
-                            status: 'success',
-                        },
-                    }),
-                );
-            }
-
             return true;
         },
         [block, image],
@@ -486,16 +460,6 @@ export default function ImageBlockEditor({
             ...copied,
             src: String(copied.src).trim(),
         });
-
-        window.dispatchEvent(
-            new CustomEvent('seo-article-editor-notify', {
-                detail: {
-                    title: t('image_pasted'),
-                    body: t('image_pasted_desc'),
-                    status: 'success',
-                },
-            }),
-        );
 
         return true;
     }, [commitImage]);
@@ -565,17 +529,6 @@ export default function ImageBlockEditor({
                             // Fallback cho trường hợp block cuối không được xóa.
                             resetImageToPicker();
                         }
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('image_cut'),
-                                    body: canDeleteBlock
-                                        ? t('image_cut_desc')
-                                        : t('image_cut_fallback_desc'),
-                                    status: 'success',
-                                },
-                            }),
-                        );
                     });
                 }
                 return;

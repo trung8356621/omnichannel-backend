@@ -14,6 +14,8 @@ use Throwable;
 
 final class ArticleWpSyncQueueService
 {
+    public const QUEUE_NAME = 'seo';
+
     public const META_KEY = 'wp_sync_queue';
 
     public const BUNDLE_META_KEY = 'wp_sync_queue_bundle';
@@ -54,7 +56,7 @@ final class ArticleWpSyncQueueService
         $html = (string) ($bundle['html'] ?? '');
         $this->persist->persistLocalSilent($article->fresh() ?? $article, $context, $html);
 
-        $article = $article->fresh() ?? $article;
+        $article = $this->bootstrapArticleDatabase($article->fresh() ?? $article);
         $now = now();
 
         $queuePayload = [
@@ -78,7 +80,14 @@ final class ArticleWpSyncQueueService
             ['meta_value' => json_encode($this->compactBundleForQueue($bundle), JSON_UNESCAPED_UNICODE)],
         );
 
-        SyncArticleToWordPressFromQueueJob::dispatch((int) $article->id);
+        if (! $this->dispatchWpSyncJob((int) $article->id)) {
+            $this->markFailed($article, 'Không ghi được job vào bảng `jobs`. Kiểm tra QUEUE_CONNECTION=database và worker đang chạy queue `seo`.');
+
+            return [
+                'success' => false,
+                'message' => 'Không ghi được job đồng bộ WordPress vào hàng đợi. Kiểm tra QUEUE_CONNECTION=database và chạy `php artisan queue:work --queue=seo,media_generation,default`.',
+            ];
+        }
 
         return [
             'success' => true,
@@ -120,7 +129,6 @@ final class ArticleWpSyncQueueService
         $this->writeQueueMeta($article, $payload);
         $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
-        $this->purgeDispatchedJobsForArticle((int) $article->id);
     }
 
     public function clearQueueEntry(SeoArticle $article): void
@@ -131,6 +139,7 @@ final class ArticleWpSyncQueueService
 
         $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])->delete();
+        $this->purgeDispatchedJobsForArticle((int) $article->id);
     }
 
     public function markFailed(SeoArticle $article, string $error): void
@@ -198,7 +207,14 @@ final class ArticleWpSyncQueueService
         $payload['user_id'] = Auth::id();
         $this->writeQueueMeta($article, $payload);
 
-        SyncArticleToWordPressFromQueueJob::dispatch((int) $article->id);
+        if (! $this->dispatchWpSyncJob((int) $article->id)) {
+            $this->markFailed($article, 'Không ghi được job vào bảng `jobs`. Kiểm tra QUEUE_CONNECTION=database và worker queue `seo`.');
+
+            return [
+                'success' => false,
+                'message' => 'Không ghi được job đồng bộ WordPress vào hàng đợi.',
+            ];
+        }
 
         return [
             'success' => true,
@@ -223,6 +239,10 @@ final class ArticleWpSyncQueueService
         $deleted = $article->articleMetas()
             ->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])
             ->delete();
+
+        if ($deleted > 0) {
+            $this->purgeDispatchedJobsForArticle((int) $article->id);
+        }
 
         return $deleted > 0;
     }
@@ -428,6 +448,45 @@ final class ArticleWpSyncQueueService
         } catch (Throwable) {
             // Queue table may be unavailable in some environments.
         }
+    }
+
+    private function dispatchWpSyncJob(int $articleId): bool
+    {
+        if ($articleId <= 0) {
+            return false;
+        }
+
+        $this->purgeDispatchedJobsForArticle($articleId);
+
+        SyncArticleToWordPressFromQueueJob::dispatch($articleId);
+
+        if ((string) config('queue.default') === 'sync') {
+            return true;
+        }
+
+        return $this->hasPendingWpSyncJob($articleId);
+    }
+
+    private function hasPendingWpSyncJob(int $articleId): bool
+    {
+        try {
+            $jobs = DB::connection($this->jobsConnection())
+                ->table('jobs')
+                ->select(['payload'])
+                ->where('queue', self::QUEUE_NAME)
+                ->where('payload', 'like', '%SyncArticleToWordPressFromQueueJob%')
+                ->get();
+
+            foreach ($jobs as $job) {
+                if ($this->extractArticleIdFromJobPayload((string) ($job->payload ?? '')) === $articleId) {
+                    return true;
+                }
+            }
+        } catch (Throwable) {
+            return true;
+        }
+
+        return false;
     }
 
     public function extractArticleIdFromJobPayload(string $payload): ?int

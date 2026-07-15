@@ -30,7 +30,9 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
 
     public function __construct(
         public int $articleId,
-    ) {}
+    ) {
+        $this->onQueue(ArticleWpSyncQueueService::QUEUE_NAME);
+    }
 
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,

@@ -38,11 +38,7 @@ final class GeminiModelCatalog
             'gemini-3.1-flash-lite',
             'gemini-3.1-flash-lite-preview',
             'gemini-3.1-pro-preview',
-            'gemini-3-pro-preview',
-            'gemini-2.5-flash',
-            'gemini-2.5-pro',
-            'gemini-2.0-flash',
-            'gemini-2.0-flash-lite',
+            'gemini-3.5-flash-preview',
         ];
     }
 
@@ -85,9 +81,12 @@ final class GeminiModelCatalog
             self::fallbackModels(),
         )));
 
-        return array_values(array_filter(
+        $candidates = array_values(array_filter(
             $candidates,
-            static fn (string $model): bool => GoogleAiModelRegistry::isTextModel($model),
+            static fn (string $model): bool => GoogleAiModelRegistry::isTextModel($model)
+                && GeminiModelVersionPolicy::isEligibleForAutoRouting($model),
         ));
+
+        return GeminiModelVersionPolicy::preferStableFirst($candidates);
     }
 }

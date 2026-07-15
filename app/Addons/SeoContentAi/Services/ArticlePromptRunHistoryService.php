@@ -281,6 +281,40 @@ final class ArticlePromptRunHistoryService
         $name = trim((string) ($step['prompt_name'] ?? $step['title'] ?? $result?->prompt?->name ?? ''));
         $displayType = $this->resolveDisplayType($type, $source, $name);
 
+        $renderModel = trim((string) (
+            $snapshot['render_model']
+            ?? $step['render_model']
+            ?? ''
+        ));
+        $plannerModel = trim((string) (
+            $snapshot['planner_model']
+            ?? $step['planner_model']
+            ?? ''
+        ));
+        $validationModel = trim((string) ($snapshot['validation_model'] ?? $step['validation_model'] ?? ''));
+        $workflowMode = trim((string) ($snapshot['workflow_execution_mode'] ?? $step['workflow_execution_mode'] ?? ''));
+
+        // Media AI: ưu tiên snapshot render; không lấy step.ai_model (thường là planner category).
+        if ($renderModel === '' && $this->isMediaAiHistory($displayType, $source, $snapshot)) {
+            $renderModel = trim((string) ($snapshot['raw_model_used'] ?? ''));
+        }
+
+        if ($renderModel === '' && $plannerModel === '') {
+            // Text path / legacy: raw_model_used; không ưu tiên step.ai_model cho media.
+            $legacy = trim((string) ($snapshot['raw_model_used'] ?? ''));
+            if ($legacy !== '') {
+                if ($this->isMediaAiHistory($displayType, $source, $snapshot)) {
+                    $renderModel = $legacy;
+                } else {
+                    $plannerModel = $legacy;
+                }
+            } elseif (! $this->isMediaAiHistory($displayType, $source, $snapshot)) {
+                $plannerModel = trim((string) ($step['ai_model'] ?? ''));
+            }
+        }
+
+        $primaryModel = $renderModel !== '' ? $renderModel : $plannerModel;
+
         return [
             'key' => $result !== null
                 ? 'result-'.$result->id
@@ -293,9 +327,32 @@ final class ArticlePromptRunHistoryService
             'result' => $output,
             'status' => trim((string) ($step['status'] ?? $result?->status ?? '')),
             'message' => trim((string) ($step['message'] ?? $result?->error_message ?? '')),
-            'model' => trim((string) ($step['ai_model'] ?? $snapshot['raw_model_used'] ?? '')),
+            'model' => $primaryModel,
+            'render_model' => $renderModel,
+            'planner_model' => $plannerModel,
+            'validation_model' => $validationModel,
+            'workflow_execution_mode' => $workflowMode,
+            'candidate_count' => $snapshot['candidate_count'] ?? null,
+            'winner_score' => $snapshot['winner_score'] ?? null,
+            'validation_passed' => $snapshot['validation_passed'] ?? null,
             'ran_at' => $result?->started_at ?? $result?->created_at,
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     */
+    private function isMediaAiHistory(string $displayType, string $source, array $snapshot): bool
+    {
+        if ($source === 'editor_media_generation' || $displayType === 'Media AI') {
+            return true;
+        }
+
+        $tools = strtolower(trim((string) ($snapshot['tools'] ?? '')));
+
+        return in_array($tools, ['image', 'image_typography'], true)
+            || ! empty($snapshot['direct_image_preview'])
+            || filled($snapshot['render_model'] ?? null);
     }
 
     private function resolveDisplayType(string $type, string $source, string $name): string

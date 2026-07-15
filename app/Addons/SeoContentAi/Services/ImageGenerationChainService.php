@@ -98,8 +98,6 @@ final class ImageGenerationChainService
 
     private function normalizeToolType(string $tool): string
     {
-        $tool = trim($tool);
-
-        return in_array($tool, ['default', 'image', 'video'], true) ? $tool : 'default';
+        return \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($tool)->value;
     }
 }

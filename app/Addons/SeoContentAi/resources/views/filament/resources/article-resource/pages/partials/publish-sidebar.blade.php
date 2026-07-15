@@ -544,14 +544,13 @@
             @endif
 
             <div class="flex items-center justify-between gap-2 text-xs">
-                <a
-                    href="{{ route('seo.articles.revisions.compare', ['article' => $record->getKey()]) }}"
-                    class="text-sky-600 hover:underline"
-                    title="Xem và so sánh các phiên bản đã lưu"
-                    target="_blank"
+                <span
+                    class="text-gray-500 dark:text-gray-400"
+                    title="{{ __('seo-content-ai::filament.article_list.page_action_history') }}"
                 >
-                    📋 Lịch sử chỉnh sửa (<span data-seo-revision-count>{{ $articleRevisionCount }}</span>)
-                </a>
+                    {{ __('seo-content-ai::filament.article_list.page_action_history') }}
+                    (<span data-seo-revision-count>{{ $articleRevisionCount }}</span>)
+                </span>
                 @if ($articleRevisionCount > 0)
                     <button
                         type="button"
@@ -569,91 +568,5 @@
             </div>
         </div>
 
-        <div class="seo-publish-icon-actions">
-            <button
-                type="button"
-                x-on:click="requestSave()"
-                x-bind:disabled="isPublishActionDisabled()"
-                x-bind:class="{
-                    'seo-publish-icon-btn': true,
-                    'is-primary': true,
-                    'is-busy': saveInFlight,
-                }"
-                x-bind:title="saveButtonTitle()"
-                x-bind:aria-label="saveButtonTitle()"
-                x-bind:aria-busy="saveInFlight ? 'true' : 'false'"
-            >
-                <span
-                    x-show="saveInFlight"
-                    x-cloak
-                    class="seo-publish-icon-btn__spinner"
-                    aria-hidden="true"
-                ></span>
-                <svg
-                    x-show="!saveInFlight"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    aria-hidden="true"
-                >
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M17 21v-8H7v8M7 3v5h8" />
-                </svg>
-            </button>
-
-            @php
-                $isContentManager = \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager();
-                $staffSubmitted = $isContentManager && $this->contentManagerSubmittedForReview();
-                $reviewButtonActive = $isContentManager ? $staffSubmitted : (bool) $record->is_reviewed;
-                $approvedToggleTitle = $isContentManager
-                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done')
-                    : __('seo-content-ai::filament.article_list.mark_reviewed');
-                $reviewConfirm = $isContentManager
-                    ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_confirm')
-                    : __('seo-content-ai::filament.article_list.review_article_description');
-            @endphp
-
-            <button
-                type="button"
-                wire:click="toggleArticleReview"
-                @if (! $reviewButtonActive) wire:confirm="{{ $reviewConfirm }}" @endif
-                wire:loading.attr="disabled"
-                wire:target="toggleArticleReview,approveArticle"
-                @if (! $this->canToggleArticleReview()) disabled @endif
-                class="seo-publish-icon-btn is-success @if ($reviewButtonActive) is-active @endif"
-                title="{{ $reviewButtonActive
-                    ? ($isContentManager
-                        ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_already')
-                        : __('seo-content-ai::filament.article_list.reviewed'))
-                    : $approvedToggleTitle }}"
-                aria-label="{{ $approvedToggleTitle }}"
-            >
-                <span wire:loading.remove wire:target="toggleArticleReview,approveArticle">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-                    </svg>
-                </span>
-                <span wire:loading wire:target="toggleArticleReview,approveArticle" class="seo-publish-icon-btn__spinner" aria-hidden="true"></span>
-            </button>
-
-            @if ($record->wp_post_id)
-                @php
-                    $wpPermalink = $this->getArticlePermalink();
-                @endphp
-                @if ($wpPermalink !== '')
-                    <a
-                        href="{{ $wpPermalink }}"
-                        target="_blank"
-                        rel="noopener"
-                        class="seo-publish-icon-btn is-outline"
-                        title="Xem trên WordPress"
-                        aria-label="Xem trên WordPress"
-                    >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                        </svg>
-                    </a>
-                @endif
-            @endif
-        </div>
+        {{-- Article actions (Save / Review / View WP) live only in top page action bar --}}
 </div>

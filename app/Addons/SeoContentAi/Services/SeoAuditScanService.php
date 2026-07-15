@@ -174,12 +174,17 @@ final class SeoAuditScanService
 
         $threshold = SeoScoringRulesRegistry::AUDIT_LOW_SCORE_THRESHOLD;
 
-        $query->where(function (Builder $orGroup) use ($selectedRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore, $threshold): void {
-            foreach ($selectedRuleKeys as $ruleKey) {
-                if (! SeoScoringRulesRegistry::isRuleEnabled($ruleKey)) {
-                    continue;
-                }
+        $enabledRuleKeys = array_values(array_filter(
+            $selectedRuleKeys,
+            static fn (string $ruleKey): bool => SeoScoringRulesRegistry::isRuleEnabled($ruleKey),
+        ));
 
+        if ($enabledRuleKeys === [] && ! $filterLowSeoScore && ! $filterTechnicalSeoScore) {
+            return $query->whereRaw('0 = 1');
+        }
+
+        $query->where(function (Builder $orGroup) use ($enabledRuleKeys, $filterLowSeoScore, $filterTechnicalSeoScore, $threshold): void {
+            foreach ($enabledRuleKeys as $ruleKey) {
                 if ($ruleKey === SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD) {
                     $orGroup->orWhere(function (Builder $missingKeyword): void {
                         $this->applyMissingFocusKeywordScope($missingKeyword);
@@ -190,7 +195,10 @@ final class SeoAuditScanService
 
                 $orGroup->orWhereHas('articleMetas', static function (Builder $meta) use ($ruleKey): void {
                     $meta->where('meta_key', SeoScoringRulesRegistry::META_KEY_VIOLATIONS)
-                        ->whereRaw('JSON_CONTAINS(meta_value, ?)', [json_encode($ruleKey, JSON_THROW_ON_ERROR)]);
+                        ->whereRaw(
+                            '(JSON_VALID(meta_value) = 1 AND JSON_CONTAINS(meta_value, ?))',
+                            [json_encode($ruleKey, JSON_THROW_ON_ERROR)]
+                        );
                 });
             }
 

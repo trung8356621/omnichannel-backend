@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
+use App\Addons\SeoContentAi\Http\Requests\TestOptimizeLocalWebpRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
+use App\Addons\SeoContentAi\Services\SeoImageOptimizationService;
 use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
@@ -58,12 +60,19 @@ class SeoMediaController extends Controller
             abort_unless(auth()->check(), 403);
         }
 
-        $seoMedia = $this->storage->storeUpload(
-            $request->file('image'),
-            $siteId,
-            $articleId,
-            (string) ($validated['source'] ?? 'clipboard'),
-        );
+        try {
+            $seoMedia = $this->storage->storeUpload(
+                $request->file('image'),
+                $siteId,
+                $articleId,
+                (string) ($validated['source'] ?? 'clipboard'),
+            );
+        } catch (\RuntimeException|\InvalidArgumentException $exception) {
+            return response()->json([
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ], 422);
+        }
 
         return response()->json([
             'success' => true,
@@ -521,6 +530,69 @@ class SeoMediaController extends Controller
     }
 
     /**
+     * Test pipeline sync WP: tạo sibling WebP local, không sửa file nguồn.
+     */
+    public function testOptimizeLocalWebp(
+        TestOptimizeLocalWebpRequest $request,
+        SeoImageOptimizationService $optimization,
+    ): JsonResponse {
+        $validated = $request->validated();
+        $siteId = (int) $validated['site_id'];
+        abort_unless($this->canAccessSite($siteId), 403);
+
+        $media = SeoMedia::query()
+            ->where('site_id', $siteId)
+            ->findOrFail((int) $validated['seo_media_id']);
+        abort_unless($this->canAccessMedia($media), 403);
+
+        $relativePath = ltrim(str_replace('\\', '/', (string) $media->path), '/');
+        if ($relativePath === '' || ! Storage::disk('public')->exists($relativePath)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Không tìm thấy file ảnh local.',
+            ], 422);
+        }
+
+        $sourcePath = Storage::disk('public')->path($relativePath);
+        $config = $optimization->resolveForSite($siteId);
+        // Đây là action test chủ động, không phụ thuộc toggle auto-convert hiện tại.
+        $config->auto_convert_webp = true;
+        $webpPath = $optimization->ensureLocalWebpCopy($sourcePath, $config);
+
+        if (
+            $webpPath !== null
+            && (int) filesize($webpPath) > SeoImageOptimizationService::WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES
+        ) {
+            $webpPath = $optimization->ensureLocalWebpUnderMaxBytes($sourcePath, $config);
+        }
+
+        if ($webpPath === null || ! $optimization->isUsableWebpFile($webpPath, $sourcePath)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'WebP local tạo thất bại hoặc ảnh kết quả bị trắng/không decode được.',
+            ], 422);
+        }
+
+        $directory = pathinfo($relativePath, PATHINFO_DIRNAME);
+        $webpRelativePath = ($directory !== '' && $directory !== '.' ? $directory.'/' : '')
+            .basename($webpPath);
+        $webpRelativePath = ltrim(str_replace('\\', '/', $webpRelativePath), '/');
+        $dimensions = @getimagesize($webpPath);
+        $publicUrl = '/storage/'.$webpRelativePath.'?v='.(string) ((int) filemtime($webpPath));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Đã tạo WebP local cạnh file gốc (sibling .webp).',
+            'url' => $publicUrl,
+            'path' => $webpRelativePath,
+            'source_path' => $relativePath,
+            'bytes' => (int) filesize($webpPath),
+            'width' => is_array($dimensions) ? (int) ($dimensions[0] ?? 0) : 0,
+            'height' => is_array($dimensions) ? (int) ($dimensions[1] ?? 0) : 0,
+        ]);
+    }
+
+    /**
      * Lưu ảnh sau khi người dùng edit/tô màu từ Editor (client-side).
      */
     public function saveEditedImage(Request $request, SeoMedia $media): JsonResponse
@@ -573,11 +645,21 @@ class SeoMediaController extends Controller
 
         app(ArticleEditorMediaAiService::class)->reconcileStaleAiMediaJobs((int) $article->id);
 
+        // Kèm completed gần đây: editor reconcile placeholder khi poll/event miss.
+        $recentCompletedAfter = now()->subHours(2);
+
         $items = SeoMedia::query()
             ->where('article_id', (int) $article->id)
             ->whereIn('source', ['ai_prompt', 'ai_video_prompt'])
-            ->whereIn('status', ['processing', 'failed'])
+            ->where(function ($query) use ($recentCompletedAfter): void {
+                $query->whereIn('status', ['processing', 'failed'])
+                    ->orWhere(function ($completed) use ($recentCompletedAfter): void {
+                        $completed->where('status', 'completed')
+                            ->where('updated_at', '>=', $recentCompletedAfter);
+                    });
+            })
             ->orderByDesc('id')
+            ->limit(40)
             ->get()
             ->map(fn (SeoMedia $media): array => $this->formatAiMediaPayload($media))
             ->values()

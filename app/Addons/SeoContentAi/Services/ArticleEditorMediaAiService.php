@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -64,8 +65,8 @@ final class ArticleEditorMediaAiService
             $loaiSanPhamCategoryArticleId,
             $loaiSanPhamCustom,
         ): array {
-            $target = trim($target);
-            $prompt = $this->resolveEditorImagePrompt($target);
+            $config = $this->resolveEditorMediaConfig($target);
+            $prompt = $config['prompt'];
 
             if ($target === 'product-gallery' && PromptLoaiSanPhamVariable::usesInPrompt($prompt)) {
                 $siteId = (int) ($article->site_id ?? 0);
@@ -86,31 +87,39 @@ final class ArticleEditorMediaAiService
                 $loaiSanPhamCustom,
             );
 
-            $variables = $this->filterVariablesForPrompt(
-                $prompt,
-                $this->buildVariables(
-                    $article,
-                    $selectionText,
-                    $selectionHtml,
-                    $userBrief,
-                    $loaiSanPhamCategoryArticleId,
-                    $loaiSanPhamCustom,
-                    $mergeLoai,
-                    $target,
+            $variables = $this->attachEditorExecutionVariables(
+                $this->filterVariablesForPrompt(
+                    $prompt,
+                    $this->buildVariables(
+                        $article,
+                        $selectionText,
+                        $selectionHtml,
+                        $userBrief,
+                        $loaiSanPhamCategoryArticleId,
+                        $loaiSanPhamCustom,
+                        $mergeLoai,
+                        $target,
+                    ),
                 ),
+                $config,
             );
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
 
             $placeholder = $this->createPlaceholderMedia(
                 $article,
-                'image',
+                (string) $config['tool_type'],
                 (int) $prompt->id,
                 $variables,
                 $editorBlockId,
             );
 
-            GenerateMediaJob::dispatch($placeholder->id, (int) $prompt->id, $variables, 'image')
+            GenerateMediaJob::dispatch(
+                $placeholder->id,
+                (int) $prompt->id,
+                $variables,
+                (string) $config['tool_type'],
+            )
                 ->onQueue('media_generation')
                 ->afterResponse();
 
@@ -167,7 +176,7 @@ final class ArticleEditorMediaAiService
             $loaiSanPhamCustom,
         );
 
-        $prompt = $this->resolveEditorImagePrompt($target);
+        $prompt = $this->resolveEditorMediaConfig($target)['prompt'];
 
         $mergeLoai = $this->shouldMergeLoaiSanPham(
             $prompt,
@@ -228,15 +237,15 @@ final class ArticleEditorMediaAiService
             $userBrief,
             $editorBlockId
         ): array {
-            $prompt = $this->resolvePrompt(
-                $this->workflowSettings->getCreateVideoPromptId(),
-                'Tạo video',
-                'video',
-            );
+            $config = $this->resolveEditorVideoConfig();
+            $prompt = $config['prompt'];
 
-            $variables = $this->filterVariablesForPrompt(
-                $prompt,
-                $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief, target: 'editor'),
+            $variables = $this->attachEditorExecutionVariables(
+                $this->filterVariablesForPrompt(
+                    $prompt,
+                    $this->buildVariables($article, $selectionText, $selectionHtml, $userBrief, target: 'editor'),
+                ),
+                $config,
             );
             $this->reconcileStaleAiMediaJobs((int) $article->id);
             $this->cancelProcessingJobsForBlock($article, 'video', $editorBlockId);
@@ -710,24 +719,140 @@ final class ArticleEditorMediaAiService
         }
     }
 
-    private function resolveEditorImagePrompt(string $target): SeoPrompt
+    /**
+     * @return array{
+     *     source: string,
+     *     prompt: SeoPrompt,
+     *     task_id: int|null,
+     *     tool_type: string,
+     *     media_target: string,
+     * }
+     */
+    private function resolveEditorMediaConfig(string $target): array
     {
-        if (trim($target) === 'product-gallery') {
-            $galleryPromptId = $this->workflowSettings->getCreateProductGalleryImagePromptId();
-            if ($galleryPromptId !== null) {
-                return $this->resolvePrompt($galleryPromptId, 'Tạo ảnh Product gallery', 'image');
-            }
+        $target = trim($target);
+
+        if ($target === 'product-gallery') {
+            return [
+                'source' => $this->workflowSettings->getCreateProductGallerySource(),
+                'prompt' => $this->resolveConfiguredMediaSource(
+                    source: $this->workflowSettings->getCreateProductGallerySource(),
+                    promptId: $this->workflowSettings->getCreateProductGalleryImagePromptId(),
+                    taskId: $this->workflowSettings->getCreateProductGalleryImageTaskId(),
+                    label: 'Tạo ảnh Product gallery',
+                    imagePipeline: true,
+                ),
+                'task_id' => $this->workflowSettings->getCreateProductGalleryImageTaskId(),
+                'tool_type' => ImageToolType::Image->value,
+                'media_target' => $target,
+            ];
         }
 
-        $taskId = $this->workflowSettings->getCreateImageTaskId();
-        if ($taskId !== null) {
-            return $this->imageTaskResolver->resolveImagePrompt($taskId);
+        if ($target === 'typography' || $target === 'editor' || $target === '') {
+            return [
+                'source' => $this->workflowSettings->getCreateTypographyImageSource(),
+                'prompt' => $this->resolveConfiguredMediaSource(
+                    source: $this->workflowSettings->getCreateTypographyImageSource(),
+                    promptId: $this->workflowSettings->getCreateTypographyImagePromptId(),
+                    taskId: $this->workflowSettings->getCreateTypographyImageTaskId(),
+                    label: 'Typography / Infographic',
+                    imagePipeline: true,
+                ),
+                'task_id' => $this->workflowSettings->getCreateTypographyImageTaskId(),
+                'tool_type' => ImageToolType::ImageTypography->value,
+                'media_target' => $target === 'typography' ? 'typography' : 'editor',
+            ];
+        }
+
+        // Legacy create_image chỉ còn cho target đặc thù (nếu có); editor mặc định = typography.
+        return [
+            'source' => $this->workflowSettings->getCreateImageSource(),
+            'prompt' => $this->resolveConfiguredMediaSource(
+                source: $this->workflowSettings->getCreateImageSource(),
+                promptId: $this->workflowSettings->getLegacyCreateImagePromptId(),
+                taskId: $this->workflowSettings->getCreateImageTaskId(),
+                label: 'Tạo ảnh',
+                imagePipeline: true,
+            ),
+            'task_id' => $this->workflowSettings->getCreateImageTaskId(),
+            'tool_type' => ImageToolType::Image->value,
+            'media_target' => $target,
+        ];
+    }
+
+    /**
+     * @return array{
+     *     source: string,
+     *     prompt: SeoPrompt,
+     *     task_id: int|null,
+     *     tool_type: string,
+     *     media_target: string,
+     * }
+     */
+    private function resolveEditorVideoConfig(): array
+    {
+        return [
+            'source' => $this->workflowSettings->getCreateVideoSource(),
+            'prompt' => $this->resolveConfiguredMediaSource(
+                source: $this->workflowSettings->getCreateVideoSource(),
+                promptId: $this->workflowSettings->getCreateVideoPromptId(),
+                taskId: $this->workflowSettings->getCreateVideoWorkflowTaskId(),
+                label: 'Tạo video',
+                imagePipeline: false,
+            ),
+            'task_id' => $this->workflowSettings->getCreateVideoWorkflowTaskId(),
+            'tool_type' => ImageToolType::Video->value,
+            'media_target' => 'video',
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     * @param  array{source: string, prompt: SeoPrompt, task_id: int|null, tool_type: string, media_target: string}  $config
+     * @return array<string, string>
+     */
+    private function attachEditorExecutionVariables(array $variables, array $config): array
+    {
+        $variables[SeoCreateArticleSettingsService::EDITOR_VAR_MEDIA_SOURCE] = (string) $config['source'];
+        $variables[SeoCreateArticleSettingsService::EDITOR_VAR_MEDIA_TARGET] = (string) $config['media_target'];
+
+        $taskId = $config['task_id'] ?? null;
+        if (is_int($taskId) && $taskId > 0) {
+            $variables[SeoCreateArticleSettingsService::EDITOR_VAR_WORKFLOW_TASK_ID] = (string) $taskId;
+        }
+
+        return $variables;
+    }
+
+    private function resolveEditorImagePrompt(string $target): SeoPrompt
+    {
+        return $this->resolveEditorMediaConfig($target)['prompt'];
+    }
+
+    private function resolveConfiguredMediaSource(
+        string $source,
+        ?int $promptId,
+        ?int $taskId,
+        string $label,
+        bool $imagePipeline,
+    ): SeoPrompt {
+        if ($source === SeoCreateArticleSettingsService::SOURCE_WORKFLOW) {
+            if ($taskId === null) {
+                throw new \InvalidArgumentException(
+                    "Chưa cấu hình Workflow «{$label}». Vào SEO → Settings → Workflows → chọn Typography / Infographic (hoặc Prompt).",
+                );
+            }
+
+            // Editor workflow: full graph chạy trong GenerateMediaJob; đây chỉ resolve prompt tham chiếu.
+            return $imagePipeline
+                ? $this->imageTaskResolver->resolveImagePrompt($taskId)
+                : $this->imageTaskResolver->resolveVideoPrompt($taskId);
         }
 
         return $this->resolvePrompt(
-            $this->workflowSettings->getLegacyCreateImagePromptId(),
-            'Tạo ảnh',
-            'image',
+            $promptId,
+            $label,
+            $imagePipeline ? 'image' : 'video',
         );
     }
 
@@ -735,7 +860,7 @@ final class ArticleEditorMediaAiService
     {
         if ($promptId === null) {
             throw new \InvalidArgumentException(
-                "Chưa cấu hình Prompt «{$label}». Vào SEO → Tùy chỉnh → Quy trình.",
+                "Chưa cấu hình Prompt «{$label}». Vào SEO → Settings → Workflows → chọn Typography / Infographic (hoặc Workflow).",
             );
         }
 
@@ -744,10 +869,22 @@ final class ArticleEditorMediaAiService
             throw new \InvalidArgumentException("Prompt «{$label}» không tồn tại hoặc đã tắt.");
         }
 
-        $tool = strtolower(trim((string) ($prompt->tools ?? 'default')));
-        if ($tool !== $expectedTool) {
+        $tool = ImageToolType::fromMixed($prompt->tools ?? 'default');
+        $expected = ImageToolType::fromMixed($expectedTool);
+
+        if ($expected->isImagePipeline()) {
+            if (! $tool->isImagePipeline()) {
+                throw new \InvalidArgumentException(
+                    "Prompt «{$label}» phải dùng công cụ Image / Image (Typography) (hiện tại: {$tool->value}).",
+                );
+            }
+
+            return $prompt;
+        }
+
+        if ($tool->value !== $expected->value) {
             throw new \InvalidArgumentException(
-                "Prompt «{$label}» phải dùng công cụ «{$expectedTool}» (hiện tại: {$tool}).",
+                "Prompt «{$label}» phải dùng công cụ «{$expected->value}» (hiện tại: {$tool->value}).",
             );
         }
 

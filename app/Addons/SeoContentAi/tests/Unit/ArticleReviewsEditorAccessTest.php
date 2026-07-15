@@ -16,7 +16,7 @@ final class ArticleReviewsEditorAccessTest extends TestCase
     private function resolveReviewEditorFlags(bool $isContentManager, bool $workflowConfigured): array
     {
         return [
-            'show_reviews_tab' => ! $isContentManager,
+            'show_reviews_tab' => true,
             'can_quick_create_reviews' => ! $isContentManager && $workflowConfigured,
             'show_configure_reviews_link' => ! $isContentManager && ! $workflowConfigured,
         ];
@@ -26,7 +26,7 @@ final class ArticleReviewsEditorAccessTest extends TestCase
     {
         $flags = $this->resolveReviewEditorFlags(isContentManager: true, workflowConfigured: true);
 
-        $this->assertFalse($flags['show_reviews_tab']);
+        $this->assertTrue($flags['show_reviews_tab']);
         $this->assertFalse($flags['can_quick_create_reviews']);
         $this->assertFalse($flags['show_configure_reviews_link']);
     }

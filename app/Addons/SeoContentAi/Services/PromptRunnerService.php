@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoPromptPart;
 use App\Addons\SeoContentAi\Support\GeminiModelCatalog;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
@@ -68,8 +69,9 @@ final class PromptRunnerService
         $this->aiModelsReadiness->assertConnectionReady($connection);
 
         $toolType = $this->normalizeToolType($prompt);
+        $imageTool = ImageToolType::fromMixed($toolType);
 
-        if ($toolType === 'image' && $connection->provider !== 'gemini') {
+        if ($imageTool->isImagePipeline() && $connection->provider !== 'gemini') {
             throw new PromptRunException(
                 'Prompt công cụ Hình ảnh yêu cầu kết nối Gemini (Imagen / Nano Banana), không dùng Claude.',
             );
@@ -82,7 +84,7 @@ final class PromptRunnerService
         // Test chuỗi prompt ảnh: cho phép chạy trực tiếp pipeline ảnh ngay từ nút "Chạy prompt cha".
         // Mục tiêu: ép kết quả bước 1 phải là URL ảnh để người dùng xác nhận render trước khi chạy sub_task.
         if (
-            $toolType === 'image'
+            $imageTool->isImagePipeline()
             && $onlySubTaskIndex === null
             && ! $runFullDependentChain
             && $this->hasDependentSubTasks($prompt)
@@ -145,7 +147,7 @@ final class PromptRunnerService
         ]);
 
         try {
-            [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+            [$output, $usage, $rawModel, $mediaMeta] = array_pad($this->executeWithModelRouting(
                 $connection,
                 $prompt,
                 $compiled,
@@ -153,7 +155,7 @@ final class PromptRunnerService
                 $isTaskMode,
                 $toolType,
                 $category,
-            );
+            ), 4, []);
             $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $toolType, $rawModel);
             $output = $this->enforceMediaOnlyOutput($output, $toolType);
 
@@ -164,7 +166,7 @@ final class PromptRunnerService
                 'finished_at' => now(),
                 'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
-                    ['raw_model_used' => $rawModel],
+                    $this->imagePipelineSnapshotFields($toolType, $rawModel, is_array($mediaMeta) ? $mediaMeta : []),
                 )),
             ]);
         } catch (\Throwable $exception) {
@@ -207,7 +209,7 @@ final class PromptRunnerService
                 'compiled_prompt' => $compiled,
                 'model_category' => $category,
                 'is_task_mode' => $isTaskMode,
-                'tools' => 'image',
+                'tools' => $this->normalizeToolType($prompt),
                 'chain_mode' => true,
                 'chain_step' => 'task',
                 'chain_step_index' => 0,
@@ -217,15 +219,17 @@ final class PromptRunnerService
         ]);
 
         try {
-            [$output, $usage] = $this->mediaGeneration->executeImage(
+            $media = $this->mediaGeneration->executeImage(
                 $connection,
                 $prompt,
                 $compiled,
                 $variables,
-                null,
             );
+            $output = $media['url'];
+            $usage = $media['usage'];
+            $renderModel = $media['model_used'];
 
-            $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, 'image');
+            $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, 'image', $renderModel);
             $output = $this->enforceMediaOnlyOutput($output, 'image');
 
             $result->update([
@@ -233,6 +237,10 @@ final class PromptRunnerService
                 'output_text' => $output,
                 'token_usage' => is_array($usage) ? $this->sanitizeTokenUsage($usage) : $usage,
                 'finished_at' => now(),
+                'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
+                    is_array($result->input_snapshot) ? $result->input_snapshot : [],
+                    $this->imagePipelineSnapshotFields($this->normalizeToolType($prompt), $renderModel, $media),
+                )),
             ]);
         } catch (\Throwable $exception) {
             $result->update([
@@ -288,7 +296,7 @@ final class PromptRunnerService
 
         $toolType = $this->normalizeToolType($prompt);
 
-        if ($toolType === 'image' && $connection->provider !== 'gemini') {
+        if (ImageToolType::fromMixed($toolType)->isImagePipeline() && $connection->provider !== 'gemini') {
             throw new PromptRunException(
                 'Prompt công cụ Hình ảnh yêu cầu kết nối Gemini (Imagen / Nano Banana), không dùng Claude.',
             );
@@ -321,7 +329,7 @@ final class PromptRunnerService
         ]);
 
         try {
-            [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+            [$output, $usage, $rawModel, $mediaMeta] = array_pad($this->executeWithModelRouting(
                 $connection,
                 $prompt,
                 $compiled,
@@ -329,7 +337,7 @@ final class PromptRunnerService
                 $isTaskMode,
                 $toolType,
                 $category,
-            );
+            ), 4, []);
             $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $toolType, $rawModel);
             $output = $this->enforceMediaOnlyOutput($output, $toolType);
 
@@ -340,7 +348,7 @@ final class PromptRunnerService
                 'finished_at' => now(),
                 'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
-                    ['raw_model_used' => $rawModel],
+                    $this->imagePipelineSnapshotFields($toolType, $rawModel, is_array($mediaMeta) ? $mediaMeta : []),
                 )),
             ]);
         } catch (\Throwable $exception) {
@@ -360,7 +368,7 @@ final class PromptRunnerService
 
     /**
      * @param  array<string, string>  $variables
-     * @return array{0: string, 1: array<string, mixed>|null, 2: string}
+     * @return array{0: string, 1: array<string, mixed>|null, 2: string, 3?: array<string, mixed>}
      */
     private function executeWithModelRouting(
         ApiConnection $connection,
@@ -371,6 +379,18 @@ final class PromptRunnerService
         string $toolType,
         string $category,
     ): array {
+        // Image path: ImageRoutingStrategy only — không dùng AiModelCategory / category failover.
+        if (ImageToolType::fromMixed($toolType)->isImagePipeline()) {
+            $media = $this->mediaGeneration->executeImage($connection, $prompt, $compiled, $variables);
+
+            return [
+                $media['url'],
+                $media['usage'] ?? null,
+                (string) ($media['model_used'] ?? ''),
+                $media,
+            ];
+        }
+
         [$output, $usage, $rawModel] = $this->aiModelRouter->executeWithFailover(
             $connection,
             $category,
@@ -444,7 +464,7 @@ final class PromptRunnerService
         ]);
 
         try {
-            [$output, $usage, $rawModel] = $this->executeChainStepWithRouting(
+            [$output, $usage, $rawModel, $mediaMeta] = array_pad($this->executeChainStepWithRouting(
                 $connection,
                 $prompt,
                 $mainTask,
@@ -452,7 +472,7 @@ final class PromptRunnerService
                 $baseCategory,
                 $isTaskMode,
                 $toolType,
-            );
+            ), 4, []);
 
             $result->update([
                 'status' => 'completed',
@@ -461,7 +481,7 @@ final class PromptRunnerService
                 'finished_at' => now(),
                 'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
-                    ['raw_model_used' => $rawModel],
+                    $this->imagePipelineSnapshotFields($toolType, $rawModel, is_array($mediaMeta) ? $mediaMeta : []),
                 )),
             ]);
         } catch (\Throwable $exception) {
@@ -527,7 +547,7 @@ final class PromptRunnerService
         ]);
 
         try {
-            [$output, $usage, $rawModel] = $this->executeChainStepWithRouting(
+            [$output, $usage, $rawModel, $mediaMeta] = array_pad($this->executeChainStepWithRouting(
                 $connection,
                 $prompt,
                 $subTask,
@@ -535,7 +555,7 @@ final class PromptRunnerService
                 $baseCategory,
                 $isTaskMode,
                 $toolType,
-            );
+            ), 4, []);
 
             $result->update([
                 'status' => 'completed',
@@ -544,7 +564,7 @@ final class PromptRunnerService
                 'finished_at' => now(),
                 'input_snapshot' => $this->sanitizeInputSnapshot(array_merge(
                     is_array($result->input_snapshot) ? $result->input_snapshot : [],
-                    ['raw_model_used' => $rawModel],
+                    $this->imagePipelineSnapshotFields($toolType, $rawModel, is_array($mediaMeta) ? $mediaMeta : []),
                 )),
             ]);
         } catch (\Throwable $exception) {
@@ -748,7 +768,7 @@ final class PromptRunnerService
 
     /**
      * @param  array<string, string>  $variables
-     * @return array{0: string, 1: array<string, mixed>|null, 2: string}
+     * @return array{0: string, 1: array<string, mixed>|null, 2: string, 3?: array<string, mixed>}
      */
     private function executeChainStepWithRouting(
         ApiConnection $connection,
@@ -763,7 +783,7 @@ final class PromptRunnerService
         $effectiveTool = $this->resolveStepToolType($prompt, $stepPart, $toolType);
         $stepCategory = $this->resolveStepCategory($prompt, $stepPart, $baseCategory, $effectiveTool);
 
-        [$output, $usage, $rawModel] = $this->executeWithModelRouting(
+        [$output, $usage, $rawModel, $mediaMeta] = array_pad($this->executeWithModelRouting(
             $connection,
             $prompt,
             $compiled,
@@ -771,12 +791,12 @@ final class PromptRunnerService
             $isTaskMode,
             $effectiveTool,
             $stepCategory,
-        );
+        ), 4, []);
 
         $output = $this->promptMediaStorage->persistRemoteMediaIfPresent($output, $effectiveTool, $rawModel);
         $output = $this->enforceMediaOnlyOutput($output, $effectiveTool);
 
-        return [$output, $usage, $rawModel];
+        return [$output, $usage, $rawModel, is_array($mediaMeta) ? $mediaMeta : []];
     }
 
     private function resolveStepCategory(
@@ -785,7 +805,8 @@ final class PromptRunnerService
         string $baseCategory,
         string $effectiveToolType,
     ): string {
-        if ($effectiveToolType === 'image') {
+        // Image steps bỏ category router; giữ IMAGEN_PRO chỉ để BC caller text path không gọi.
+        if (ImageToolType::fromMixed($effectiveToolType)->isImagePipeline()) {
             return \App\Addons\SeoContentAi\Support\AiModelCategory::IMAGEN_PRO;
         }
 
@@ -802,19 +823,27 @@ final class PromptRunnerService
      */
     private function resolveStepToolType(SeoPrompt $prompt, SeoPromptPart $stepPart, string $promptToolType): string
     {
-        if ($promptToolType === 'video') {
-            return 'video';
+        if ($promptToolType === ImageToolType::Video->value) {
+            return ImageToolType::Video->value;
         }
+
+        $promptImageTool = ImageToolType::fromMixed($promptToolType);
 
         if ($this->hasDependentSubTasks($prompt)) {
-            return (string) $stepPart->role === 'task' ? 'default' : 'image';
+            if ((string) $stepPart->role === 'task') {
+                return ImageToolType::Default->value;
+            }
+
+            return $promptImageTool->isTypography()
+                ? ImageToolType::ImageTypography->value
+                : ImageToolType::Image->value;
         }
 
-        if ($promptToolType === 'image') {
-            return 'image';
+        if ($promptImageTool->isImagePipeline()) {
+            return $promptImageTool->value;
         }
 
-        return 'default';
+        return ImageToolType::Default->value;
     }
 
     /**
@@ -858,9 +887,57 @@ final class PromptRunnerService
 
     private function normalizeToolType(SeoPrompt $prompt): string
     {
-        $tool = trim((string) ($prompt->tools ?? 'default'));
+        return ImageToolType::fromMixed($prompt->tools ?? 'default')->value;
+    }
 
-        return in_array($tool, ['default', 'image', 'video'], true) ? $tool : 'default';
+    /**
+     * @return array{render_model?: string, planner_model?: string, raw_model_used: string}
+     */
+    private function modelSnapshotFields(string $toolType, string $modelUsed): array
+    {
+        $modelUsed = trim($modelUsed);
+        if ($modelUsed === '') {
+            return [];
+        }
+
+        if (ImageToolType::fromMixed($toolType)->isImagePipeline()) {
+            return [
+                'render_model' => $modelUsed,
+                'raw_model_used' => $modelUsed,
+            ];
+        }
+
+        return [
+            'planner_model' => $modelUsed,
+            'raw_model_used' => $modelUsed,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $media
+     * @return array<string, mixed>
+     */
+    private function imagePipelineSnapshotFields(string $toolType, string $rawModel, array $media = []): array
+    {
+        $fields = $this->modelSnapshotFields($toolType, $rawModel);
+
+        foreach ([
+            'validation_model',
+            'candidate_count',
+            'winner_score',
+            'validation_passed',
+            'validation_warning',
+            'missing_text_count',
+            'mismatched_text_count',
+            'typography_complexity_summary',
+            'workflow_execution_mode',
+        ] as $key) {
+            if (array_key_exists($key, $media)) {
+                $fields[$key] = $media[$key];
+            }
+        }
+
+        return $fields;
     }
 
     /**
@@ -1016,7 +1093,9 @@ final class PromptRunnerService
         }
 
         if ($this->mediaGeneration->shouldUseImagePipeline($prompt, $toolType)) {
-            return $this->mediaGeneration->executeImage($connection, $prompt, $compiled, $variables, $model);
+            $media = $this->mediaGeneration->executeImage($connection, $prompt, $compiled, $variables);
+
+            return [$media['url'], $media['usage'], $media['model_used']];
         }
 
         return match ($connection->provider) {
@@ -1160,7 +1239,8 @@ final class PromptRunnerService
 
     private function enforceMediaOnlyOutput(string $output, string $toolType): string
     {
-        if (! in_array($toolType, ['image', 'video'], true)) {
+        $tool = ImageToolType::fromMixed($toolType);
+        if (! $tool->isMediaTool()) {
             return $output;
         }
 
@@ -1169,7 +1249,7 @@ final class PromptRunnerService
 
         if (! $isUrl) {
             throw new PromptRunException(
-                $toolType === 'image'
+                $tool->isImagePipeline()
                     ? 'Hình ảnh lỗi: không nhận được file ảnh hợp lệ từ AI.'
                     : 'Video lỗi: không nhận được URL video hợp lệ từ AI.',
             );

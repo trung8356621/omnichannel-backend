@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use App\Models\Site;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -20,11 +21,198 @@ class SyncDomainContentService
 {
     private const INCREMENTAL_FETCH_CHUNK = 40;
 
+    public const META_PULL_SYNC_AUDIT = 'wp_pull_sync_audit';
+
     public function __construct(
         private readonly WordPressArticleTimestampService $timestampService,
         private readonly ArticleTocExtractionService $tocExtraction,
         private readonly DomainSyncManifestComparator $manifestComparator,
     ) {}
+
+    /**
+     * Pull destructive một bài từ WordPress → Laravel (WP là nguồn sự thật).
+     *
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     inline_images?: int,
+     *     category_ids?: list<int>,
+     *     previous_checksum?: string,
+     *     new_checksum?: string,
+     * }
+     */
+    public function syncSingleArticleFromWordPress(SeoArticle $article): array
+    {
+        $stage = 'validate';
+
+        try {
+            $wpPostId = (int) ($article->wp_post_id ?? 0);
+            if ($wpPostId <= 0) {
+                return [
+                    'success' => false,
+                    'message' => 'Bài chưa liên kết WordPress.',
+                ];
+            }
+
+            $article->loadMissing(['site', 'articleMetas']);
+            $site = $article->site;
+            if (! $site instanceof Site) {
+                return [
+                    'success' => false,
+                    'message' => 'Không tìm thấy domain của bài viết.',
+                ];
+            }
+
+            if ((int) ($article->site_id ?? 0) !== (int) $site->id) {
+                return [
+                    'success' => false,
+                    'message' => 'Bài viết không thuộc domain hiện tại.',
+                ];
+            }
+
+            $validationError = $this->validateWordPressSite($site);
+            if ($validationError !== null) {
+                return $validationError;
+            }
+
+            $site->loadMissing('metas');
+            $readToken = trim((string) ($site->getMeta('seo_read_token') ?? ''));
+            $wpEntity = trim((string) (
+                $article->articleMetas->firstWhere('meta_key', 'wp_entity')?->meta_value ?? 'post'
+            ));
+            if ($wpEntity === '') {
+                $wpEntity = 'post';
+            }
+
+            $ref = [
+                'wp_id' => $wpPostId,
+                'wp_entity' => $wpEntity,
+            ];
+
+            if ($wpEntity === 'term') {
+                $taxonomy = trim((string) (
+                    $article->articleMetas->firstWhere('meta_key', 'wp_taxonomy')?->meta_value
+                    ?? $article->articleMetas->firstWhere('meta_key', 'wp_post_type')?->meta_value
+                    ?? ''
+                ));
+                if ($taxonomy !== '') {
+                    $ref['wp_post_type'] = $taxonomy;
+                }
+            }
+
+            $stage = 'fetch';
+            $items = $this->fetchItemsByRefs($site, $readToken, [$ref]);
+            if ($items === null || $items === []) {
+                return [
+                    'success' => false,
+                    'message' => 'Không lấy được bài từ WordPress (post không tồn tại hoặc bridge lỗi).',
+                ];
+            }
+
+            $item = $items[0];
+            if (! is_array($item) || (int) ($item['wp_id'] ?? 0) !== $wpPostId) {
+                return [
+                    'success' => false,
+                    'message' => 'WordPress trả về post không khớp với bài hiện tại.',
+                ];
+            }
+
+            $item['wp_id'] = $wpPostId;
+            $item['type'] = (string) ($article->type ?? $item['type'] ?? 'article');
+
+            $scoring = app(SeoArticleScoringQueueService::class);
+            $previousChecksum = $scoring->buildArticleFingerprint($article);
+            $inlineImages = $this->countInlineImagesFromSyncItem($item);
+            $categoryIds = $this->extractCategoryIdsFromSyncItem($item);
+
+            $stage = 'import';
+            $userId = (int) $site->user_id;
+            $syncFlags = app(ArticleWordPressSyncFlagService::class);
+            $synced = [
+                'article' => 0,
+                'product' => 0,
+                'category' => 0,
+                'product_category' => 0,
+                'other' => 0,
+            ];
+
+            DB::connection($article->getConnectionName())->transaction(function () use (
+                $site,
+                $item,
+                $wpPostId,
+                &$synced,
+                $userId,
+                $syncFlags,
+                $article,
+                $categoryIds,
+            ): void {
+                $this->importSingleSyncItem(
+                    site: $site,
+                    item: $item,
+                    wpId: $wpPostId,
+                    synced: $synced,
+                    userId: $userId,
+                    syncFlags: $syncFlags,
+                    forceOverwrite: true,
+                );
+
+                $article->refresh();
+                $this->syncCategoryIdsFromSyncItem($article, $item, $categoryIds);
+            });
+
+            $article->refresh();
+            $newChecksum = $scoring->buildArticleFingerprint($article);
+            $wpModified = trim((string) ($item['post_modified'] ?? ''));
+
+            $stage = 'audit';
+            $this->persistPullSyncAudit($article, [
+                'user_id' => (int) (auth()->id() ?? 0),
+                'article_id' => (int) $article->id,
+                'wp_post_id' => $wpPostId,
+                'previous_content_checksum' => $previousChecksum,
+                'new_content_checksum' => $newChecksum,
+                'wordpress_modified_at' => $wpModified !== '' ? $wpModified : null,
+                'inline_images' => $inlineImages,
+                'synchronized_at' => now()->toIso8601String(),
+            ]);
+
+            Log::info('SeoContentAi single-article WordPress pull sync completed', [
+                'user_id' => (int) (auth()->id() ?? 0),
+                'article_id' => (int) $article->id,
+                'wp_post_id' => $wpPostId,
+                'site_id' => (int) $site->id,
+                'previous_content_checksum' => $previousChecksum,
+                'new_content_checksum' => $newChecksum,
+                'wordpress_modified_at' => $wpModified !== '' ? $wpModified : null,
+                'inline_images' => $inlineImages,
+            ]);
+
+            return [
+                'success' => true,
+                'message' => sprintf(
+                    'Đã đồng bộ lại từ WordPress (ghi đè). Ảnh trong bài: %d.',
+                    $inlineImages,
+                ),
+                'inline_images' => $inlineImages,
+                'category_ids' => $categoryIds,
+                'previous_checksum' => $previousChecksum,
+                'new_checksum' => $newChecksum,
+            ];
+        } catch (Throwable $e) {
+            Log::error('SeoContentAi single-article WordPress pull sync failed', [
+                'article_id' => (int) ($article->id ?? 0),
+                'wp_post_id' => (int) ($article->wp_post_id ?? 0),
+                'site_id' => (int) ($article->site_id ?? 0),
+                'stage' => $stage,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Đồng bộ từ WordPress thất bại: '.$e->getMessage(),
+            ];
+        }
+    }
 
     /**
      * @param  array{is_test?:bool,limit_per_type?:int}  $options
@@ -806,6 +994,9 @@ class SyncDomainContentService
             'category' => 0,
             'product_category' => 0,
             'other' => 0,
+            'trashed' => 0,
+            'force_deleted' => 0,
+            'restored' => 0,
         ];
 
         $userId = (int) $site->user_id;
@@ -822,6 +1013,22 @@ class SyncDomainContentService
                 continue;
             }
 
+            $lifecycleAction = $this->resolveWordPressLifecycleAction($item);
+            if ($lifecycleAction !== null) {
+                try {
+                    $this->applyWordPressLifecycleAction($site, $wpId, $lifecycleAction, $synced);
+                } catch (Throwable $e) {
+                    Log::warning('SeoContentAi sync lifecycle failed', [
+                        'site_id' => $site->id,
+                        'wp_id' => $wpId,
+                        'action' => $lifecycleAction,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
+                continue;
+            }
+
             try {
                 $this->importSingleSyncItem(
                     site: $site,
@@ -830,6 +1037,7 @@ class SyncDomainContentService
                     synced: $synced,
                     userId: $userId,
                     syncFlags: $syncFlags,
+                    forceOverwrite: false,
                 );
             } catch (Throwable $e) {
                 Log::warning('SeoContentAi sync item failed', [
@@ -846,6 +1054,87 @@ class SyncDomainContentService
 
     /**
      * @param  array<string, mixed>  $item
+     */
+    private function resolveWordPressLifecycleAction(array $item): ?string
+    {
+        $action = strtolower(trim((string) ($item['action'] ?? '')));
+        if (in_array($action, ['trash', 'force_delete', 'restore'], true)) {
+            return $action;
+        }
+
+        $status = strtolower(trim((string) ($item['status'] ?? '')));
+        if ($status === 'trash') {
+            return 'trash';
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<string, int>  $synced
+     */
+    private function applyWordPressLifecycleAction(
+        Site $site,
+        int $wpId,
+        string $action,
+        array &$synced,
+    ): void {
+        $articles = SeoArticle::withTrashed()
+            ->where('site_id', $site->id)
+            ->where('wp_post_id', $wpId)
+            ->get();
+
+        if ($articles->isEmpty()) {
+            return;
+        }
+
+        foreach ($articles as $article) {
+            match ($action) {
+                'trash' => $this->trashSyncedArticle($article, $synced),
+                'force_delete' => $this->forceDeleteSyncedArticle($article, $synced),
+                'restore' => $this->restoreSyncedArticle($article, $synced),
+                default => null,
+            };
+        }
+    }
+
+    /**
+     * @param  array<string, int>  $synced
+     */
+    private function trashSyncedArticle(SeoArticle $article, array &$synced): void
+    {
+        if ($article->trashed()) {
+            return;
+        }
+
+        $article->delete();
+        $synced['trashed']++;
+    }
+
+    /**
+     * @param  array<string, int>  $synced
+     */
+    private function forceDeleteSyncedArticle(SeoArticle $article, array &$synced): void
+    {
+        $article->forceDelete();
+        $synced['force_deleted']++;
+    }
+
+    /**
+     * @param  array<string, int>  $synced
+     */
+    private function restoreSyncedArticle(SeoArticle $article, array &$synced): void
+    {
+        if (! $article->trashed()) {
+            return;
+        }
+
+        $article->restore();
+        $synced['restored']++;
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
      * @param  array<string, int>  $synced
      */
     private function importSingleSyncItem(
@@ -855,6 +1144,7 @@ class SyncDomainContentService
         array &$synced,
         int $userId,
         ArticleWordPressSyncFlagService $syncFlags,
+        bool $forceOverwrite = false,
     ): void {
         $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
         $publishedAt = $this->parsePublishedAt($item['published_at'] ?? null);
@@ -865,7 +1155,11 @@ class SyncDomainContentService
             ->where('type', $type)
             ->first();
 
-        if ($existing instanceof SeoArticle && $syncFlags->shouldBlockWordPressImport($existing)) {
+        if (
+            ! $forceOverwrite
+            && $existing instanceof SeoArticle
+            && $syncFlags->shouldBlockWordPressImport($existing)
+        ) {
             $syncFlags->markDataOutOfSync($existing);
 
             if (array_key_exists('conflict', $synced)) {
@@ -878,9 +1172,12 @@ class SyncDomainContentService
         }
 
         $title = $this->resolveSyncItemTitle($item, $syncFlags);
-        $hasLocalBody = $existing instanceof SeoArticle && $syncFlags->hasLocalEditorContent($existing);
+        $hasLocalBody = ! $forceOverwrite
+            && $existing instanceof SeoArticle
+            && $syncFlags->hasLocalEditorContent($existing);
 
-        // Bài chưa có nội dung editor trên SEO: ghi đè scoring (xóa slug/body). Bài đã có body: chỉ cập nhật tiêu đề/trạng thái.
+        // Bài chưa có nội dung editor trên SEO (hoặc forceOverwrite): ghi đè scoring (xóa slug/body).
+        // Bài đã có body: chỉ cập nhật tiêu đề/trạng thái.
         $articleAttributes = [
             'type' => $type,
             'title' => $title !== '' ? $title : 'Untitled',
@@ -934,12 +1231,51 @@ class SyncDomainContentService
             );
         }
 
-        $this->syncWordPressPostMeta($article, $item);
+        if ($forceOverwrite) {
+            $scoring = is_array($item['scoring'] ?? null) ? $item['scoring'] : [];
+            $preparedHtml = app(ArticlePostImagesService::class)->prepareEditorHtmlFromWordPressSources(
+                $article,
+                trim((string) ($item['post_content'] ?? '')),
+                trim((string) ($scoring['body'] ?? '')),
+                is_array($item['post_images'] ?? null) ? $item['post_images'] : [],
+            );
+            if ($preparedHtml !== '') {
+                $item['post_content'] = $preparedHtml;
+            }
+        }
+
+        $this->syncWordPressPostMeta($article, $item, $forceOverwrite);
         $this->syncSchemaAndWooCommerceMeta($article, $item);
         app(ArticlePostImagesService::class)->importFromSyncItem($article, $item);
 
+        $postImages = $item['post_images'] ?? null;
+        if ($forceOverwrite && (! is_array($postImages) || $postImages === [])) {
+            app(ArticlePostImagesService::class)->persistForArticle($article, []);
+        }
+
         if (! $hasLocalBody) {
             app(ArticleFaqWordPressImportService::class)->importFromWordPressSyncItem($article, $item);
+        }
+
+        if ($forceOverwrite) {
+            // FAQ import có thể ghi body; giữ body null — editor đọc wp_post_content đã chuẩn hóa.
+            $preparedMeta = trim((string) (
+                $article->articleMetas()->where('meta_key', 'wp_post_content')->value('meta_value') ?? ''
+            ));
+            if ($preparedMeta === '' && filled($item['post_content'] ?? null)) {
+                $preparedMeta = trim((string) $item['post_content']);
+                $article->articleMetas()->updateOrCreate(
+                    ['meta_key' => 'wp_post_content'],
+                    ['meta_value' => $preparedMeta],
+                );
+            }
+
+            $article->update([
+                'body' => null,
+                'blocks' => null,
+                'excerpt' => null,
+                'slug' => null,
+            ]);
         }
 
         $this->syncSeoMetaFromWordPress($article, $item);
@@ -973,20 +1309,22 @@ class SyncDomainContentService
     /**
      * @param  array<string, mixed>  $item
      */
-    private function syncWordPressPostMeta(SeoArticle $article, array $item): void
+    private function syncWordPressPostMeta(SeoArticle $article, array $item, bool $forceOverwrite = false): void
     {
         $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
         $isTaxonomy = in_array($type, ['category', 'product_category'], true);
         $content = $this->resolveSyncItemContent($item);
 
-        if ($isTaxonomy || $content !== '') {
+        if ($forceOverwrite || $isTaxonomy || $content !== '') {
             $article->articleMetas()->updateOrCreate(
                 ['meta_key' => 'wp_post_content'],
                 ['meta_value' => $content],
             );
 
             app(ArticleFaqWordPressRestoreService::class)->persistWordPressSourceSnapshot($article, $content);
-            $this->extractTocAfterWordPressContentSync($article);
+            if ($content !== '') {
+                $this->extractTocAfterWordPressContentSync($article);
+            }
         }
 
         $slug = trim((string) ($item['slug'] ?? ''));
@@ -1037,6 +1375,8 @@ class SyncDomainContentService
                 ['meta_key' => 'wp_featured_image_url'],
                 ['meta_value' => $featuredImageUrl],
             );
+        } elseif ($forceOverwrite) {
+            $article->articleMetas()->where('meta_key', 'wp_featured_image_url')->delete();
         }
 
         $gallery = $item['product_gallery'] ?? null;
@@ -1045,7 +1385,86 @@ class SyncDomainContentService
                 ['meta_key' => 'wp_product_gallery'],
                 ['meta_value' => json_encode($gallery, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)],
             );
+        } elseif ($forceOverwrite) {
+            $article->articleMetas()->where('meta_key', 'wp_product_gallery')->delete();
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return list<int>
+     */
+    private function extractCategoryIdsFromSyncItem(array $item): array
+    {
+        $raw = $item['category_ids'] ?? [];
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        return collect($raw)
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->filter(static fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @param  list<int>  $categoryIds
+     */
+    private function syncCategoryIdsFromSyncItem(SeoArticle $article, array $item, array $categoryIds): void
+    {
+        $type = $this->normalizeType((string) ($item['type'] ?? 'article'));
+        $isTaxonomy = in_array($type, ['category', 'product_category'], true);
+
+        if ($categoryIds === []) {
+            $article->articleMetas()->whereIn('meta_key', ['wp_category_ids', 'category_ids'])->delete();
+
+            return;
+        }
+
+        $encoded = json_encode($categoryIds, JSON_THROW_ON_ERROR);
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => 'wp_category_ids'],
+            ['meta_value' => $encoded],
+        );
+
+        if (! $isTaxonomy) {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'category_ids'],
+                ['meta_value' => $encoded],
+            );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function countInlineImagesFromSyncItem(array $item): int
+    {
+        $images = $item['post_images'] ?? null;
+        if (! is_array($images)) {
+            return 0;
+        }
+
+        return count(app(ArticlePostImagesService::class)->normalizeList($images));
+    }
+
+    /**
+     * @param  array<string, mixed>  $audit
+     */
+    private function persistPullSyncAudit(SeoArticle $article, array $audit): void
+    {
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_PULL_SYNC_AUDIT],
+            [
+                'meta_value' => json_encode(
+                    $audit,
+                    JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
+                ),
+            ],
+        );
     }
 
     /**

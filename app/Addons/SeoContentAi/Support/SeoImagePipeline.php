@@ -6,8 +6,8 @@ namespace App\Addons\SeoContentAi\Support;
 
 use App\Support\ImageDriverResolver;
 use Intervention\Image\Format;
+use Intervention\Image\ImageManager;
 use Intervention\Image\Interfaces\ImageInterface;
-use Intervention\Image\Laravel\Facades\Image;
 
 /**
  * Pipeline resize/encode chất lượng cao: native Imagick (Lanczos) → Intervention (Imagick/GD).
@@ -126,7 +126,7 @@ final class SeoImagePipeline
         }
 
         try {
-            $image = Image::read($sourcePath);
+            $image = $this->readWithIntervention($sourcePath);
             $encoded = $this->encodeImage($image, $extension, $quality);
             if (@file_put_contents($destinationPath, $encoded) === false) {
                 return false;
@@ -148,7 +148,32 @@ final class SeoImagePipeline
 
     private function isEncodedOutputValid(string $destinationPath): bool
     {
-        return is_file($destinationPath) && (int) filesize($destinationPath) > 0;
+        if (! is_file($destinationPath) || (int) filesize($destinationPath) < 256) {
+            return false;
+        }
+
+        $info = @getimagesize($destinationPath);
+
+        return is_array($info)
+            && (int) ($info[0] ?? 0) > 0
+            && (int) ($info[1] ?? 0) > 0;
+    }
+
+    /**
+     * setImageColorspace chỉ đổi nhãn — dễ ra ảnh trắng khi encode WebP.
+     * Dùng transformImageColorspace để convert pixel thật sang sRGB.
+     */
+    private function prepareImagickColorspace(\Imagick $imagick): void
+    {
+        try {
+            if ($imagick->getImageColorspace() === \Imagick::COLORSPACE_SRGB) {
+                return;
+            }
+
+            $imagick->transformImageColorspace(\Imagick::COLORSPACE_SRGB);
+        } catch (\Throwable) {
+            // Không chặn encode nếu host Imagick thiếu transform.
+        }
     }
 
     private function tryResizeWithImagick(
@@ -163,7 +188,7 @@ final class SeoImagePipeline
 
         try {
             $imagick = new \Imagick($absolutePath);
-            $imagick->setImageColorspace(\Imagick::COLORSPACE_SRGB);
+            $this->prepareImagickColorspace($imagick);
 
             $origWidth = $imagick->getImageWidth();
             $origHeight = $imagick->getImageHeight();
@@ -179,9 +204,7 @@ final class SeoImagePipeline
                 return true;
             }
 
-            if ($extension === 'png') {
-                $imagick->setImageAlphaChannel(\Imagick::ALPHACHANNEL_ACTIVATE);
-            }
+            // Không ALPHACHANNEL_ACTIVATE — dễ mất pixel khi write WebP/PNG.
 
             $steps = SeoImageResizeMath::progressiveScaleSteps($origWidth, $origHeight, $outWidth, $outHeight);
             foreach ($steps as $step) {
@@ -226,12 +249,37 @@ final class SeoImagePipeline
             return false;
         }
 
+        $imagick = null;
+
         try {
-            $imagick = new \Imagick($sourcePath);
-            $imagick->setImageColorspace(\Imagick::COLORSPACE_SRGB);
+            // Fresh decode — không reuse object từ attempt WebP trước.
+            $imagick = new \Imagick();
+            $imagick->readImage($sourcePath);
+
+            if ($imagick->getNumberImages() > 1) {
+                $coalesced = $imagick->coalesceImages();
+                $imagick->clear();
+                $imagick->destroy();
+                $imagick = $coalesced;
+            }
+
+            // Làm việc trên object chính — tránh getImage() clone lệch alpha/frame.
+            $imagick->setIteratorIndex(0);
+
+            if (method_exists($imagick, 'autoOrientImage')) {
+                try {
+                    $imagick->autoOrientImage();
+                } catch (\Throwable) {
+                    // Một số bản Imagick không hỗ trợ / thiếu EXIF.
+                }
+            }
+
+            $this->prepareImagickColorspace($imagick);
+
+            // Validate pixel TRƯỚC flatten/encode — canvas alpha=0 không được “cứu” bằng flatten.
+            $this->assertImagickHasVisibleContent($imagick);
+
             $this->writeImagickToPath($imagick, $destinationPath, $extension, $quality);
-            $imagick->clear();
-            $imagick->destroy();
             $this->lastDriver = 'imagick-native';
 
             return true;
@@ -244,6 +292,38 @@ final class SeoImagePipeline
             ]);
 
             return false;
+        } finally {
+            if ($imagick instanceof \Imagick) {
+                $imagick->clear();
+                $imagick->destroy();
+            }
+        }
+    }
+
+    /**
+     * Sample nhanh — throw nếu toàn alpha=0 (blank canvas).
+     */
+    private function assertImagickHasVisibleContent(\Imagick $imagick): void
+    {
+        $width = max(1, $imagick->getImageWidth());
+        $height = max(1, $imagick->getImageHeight());
+        $grid = 8;
+        $visible = 0;
+
+        for ($gy = 0; $gy < $grid; $gy++) {
+            for ($gx = 0; $gx < $grid; $gx++) {
+                $x = (int) round(($gx / max(1, $grid - 1)) * ($width - 1));
+                $y = (int) round(($gy / max(1, $grid - 1)) * ($height - 1));
+                $color = ImagickPixelColor::normalized($imagick->getImagePixelColor($x, $y));
+                $a = array_key_exists('a', $color) ? (float) $color['a'] : 1.0;
+                if ($a > 0.02) {
+                    $visible++;
+                }
+            }
+        }
+
+        if ($visible === 0) {
+            throw new \RuntimeException('Working canvas fully transparent — refuse encode/flatten.');
         }
     }
 
@@ -264,7 +344,7 @@ final class SeoImagePipeline
         ];
 
         try {
-            $image = Image::read($absolutePath);
+            $image = $this->readWithIntervention($absolutePath);
             $origWidth = $image->width();
             $origHeight = $image->height();
             $dimensions = SeoImageResizeMath::outputDimensions($origWidth, $origHeight, $width, $height);
@@ -329,15 +409,23 @@ final class SeoImagePipeline
             $imagick->setOption('png:compression-level', '3');
             $imagick->setImageCompressionQuality(100);
 
-            $imagick->writeImage($absolutePath);
+            if (! $imagick->writeImage($absolutePath)) {
+                throw new \RuntimeException('Imagick writeImage(png) returned false.');
+            }
 
             return;
         }
 
         if ($extension === 'webp') {
+            // KHÔNG gọi ALPHACHANNEL_ACTIVATE — trên nhiều host Imagick nó tạo WebP toàn alpha=0
+            // dù RGB còn nội dung (paste-….webp ~756B, 800×437).
+            $this->prepareImagickAlphaForWebp($imagick);
             $imagick->setImageFormat('webp');
+            $imagick->setOption('webp:method', '4');
             $imagick->setImageCompressionQuality(max(10, min(100, $quality)));
-            $imagick->writeImage($absolutePath);
+            if (! $imagick->writeImage($absolutePath)) {
+                throw new \RuntimeException('Imagick writeImage(webp) returned false.');
+            }
 
             return;
         }
@@ -349,9 +437,125 @@ final class SeoImagePipeline
             return;
         }
 
+        // JPEG: chỉ flatten khi đã có visible pixels (assert trước đó) + có alpha thật.
+        $this->flattenImagickOntoWhiteInPlace($imagick);
         $imagick->setImageFormat('jpeg');
         $imagick->setImageCompressionQuality(max(10, min(100, $quality)));
-        $imagick->writeImage($absolutePath);
+        if (! $imagick->writeImage($absolutePath)) {
+            throw new \RuntimeException('Imagick writeImage(jpeg) returned false.');
+        }
+    }
+
+    /**
+     * WebP: nếu alpha không dùng (gần như opaque) → remove alpha.
+     * Nếu có transparency hợp lệ → giữ nguyên, set alpha-quality — không ACTIVATE.
+     */
+    private function prepareImagickAlphaForWebp(\Imagick $imagick): void
+    {
+        $hasUsefulAlpha = $this->imagickHasUsefulTransparency($imagick);
+
+        try {
+            if (! $hasUsefulAlpha) {
+                $imagick->setImageBackgroundColor(new \ImagickPixel('white'));
+                $imagick->setImageAlphaChannel(\Imagick::ALPHACHANNEL_REMOVE);
+
+                return;
+            }
+
+            $imagick->setOption('webp:alpha-quality', '100');
+        } catch (\Throwable) {
+            // Host thiếu alpha API — để Magick tự xử lý.
+        }
+    }
+
+    private function imagickHasUsefulTransparency(\Imagick $imagick): bool
+    {
+        try {
+            $type = $imagick->getImageAlphaChannel();
+            // 0 / UNDEFINED = không có alpha hữu dụng.
+            if ($type === 0) {
+                return false;
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        $width = max(1, $imagick->getImageWidth());
+        $height = max(1, $imagick->getImageHeight());
+        $grid = 8;
+        $transparentSamples = 0;
+        $opaqueSamples = 0;
+
+        for ($gy = 0; $gy < $grid; $gy++) {
+            for ($gx = 0; $gx < $grid; $gx++) {
+                $x = (int) round(($gx / max(1, $grid - 1)) * ($width - 1));
+                $y = (int) round(($gy / max(1, $grid - 1)) * ($height - 1));
+                $color = ImagickPixelColor::normalized($imagick->getImagePixelColor($x, $y));
+                $a = array_key_exists('a', $color) ? (float) $color['a'] : 1.0;
+                if ($a < 0.98) {
+                    $transparentSamples++;
+                } else {
+                    $opaqueSamples++;
+                }
+            }
+        }
+
+        // Có cả pixel trong suốt lẫn nhìn thấy → transparency hợp lệ.
+        return $transparentSamples > 0 && $opaqueSamples > 0;
+    }
+
+    /**
+     * Composite lên nền trắng in-place — không clear()/destroy object đang encode.
+     */
+    private function flattenImagickOntoWhiteInPlace(\Imagick $imagick): void
+    {
+        if (! $this->imagickHasUsefulTransparency($imagick)) {
+            try {
+                $imagick->setImageBackgroundColor(new \ImagickPixel('white'));
+                $imagick->setImageAlphaChannel(\Imagick::ALPHACHANNEL_REMOVE);
+            } catch (\Throwable) {
+                // ok
+            }
+
+            return;
+        }
+
+        $canvas = null;
+        try {
+            $width = max(1, $imagick->getImageWidth());
+            $height = max(1, $imagick->getImageHeight());
+            $canvas = new \Imagick();
+            $canvas->newImage($width, $height, new \ImagickPixel('white'));
+            $canvas->setImageColorspace($imagick->getImageColorspace());
+            $canvas->compositeImage($imagick, \Imagick::COMPOSITE_OVER, 0, 0);
+            $canvas->setImageFormat('png');
+            try {
+                $canvas->setImageAlphaChannel(\Imagick::ALPHACHANNEL_REMOVE);
+            } catch (\Throwable) {
+                // ok
+            }
+
+            // Thay pixel của object hiện tại — clear() rồi read lại blob (không destroy).
+            $blob = $canvas->getImageBlob();
+            $imagick->clear();
+            $imagick->readImageBlob($blob);
+            $imagick->setIteratorIndex(0);
+            try {
+                $imagick->setImageAlphaChannel(\Imagick::ALPHACHANNEL_REMOVE);
+            } catch (\Throwable) {
+                // ok
+            }
+        } catch (\Throwable $exception) {
+            logger()->warning('Imagick flatten onto white failed.', [
+                'message' => $exception->getMessage(),
+            ]);
+            throw $exception;
+        } finally {
+            if ($canvas instanceof \Imagick) {
+                $canvas->clear();
+                $canvas->destroy();
+            }
+        }
     }
 
     private function encodeImage(ImageInterface $image, string $extension, int $quality): string
@@ -363,11 +567,64 @@ final class SeoImagePipeline
             default => Format::JPEG,
         };
 
+        if (in_array($extension, ['jpg', 'jpeg'], true)) {
+            $image = $this->flattenInterventionOntoWhite($image);
+        }
+
         if ($extension === 'png') {
             return (string) $image->encodeUsingFormat($format);
         }
 
         return (string) $image->encodeUsingFormat($format, quality: $quality);
+    }
+
+    /**
+     * JPEG không có alpha — blend transparency lên nền trắng (tránh đen thui).
+     */
+    private function flattenInterventionOntoWhite(ImageInterface $image): ImageInterface
+    {
+        try {
+            if (method_exists($image, 'blendTransparency')) {
+                $blended = $image->blendTransparency('ffffff');
+                if ($blended instanceof ImageInterface) {
+                    return $blended;
+                }
+            }
+        } catch (\Throwable) {
+            // fall through
+        }
+
+        try {
+            $canvas = $this->interventionManager()->create($image->width(), $image->height())->fill('ffffff');
+            $canvas->place($image);
+
+            return $canvas;
+        } catch (\Throwable $exception) {
+            logger()->warning('Intervention flatten onto white failed.', [
+                'message' => $exception->getMessage(),
+            ]);
+
+            return $image;
+        }
+    }
+
+    private function readWithIntervention(string $absolutePath): ImageInterface
+    {
+        $manager = $this->interventionManager();
+        if (! method_exists($manager, 'read')) {
+            throw new \RuntimeException(
+                'Intervention ImageManager::read() missing — cần intervention/image ^3/^4 (composer install trên host).',
+            );
+        }
+
+        return $manager->read($absolutePath);
+    }
+
+    private function interventionManager(): ImageManager
+    {
+        $driverClass = ImageDriverResolver::interventionDriverClass();
+
+        return new ImageManager(new $driverClass());
     }
 
     /**

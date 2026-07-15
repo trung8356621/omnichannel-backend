@@ -21,7 +21,6 @@ import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
     finishArticleEditorApiAction,
-    notifyEditorFromApi,
     saveArticleViaApi,
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
@@ -79,7 +78,11 @@ window.__seoProductAlbumStorage = {
 
 window.__seoPersistProductAlbumDraft = persistProductAlbumDraftToServer;
 
-window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction(action, wire) {
+window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction(
+    action,
+    wire,
+    { renameImagesBeforeWpSync = false } = {},
+) {
     const normalizedAction = action === 'sync' ? 'sync' : 'save';
 
     if (!window.__seoArticleHeavyActionOverlay?.locked) {
@@ -94,7 +97,10 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
             throw new Error('Editor chưa sẵn sàng — tải lại trang rồi thử lại.');
         }
 
-        const editorBundle = await collect();
+        const editorBundle = await collect({
+            renameImagesBeforeWpSync:
+                normalizedAction === 'sync' && renameImagesBeforeWpSync === true,
+        });
         const html = String(editorBundle?.html ?? '').trim();
         if (!html) {
             throw new Error('Không thu thập được nội dung bài viết.');
@@ -118,9 +124,6 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
                 'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
             );
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
-            if (result.notification) {
-                notifyEditorFromApi(wire, result.notification);
-            }
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
@@ -185,9 +188,6 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
                 'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
             );
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
-            if (result.notification) {
-                notifyEditorFromApi(wire, result.notification);
-            }
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
@@ -309,7 +309,7 @@ window.addEventListener('message', (event) => {
     syncProductAlbumToServer(articleId);
 });
 
-/** Livewire 3 có thể gửi params dạng object hoặc mảng — chuẩn hóa cho listener window. */
+/** Livewire 3 có thể gửi params dạng object, mảng, hoặc nhiều argument — chuẩn hóa cho listener window. */
 function normalizeLivewireEventDetail(payload) {
     if (payload == null) {
         return {};
@@ -319,10 +319,46 @@ function normalizeLivewireEventDetail(payload) {
             return payload[0];
         }
 
-        return { params: payload };
+        const merged = {};
+        for (const item of payload) {
+            if (item != null && typeof item === 'object' && !Array.isArray(item)) {
+                Object.assign(merged, item);
+            }
+        }
+
+        return Object.keys(merged).length > 0 ? merged : { params: payload };
     }
 
-    return typeof payload === 'object' ? payload : {};
+    if (typeof payload === 'object') {
+        // Livewire Event wrapper: { detail: {...} } hoặc { params: [...] }
+        if (payload.detail != null && typeof payload.detail === 'object' && !Array.isArray(payload.detail)) {
+            return payload.detail;
+        }
+        if (Array.isArray(payload.params)) {
+            return normalizeLivewireEventDetail(payload.params);
+        }
+
+        return payload;
+    }
+
+    return {};
+}
+
+function mergeLivewireForwardArgs(args) {
+    if (!Array.isArray(args) || args.length === 0) {
+        return {};
+    }
+
+    if (args.length === 1) {
+        return normalizeLivewireEventDetail(args[0]);
+    }
+
+    const merged = {};
+    for (const arg of args) {
+        Object.assign(merged, normalizeLivewireEventDetail(arg));
+    }
+
+    return merged;
 }
 
 function registerArticleEditorLivewireBridge() {
@@ -334,7 +370,7 @@ function registerArticleEditorLivewireBridge() {
     /** Livewire 3 listens to window events with the same name — prevent echo loops. */
     const forwardingLivewireEvents = new Set();
 
-    const forward = (name) => (payload) => {
+    const forward = (name) => (...args) => {
         if (forwardingLivewireEvents.has(name)) {
             return;
         }
@@ -343,7 +379,7 @@ function registerArticleEditorLivewireBridge() {
         try {
             window.dispatchEvent(
                 new CustomEvent(name, {
-                    detail: normalizeLivewireEventDetail(payload),
+                    detail: mergeLivewireForwardArgs(args),
                 }),
             );
         } finally {

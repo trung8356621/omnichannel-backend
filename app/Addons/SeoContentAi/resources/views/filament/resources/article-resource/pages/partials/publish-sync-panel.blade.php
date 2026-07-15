@@ -242,29 +242,34 @@
 
                     this.syncInFlight = true;
                     window.__seoBeginArticleHeavyActionClient?.('sync');
+                    let actionFinished = false;
 
                     try {
                         if (typeof window.__seoEnsureCategoriesBeforeSync === 'function') {
                             const allowed = await window.__seoEnsureCategoriesBeforeSync();
                             if (!allowed) {
-                                this.syncInFlight = false;
-                                window.__seoEndArticleHeavyActionClient?.();
                                 return;
                             }
                         }
 
                         if (typeof window.__seoExecuteHeavyArticleAction === 'function') {
-                            await window.__seoExecuteHeavyArticleAction('sync', this.$wire);
+                            await window.__seoExecuteHeavyArticleAction('sync', this.$wire, {
+                                renameImagesBeforeWpSync: !this.hasWpPost,
+                            });
                         } else {
                             await window.__seoPublishBoxPush?.();
                             await window.__seoPushPublishCategoriesToWire?.();
                             await this.$wire.requestSyncToWordPress();
                         }
+                        actionFinished = true;
                         window.__seoResetPublishTabPrimed?.();
                     } catch (error) {
                         console.warn('Đồng bộ WordPress thất bại ở client', error);
+                    } finally {
                         this.syncInFlight = false;
-                        window.__seoEndArticleHeavyActionClient?.();
+                        if (!actionFinished) {
+                            window.__seoEndArticleHeavyActionClient?.();
+                        }
                     }
                 },
             };
@@ -321,23 +326,6 @@
             <strong class="text-gray-800 dark:text-gray-100" x-text="publishWhenLabel"></strong>
         </p>
 
-        <div x-show="canSync" x-cloak>
-            <button
-                type="button"
-                x-on:click="requestSync()"
-                x-bind:disabled="isSyncDisabled()"
-                x-bind:title="syncButtonTitle()"
-                x-bind:aria-busy="syncInFlight ? 'true' : 'false'"
-                class="seo-publish-sync-btn"
-            >
-                <span
-                    x-show="syncInFlight"
-                    x-cloak
-                    class="seo-publish-icon-btn__spinner"
-                    aria-hidden="true"
-                ></span>
-                <span x-text="syncInFlight ? @js(__('seo-content-ai::filament.article_list.sync_queueing')) : @js(__('seo-content-ai::filament.article_list.sync_to_wordpress'))"></span>
-            </button>
-        </div>
+        {{-- Sync UI entry: top page action bar only. requestSync() kept for event bridge. --}}
     </div>
 </div>

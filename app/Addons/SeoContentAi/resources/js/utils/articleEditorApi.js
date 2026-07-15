@@ -114,30 +114,66 @@ export async function syncArticleToWordPressViaApi(articleId, payload) {
     return data;
 }
 
+const TOAST_DEDUPE_MS = 2200;
+/** @type {{ key: string, at: number } | null} */
+let lastEditorToastFingerprint = null;
+
 /**
  * Toast Filament thuần JS — không qua Livewire.
+ * Bỏ toast rỗng (trắng) + dedupe ngắn để tránh lặp.
  *
- * @param {{ title?: string, body?: string, status?: string }} notification
+ * @param {{ title?: string, body?: string, status?: string }|null|undefined} notification
  */
 export function showArticleEditorFilamentToast(notification) {
+    if (!notification || typeof notification !== 'object') {
+        return;
+    }
+
     if (typeof window.FilamentNotification === 'undefined') {
         return;
     }
 
-    const toast = new window.FilamentNotification()
-        .title(String(notification.title ?? ''))
-        .body(String(notification.body ?? ''));
+    const title = String(notification.title ?? '').trim();
+    const body = String(notification.body ?? '').trim();
+    if (title === '' && body === '') {
+        return;
+    }
 
-    const status = String(notification.status ?? 'success');
+    const status = String(notification.status ?? 'success').trim() || 'success';
+    const key = `${status}|${title}|${body}`;
+    const now = Date.now();
+    if (
+        lastEditorToastFingerprint
+        && lastEditorToastFingerprint.key === key
+        && now - lastEditorToastFingerprint.at < TOAST_DEDUPE_MS
+    ) {
+        return;
+    }
+    lastEditorToastFingerprint = { key, at: now };
+
+    const toast = new window.FilamentNotification();
+    if (title !== '') {
+        toast.title(title);
+    }
+    if (body !== '') {
+        toast.body(body);
+    }
+
     if (status === 'danger' || status === 'error') {
         toast.danger();
     } else if (status === 'warning') {
         toast.warning();
+    } else if (status === 'info') {
+        toast.info();
     } else {
         toast.success();
     }
 
     toast.send();
+}
+
+if (typeof window !== 'undefined') {
+    window.__seoShowArticleEditorToast = showArticleEditorFilamentToast;
 }
 
 /**

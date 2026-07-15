@@ -77,13 +77,15 @@ final class SeoAuditKeywordFlagService
             return new Paginator([], 0, $perPage, $page, ['path' => request()->url(), 'query' => request()->query()]);
         }
 
-        $articles = SeoArticle::query()
-            ->whereIn('id', $mergedIds)
+        $articles = ArticleResource::applySeoAuditCandidateScope(
+            SeoArticle::query()->whereIn('id', $mergedIds)
+        )
             ->with([
                 'site:id,domain',
                 'articleMetas' => static function ($relation): void {
                     $relation->whereIn('meta_key', [
                         SeoScoringRulesRegistry::META_KEY_VIOLATIONS,
+                        'seo_focus_keyword',
                         'wp_permalink',
                         'meta_description',
                         'seo_meta_description',
@@ -157,6 +159,12 @@ final class SeoAuditKeywordFlagService
 
         $keywordFlags = $this->collectKeywordFlagsForArticle($article);
         $hasKeywordFlags = $keywordFlags['warning_count'] > 0 || $keywordFlags['danger_count'] > 0;
+        $focusKeyword = trim((string) (
+            $article->articleMetas
+                ->firstWhere('meta_key', 'seo_focus_keyword')
+                ?->meta_value ?? ''
+        ));
+        $hasFocusKeyword = $focusKeyword !== '';
 
         $hasScoringSelection = $selectedRuleKeys !== []
             || $filterLowSeoScore
@@ -203,6 +211,8 @@ final class SeoAuditKeywordFlagService
             'warning_count' => $keywordFlags['warning_count'],
             'danger_count' => $keywordFlags['danger_count'],
             'flagged_keywords' => $keywordFlags['items'],
+            'focus_keyword' => $focusKeyword,
+            'has_focus_keyword' => $hasFocusKeyword,
             'audit_sources' => $sources,
             'has_keyword_flags' => $hasKeywordFlags,
             'has_seo_rule_matches' => $matchesRules,

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Jobs;
 
 use App\Addons\SeoContentAi\Services\IncrementalDomainSyncRunner;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\IncrementalDomainSyncCache;
 use App\Models\Site;
@@ -34,7 +35,9 @@ final class RunIncrementalDomainSyncJob implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public int $siteId,
         public int $userId,
-    ) {}
+    ) {
+        $this->onQueue(ArticleWpSyncQueueService::QUEUE_NAME);
+    }
 
     public function uniqueId(): string
     {

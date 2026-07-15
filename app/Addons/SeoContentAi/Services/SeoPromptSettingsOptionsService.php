@@ -13,7 +13,7 @@ final class SeoPromptSettingsOptionsService
      */
     public function activePromptOptions(): array
     {
-        return $this->activePromptOptionsForTool(null);
+        return $this->activePromptOptionsForTools(null);
     }
 
     /**
@@ -21,7 +21,25 @@ final class SeoPromptSettingsOptionsService
      */
     public function activeImagePromptOptions(): array
     {
-        return $this->activePromptOptionsForTool('image');
+        return $this->activePromptOptionsForTools(['image']);
+    }
+
+    /**
+     * Image + Image Typography (editor general image source).
+     *
+     * @return array<int, string>
+     */
+    public function activeAnyImagePromptOptions(): array
+    {
+        return $this->activePromptOptionsForTools(['image', 'image_typography']);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function activeTypographyImagePromptOptions(): array
+    {
+        return $this->activePromptOptionsForTools(['image_typography']);
     }
 
     /**
@@ -29,18 +47,19 @@ final class SeoPromptSettingsOptionsService
      */
     public function activeVideoPromptOptions(): array
     {
-        return $this->activePromptOptionsForTool('video');
+        return $this->activePromptOptionsForTools(['video']);
     }
 
     /**
+     * @param  list<string>|null  $tools
      * @return array<int, string>
      */
-    private function activePromptOptionsForTool(?string $tool): array
+    private function activePromptOptionsForTools(?array $tools): array
     {
         $query = SeoPrompt::query()->where('is_active', true);
 
-        if ($tool !== null) {
-            $query->where('tools', $tool);
+        if ($tools !== null && $tools !== []) {
+            $query->whereIn('tools', $tools);
         }
 
         return $query

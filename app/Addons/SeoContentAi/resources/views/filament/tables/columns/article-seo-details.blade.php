@@ -34,7 +34,11 @@
         },
         syncMainKeywordIfChanged(articleId, value) {
             const next = this.normalizeKeyword(value);
-            if (next === this.normalizeKeyword(this.keywordOriginal)) {
+            const unchanged = next === this.normalizeKeyword(this.keywordOriginal);
+            const scoreText = this.$el.querySelector('.article-seo-score')?.textContent ?? '';
+            // Bài từng thiếu KW: điểm DB còn 0/100 dù input đã có keyword — blur vẫn chấm lại.
+            const stuckAtZero = next !== '' && /\b0\s*\/\s*100\b/.test(scoreText);
+            if (unchanged && !stuckAtZero) {
                 return;
             }
 

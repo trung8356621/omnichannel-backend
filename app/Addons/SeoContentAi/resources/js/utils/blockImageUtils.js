@@ -218,7 +218,136 @@ export function isWordPressImageElement(el) {
     if (el.classList.contains('wp-block-image') || el.classList.contains('wp-block-video')) return true;
     if (el.classList.contains('wp-caption') && el.querySelector('img')) return true;
 
+    // <p><img></p> / wrapper chỉ chứa media — TipTap block-image sẽ nuốt img trong paragraph.
+    if ((tag === 'p' || tag === 'div' || tag === 'span') && el.querySelector('img, video')) {
+        const clone = el.cloneNode(true);
+        clone.querySelectorAll('img, video, br, figure, picture, source').forEach((node) => node.remove());
+        const text = (clone.textContent || '').replace(/\u00a0/g, ' ').trim();
+
+        return text === '';
+    }
+
     return false;
+}
+
+/**
+ * Tách HTML text thành các chunk text / image để hydrate thành image block riêng.
+ *
+ * @returns {Array<{ type: 'text', html: string } | { type: 'image', html: string, image: object }>}
+ */
+export function splitHtmlIntoTextAndImageChunks(html) {
+    const source = String(html || '').trim();
+    if (!source) {
+        return [];
+    }
+
+    if (!/<img[\s>]|<video[\s>]|<figure\b/i.test(source)) {
+        return [{ type: 'text', html: source }];
+    }
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(source, 'text/html');
+    const chunks = [];
+    let textBuffer = doc.createElement('div');
+
+    const flushText = () => {
+        const htmlChunk = textBuffer.innerHTML.trim();
+        if (htmlChunk) {
+            chunks.push({ type: 'text', html: htmlChunk });
+        }
+        textBuffer = doc.createElement('div');
+    };
+
+    const pushImageNode = (node) => {
+        const wrap = doc.createElement('div');
+        wrap.appendChild(node.cloneNode(true));
+        const content = wrap.innerHTML.trim();
+        const image = parseImageFromBlockContent(content);
+        if (!image?.src) {
+            textBuffer.appendChild(node.cloneNode(true));
+
+            return;
+        }
+
+        flushText();
+        chunks.push({
+            type: 'image',
+            html: renderImageFigure(image),
+            image,
+        });
+    };
+
+    const walk = (parent) => {
+        Array.from(parent.childNodes).forEach((node) => {
+            if (node.nodeType === 3) {
+                if (node.textContent?.trim()) {
+                    textBuffer.appendChild(node.cloneNode(true));
+                }
+
+                return;
+            }
+
+            if (node.nodeType !== 1) {
+                return;
+            }
+
+            if (isWordPressImageElement(node)) {
+                pushImageNode(node);
+
+                return;
+            }
+
+            const tag = node.tagName.toLowerCase();
+            const unwrapWrapper =
+                (tag === 'div' || tag === 'section' || tag === 'article') &&
+                node.querySelector('img, video') &&
+                !node.classList.contains('wp-block-image') &&
+                !node.classList.contains('wp-caption');
+
+            if (unwrapWrapper) {
+                walk(node);
+
+                return;
+            }
+
+            if (typeof node.querySelector === 'function' && node.querySelector('img, video')) {
+                const working = node.cloneNode(true);
+                const mediaHosts = [];
+                working.querySelectorAll('img, video').forEach((media) => {
+                    const host =
+                        media.closest('figure, .wp-block-image, .wp-caption, p') || media;
+                    if (!mediaHosts.includes(host)) {
+                        mediaHosts.push(host);
+                    }
+                });
+
+                mediaHosts.forEach((host) => {
+                    pushImageNode(host);
+                    host.remove();
+                });
+
+                const remainderText = (working.textContent || '').replace(/\u00a0/g, ' ').trim();
+                const hasStructure = Boolean(working.querySelector('ul,ol,table,a,h1,h2,h3,h4,h5,h6,p,li'));
+                if (remainderText !== '' || hasStructure) {
+                    const remainderWrap = doc.createElement(tag);
+                    for (const attr of Array.from(node.attributes ?? [])) {
+                        remainderWrap.setAttribute(attr.name, attr.value);
+                    }
+                    remainderWrap.innerHTML = working.innerHTML;
+                    textBuffer.appendChild(remainderWrap);
+                }
+
+                return;
+            }
+
+            textBuffer.appendChild(node.cloneNode(true));
+        });
+    };
+
+    walk(doc.body);
+    flushText();
+
+    return chunks.length > 0 ? chunks : [{ type: 'text', html: source }];
 }
 
 /**

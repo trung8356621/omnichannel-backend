@@ -36,8 +36,8 @@
                         message: 'Đang đồng bộ với WordPress — vui lòng chờ…',
                     },
                     restore: {
-                        title: 'Đang lấy từ WordPress',
-                        message: 'Đang khôi phục nội dung từ WordPress — vui lòng chờ…',
+                        title: 'Đang đồng bộ từ WordPress',
+                        message: 'Đang ghi đè bài viết bằng bản WordPress — vui lòng chờ…',
                     },
                     delete: {
                         title: 'Đang xóa bài viết',
@@ -257,6 +257,29 @@
                     this.featuredImageDraft = stored;
                 }
             },
+            onFeaturedImageUpdated(event) {
+                const detail = event?.detail ?? {};
+                const aid = Number(detail.articleId ?? detail.article_id ?? 0);
+                if (aid > 0 && aid !== this.articleId) {
+                    return;
+                }
+
+                const item = detail.item ?? detail;
+                const url = String(item?.url ?? item?.src ?? '').trim();
+                if (url === '') {
+                    this.syncFeaturedImageDraft();
+
+                    return;
+                }
+
+                this.featuredImageDraft = {
+                    url,
+                    wp_attachment_id: Number(item?.wp_attachment_id ?? item?.wpAttachmentId ?? 0) || 0,
+                    seo_media_id: Number(item?.seo_media_id ?? item?.seoMediaId ?? 0) || 0,
+                    alt: String(item?.alt ?? '').trim(),
+                    slug: String(item?.slug ?? '').trim(),
+                };
+            },
             onFeaturedImageCleared(event) {
                 const detail = event?.detail ?? {};
                 const aid = Number(detail.articleId ?? detail.article_id ?? 0);
@@ -411,6 +434,19 @@
             customTabsApi() {
                 return window.__seoArticleMediaPickerCustomTabs || {};
             },
+            articleDomain() {
+                const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
+                const api = this.customTabsApi();
+                const raw = String(picker.articleDomain || '').trim();
+                if (raw === '') {
+                    return '';
+                }
+
+                return api.normalizeDomain ? api.normalizeDomain(raw) : raw.toLowerCase();
+            },
+            articleDomainReady() {
+                return this.articleDomain() !== '';
+            },
             isCustomPickerTab(tab = this.pickerTab) {
                 const api = this.customTabsApi();
 
@@ -434,7 +470,14 @@
             },
             loadPickerCustomTabs() {
                 const api = this.customTabsApi();
-                this.pickerCustomTabs = api.loadTabs?.(this.articleId) ?? [];
+                const domain = this.articleDomain();
+                if (domain === '') {
+                    this.pickerCustomTabs = [];
+
+                    return;
+                }
+
+                this.pickerCustomTabs = api.loadTabs?.(domain, this.articleId) ?? [];
             },
             defaultPickerSearchKeyword() {
                 const picker = window.__SEO_ARTICLE_MEDIA_PICKER__ || {};
@@ -499,6 +542,12 @@
                 return `left:${Number(menu?.x || 0)}px;top:${Number(menu?.y || 0)}px;`;
             },
             togglePickerAddTabMenu(event) {
+                if (!this.articleDomainReady()) {
+                    this.pickerError = 'Chưa xác định được domain của bài viết. Không thể thêm tab tìm kiếm.';
+
+                    return;
+                }
+
                 if (!this.pickerWordPressLinked()) {
                     this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi tạo tab tìm kiếm.';
 
@@ -533,6 +582,12 @@
                 this.pickerAddTabSearchKeyword = '';
             },
             createCustomPickerTab(keyword, { blank = false } = {}) {
+                if (!this.articleDomainReady()) {
+                    this.pickerError = 'Chưa xác định được domain của bài viết. Không thể thêm tab tìm kiếm.';
+
+                    return;
+                }
+
                 if (!this.pickerWordPressLinked()) {
                     this.pickerError = 'Bài viết chưa được liên kết WordPress. Hãy đồng bộ bài viết trước khi tạo tab tìm kiếm.';
 
@@ -545,7 +600,10 @@
                 }
 
                 const api = this.customTabsApi();
-                const created = api.addTab?.(this.articleId, normalized, { blank });
+                const created = api.addTab?.(this.articleDomain(), normalized, {
+                    blank,
+                    articleId: this.articleId,
+                });
                 if (!created?.id) {
                     return;
                 }
@@ -571,6 +629,12 @@
                     return;
                 }
 
+                if (!this.articleDomainReady()) {
+                    this.pickerError = 'Chưa xác định được domain của bài viết. Không thể xóa tab tìm kiếm.';
+
+                    return;
+                }
+
                 if (this.pickerCustomTabRename.tabId === id) {
                     this.cancelRenameCustomPickerTab();
                 }
@@ -580,7 +644,7 @@
                 }
 
                 const activeCustomId = this.isCustomPickerTab() ? this.customTabIdFromPickerTab() : '';
-                this.customTabsApi().removeTab?.(this.articleId, id);
+                this.customTabsApi().removeTab?.(this.articleDomain(), id, this.articleId);
                 this.loadPickerCustomTabs();
 
                 if (activeCustomId === id) {
@@ -588,7 +652,7 @@
                 }
             },
             startRenameCustomPickerTab(customTab) {
-                if (!customTab?.blank || !customTab?.id) {
+                if (!customTab?.blank || !customTab?.id || !this.articleDomainReady()) {
                     return;
                 }
 
@@ -610,7 +674,7 @@
             commitRenameCustomPickerTab() {
                 const tabId = String(this.pickerCustomTabRename?.tabId || '').trim();
                 const draft = String(this.pickerCustomTabRename?.draft || '').trim();
-                if (tabId === '' || draft === '') {
+                if (tabId === '' || draft === '' || !this.articleDomainReady()) {
                     this.cancelRenameCustomPickerTab();
 
                     return;
@@ -1336,26 +1400,24 @@
                     });
 
                     await this.reloadPickerImages();
-
-                    const count = uploaded?.length ?? 0;
-                    const titleMany = String(i18n.upload_success_many || '');
-                    const notifyTitle = count === 1
-                        ? (i18n.upload_success_one || 'Đã upload ảnh')
-                        : titleMany.replace(':count', String(count));
-                    if (typeof FilamentNotification !== 'undefined') {
-                        new FilamentNotification()
-                            .title(notifyTitle)
-                            .body(i18n.upload_success_body || '')
-                            .success()
-                            .send();
-                    }
                 } catch (error) {
-                    if (typeof FilamentNotification !== 'undefined') {
-                        new FilamentNotification()
-                            .title(i18n.upload_failed || 'Upload thất bại')
-                            .body(error?.message ?? (i18n.upload_failed_body || ''))
-                            .danger()
-                            .send();
+                    const failTitle = String(i18n.upload_failed || 'Upload thất bại').trim();
+                    const failBody = String(error?.message ?? (i18n.upload_failed_body || '')).trim();
+                    if (typeof window.__seoShowArticleEditorToast === 'function') {
+                        window.__seoShowArticleEditorToast({
+                            title: failTitle,
+                            body: failBody,
+                            status: 'danger',
+                        });
+                    } else if (typeof FilamentNotification !== 'undefined' && (failTitle !== '' || failBody !== '')) {
+                        const toast = new FilamentNotification();
+                        if (failTitle !== '') {
+                            toast.title(failTitle);
+                        }
+                        if (failBody !== '') {
+                            toast.body(failBody);
+                        }
+                        toast.danger().send();
                     }
                 } finally {
                     this.localMediaUploading = false;
@@ -1369,23 +1431,39 @@
         }"
         x-on:close-article-media-modal.window="closeArticleMediaModal()"
         x-on:seo-featured-image-storage-ready.window="syncFeaturedImageDraft()"
+        x-on:seo-featured-image-updated.window="onFeaturedImageUpdated($event)"
         x-on:seo-featured-image-cleared.window="onFeaturedImageCleared($event)"
         x-on:article-wordpress-sync-lock.window="lockPageForHeavyAction($event.detail?.action ?? 'sync')"
         x-on:article-wordpress-sync-unlock.window="unlockPageAfterHeavyActionFailure()"
         x-on:seo-open-article-media-picker.window="openArticleMediaModal('editor-block', $event.detail?.blockId ?? null)"
         x-on:seo-article-editor-notify.window="
             const payload = $event.detail && typeof $event.detail === 'object' ? $event.detail : {};
+            if (typeof window.__seoShowArticleEditorToast === 'function') {
+                window.__seoShowArticleEditorToast(payload);
+                return;
+            }
+            const title = String(payload.title ?? '').trim();
+            const body = String(payload.body ?? '').trim();
+            if (title === '' && body === '') {
+                return;
+            }
             if (typeof FilamentNotification === 'undefined') {
                 return;
             }
-            const toast = new FilamentNotification()
-                .title(String(payload.title ?? ''))
-                .body(String(payload.body ?? ''));
+            const toast = new FilamentNotification();
+            if (title !== '') {
+                toast.title(title);
+            }
+            if (body !== '') {
+                toast.body(body);
+            }
             const status = String(payload.status ?? 'success');
             if (status === 'danger' || status === 'error') {
                 toast.danger();
             } else if (status === 'warning') {
                 toast.warning();
+            } else if (status === 'info') {
+                toast.info();
             } else {
                 toast.success();
             }
@@ -1561,13 +1639,15 @@
                 <div class="seo-article-edit-back">
                     <a
                         href="{{ \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index') }}"
-                        class="seo-article-edit-back-link"
+                        class="seo-article-edit-back-link seo-article-edit-back-link--icon"
+                        title="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
+                        aria-label="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
                         </svg>
-                        {{ __('seo-content-ai::filament.article_list.back_to_articles') }}
                     </a>
+                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
                 </div>
 
                 <div class="wp-postbox">
@@ -1578,7 +1658,6 @@
                             placeholder="Thêm tiêu đề bài viết"
                             class="wp-title-input"
                         />
-                        @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
                     </div>
 
                     <div class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
@@ -1615,6 +1694,8 @@
                 </script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact min-w-0"></div>
+
+                @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-rail')
 
                 <button
                     type="button"
@@ -1912,20 +1993,18 @@
                                     </div>
                                     @endif
 
-                                            @if (! \App\Addons\SeoContentAi\Support\SeoAccessControl::isContentManager())
-                                                <div
-                                                    class="seo-assistant-panel-slot"
-                                                    data-assistant-widget
-                                                    data-assistant-widget-id="links"
-                                                    data-assistant-tab-label="Links"
-                                                    data-assistant-widget-label="Link Assistant"
-                                                    data-assistant-search-keywords="link,links,internal,external,href"
-                                                    x-show="isWidgetVisible('links')"
-                                                    x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'links' }"
-                                                >
-                                                    <div wire:ignore id="seo-article-links-root"></div>
-                                                </div>
-                                            @endif
+                                    <div
+                                        class="seo-assistant-panel-slot"
+                                        data-assistant-widget
+                                        data-assistant-widget-id="links"
+                                        data-assistant-tab-label="Links"
+                                        data-assistant-widget-label="Link Assistant"
+                                        data-assistant-search-keywords="link,links,internal,external,href"
+                                        x-show="isWidgetVisible('links')"
+                                        x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'links' }"
+                                    >
+                                        <div wire:ignore id="seo-article-links-root"></div>
+                                    </div>
 
                                             <div
                                                 class="seo-assistant-panel-slot"
@@ -2038,7 +2117,7 @@
                     </button>
                     <div
                         class="seo-article-media-modal__tab-add-wrap"
-                        x-show="pickerWordPressLinked()"
+                        x-show="pickerWordPressLinked() && articleDomainReady()"
                         x-cloak
                     >
                         <button
@@ -2049,6 +2128,7 @@
                             title="Thêm tab tìm kiếm WordPress"
                             aria-label="Thêm tab tìm kiếm WordPress"
                             x-bind:aria-expanded="pickerAddTabMenu.open"
+                            x-bind:disabled="!articleDomainReady()"
                         >+</button>
                     </div>
                     <template x-for="customTab in pickerCustomTabs" x-bind:key="customTab.id">
@@ -2477,21 +2557,25 @@
                 (function () {
                     function mountDebugMarkdownHeaderButton() {
                         const slot = document.querySelector('[data-seo-page-actions-slot]');
-                        if (!slot || slot.querySelector('[data-seo-debug-md-import]')) {
+                        const host = slot?.querySelector('[data-seo-page-actions-secondary]') ?? slot;
+                        if (!host || host.querySelector('[data-seo-debug-md-import]')) {
                             return;
                         }
 
                         const button = document.createElement('button');
                         button.type = 'button';
                         button.setAttribute('data-seo-debug-md-import', '1');
-                        button.className = 'fi-btn relative grid-flow-col items-center justify-center font-semibold outline-none transition duration-75 focus-visible:ring-2 fi-btn-size-md fi-color-gray gap-1.5 px-3 py-2 text-sm inline-grid shadow-sm bg-white text-gray-950 hover:bg-gray-50 dark:bg-white/5 dark:text-white dark:hover:bg-white/10 ring-1 ring-gray-950/10 dark:ring-white/20';
-                        button.innerHTML = '<span class="fi-btn-label">Debug import Markdown</span>';
+                        button.className = 'seo-editor-menu-item';
+                        button.setAttribute('role', 'menuitem');
+                        button.title = 'Debug import Markdown';
+                        button.setAttribute('aria-label', 'Debug import Markdown');
+                        button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" /></svg><span>Debug import Markdown</span>';
                         button.addEventListener('click', function (event) {
                             event.preventDefault();
                             window.dispatchEvent(new CustomEvent('open-debug-markdown-import'));
                         });
 
-                        slot.insertBefore(button, slot.firstChild);
+                        host.insertBefore(button, host.firstChild);
                         window.dispatchEvent(new CustomEvent('seo-article-editor-toolbar-refresh'));
                     }
 

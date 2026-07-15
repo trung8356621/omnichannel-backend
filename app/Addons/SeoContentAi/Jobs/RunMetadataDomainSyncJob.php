@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Jobs;
 
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\MetadataDomainSyncRunner;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Support\MetadataDomainSyncCache;
@@ -34,7 +35,9 @@ final class RunMetadataDomainSyncJob implements ShouldBeUnique, ShouldQueue
     public function __construct(
         public int $siteId,
         public int $userId,
-    ) {}
+    ) {
+        $this->onQueue(ArticleWpSyncQueueService::QUEUE_NAME);
+    }
 
     public function uniqueId(): string
     {

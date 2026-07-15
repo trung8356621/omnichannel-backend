@@ -5,13 +5,20 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
+use App\Addons\SeoContentAi\Models\SeoAiModel;
+use App\Addons\SeoContentAi\Support\GeminiModelVersionPolicy;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\ImageRoutingStrategy;
+use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\RenderingPreference;
+use App\Addons\SeoContentAi\Support\TypographyComplexity;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
 
 /**
  * Sinh ảnh qua Gemini API: Imagen (:predict) hoặc Nano Banana (:generateContent).
+ * Danh sách model thử đến từ ImageRoutingStrategy (entry duy nhất).
  */
 final class GeminiMediaGenerationService
 {
@@ -21,41 +28,137 @@ final class GeminiMediaGenerationService
     public function __construct(
         private readonly PromptMediaStorageService $promptMediaStorage,
         private readonly SeoCreateArticleSettingsService $workflowSettings,
+        private readonly ImageRoutingStrategy $imageRoutingStrategy,
     ) {}
 
     /**
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @param  list<string>|null  $modelsOverride  Nếu có (vd. từ executionPolicy fallback) — dùng trực tiếp, không gọi lại modelsToTry
+     * @return array{url: string, usage: array<string, mixed>|null, model_used: string}
      */
     public function generateImage(
         ApiConnection $connection,
         string $prompt,
-        ?string $preferredModel = null,
-        bool $excludeImagen = false,
+        ImageToolType $toolType = ImageToolType::Image,
+        ?RenderingPreference $preference = null,
+        bool $productContext = false,
         ?int $inputLength = null,
+        ?TypographyComplexity $typographyComplexity = null,
+        ?array $modelsOverride = null,
+    ): array {
+        $rendered = $this->generateImageBinary(
+            connection: $connection,
+            prompt: $prompt,
+            toolType: $toolType,
+            preference: $preference,
+            productContext: $productContext,
+            inputLength: $inputLength,
+            typographyComplexity: $typographyComplexity,
+            modelsOverride: $modelsOverride,
+        );
+
+        $imageUrl = $this->promptMediaStorage->storeBinaryMedia(
+            $rendered['binary'],
+            $rendered['mime'],
+            'image',
+            $rendered['model_used'],
+        );
+
+        logger()->info('Image render succeeded', [
+            'render_model' => $rendered['model_used'],
+            'tool_type' => $toolType->value,
+        ]);
+
+        return [
+            'url' => $imageUrl,
+            'usage' => $rendered['usage'],
+            'model_used' => $rendered['model_used'],
+        ];
+    }
+
+    /**
+     * Render ảnh → binary only (không ghi seo_media). Dùng cho typography candidate.
+     *
+     * @param  list<string>|null  $modelsOverride
+     * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
+     */
+    public function generateImageBinary(
+        ApiConnection $connection,
+        string $prompt,
+        ImageToolType $toolType = ImageToolType::Image,
+        ?RenderingPreference $preference = null,
+        bool $productContext = false,
+        ?int $inputLength = null,
+        ?TypographyComplexity $typographyComplexity = null,
+        ?array $modelsOverride = null,
     ): array {
         $prompt = $this->normalizeImagePrompt(Utf8Sanitizer::string($prompt));
-        $models = GoogleAiModelRegistry::imageModelsToTry(
-            $preferredModel,
-            $excludeImagen,
-            $this->workflowSettings->getImageModelPriority(),
-            $inputLength,
-        );
+        $preference ??= $this->workflowSettings->getRenderingPreference();
+
+        if ($modelsOverride !== null) {
+            $models = array_values(array_unique(array_filter(array_map(
+                static fn (mixed $slug): string => GoogleAiModelRegistry::normalizeSlug((string) $slug),
+                $modelsOverride,
+            ))));
+        } elseif ($toolType->isTypography()) {
+            $policy = $this->imageRoutingStrategy->executionPolicy(
+                toolType: ImageToolType::ImageTypography,
+                preference: $preference,
+                typographyComplexity: $typographyComplexity,
+                compiledPromptLength: $inputLength,
+                productContext: $productContext,
+                configuredPriorityList: $this->workflowSettings->getTypographyModelPriority(),
+                adminEnabledUnknownSlugs: $this->workflowSettings->getAdminEnabledUnknownImageModels(),
+                allowGeneralImageFallback: $this->workflowSettings->allowTypographyGeneralImageFallback(),
+                generalImageFallbackPriorityList: $this->workflowSettings->getImageModelPriority(),
+            );
+            $models = $policy->models;
+        } else {
+            $models = $this->imageRoutingStrategy->modelsToTry(
+                toolType: $toolType,
+                preference: $preference,
+                compiledPromptLength: $inputLength,
+                productContext: $productContext,
+                typographyComplexity: $typographyComplexity,
+                configuredPriorityList: $this->workflowSettings->getImageModelPriority(),
+                adminEnabledUnknownSlugs: $this->workflowSettings->getAdminEnabledUnknownImageModels(),
+            );
+        }
+
+        if ($models === []) {
+            throw new PromptRunException(
+                $toolType->isTypography()
+                    ? (
+                        $this->workflowSettings->allowTypographyGeneralImageFallback()
+                            ? 'Không có model image (typography hoặc general) đủ điều kiện để render.'
+                            : 'Không có model typography phù hợp. Bật General Image Fallback trong AI Advanced hoặc thêm model typography_supported.'
+                    )
+                    : 'Không có model image đủ điều kiện để render.',
+            );
+        }
+
         $lastError = null;
 
         foreach ($models as $model) {
             try {
-                if (GoogleAiModelRegistry::isImagenModel($model)) {
-                    return $this->requestImagenPredict($connection, $prompt, $model);
-                }
+                $rendered = GoogleAiModelRegistry::isImagenModel($model)
+                    ? $this->requestImagenPredict($connection, $prompt, $model)
+                    : $this->requestGeminiNativeImage($connection, $prompt, $model);
 
-                return $this->requestGeminiNativeImage($connection, $prompt, $model);
+                logger()->info('Image render binary succeeded', [
+                    'render_model' => $rendered['model_used'] ?? $model,
+                    'tool_type' => $toolType->value,
+                ]);
+
+                return $rendered;
             } catch (PromptRunException $exception) {
                 $lastError = $exception;
+                $this->handleRenderModelFailure($connection, $model, $exception->getMessage());
                 if (! $this->isRetryable($exception->getMessage())) {
                     throw $exception;
                 }
             } catch (\Throwable $exception) {
                 $lastError = new PromptRunException($exception->getMessage(), (int) $exception->getCode(), $exception);
+                $this->handleRenderModelFailure($connection, $model, $exception->getMessage());
                 if (! $this->isRetryable($exception->getMessage())) {
                     throw $lastError;
                 }
@@ -65,10 +168,37 @@ final class GeminiMediaGenerationService
         throw $lastError ?? new PromptRunException('Không sinh được ảnh từ Gemini API.');
     }
 
+    private function handleRenderModelFailure(ApiConnection $connection, string $model, string $message): void
+    {
+        logger()->warning('Image render model failed, try next', [
+            'render_model' => $model,
+            'error' => $message,
+        ]);
+
+        if (! GeminiModelVersionPolicy::isProviderUnavailableError($message)) {
+            return;
+        }
+
+        $record = SeoAiModel::query()
+            ->where('api_connection_id', (int) $connection->id)
+            ->where('raw_model_name', $model)
+            ->first();
+
+        if (! $record instanceof SeoAiModel) {
+            return;
+        }
+
+        $capabilities = is_array($record->capabilities) ? $record->capabilities : [];
+        $record->update([
+            'capabilities' => GeminiModelVersionPolicy::markCapabilitiesUnavailable($capabilities, $message),
+            'last_error' => mb_substr($message, 0, 2000),
+        ]);
+    }
+
     /**
      * Imagen 4 — POST .../models/{model}:predict
      *
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
      */
     private function requestImagenPredict(ApiConnection $connection, string $prompt, string $model): array
     {
@@ -116,9 +246,13 @@ final class GeminiMediaGenerationService
             }
 
             $mime = (string) ($prediction['mimeType'] ?? 'image/png');
-            $imageUrl = $this->promptMediaStorage->storeBinaryMedia($binary, $mime, 'image', $model);
 
-            return [$imageUrl, null];
+            return [
+                'binary' => $binary,
+                'mime' => $mime !== '' ? $mime : 'image/png',
+                'usage' => null,
+                'model_used' => $model,
+            ];
         }
 
         throw new PromptRunException('Imagen không trả về ảnh ('.$model.').');
@@ -128,7 +262,7 @@ final class GeminiMediaGenerationService
      * Nano Banana — POST .../models/{model}:generateContent (v1beta).
      * Bắt buộc yêu cầu IMAGE modality, nếu không model có thể trả text-only rồi stop.
      *
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @return array{binary: string, mime: string, usage: array<string, mixed>|null, model_used: string}
      */
     private function requestGeminiNativeImage(ApiConnection $connection, string $prompt, string $model): array
     {
@@ -164,7 +298,8 @@ final class GeminiMediaGenerationService
         }
 
         $textLines = [];
-        $imageUrl = null;
+        $binaryOut = null;
+        $mimeOut = 'image/png';
 
         foreach ($parts as $part) {
             if (! is_array($part)) {
@@ -186,10 +321,11 @@ final class GeminiMediaGenerationService
                 continue;
             }
 
-            $imageUrl = $this->promptMediaStorage->storeBinaryMedia($binary, $mime, 'image', $model);
+            $binaryOut = $binary;
+            $mimeOut = $mime !== '' ? $mime : 'image/png';
         }
 
-        if ($imageUrl === null) {
+        if ($binaryOut === null) {
             $blockReason = $response->json('candidates.0.finishReason')
                 ?? $response->json('promptFeedback.blockReason');
             $hint = $textLines !== []
@@ -204,10 +340,14 @@ final class GeminiMediaGenerationService
             );
         }
 
-        $output = $imageUrl;
         $usage = $response->json('usageMetadata');
 
-        return [$output, is_array($usage) ? $usage : null];
+        return [
+            'binary' => $binaryOut,
+            'mime' => $mimeOut,
+            'usage' => is_array($usage) ? $usage : null,
+            'model_used' => $model,
+        ];
     }
 
     private function normalizeImagePrompt(string $prompt): string
@@ -276,7 +416,8 @@ final class GeminiMediaGenerationService
     {
         $lower = strtolower($message);
 
-        return str_contains($lower, 'not found')
+        return GeminiModelVersionPolicy::isProviderUnavailableError($message)
+            || str_contains($lower, 'not found')
             || str_contains($lower, '404')
             || str_contains($lower, 'not supported')
             || str_contains($lower, '429')

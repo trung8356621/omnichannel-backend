@@ -70,6 +70,8 @@
                         @php
                             $promptType = trim((string) ($promptItem['type'] ?? 'Prompt AI'));
                             $status = trim((string) ($promptItem['status'] ?? ''));
+                            $renderModel = trim((string) ($promptItem['render_model'] ?? ''));
+                            $plannerModel = trim((string) ($promptItem['planner_model'] ?? ''));
                             $model = trim((string) ($promptItem['model'] ?? ''));
                             $promptText = trim((string) ($promptItem['prompt'] ?? ''));
                             $resultText = trim((string) ($promptItem['result'] ?? ''));
@@ -89,8 +91,13 @@
                                     <span class="seo-run-history-item__index">{{ $index + 1 }}</span>
                                     <span>
                                         <span class="seo-run-history-item__type">{{ $promptType }}</span>
-                                        @if ($model !== '')
+                                        @if ($renderModel !== '')
+                                            <span class="seo-run-history-item__model" title="Render model">{{ $renderModel }}</span>
+                                        @elseif ($model !== '')
                                             <span class="seo-run-history-item__model">{{ $model }}</span>
+                                        @endif
+                                        @if ($plannerModel !== '' && $plannerModel !== $renderModel)
+                                            <span class="seo-run-history-item__model seo-run-history-item__model--planner" title="Planner model">planner: {{ $plannerModel }}</span>
                                         @endif
                                     </span>
                                 </span>

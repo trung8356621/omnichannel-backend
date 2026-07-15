@@ -22,17 +22,17 @@ final class SetDynamicSeoDatabaseByHash
         $hashId = $this->resolveHashId($request);
 
         if ($hashId === null) {
-            abort(403, 'Yêu cầu mã định danh kết nối SEO.');
+            return redirect()->to('/seo', $request->isMethodSafe() ? 301 : 302);
         }
 
         if (! SeoConnectionContext::isValidHashFormat($hashId)) {
-            abort(404, 'Mã định danh kết nối SEO không hợp lệ.');
+            return redirect()->to('/seo', $request->isMethodSafe() ? 301 : 302);
         }
 
         try {
             $connection = $this->databaseConnection->bootstrapByHash($hashId);
         } catch (RuntimeException) {
-            abort(404, 'Không tìm thấy kết nối cơ sở dữ liệu SEO hợp lệ.');
+            return redirect()->to('/seo', $request->isMethodSafe() ? 301 : 302);
         }
 
         SeoConnectionContext::applyUrlDefaults($hashId);

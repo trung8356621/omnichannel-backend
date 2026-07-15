@@ -751,6 +751,8 @@ final class WordPressArticleSyncService
             null,
         );
 
+        $this->hydratePostImagesCatalogAfterSync($article->fresh(), $postContent);
+
         return [
             'success' => true,
             'message' => $message,
@@ -762,6 +764,31 @@ final class WordPressArticleSyncService
                 : false,
             'step_detail' => implode(', ', $stepDetails),
         ];
+    }
+
+    private function hydratePostImagesCatalogAfterSync(SeoArticle $article, string $postContent): void
+    {
+        $html = trim($postContent);
+        if ($html === '') {
+            $article->loadMissing('articleMetas');
+            $html = trim((string) ($article->articleMetas
+                ->firstWhere('meta_key', 'wp_post_content')?->meta_value ?? ''));
+        }
+        if ($html === '') {
+            $html = trim((string) ($article->body ?? ''));
+        }
+        if ($html === '') {
+            return;
+        }
+
+        try {
+            app(ArticlePostImagesService::class)->syncFromHtml($article, $html);
+        } catch (Throwable $exception) {
+            Log::warning('hydratePostImagesCatalogAfterSync failed', [
+                'article_id' => $article->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -1307,13 +1334,20 @@ final class WordPressArticleSyncService
     }
 
     /**
-     * Trạng thái gửi lên WP khi đồng bộ. Scheduled → draft (không dùng WP future).
+     * Trạng thái gửi lên WP khi đồng bộ.
+     * Laravel là bản tạm: được sync/sửa nội dung; không xóa / trash / hạ draft bài đã có trên WP.
+     * Scheduled → draft (giữ bài chờ cron publish). Create mới (chưa wp_post_id) vẫn gửi draft được.
      *
-     * @return array{status: string, post_date?: string|null}
+     * @return array{status?: string, post_date?: string|null}
      */
     private function resolveWordPressStatusPayload(SeoArticle $article): array
     {
-        $status = (string) ($article->status ?? 'draft');
+        $status = strtolower(trim((string) ($article->status ?? 'draft')));
+
+        // Không bao giờ đẩy trash/delete lên WordPress.
+        if (in_array($status, ['trash', 'deleted'], true)) {
+            return [];
+        }
 
         if ($status === 'scheduled') {
             return [
@@ -1321,8 +1355,16 @@ final class WordPressArticleSyncService
             ];
         }
 
+        $wpStatus = $this->mapStatusForWordPress($status);
+        $wpPostId = (int) ($article->wp_post_id ?? 0);
+
+        // Bài đã gắn WP: không demote xuống draft qua sync.
+        if ($wpPostId > 0 && $wpStatus === 'draft') {
+            return [];
+        }
+
         $payload = [
-            'status' => $this->mapStatusForWordPress($status),
+            'status' => $wpStatus,
         ];
 
         $postDate = $this->formatPostDateForWordPress($article);

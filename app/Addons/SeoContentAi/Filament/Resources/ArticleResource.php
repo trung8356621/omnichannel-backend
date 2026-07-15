@@ -60,6 +60,9 @@ class ArticleResource extends SeoPanelResource
 
     protected static ?string $pluralModelLabel = 'Articles';
 
+    /** article_meta: bỏ qua lọc Article SEO Audit (Laravel only — không đụng WordPress). */
+    public const META_SKIP_SEO_AUDIT = 'skip_seo_audit';
+
     public static function canViewAny(): bool
     {
         return SeoAccessControl::canAccessContentFeatures();
@@ -309,6 +312,7 @@ class ArticleResource extends SeoPanelResource
                     ->label('Ngôn ngữ')
                     ->visible(fn (): bool => app(SitePolylangService::class)->anyAccessibleSiteHasPolylang())
                     ->options(fn (): array => app(SitePolylangService::class)->defaultLanguageOptions())
+                    ->default('vi')
                     ->native(false)
                     ->placeholder('Tất cả ngôn ngữ')
                     ->indicator('Ngôn ngữ')
@@ -327,6 +331,7 @@ class ArticleResource extends SeoPanelResource
                         'page' => __('seo-content-ai::filament.article_list.post_type_page'),
                         'product' => __('seo-content-ai::filament.article_list.post_type_product'),
                     ])
+                    ->default('post')
                     ->native(false)
                     ->placeholder(__('seo-content-ai::filament.article_list.all_post_types'))
                     ->indicator(__('seo-content-ai::filament.article_list.post_type'))
@@ -915,7 +920,7 @@ class ArticleResource extends SeoPanelResource
      *     date: string,
      *     date_label: string,
      *     count: int,
-     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>
+     *     articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string, view_url: string|null}>
      * }>
      */
     public static function buildReviewedArticlesGrouped(): array
@@ -925,8 +930,10 @@ class ArticleResource extends SeoPanelResource
             ->whereNotNull('reviewed_at')
             ->whereNotIn('type', ['category', 'product_category'])
             ->where('status', '!=', 'trash')
-            ->select(['id', 'title', 'reviewed_at'])
+            ->with(['site', 'articleMetas'])
             ->orderByDesc('reviewed_at');
+
+        static::applyExcludeSkipSeoAuditScope($query);
 
         if (SeoAccessControl::shouldScopeToAccountOwner() && ! SeoAccessControl::isContentManager()) {
             SeoAccessControl::applyAccessibleSiteScope($query);
@@ -940,7 +947,7 @@ class ArticleResource extends SeoPanelResource
             static::applyContentManagerOwnershipScope($query);
         }
 
-        /** @var array<string, array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string}>}> $grouped */
+        /** @var array<string, array{date: string, date_label: string, count: int, articles: list<array{id: int, title: string, reviewed_time: string, edit_url: string, view_url: string|null}>}> $grouped */
         $grouped = [];
 
         foreach ($query->get() as $article) {
@@ -968,6 +975,7 @@ class ArticleResource extends SeoPanelResource
                 'title' => (string) ($article->title ?? ''),
                 'reviewed_time' => $reviewedAt->format('H:i'),
                 'edit_url' => static::getUrl('edit', ['record' => $article]),
+                'view_url' => static::resolveWordPressPermalink($article),
             ];
             $grouped[$dateKey]['count']++;
         }
@@ -1138,6 +1146,7 @@ class ArticleResource extends SeoPanelResource
             'articleMetas' => static fn ($query) => $query->whereIn('meta_key', [
                 'seo_focus_keyword',
                 'seo_rule_violations',
+                self::META_SKIP_SEO_AUDIT,
                 'wp_post_images',
                 'wp_featured_image_url',
                 'wp_permalink',
@@ -1294,21 +1303,23 @@ class ArticleResource extends SeoPanelResource
                 ->url(fn (SeoArticle $record): string => static::resolveWordPressPermalink($record) ?? '#')
                 ->openUrlInNewTab()
                 ->disabled(fn (SeoArticle $record): bool => blank(static::resolveWordPressPermalink($record))),
-            Tables\Actions\Action::make('toggle_skip_seo_score')
-                ->icon('heroicon-o-forward')
+            Tables\Actions\Action::make('toggle_skip_seo_audit')
+                ->icon(fn (SeoArticle $record): string => static::articleIsSkipSeoAudit($record)
+                    ? 'heroicon-o-eye'
+                    : 'heroicon-o-eye-slash')
                 ->iconButton()
-                ->color(fn (SeoArticle $record): string => (bool) $record->skip_seo_score ? 'warning' : 'gray')
-                ->tooltip(fn (SeoArticle $record): string => (bool) $record->skip_seo_score
-                    ? __('seo-content-ai::filament.article_list.unskip_seo_score')
-                    : __('seo-content-ai::filament.article_list.skip_seo_score'))
+                ->color(fn (SeoArticle $record): string => static::articleIsSkipSeoAudit($record) ? 'warning' : 'gray')
+                ->tooltip(fn (SeoArticle $record): string => static::articleIsSkipSeoAudit($record)
+                    ? __('seo-content-ai::filament.article_list.unskip_seo_audit')
+                    : __('seo-content-ai::filament.article_list.skip_seo_audit'))
                 ->action(function (SeoArticle $record): void {
-                    $skipped = static::toggleSkipSeoScore($record);
+                    $skipped = static::toggleSkipSeoAudit($record);
 
                     Notification::make()
                         ->title(
                             $skipped
-                                ? __('seo-content-ai::filament.article_list.seo_score_skipped_on')
-                                : __('seo-content-ai::filament.article_list.seo_score_skipped_off'),
+                                ? __('seo-content-ai::filament.article_list.seo_audit_skipped_on')
+                                : __('seo-content-ai::filament.article_list.seo_audit_skipped_off'),
                         )
                         ->success()
                         ->send();
@@ -1498,20 +1509,94 @@ class ArticleResource extends SeoPanelResource
     }
 
     /**
-     * Bật/tắt bỏ qua chấm điểm SEO. Trả về true nếu sau thao tác bài đang được bỏ qua.
+     * Bật/tắt bỏ qua SEO Audit + ẩn khỏi Article list. Trả về true nếu sau thao tác đang skip.
+     */
+    public static function toggleSkipSeoAudit(SeoArticle $article): bool
+    {
+        if (static::articleIsSkipSeoAudit($article)) {
+            $article->articleMetas()
+                ->where('meta_key', self::META_SKIP_SEO_AUDIT)
+                ->delete();
+            $article->unsetRelation('articleMetas');
+
+            return false;
+        }
+
+        $article->articleMetas()->updateOrCreate(
+            ['meta_key' => self::META_SKIP_SEO_AUDIT],
+            ['meta_value' => '1'],
+        );
+        $article->unsetRelation('articleMetas');
+
+        return true;
+    }
+
+    public static function articleIsSkipSeoAudit(SeoArticle $article): bool
+    {
+        if ($article->relationLoaded('articleMetas')) {
+            return $article->articleMetas
+                ->contains(static function ($meta): bool {
+                    if ((string) ($meta->meta_key ?? '') !== self::META_SKIP_SEO_AUDIT) {
+                        return false;
+                    }
+
+                    $value = strtolower(trim((string) ($meta->meta_value ?? '')));
+
+                    return in_array($value, ['1', 'true'], true);
+                });
+        }
+
+        return $article->articleMetas()
+            ->where('meta_key', self::META_SKIP_SEO_AUDIT)
+            ->where(function (Builder $valueQuery): void {
+                $valueQuery
+                    ->where('meta_value', '1')
+                    ->orWhere('meta_value', 1)
+                    ->orWhere('meta_value', 'true');
+            })
+            ->exists();
+    }
+
+    /**
+     * @param  Builder<SeoArticle>  $query
+     * @return Builder<SeoArticle>
+     */
+    public static function applyExcludeSkipSeoAuditScope(Builder $query): Builder
+    {
+        return $query->whereDoesntHave('articleMetas', static function (Builder $meta): void {
+            $meta->where('meta_key', self::META_SKIP_SEO_AUDIT)
+                ->where(function (Builder $valueQuery): void {
+                    $valueQuery
+                        ->where('meta_value', '1')
+                        ->orWhere('meta_value', 1)
+                        ->orWhere('meta_value', 'true');
+                });
+        });
+    }
+
+    /**
+     * @param  Builder<SeoArticle>  $query
+     * @return Builder<SeoArticle>
+     */
+    public static function applyOnlySkipSeoAuditScope(Builder $query): Builder
+    {
+        return $query->whereHas('articleMetas', static function (Builder $meta): void {
+            $meta->where('meta_key', self::META_SKIP_SEO_AUDIT)
+                ->where(function (Builder $valueQuery): void {
+                    $valueQuery
+                        ->where('meta_value', '1')
+                        ->orWhere('meta_value', 1)
+                        ->orWhere('meta_value', 'true');
+                });
+        });
+    }
+
+    /**
+     * @deprecated Dùng toggleSkipSeoAudit — giữ để tương thích chỗ còn gọi cũ.
      */
     public static function toggleSkipSeoScore(SeoArticle $article): bool
     {
-        $skip = ! (bool) $article->skip_seo_score;
-
-        $payload = ['skip_seo_score' => $skip];
-        if ($skip) {
-            $payload['seo_score'] = null;
-        }
-
-        $article->forceFill($payload)->save();
-
-        return $skip;
+        return static::toggleSkipSeoAudit($article);
     }
 
     private static function deleteLocalMediaForArticle(SeoArticle $article): int
@@ -1881,6 +1966,30 @@ class ArticleResource extends SeoPanelResource
         }
 
         return static::resolveArticleProjectSourceContent($article);
+    }
+
+    /**
+     * SEO Audit candidates only: exclude reviewed + bài đã gắn Content Project (`article_id`)
+     * + bài có meta skip_seo_audit.
+     *
+     * @param  Builder<SeoArticle>  $query
+     * @return Builder<SeoArticle>
+     */
+    public static function applySeoAuditCandidateScope(Builder $query): Builder
+    {
+        $query->where(function (Builder $sub): void {
+            $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
+        });
+
+        // Chỉ match article_id — assign rewrite/improve luôn set cột này.
+        // Không OR theo title: correlated scan trên cả domain dễ timeout → scan_failed.
+        $query->whereNotExists(function ($sub): void {
+            $sub->selectRaw('1')
+                ->from('seo_project_tasks')
+                ->whereColumn('seo_project_tasks.article_id', 'articles.id');
+        });
+
+        return static::applyExcludeSkipSeoAuditScope($query);
     }
 
     public static function articleAssignedContentProjectId(SeoArticle $article): ?int

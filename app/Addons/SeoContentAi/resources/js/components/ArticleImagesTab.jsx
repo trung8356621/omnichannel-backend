@@ -1,9 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Link2, Loader2, MoreHorizontal, RotateCcw, Scissors, ShieldOff, Trash2, Type } from 'lucide-react';
+import {
+    ExternalLink,
+    FlaskConical,
+    ImageUp,
+    Link2,
+    Loader2,
+    MoreHorizontal,
+    RotateCcw,
+    Scissors,
+    ShieldOff,
+    Trash2,
+    Type,
+} from 'lucide-react';
 import {
     assignInArticleQuickFixIndices,
     collectImagesFromBlocks,
     filterSupplementalDuplicatesOfBlockRows,
+    hasTrustedWordPressUrl,
+    isImageReadyForWpSlugFix,
     mergeArticleImageRow,
 } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
@@ -16,6 +30,7 @@ import {
     prepareImageEditorUrl,
     deleteAiMediaJob,
     retryAiMediaGeneration,
+    testOptimizeLocalWebp,
 } from '../utils/seoMediaApi';
 
 const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
@@ -83,11 +98,6 @@ function AiMediaJobRow({ job, onRetry, onFocusBlock, onNotify }) {
         try {
             const data = await retryAiMediaGeneration(job.id, retryInput);
             onRetry?.(data);
-            onNotify?.({
-                title: t('ai_retry_success'),
-                body: t('ai_retry_success_body'),
-                status: 'success',
-            });
             setShowRetryInput(false);
 
             if (data.editor_block_id) {
@@ -128,11 +138,6 @@ function AiMediaJobRow({ job, onRetry, onFocusBlock, onNotify }) {
         try {
             await deleteAiMediaJob(job.id);
             onRetry?.();
-            onNotify?.({
-                title: t('ai_delete_success'),
-                body: `Đã xóa job #${job.id}.`,
-                status: 'success',
-            });
         } catch (error) {
             onNotify?.({
                 title: t('ai_delete_failed'),
@@ -248,25 +253,40 @@ function ImageRow({
     onRemoveImage,
     onRemoveSupplementalImage,
     onAltTitleChange,
+    onMakeFeatured,
     canQuickFix = false,
     onNotify,
 }) {
     const [alt, setAlt] = useState(row.alt ?? '');
     const [openingEditor, setOpeningEditor] = useState(false);
     const [applyingWatermark, setApplyingWatermark] = useState(false);
+    const [optimizingWebp, setOptimizingWebp] = useState(false);
+    const [makingFeatured, setMakingFeatured] = useState(false);
+    const [webpTestResult, setWebpTestResult] = useState(null);
     const [moreOpen, setMoreOpen] = useState(false);
     const moreMenuRef = useRef(null);
     const canPatchInEditor = Boolean(row.blockId);
     const canRemove = canPatchInEditor || Boolean(onRemoveSupplementalImage);
     const slugText = (row.slug || '').trim();
     const showActions = canProcessArticleImage(row);
-    const busy = openingEditor || applyingWatermark;
+    const busy = openingEditor || applyingWatermark || optimizingWebp || makingFeatured;
     const excluded = Boolean(row.excludeQuickFix);
-    const wpUrl = String(row.wpSrc || '').trim();
-    const localUrl = String(row.localSrc || '').trim();
-    const primaryUrl = wpUrl || String(row.src || '').trim();
-    const showLocalExtra = distinctUrls(primaryUrl, localUrl);
+    const rawWpSrc = String(row.wpSrc || '').trim();
+    const trustedWpUrl = hasTrustedWordPressUrl(row)
+        ? (!isLocalSeoMediaSrc(rawWpSrc) ? rawWpSrc : String(row.src || '').trim())
+        : '';
+    const localUrl =
+        String(row.localSrc || '').trim()
+        || (isLocalSeoMediaSrc(String(row.src || '').trim()) ? String(row.src || '').trim() : '');
+    const primaryUrl = trustedWpUrl || localUrl || String(row.src || '').trim();
+    const showLocalExtra = Boolean(trustedWpUrl) && distinctUrls(trustedWpUrl, localUrl);
     const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);
+    const canQuickFixSlugOne =
+        canQuickFix &&
+        (isImageReadyForWpSlugFix(row) ||
+            seoMediaId > 0 ||
+            isLocalSeoMediaSrc(String(row.src || '').trim()) ||
+            isLocalSeoMediaSrc(String(row.localSrc || '').trim()));
 
     useEffect(() => {
         setAlt(row.alt ?? '');
@@ -335,11 +355,6 @@ function ImageRow({
             if (data.url) {
                 onPatch?.(row.blockId, { src: data.url });
             }
-            onNotify?.({
-                title: t('image_watermark_applied'),
-                body: data.message ?? t('image_watermark_applied_body'),
-                status: 'success',
-            });
         } catch (error) {
             onNotify?.({
                 title: t('image_watermark_failed'),
@@ -365,6 +380,74 @@ function ImageRow({
             return;
         }
         window.open(splitterUrl, '_blank', 'noopener,noreferrer');
+    };
+
+    const handleTestOptimizeWebp = async () => {
+        if (!siteId || seoMediaId <= 0 || busy) {
+            return;
+        }
+
+        setOptimizingWebp(true);
+        setWebpTestResult(null);
+        onNotify?.({
+            title: t('test_optimize_webp'),
+            body: t('test_optimize_webp_working'),
+            status: 'info',
+        });
+
+        try {
+            const data = await testOptimizeLocalWebp({ siteId, seoMediaId });
+            const result = {
+                url: String(data.url || '').trim(),
+                path: String(data.path || '').trim(),
+                width: Number(data.width ?? 0),
+                height: Number(data.height ?? 0),
+                bytes: Number(data.bytes ?? 0),
+            };
+            setWebpTestResult(result);
+
+            const kb = Math.max(1, Math.round(result.bytes / 1024));
+            onNotify?.({
+                title: t('test_optimize_webp_success'),
+                body: t('test_optimize_webp_success_body', {
+                    width: result.width,
+                    height: result.height,
+                    kb,
+                    path: result.path || '—',
+                    url: result.url || '—',
+                }),
+                status: 'success',
+            });
+            // Không auto-open tab (dễ bị blocker / about:blank). Hiện link ngay dưới ảnh.
+        } catch (error) {
+            setWebpTestResult(null);
+            onNotify?.({
+                title: t('test_optimize_webp_failed'),
+                body: error?.message ?? t('editor_try_again_later'),
+                status: 'danger',
+            });
+        } finally {
+            setOptimizingWebp(false);
+        }
+    };
+
+    const handleMakeFeatured = async () => {
+        if (!articleId || !onMakeFeatured || busy) {
+            return;
+        }
+
+        setMakingFeatured(true);
+        try {
+            await onMakeFeatured(row);
+        } catch (error) {
+            onNotify?.({
+                title: t('make_featured_image_failed'),
+                body: error?.message ?? t('editor_try_again_later'),
+                status: 'danger',
+            });
+        } finally {
+            setMakingFeatured(false);
+        }
     };
 
     return (
@@ -421,20 +504,30 @@ function ImageRow({
                         placeholder={t('image_alt_placeholder')}
                         disabled={!canPatchInEditor && !onAltTitleChange}
                     />
-                    {row.wpAttachmentId && primaryUrl ? (
+                    {row.wpAttachmentId && trustedWpUrl ? (
                         <a
-                            href={primaryUrl}
+                            href={trustedWpUrl}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="seo-article-images-wp-id"
-                            title={primaryUrl}
+                            title={trustedWpUrl}
                         >
-                            {t('image_used_in_other_article', { url: primaryUrl })}
+                            {t('image_used_in_other_article', { url: trustedWpUrl })}
                         </a>
                     ) : null}
                 </div>
 
-                {primaryUrl ? (
+                {trustedWpUrl ? (
+                    <a
+                        href={trustedWpUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="seo-article-images-src-link"
+                    >
+                        <ExternalLink size={14} />
+                        <span className="truncate">{`WP: ${trustedWpUrl}`}</span>
+                    </a>
+                ) : primaryUrl ? (
                     <a
                         href={primaryUrl}
                         target="_blank"
@@ -443,7 +536,7 @@ function ImageRow({
                     >
                         <ExternalLink size={14} />
                         <span className="truncate">
-                            {wpUrl ? `WP: ${primaryUrl}` : primaryUrl}
+                            {isLocalSeoMediaSrc(primaryUrl) ? `Local: ${primaryUrl}` : primaryUrl}
                         </span>
                     </a>
                 ) : null}
@@ -457,6 +550,58 @@ function ImageRow({
                         <ExternalLink size={14} />
                         <span className="truncate">{`Local: ${localUrl}`}</span>
                     </a>
+                ) : null}
+
+                {webpTestResult?.url ? (
+                    <div className="seo-article-images-webp-test">
+                        <p className="seo-article-images-webp-test__label">
+                            {t('test_optimize_webp_result_label')}
+                            {webpTestResult.width > 0
+                                ? ` · ${webpTestResult.width}×${webpTestResult.height}px · ${Math.max(1, Math.round(webpTestResult.bytes / 1024))}KB`
+                                : ''}
+                        </p>
+                        <a
+                            href={webpTestResult.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="seo-article-images-src-link"
+                            title={webpTestResult.url}
+                        >
+                            <ExternalLink size={14} />
+                            <span className="truncate">{`WebP: ${webpTestResult.path || webpTestResult.url}`}</span>
+                        </a>
+                        <div className="seo-article-images-webp-test__actions">
+                            <button
+                                type="button"
+                                className="seo-article-images-webp-test__btn"
+                                onClick={() => window.open(webpTestResult.url, '_blank', 'noopener,noreferrer')}
+                            >
+                                {t('test_optimize_webp_open')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-article-images-webp-test__btn"
+                                onClick={async () => {
+                                    try {
+                                        await navigator.clipboard.writeText(webpTestResult.url);
+                                        onNotify?.({
+                                            title: t('test_optimize_webp_copy'),
+                                            body: webpTestResult.url,
+                                            status: 'success',
+                                        });
+                                    } catch {
+                                        onNotify?.({
+                                            title: t('test_optimize_webp_copy'),
+                                            body: webpTestResult.url,
+                                            status: 'info',
+                                        });
+                                    }
+                                }}
+                            >
+                                {t('test_optimize_webp_copy')}
+                            </button>
+                        </div>
+                    </div>
                 ) : null}
 
                 {showActions ? (
@@ -495,7 +640,12 @@ function ImageRow({
                                         type="button"
                                         className="seo-article-images-more-item"
                                         role="menuitem"
-                                        disabled={busy || excluded || !canQuickFix}
+                                        disabled={busy || excluded || !canQuickFixSlugOne}
+                                        title={
+                                            !canQuickFix
+                                                ? t('image_quick_fix_missing_keyword')
+                                                : t('image_quick_fix_slug_hint')
+                                        }
                                         onClick={() => {
                                             setMoreOpen(false);
                                             onQuickFixSlug?.(row);
@@ -516,6 +666,33 @@ function ImageRow({
                                     >
                                         <Type size={14} />
                                         {t('fix_alt_title')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={busy || seoMediaId <= 0 || !siteId}
+                                        title={seoMediaId > 0 ? t('test_optimize_webp_hint') : t('test_optimize_webp_local_only')}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            handleTestOptimizeWebp();
+                                        }}
+                                    >
+                                        {optimizingWebp ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />}
+                                        {optimizingWebp ? t('processing') : t('test_optimize_webp')}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="seo-article-images-more-item"
+                                        role="menuitem"
+                                        disabled={busy || !articleId || !onMakeFeatured}
+                                        onClick={() => {
+                                            setMoreOpen(false);
+                                            handleMakeFeatured();
+                                        }}
+                                    >
+                                        {makingFeatured ? <Loader2 size={14} className="animate-spin" /> : <ImageUp size={14} />}
+                                        {makingFeatured ? t('processing') : t('make_featured_image')}
                                     </button>
                                     <button
                                         type="button"
@@ -613,6 +790,7 @@ export default function ArticleImagesTab({
     onRemoveImage,
     onRemoveSupplementalImage,
     onAltTitleChange,
+    onMakeFeatured,
     onNotify,
 }) {
     const blockImages = useMemo(() => collectImagesFromBlocks(blocks), [blocks]);
@@ -772,10 +950,15 @@ export default function ArticleImagesTab({
     }, [jumpTarget, mergedImages, aiJobs]);
 
     const totalCount = aiJobs.length + mergedImages.length;
-    const hasWpImages = mergedImages.some((row) => row.wpAttachmentId);
-    const hasLocalImages = mergedImages.some((row) => !row.wpAttachmentId && isLocalSeoMediaSrc(row.src));
+    const hasWpImages = mergedImages.some((row) => row.wpAttachmentId && hasTrustedWordPressUrl(row));
+    const hasLocalImages = mergedImages.some(
+        (row) =>
+            (!row.wpAttachmentId && isLocalSeoMediaSrc(row.src)) ||
+            isLocalSeoMediaSrc(String(row.localSrc || '').trim()),
+    );
     const keywordSource = (focusKeyword || articleTitle || '').trim();
     const canQuickFix = keywordSource.length > 0 && mergedImages.length > 0;
+    const canQuickFixSlug = canQuickFix;
 
     if (!totalCount) {
         return (
@@ -814,13 +997,13 @@ export default function ArticleImagesTab({
                     <button
                         type="button"
                         className={`seo-images-quick-fix-btn${quickFixSlugAllBusy ? ' is-loading' : ''}`}
-                        disabled={!canQuickFix || quickFixSlugAllBusy}
+                        disabled={!canQuickFixSlug || quickFixSlugAllBusy}
                         title={
                             quickFixSlugAllBusy
                                 ? t('fix_slug_all_loading')
-                                : canQuickFix
-                                  ? t('images_tab_quick_fix_slug_all_hint')
-                                  : t('image_quick_fix_missing_keyword')
+                                : !keywordSource
+                                  ? t('image_quick_fix_missing_keyword')
+                                  : t('images_tab_quick_fix_slug_all_hint')
                         }
                         aria-busy={quickFixSlugAllBusy}
                         onClick={() => onQuickFixSlugAll?.(mergedImages)}
@@ -871,6 +1054,7 @@ export default function ArticleImagesTab({
                         onRemoveImage={onRemoveImage}
                         onRemoveSupplementalImage={onRemoveSupplementalImage}
                         onAltTitleChange={onAltTitleChange}
+                        onMakeFeatured={onMakeFeatured}
                         canQuickFix={canQuickFix}
                         onNotify={onNotify}
                     />

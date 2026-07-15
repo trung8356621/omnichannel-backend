@@ -15,16 +15,16 @@ final class GoogleAiModelRegistryImagePriorityTest extends TestCase
             preferred: null,
             excludeImagen: false,
             customPriority: [
-                'gemini-2.5-pro-image',
-                'gemini-2.5-flash-image',
+                'gemini-3-pro-image-preview',
+                'gemini-3.1-flash-image-preview',
                 'imagen-4.0-generate-001',
             ],
             inputLength: 2000,
         );
 
         self::assertSame([
-            'gemini-2.5-pro-image',
-            'gemini-2.5-flash-image',
+            'gemini-3-pro-image-preview',
+            'gemini-3.1-flash-image-preview',
             'imagen-4.0-generate-001',
         ], $models);
     }
@@ -38,6 +38,17 @@ final class GoogleAiModelRegistryImagePriorityTest extends TestCase
         );
 
         self::assertNotContains('imagen-4.0-generate-001', $models);
-        self::assertContains('gemini-2.5-flash-image', $models);
+        self::assertContains('gemini-3.1-flash-image-preview', $models);
+    }
+
+    public function test_it_filters_legacy_gemini_2x_from_priority(): void
+    {
+        $models = GoogleAiModelRegistry::resolveImageModelPriorityList([
+            'gemini-2.5-flash-image',
+            'gemini-3.1-flash-image-preview',
+        ]);
+
+        self::assertNotContains('gemini-2.5-flash-image', $models);
+        self::assertContains('gemini-3.1-flash-image-preview', $models);
     }
 }

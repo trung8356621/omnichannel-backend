@@ -8,7 +8,12 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoAiModel;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
+use App\Addons\SeoContentAi\Support\GeminiModelVersionPolicy;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
+use App\Addons\SeoContentAi\Support\ImageCapability;
+use App\Addons\SeoContentAi\Support\ImageCapabilityResolver;
+use App\Addons\SeoContentAi\Support\ImageToolType;
+use App\Addons\SeoContentAi\Support\RenderingPreference;
 use App\Models\ApiConnection;
 use Illuminate\Support\Facades\Http;
 use Throwable;
@@ -73,9 +78,9 @@ final class AiModelRouterService
                                 'display_name' => (string) ($model['displayName'] ?? $rawName),
                                 'priority' => $classified['priority'],
                                 'status' => SeoAiModel::STATUS_ACTIVE,
-                                'capabilities' => [
+                                'capabilities' => $this->capabilitiesWithResolved($rawName, [
                                     'supportedGenerationMethods' => $model['supportedGenerationMethods'] ?? [],
-                                ],
+                                ]),
                                 'last_error' => null,
                             ],
                         );
@@ -179,6 +184,7 @@ final class AiModelRouterService
                         'display_name' => (string) ($model['display_name'] ?? $model['displayName'] ?? $rawName),
                         'priority' => $classified['priority'],
                         'status' => SeoAiModel::STATUS_ACTIVE,
+                        'capabilities' => $this->capabilitiesWithResolved($rawName, ['source' => 'anthropic']),
                         'last_error' => null,
                     ],
                 );
@@ -235,24 +241,59 @@ final class AiModelRouterService
         ]);
 
         logger()->warning('AI model exhausted, failover next', [
-            'raw_model' => $failedModel->raw_model_name,
+            'planner_model' => $failedModel->raw_model_name,
             'category' => $failedModel->category,
         ]);
     }
 
+    public function markModelUnavailableForAutoRouting(int $modelId, string $errorMessage): void
+    {
+        $failedModel = SeoAiModel::query()->find($modelId);
+        if ($failedModel === null) {
+            return;
+        }
+
+        $capabilities = is_array($failedModel->capabilities) ? $failedModel->capabilities : [];
+        $failedModel->update([
+            'capabilities' => GeminiModelVersionPolicy::markCapabilitiesUnavailable($capabilities, $errorMessage),
+            'last_error' => mb_substr($errorMessage, 0, 2000),
+        ]);
+
+        logger()->warning('AI model marked unavailable for auto-routing', [
+            'planner_model' => $failedModel->raw_model_name,
+            'disabled_reason' => GeminiModelVersionPolicy::REASON_PROVIDER_UNAVAILABLE,
+        ]);
+    }
+
     /**
-     * Category cho prompt (công cụ image → imagen_pro).
+     * Category cho text path theo RenderingPreference.
+     * Image path không dùng — ImageRoutingStrategy.
+     *
+     * @deprecated prompts.model_category không còn điều khiển routing
      */
     public function resolveCategoryForPrompt(SeoPrompt $prompt, string $toolType = 'default'): string
     {
         $connection = $prompt->aiConnection;
         $provider = $connection !== null ? (string) $connection->provider : 'gemini';
 
-        return AiModelCategory::resolveForPrompt(
-            filled($prompt->model_category ?? null) ? (string) $prompt->model_category : null,
-            $provider,
-            $toolType,
-        );
+        if (ImageToolType::fromMixed($toolType)->isImagePipeline()) {
+            return AiModelCategory::IMAGEN_PRO;
+        }
+
+        $preference = app(SeoCreateArticleSettingsService::class)->getRenderingPreference();
+
+        return match ($provider) {
+            'claude' => match ($preference) {
+                RenderingPreference::CostFirst => AiModelCategory::CLAUDE_HAIKU,
+                RenderingPreference::QualityFirst => AiModelCategory::CLAUDE_OPUS,
+                RenderingPreference::Balanced => AiModelCategory::CLAUDE_SONNET,
+            },
+            default => match ($preference) {
+                RenderingPreference::QualityFirst => AiModelCategory::GEMINI_PRO,
+                RenderingPreference::CostFirst,
+                RenderingPreference::Balanced => AiModelCategory::GEMINI_FLASH,
+            },
+        };
     }
 
     /**
@@ -289,8 +330,19 @@ final class AiModelRouterService
 
                 return [$output, $usage, $rawName, $modelId];
             } catch (Throwable $exception) {
-                if ($this->isQuotaOrRateLimitError($exception->getMessage())) {
-                    $this->handleModelExhausted($modelId, $exception->getMessage());
+                if ($this->isQuotaOrRateLimitError($exception->getMessage())
+                    || GeminiModelVersionPolicy::isProviderUnavailableError($exception->getMessage())
+                ) {
+                    if (GeminiModelVersionPolicy::isProviderUnavailableError($exception->getMessage())) {
+                        $this->markModelUnavailableForAutoRouting($modelId, $exception->getMessage());
+                    } else {
+                        $this->handleModelExhausted($modelId, $exception->getMessage());
+                    }
+
+                    logger()->warning('Planner model failed, failover next', [
+                        'planner_model' => $rawName,
+                        'error' => $exception->getMessage(),
+                    ]);
 
                     return $this->executeWithFailover($connection, $category, $executor, $attempt + 1, $modelId);
                 }
@@ -447,18 +499,30 @@ final class AiModelRouterService
             $query->where('id', '!=', $excludeModelId);
         }
 
-        return $query->first();
+        foreach ($query->get() as $model) {
+            $capabilities = is_array($model->capabilities) ? $model->capabilities : [];
+            if (GeminiModelVersionPolicy::isEligibleForAutoRouting((string) $model->raw_model_name, $capabilities)) {
+                return $model;
+            }
+        }
+
+        return null;
     }
 
     private function fallbackRawModelName(ApiConnection $connection, string $category): string
     {
         $legacyRaw = trim((string) ($connection->default_model ?? ''));
-        if ($legacyRaw !== '' && ! AiModelCategory::isValid($legacyRaw) && $this->categoryForLegacyRaw($legacyRaw) === $category) {
+        if (
+            $legacyRaw !== ''
+            && ! AiModelCategory::isValid($legacyRaw)
+            && $this->categoryForLegacyRaw($legacyRaw) === $category
+            && GeminiModelVersionPolicy::isEligibleForAutoRouting($legacyRaw)
+        ) {
             return $legacyRaw;
         }
 
         return match ($category) {
-            AiModelCategory::IMAGEN_PRO => 'imagen-4.0-fast-generate-001',
+            AiModelCategory::IMAGEN_PRO => 'gemini-3.1-flash-image-preview',
             AiModelCategory::GEMINI_PRO => 'gemini-3.1-pro-preview',
             AiModelCategory::GEMINI_FLASH => 'gemini-3-flash-preview',
             AiModelCategory::CLAUDE_OPUS => 'claude-opus-4-20250514',
@@ -546,7 +610,10 @@ final class AiModelRouterService
                     'display_name' => $label,
                     'priority' => $priority,
                     'status' => SeoAiModel::STATUS_ACTIVE,
-                    'capabilities' => ['supportedGenerationMethods' => $methods, 'source' => 'catalog'],
+                    'capabilities' => $this->capabilitiesWithResolved($raw, [
+                        'supportedGenerationMethods' => $methods,
+                        'source' => 'catalog',
+                    ]),
                     'last_error' => null,
                 ],
             );
@@ -555,6 +622,15 @@ final class AiModelRouterService
         }
 
         return $seeded;
+    }
+
+    /**
+     * @param  array<string, mixed>  $base
+     * @return array<string, mixed>
+     */
+    private function capabilitiesWithResolved(string $rawName, array $base): array
+    {
+        return (new ImageCapabilityResolver())->mergeResolvedIntoCapabilities($rawName, $base);
     }
 
     /**
@@ -580,21 +656,47 @@ final class AiModelRouterService
         $total = 0;
         $latestSync = null;
 
+        $resolver = new ImageCapabilityResolver();
+        $adminEnabledUnknown = array_fill_keys(
+            app(SeoCreateArticleSettingsService::class)->getAdminEnabledUnknownImageModels(),
+            true,
+        );
+
         foreach ($connections as $connection) {
             $models = [];
+            $groups = [
+                'text' => [],
+                'image' => [],
+                'image_typography' => [],
+                'video' => [],
+                'unknown' => [],
+            ];
+
             foreach ($connection->seoAiModels as $model) {
                 $total++;
-                $models[] = [
+                $capabilities = is_array($model->capabilities) ? $model->capabilities : [];
+                $resolved = $resolver->resolve((string) $model->raw_model_name, $capabilities);
+                $group = ImageCapability::displayGroupForCapabilities($resolved);
+                $slug = GoogleAiModelRegistry::normalizeSlug((string) $model->raw_model_name);
+                $routing = GeminiModelVersionPolicy::routingDecision($slug, $capabilities);
+                $row = [
                     'id' => $model->id,
                     'category' => $model->category,
                     'category_label' => AiModelCategory::promptSelectOptions()[$model->category] ?? $model->category,
+                    'capability_group' => $group,
+                    'capabilities_resolved' => $resolved,
                     'raw_model_name' => $model->raw_model_name,
                     'display_name' => $model->display_name,
                     'priority' => $model->priority,
                     'status' => $model->status,
+                    'routing_status' => $routing['routing_status'],
+                    'disabled_reason' => $routing['disabled_reason'],
                     'last_error' => $model->last_error,
+                    'admin_enabled_unknown' => isset($adminEnabledUnknown[$slug]),
                     'updated_at' => $model->updated_at?->timezone(config('app.timezone'))->format('d/m/Y H:i'),
                 ];
+                $models[] = $row;
+                $groups[$group][] = $row;
 
                 if ($model->updated_at !== null
                     && ($latestSync === null || $model->updated_at->gt($latestSync))) {
@@ -609,6 +711,7 @@ final class AiModelRouterService
                 'status' => $connection->status,
                 'model_count' => count($models),
                 'models' => $models,
+                'groups' => $groups,
             ];
         }
 
@@ -616,7 +719,28 @@ final class AiModelRouterService
             'connections' => $rows,
             'total_models' => $total,
             'last_synced_at' => $latestSync?->timezone(config('app.timezone'))->format('d/m/Y H:i'),
+            'capability_groups' => ImageCapability::displayGroups(),
         ];
+    }
+
+    public function toggleAdminEnabledUnknownImageModel(string $rawModelName, bool $enabled): void
+    {
+        $settings = app(SeoCreateArticleSettingsService::class);
+        $slug = GoogleAiModelRegistry::normalizeSlug($rawModelName);
+        if ($slug === '') {
+            return;
+        }
+
+        $current = $settings->getAdminEnabledUnknownImageModels();
+        if ($enabled) {
+            $current[] = $slug;
+        } else {
+            $current = array_values(array_filter($current, static fn (string $item): bool => $item !== $slug));
+        }
+
+        $bag = $settings->getSettings();
+        $bag[SeoCreateArticleSettingsService::KEY_ADMIN_ENABLED_UNKNOWN_IMAGE_MODELS] = array_values(array_unique($current));
+        $settings->saveSettings($bag);
     }
 
     /**
@@ -677,6 +801,7 @@ final class AiModelRouterService
                     'display_name' => $label,
                     'priority' => $priority,
                     'status' => SeoAiModel::STATUS_ACTIVE,
+                    'capabilities' => $this->capabilitiesWithResolved($raw, ['source' => 'catalog']),
                 ],
             );
         }

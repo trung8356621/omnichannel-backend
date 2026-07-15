@@ -42,8 +42,7 @@ final class AiExecutionService
         $inputData = $inputData !== null ? Utf8Sanitizer::compactForAiVariable($inputData) : null;
         $compiledPrompt = $compiledPrompt !== null ? Utf8Sanitizer::string($compiledPrompt) : null;
 
-        $promptTool = trim((string) ($prompt->tools ?? 'default'));
-        if ($promptTool === 'image') {
+        if (\App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline()) {
             throw new PromptRunException(
                 'Prompt công cụ Hình ảnh phải chạy qua MediaGenerationService (Imagen/Nano Banana), không gọi executeClaude.',
             );

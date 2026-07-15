@@ -142,6 +142,19 @@ class SeoSettingsOverview extends Page implements HasForms
         $notification->send();
     }
 
+    public function toggleUnknownModelRouting(string $rawModelName, bool $enabled, AiModelRouterService $router): void
+    {
+        $router->toggleAdminEnabledUnknownImageModel($rawModelName, $enabled);
+        $this->refreshAiModelsOverview($router);
+
+        Notification::make()
+            ->title($enabled
+                ? 'Unknown model enabled for routing (test)'
+                : 'Unknown model removed from routing')
+            ->success()
+            ->send();
+    }
+
     public function syncConnectionAiModels(int $connectionId, AiModelRouterService $router): void
     {
         $ok = $router->syncModelsForConnection($connectionId);

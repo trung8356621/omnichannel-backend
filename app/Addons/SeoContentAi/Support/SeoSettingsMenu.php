@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsAiAdvanced;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsEditor;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsKeywords;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsPrompt;
+use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsRecommendations;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsScoring;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsWorkflows;
 use App\Addons\SeoContentAi\Filament\Resources\AiConnectionResource;
@@ -31,6 +33,12 @@ final class SeoSettingsMenu
                 'label' => 'Workflows',
                 'icon' => 'heroicon-o-arrows-right-left',
                 'url' => SeoSettingsWorkflows::getUrl(),
+            ],
+            [
+                'id' => 'ai-advanced',
+                'label' => 'AI Advanced',
+                'icon' => 'heroicon-o-cpu-chip',
+                'url' => SeoSettingsAiAdvanced::getUrl(),
             ],
             [
                 'id' => 'editor',
@@ -61,6 +69,12 @@ final class SeoSettingsMenu
                 'label' => 'SEO scoring',
                 'icon' => 'heroicon-o-chart-bar',
                 'url' => SeoSettingsScoring::getUrl(),
+            ],
+            [
+                'id' => 'recommendations',
+                'label' => 'Recommendations',
+                'icon' => 'heroicon-o-book-open',
+                'url' => SeoSettingsRecommendations::getUrl(),
             ],
         ];
     }

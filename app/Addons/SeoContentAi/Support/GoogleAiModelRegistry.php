@@ -119,6 +119,13 @@ final class GoogleAiModelRegistry
         return self::categoryOf($modelSlug) === self::CATEGORY_TEXT;
     }
 
+    public static function isRegistered(string $modelSlug): bool
+    {
+        $slug = self::normalizeSlug($modelSlug);
+
+        return $slug !== '' && isset(self::MODELS[$slug]);
+    }
+
     /**
      * Thứ tự thử khi công cụ prompt = Hình ảnh.
      *
@@ -131,29 +138,40 @@ final class GoogleAiModelRegistry
      *
      * @return list<string>
      */
+    /**
+     * @deprecated Dùng ImageRoutingStrategy::modelsToTry — wrapper BC cho test/legacy.
+     *
+     * @return list<string>
+     */
     public static function imageModelsToTry(
         ?string $preferred = null,
         bool $excludeImagen = false,
         ?array $customPriority = null,
         ?int $inputLength = null,
     ): array {
+        $models = (new ImageRoutingStrategy())->modelsToTry(
+            toolType: ImageToolType::Image,
+            preference: RenderingPreference::Balanced,
+            compiledPromptLength: $inputLength,
+            productContext: $excludeImagen,
+            configuredPriorityList: $customPriority,
+        );
+
         $preferred = self::normalizeSlug((string) $preferred);
-        $defaults = self::resolveImageModelPriority($customPriority);
-
-        if ($inputLength !== null && $inputLength >= 0) {
-            $defaults = ImageModelInputLengthPolicy::reorderModels($defaults, $inputLength);
-        }
-
-        $models = $defaults;
         if ($preferred !== '' && self::categoryOf($preferred) !== self::CATEGORY_TEXT) {
-            $models = array_merge([$preferred], $defaults);
+            $models = array_values(array_unique(array_merge([$preferred], $models)));
         }
 
-        if ($excludeImagen) {
-            $models = array_filter($models, fn (string $model): bool => ! self::isImagenModel($model));
-        }
+        return $models;
+    }
 
-        return array_values(array_unique($models));
+    /**
+     * @param  list<string|array{slug?: string}>|null  $customPriority
+     * @return list<string>
+     */
+    public static function resolveImageModelPriorityList(?array $customPriority): array
+    {
+        return self::resolveImageModelPriority($customPriority);
     }
 
     /**
@@ -161,9 +179,10 @@ final class GoogleAiModelRegistry
      */
     public static function defaultImageModelPriority(): array
     {
+        // Gemini major < 3 không vào auto-routing (xem GeminiModelVersionPolicy).
         return [
-            'gemini-2.5-flash-image',
-            'gemini-2.5-pro-image',
+            'gemini-3.1-flash-image-preview',
+            'gemini-3-pro-image-preview',
             'imagen-4.0-generate-001',
         ];
     }
@@ -190,9 +209,15 @@ final class GoogleAiModelRegistry
             }
 
             $slug = self::normalizeSlug($slug);
-            if ($slug !== '' && self::categoryOf($slug) !== self::CATEGORY_TEXT) {
-                $normalized[] = $slug;
+            if ($slug === '' || self::categoryOf($slug) === self::CATEGORY_TEXT) {
+                continue;
             }
+
+            if (! GeminiModelVersionPolicy::isEligibleForAutoRouting($slug)) {
+                continue;
+            }
+
+            $normalized[] = $slug;
         }
 
         $normalized = array_values(array_unique($normalized));

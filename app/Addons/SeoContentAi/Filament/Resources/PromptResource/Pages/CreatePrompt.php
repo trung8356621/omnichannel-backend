@@ -37,6 +37,7 @@ class CreatePrompt extends SeoCreateRecord
             $data['variables'] ?? [],
         );
 
+        // model_category không còn trên form — lưu default provider nếu cột còn; không dùng để route image.
         if (blank($data['model_category'] ?? null) && filled($data['ai_connection_id'] ?? null)) {
             $data['model_category'] = PromptResource::defaultModelCategoryForConnection($data['ai_connection_id']);
         }

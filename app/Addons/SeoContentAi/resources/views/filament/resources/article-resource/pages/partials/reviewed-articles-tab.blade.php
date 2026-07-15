@@ -276,7 +276,9 @@
                                             </div>
                                             <div class="reviewed-article-item__actions">
                                                 <a
-                                                    x-bind:href="article.edit_url"
+                                                    x-bind:href="article.view_url || '#'"
+                                                    x-bind:aria-disabled="!article.view_url"
+                                                    x-bind:class="!article.view_url ? 'pointer-events-none opacity-50' : ''"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
                                                     class="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-700 bg-white ring-1 ring-gray-300 shadow-sm transition hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:ring-gray-600 dark:hover:bg-gray-700"

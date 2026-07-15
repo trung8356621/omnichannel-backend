@@ -484,3 +484,326 @@
     padding: 1rem 1.25rem;
     color: rgb(var(--gray-600));
 }
+
+/* Recommendations page */
+.seo-rec-overview-teaser {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem 1.25rem;
+    border-radius: 0.75rem;
+    border: 1px solid #bae6fd;
+    background: linear-gradient(135deg, #f0f9ff 0%, #ecfeff 100%);
+}
+
+.dark .seo-rec-overview-teaser {
+    border-color: rgba(14, 165, 233, 0.35);
+    background: linear-gradient(135deg, rgba(14, 165, 233, 0.12) 0%, rgba(6, 182, 212, 0.08) 100%);
+}
+
+.seo-rec-overview-teaser__title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.35rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: #0c4a6e;
+}
+
+.dark .seo-rec-overview-teaser__title {
+    color: #7dd3fc;
+}
+
+.seo-rec-overview-teaser__icon {
+    width: 1.125rem;
+    height: 1.125rem;
+}
+
+.seo-rec-overview-teaser__body {
+    margin: 0;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: #0369a1;
+    max-width: 42rem;
+}
+
+.dark .seo-rec-overview-teaser__body {
+    color: #bae6fd;
+}
+
+.seo-rec-badge {
+    margin-bottom: 1.5rem;
+    padding: 1rem 1.25rem;
+    border-radius: 0.75rem;
+    border: 1px solid #86efac;
+    background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+}
+
+.dark .seo-rec-badge {
+    border-color: rgba(34, 197, 94, 0.35);
+    background: linear-gradient(135deg, rgba(34, 197, 94, 0.12) 0%, rgba(16, 185, 129, 0.08) 100%);
+}
+
+.seo-rec-badge__title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.75rem;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: #166534;
+}
+
+.dark .seo-rec-badge__title {
+    color: #86efac;
+}
+
+.seo-rec-badge__icon {
+    width: 1.125rem;
+    height: 1.125rem;
+}
+
+.seo-rec-badge__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 0.75rem 1.25rem;
+    margin: 0;
+}
+
+.seo-rec-badge__item dt {
+    margin: 0;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #15803d;
+}
+
+.dark .seo-rec-badge__item dt {
+    color: #4ade80;
+}
+
+.seo-rec-badge__item dd {
+    margin: 0.15rem 0 0;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #14532d;
+}
+
+.dark .seo-rec-badge__item dd {
+    color: #bbf7d0;
+}
+
+.seo-rec-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+    gap: 1rem;
+}
+
+.seo-rec-card {
+    border-radius: 0.75rem;
+    border: 1px solid rgb(var(--gray-200));
+    background: #fff;
+    overflow: hidden;
+}
+
+.dark .seo-rec-card {
+    border-color: rgb(var(--gray-700));
+    background: rgb(var(--gray-900));
+}
+
+.seo-rec-card--info {
+    border-left: 4px solid #0ea5e9;
+}
+
+.seo-rec-card--success {
+    border-left: 4px solid #22c55e;
+}
+
+.seo-rec-card--warning {
+    border-left: 4px solid #f59e0b;
+}
+
+.seo-rec-card__head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid rgb(var(--gray-100));
+    background: rgb(var(--gray-50));
+}
+
+.dark .seo-rec-card__head {
+    border-color: rgb(var(--gray-800));
+    background: rgb(var(--gray-950));
+}
+
+.seo-rec-card__icon {
+    width: 1.125rem;
+    height: 1.125rem;
+    flex-shrink: 0;
+}
+
+.seo-rec-card--info .seo-rec-card__icon { color: #0284c7; }
+.seo-rec-card--success .seo-rec-card__icon { color: #16a34a; }
+.seo-rec-card--warning .seo-rec-card__icon { color: #d97706; }
+
+.seo-rec-card__title {
+    margin: 0;
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: rgb(var(--gray-900));
+}
+
+.dark .seo-rec-card__title {
+    color: rgb(var(--gray-100));
+}
+
+.seo-rec-card__body {
+    padding: 0.875rem 1rem 1rem;
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    color: rgb(var(--gray-700));
+}
+
+.dark .seo-rec-card__body {
+    color: rgb(var(--gray-300));
+}
+
+.seo-rec-block__subheading {
+    margin: 0.75rem 0 0.35rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: rgb(var(--gray-600));
+}
+
+.seo-rec-block__subheading:first-child {
+    margin-top: 0;
+}
+
+.dark .seo-rec-block__subheading {
+    color: rgb(var(--gray-400));
+}
+
+.seo-rec-block__paragraph {
+    margin: 0.35rem 0 0;
+}
+
+.seo-rec-block__pairs {
+    margin: 0.35rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.seo-rec-block__pairs li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.35rem;
+    padding: 0.35rem 0;
+    border-bottom: 1px dashed rgb(var(--gray-200));
+}
+
+.dark .seo-rec-block__pairs li {
+    border-color: rgb(var(--gray-700));
+}
+
+.seo-rec-block__pairs li:last-child {
+    border-bottom: none;
+}
+
+.seo-rec-block__pair-label {
+    font-weight: 600;
+}
+
+.seo-rec-block__pair-arrow {
+    color: rgb(var(--gray-400));
+}
+
+.seo-rec-block__pair-value {
+    font-weight: 600;
+    color: #0369a1;
+}
+
+.dark .seo-rec-block__pair-value {
+    color: #7dd3fc;
+}
+
+.seo-rec-block__list,
+.seo-rec-block__numbered {
+    margin: 0.35rem 0 0;
+    padding-left: 1.15rem;
+}
+
+.seo-rec-block__list--success li {
+    color: #15803d;
+}
+
+.dark .seo-rec-block__list--success li {
+    color: #86efac;
+}
+
+.seo-rec-block__list--danger li {
+    color: #b91c1c;
+}
+
+.dark .seo-rec-block__list--danger li {
+    color: #fca5a5;
+}
+
+.seo-rec-block__flow {
+    margin-top: 0.5rem;
+    text-align: center;
+}
+
+.seo-rec-block__flow-step {
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    background: rgb(var(--gray-100));
+    font-weight: 600;
+}
+
+.dark .seo-rec-block__flow-step {
+    background: rgb(var(--gray-800));
+}
+
+.seo-rec-block__flow-arrow {
+    padding: 0.2rem 0;
+    font-size: 1rem;
+    color: rgb(var(--gray-400));
+}
+
+.seo-rec-block__status-badge {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    background: #fef3c7;
+    color: #92400e;
+    border: 1px solid #fcd34d;
+}
+
+.dark .seo-rec-block__status-badge {
+    background: rgba(245, 158, 11, 0.2);
+    color: #fcd34d;
+    border-color: rgba(245, 158, 11, 0.4);
+}
+
+@media (max-width: 768px) {
+    .seo-rec-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .seo-rec-overview-teaser {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

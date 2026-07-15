@@ -29,7 +29,12 @@ class SeoMediaStorageService
             : null;
 
         $config = $this->optimization->resolveForSite($siteId);
-        $processed = $this->optimization->processUpload($file, $config, $article);
+        $processed = $this->optimization->processUpload(
+            $file,
+            $config,
+            $article,
+            $source === 'clipboard',
+        );
 
         Storage::disk('public')->put($processed['relative_path'], $processed['binary']);
 

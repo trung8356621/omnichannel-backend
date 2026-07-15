@@ -11,5 +11,14 @@ ztARSSpNQj5vpJ7MmHZj
 
 #Để chạy queue (bắt buộc gồm queue seo cho rank check)
 nohup php artisan queue:work --timeout=360 > storage/logs/queue-worker.log 2>&1 &
-pkill -f "queue:work"
+php artisan queue:work \
+  --queue=seo,wordpress,media_generation,default \
+  --stop-when-empty \
+  --timeout=360 \
+  --tries=3 \
+  --memory=128
+
+php artisan queue:work --queue=seo,media_generation,default --timeout=360
+
+
 

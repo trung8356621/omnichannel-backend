@@ -6,7 +6,7 @@
             <div class="seo-settings-main">
                 <header class="seo-settings-header">
                     <h1>{{ __('Workflows') }}</h1>
-                    <p>{{ __('Choose the workflow (Task) used for each request type. Configuration is stored in wp_options.') }}</p>
+                    <p>{{ __('seo-content-ai::filament.settings_workflows.page_intro') }}</p>
                 </header>
 
                 <form wire:submit="saveSettings" class="max-w-3xl mx-auto space-y-6">

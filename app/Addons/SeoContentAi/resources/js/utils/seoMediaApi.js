@@ -2,6 +2,7 @@ const UPLOAD_URL = '/api/seo/media/upload';
 const IMPORT_URL = '/api/seo/media/import-url';
 const PREPARE_EDITOR_URL = '/api/seo/media/prepare-editor';
 const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
+const TEST_OPTIMIZE_LOCAL_WEBP_URL = '/api/seo/media/test-optimize-local-webp';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
 const RENAME_BY_URL = '/api/seo/media/rename-by-url';
 const UPDATE_META_URL = '/api/seo/media/update-meta';
@@ -405,6 +406,51 @@ export async function applyWatermarkToImage({
     return data;
 }
 
+/**
+ * Tạo sibling WebP local bằng đúng pipeline dùng khi sync WordPress.
+ */
+export async function testOptimizeLocalWebp({ siteId, seoMediaId }) {
+    const response = await fetch(TEST_OPTIMIZE_LOCAL_WEBP_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+            site_id: siteId,
+            seo_media_id: seoMediaId,
+        }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+        const message =
+            response.status === 419
+                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
+                : (data.message ?? 'Không tạo được WebP local.');
+        throw new Error(message);
+    }
+
+    if (data.url) {
+        const raw = String(data.url);
+        const [pathPart, query] = raw.split('?');
+        const normalized = normalizeSeoMediaUrl(pathPart);
+        const absolute = normalized.startsWith('http')
+            ? normalized
+            : `${window.location.origin}${normalized.startsWith('/') ? '' : '/'}${normalized}`;
+        data.url = query ? `${absolute}?${query}` : absolute;
+        if (!data.path) {
+            data.path = normalized.startsWith('/storage/')
+                ? normalized.slice('/storage/'.length)
+                : normalized.replace(/^\//, '');
+        }
+    }
+
+    return data;
+}
+
 export async function renameSeoMedia(mediaId, newSlug) {
     const url = RENAME_URL_TEMPLATE.replace('{id}', String(mediaId));
     const response = await fetch(url, {
@@ -520,7 +566,7 @@ export function processClipboardImagePaste(event, options = {}) {
         source = 'clipboard',
         onUploaded,
         onError,
-        notifyOnSuccess = true,
+        notifyOnSuccess = false,
         notifyOnError = true,
     } = options;
 

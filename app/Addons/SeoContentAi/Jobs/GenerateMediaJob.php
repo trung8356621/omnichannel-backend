@@ -8,14 +8,18 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\ArticleMediaLocalService;
+use App\Addons\SeoContentAi\Services\EditorWorkflowExecutionService;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\PromptPostProcessingApplyService;
 use App\Addons\SeoContentAi\Services\PromptResultLinkService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -58,6 +62,7 @@ class GenerateMediaJob implements ShouldQueue
         PromptResultLinkService $promptResultLinks,
         SeoDatabaseConnectionService $databaseConnection,
         ArticleEditorReadinessService $editorReadiness,
+        EditorWorkflowExecutionService $workflowExecution,
     ): void {
         $databaseConnection->bootstrapLegacySharedConnection();
 
@@ -82,37 +87,66 @@ class GenerateMediaJob implements ShouldQueue
             return;
         }
 
-        try {
-            $promptResult = $promptMediaStorage->usingTargetMedia(
-                $media,
-                fn () => $promptRunner->run(
-                    $prompt,
-                    $this->variables,
-                    isTaskMode: false,
-                    runFullDependentChain: $this->runFullDependentChain,
-                ),
-            );
-            $output = trim((string) ($promptResult->output_text ?? ''));
-            $finalUrl = trim((string) (explode("\n", $output, 2)[0] ?? ''));
+        $status = strtolower(trim((string) ($media->status ?? '')));
+        if ($status === 'failed') {
+            // Job đã bị thay thế / hủy trước khi worker chạy — không ghi đè thư viện.
+            return;
+        }
 
+        if ($status === 'completed' && ! str_contains((string) ($media->url ?? ''), 'placeholder-loading')) {
+            return;
+        }
+
+        try {
+            $mediaSource = (string) ($this->variables[SeoCreateArticleSettingsService::EDITOR_VAR_MEDIA_SOURCE] ?? SeoCreateArticleSettingsService::SOURCE_PROMPT);
+            $workflowTaskId = (int) ($this->variables[SeoCreateArticleSettingsService::EDITOR_VAR_WORKFLOW_TASK_ID] ?? 0);
             $articleId = (int) ($media->firstArticleId() ?? 0);
-            if ($articleId > 0) {
-                try {
-                    $promptResultLinks->linkPromptResult(
-                        promptResultId: (int) $promptResult->id,
-                        articleId: $articleId,
-                        source: 'editor_media_generation',
-                        meta: [
-                            'tool_type' => $this->toolType,
-                            'seo_media_id' => (int) $media->id,
-                            'editor_block_id' => (string) ($media->editor_block_id ?? ''),
-                        ],
-                    );
-                } catch (Throwable $linkException) {
-                    // Link lịch sử prompt không được làm hỏng luồng tạo ảnh.
-                    logger()->warning(
-                        "GenerateMediaJob linkPromptResult failed [media_id={$this->seoMediaId}]: {$linkException->getMessage()}",
-                    );
+            $article = $articleId > 0 ? SeoArticle::query()->find($articleId) : null;
+
+            if (
+                $mediaSource === SeoCreateArticleSettingsService::SOURCE_WORKFLOW
+                && $workflowTaskId > 0
+                && $article instanceof SeoArticle
+            ) {
+                $workflowResult = $this->runEditorWorkflow(
+                    workflowExecution: $workflowExecution,
+                    media: $media,
+                    article: $article,
+                    taskId: $workflowTaskId,
+                );
+                $finalUrl = trim((string) ($workflowResult['url'] ?? ''));
+                $workflowSnapshot = is_array($workflowResult['snapshot'] ?? null) ? $workflowResult['snapshot'] : [];
+            } else {
+                $promptResult = $promptMediaStorage->usingTargetMedia(
+                    $media,
+                    fn () => $promptRunner->run(
+                        $prompt,
+                        $this->variables,
+                        isTaskMode: false,
+                        runFullDependentChain: $this->runFullDependentChain,
+                    ),
+                );
+                $output = trim((string) ($promptResult->output_text ?? ''));
+                $finalUrl = trim((string) (explode("\n", $output, 2)[0] ?? ''));
+                $workflowSnapshot = is_array($promptResult->input_snapshot) ? $promptResult->input_snapshot : [];
+
+                if ($articleId > 0) {
+                    try {
+                        $promptResultLinks->linkPromptResult(
+                            promptResultId: (int) $promptResult->id,
+                            articleId: $articleId,
+                            source: 'editor_media_generation',
+                            meta: [
+                                'tool_type' => $this->toolType,
+                                'seo_media_id' => (int) $media->id,
+                                'editor_block_id' => (string) ($media->editor_block_id ?? ''),
+                            ],
+                        );
+                    } catch (Throwable $linkException) {
+                        logger()->warning(
+                            "GenerateMediaJob linkPromptResult failed [media_id={$this->seoMediaId}]: {$linkException->getMessage()}",
+                        );
+                    }
                 }
             }
 
@@ -134,10 +168,11 @@ class GenerateMediaJob implements ShouldQueue
                 'filename' => $resolvedFilename !== '' ? $resolvedFilename : (string) $media->filename,
                 'status' => 'completed',
                 'error_message' => null,
+                'prompt_variables' => $this->mergeWorkflowSnapshotIntoVariables($media, $workflowSnapshot),
             ]);
 
             $media = $media->fresh();
-            if ($this->toolType === 'image' && $media instanceof SeoMedia) {
+            if (ImageToolType::fromMixed($this->toolType)->isImagePipeline() && $media instanceof SeoMedia) {
                 try {
                     $postResult = $postProcessing->applyIfConfigured($media, $prompt);
                     if ($postResult->applied && count($postResult->pieces) > 0) {
@@ -156,7 +191,7 @@ class GenerateMediaJob implements ShouldQueue
             }
 
             $media = $media->fresh();
-            if ($this->toolType === 'image' && $media instanceof SeoMedia) {
+            if (ImageToolType::fromMixed($this->toolType)->isImagePipeline() && $media instanceof SeoMedia) {
                 $this->persistProductGalleryLinkIfNeeded($media);
             }
 
@@ -205,6 +240,76 @@ class GenerateMediaJob implements ShouldQueue
             'status' => 'failed',
             'error_message' => mb_substr($message, 0, 1000),
         ]);
+    }
+
+    /**
+     * @return array{url: string|null, snapshot: array<string, mixed>}
+     */
+    private function runEditorWorkflow(
+        EditorWorkflowExecutionService $workflowExecution,
+        SeoMedia $media,
+        SeoArticle $article,
+        int $taskId,
+    ): array {
+        $task = SeoTask::query()->find($taskId);
+        if (! $task instanceof SeoTask) {
+            throw new PromptRunException('Workflow editor không tồn tại.');
+        }
+
+        $expectedTool = ImageToolType::fromMixed($this->toolType);
+        $result = $workflowExecution->executeForEditor(
+            task: $task,
+            article: $article,
+            variables: $this->variables,
+            expectedTool: $expectedTool,
+            targetMedia: $media,
+        );
+
+        $snapshot = [
+            'workflow_execution_mode' => (string) ($result['workflow_execution_mode'] ?? ''),
+            'render_model' => $result['render_model'] ?? null,
+            'planner_model' => $result['planner_model'] ?? null,
+            'validation_model' => $result['validation_model'] ?? null,
+            'tools' => $this->toolType,
+            'editor_media_source' => SeoCreateArticleSettingsService::SOURCE_WORKFLOW,
+            'workflow_task_id' => $taskId,
+        ];
+
+        $metadata = is_array($result['metadata'] ?? null) ? $result['metadata'] : [];
+        foreach ([
+            'candidate_count',
+            'winner_score',
+            'validation_passed',
+            'validation_warning',
+            'missing_text_count',
+            'mismatched_text_count',
+            'typography_complexity_summary',
+        ] as $key) {
+            if (array_key_exists($key, $metadata)) {
+                $snapshot[$key] = $metadata[$key];
+            }
+        }
+
+        return [
+            'url' => is_string($result['url'] ?? null) ? $result['url'] : null,
+            'snapshot' => $snapshot,
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $snapshot
+     * @return array<string, mixed>
+     */
+    private function mergeWorkflowSnapshotIntoVariables(SeoMedia $media, array $snapshot): array
+    {
+        $variables = is_array($media->prompt_variables) ? $media->prompt_variables : [];
+        if ($snapshot === []) {
+            return $variables;
+        }
+
+        $variables['_editor_run_snapshot'] = json_encode($snapshot, JSON_UNESCAPED_UNICODE);
+
+        return $variables;
     }
 
     private function persistProductGalleryLinkIfNeeded(SeoMedia $media): void

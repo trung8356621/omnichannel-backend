@@ -38,6 +38,12 @@
         >
             {{ __('seo-content-ai::filament.article_list.tab_reviewed') }}
         </a>
+        <a
+            href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED) }}"
+            @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_SKIPPED])
+        >
+            {{ __('seo-content-ai::filament.article_list.tab_skipped') }}
+        </a>
     </div>
 
     @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED)

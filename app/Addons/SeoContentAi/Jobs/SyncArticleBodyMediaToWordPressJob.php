@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Jobs;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
 use App\Addons\SeoContentAi\Services\WordPressLocalMediaSyncService;
@@ -37,7 +38,9 @@ final class SyncArticleBodyMediaToWordPressJob implements ShouldQueue
     public function __construct(
         public int $articleId,
         public ?array $seoOverride = null,
-    ) {}
+    ) {
+        $this->onQueue(ArticleWpSyncQueueService::QUEUE_NAME);
+    }
 
     public function handle(
         SeoDatabaseConnectionService $databaseConnection,

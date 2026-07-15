@@ -87,11 +87,6 @@ final class SeoAccessControl
         return self::canAccessManagerFeatures();
     }
 
-    public static function canViewArticleArchive(): bool
-    {
-        return self::canViewProjectArchives();
-    }
-
     public static function canReviewKeywords(): bool
     {
         return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();

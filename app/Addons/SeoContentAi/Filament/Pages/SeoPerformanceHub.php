@@ -870,7 +870,7 @@ final class SeoPerformanceHub extends SeoPanelPage
             $result = $this->dashboard->dispatchRankCheck(
                 groupId: $groupId,
                 userId: (int) auth()->id(),
-                provider: $this->dataSource,
+                source: $this->dataSource,
                 metrics: $metrics,
             );
         } catch (\RuntimeException $exception) {

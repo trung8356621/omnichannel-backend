@@ -52,7 +52,7 @@ final class PromptMediaStorageService
     ): string {
         $targetMedia ??= $this->persistTarget;
 
-        if (! in_array($toolType, ['image', 'video'], true)) {
+        if (! \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($toolType)->isMediaTool()) {
             return $rawOutput;
         }
 

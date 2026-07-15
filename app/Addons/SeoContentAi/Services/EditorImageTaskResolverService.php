@@ -30,4 +30,22 @@ final class EditorImageTaskResolverService
 
         return $this->workflowRunner->resolveImagePromptForTask($task);
     }
+
+    public function resolveVideoPrompt(?int $taskId): SeoPrompt
+    {
+        if ($taskId === null) {
+            throw new \InvalidArgumentException(
+                'Chưa cấu hình quy trình «Tạo video». Vào SEO → Cài đặt → Quy trình.',
+            );
+        }
+
+        $task = SeoTask::query()->where('is_active', true)->find($taskId);
+        if ($task === null) {
+            throw new \InvalidArgumentException(
+                "Quy trình «Tạo video» (#{$taskId}) không tồn tại hoặc đã tắt.",
+            );
+        }
+
+        return $this->workflowRunner->resolveVideoPromptForTask($task);
+    }
 }

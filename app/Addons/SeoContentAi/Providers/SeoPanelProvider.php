@@ -19,6 +19,7 @@ use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
 use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
+use App\Addons\SeoContentAi\Http\Controllers\SeoPanelLogoutController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoPanelRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoWatermarkController;
 use App\Addons\SeoContentAi\Http\Controllers\TeamMessageController;
@@ -79,6 +80,10 @@ class SeoPanelProvider extends PanelProvider
         Route::middleware(['web'])
             ->get('/seo', SeoPanelRedirectController::class)
             ->name('seo.panel.redirect');
+
+        Route::middleware(['web', 'auth'])
+            ->post('/seo/logout', SeoPanelLogoutController::class)
+            ->name('seo.logout');
 
         Filament::serving(function (): void {
             if (filament()->getCurrentPanel()?->getId() !== 'seo') {
@@ -276,6 +281,8 @@ class SeoPanelProvider extends PanelProvider
                     ->name('seo.media.prepare-editor');
                 Route::post('/apply-watermark', [SeoMediaController::class, 'applyWatermark'])
                     ->name('seo.media.apply-watermark');
+                Route::post('/test-optimize-local-webp', [SeoMediaController::class, 'testOptimizeLocalWebp'])
+                    ->name('seo.media.test-optimize-local-webp');
                 Route::get('/article/{article}/ai-jobs', [SeoMediaController::class, 'articleAiJobs'])
                     ->whereNumber('article')
                     ->name('seo.media.article-ai-jobs');
@@ -451,6 +458,16 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/articles/wp-edit-redirect', ArticleWpEditRedirectController::class)
                     ->name('seo.articles.wp-edit-redirect.legacy');
             });
+
+        // Hash sai format (không khớp 32–64 alnum) → about /seo (SeoPanelRedirectController).
+        // Hash đúng format nhưng không tồn tại: xử lý ở SetDynamicSeoDatabaseByHash.
+        Route::middleware(['web'])
+            ->get('/seo/{invalidHash}/{invalidPath?}', static fn () => redirect()->to('/seo', 301))
+            ->where([
+                'invalidHash' => '^(?![a-zA-Z0-9]{32,64}$)(?!oauth$)(?!articles$)(?!logout$)(?!wp-plugin$)[^/]+',
+                'invalidPath' => '.*',
+            ])
+            ->name('seo.panel.invalid-hash');
     }
 
     public function panel(Panel $panel): Panel

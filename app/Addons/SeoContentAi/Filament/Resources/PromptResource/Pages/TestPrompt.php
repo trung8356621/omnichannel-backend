@@ -919,7 +919,9 @@ class TestPrompt extends Page implements HasForms
 
     public function isImageToolPrompt(): bool
     {
-        return trim((string) ($this->getPrompt()->tools ?? 'default')) === 'image';
+        return \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed(
+            $this->getPrompt()->tools ?? 'default',
+        )->isImagePipeline();
     }
 
     public function isVideoToolPrompt(): bool

@@ -44,11 +44,8 @@ class EditPrompt extends SeoEditRecord
             $this->record->variables ?? [],
         );
 
-        if (blank($data['model_category'] ?? null)) {
-            $data['model_category'] = filled($data['ai_connection_id'] ?? null)
-                ? PromptResource::defaultModelCategoryForConnection($data['ai_connection_id'])
-                : \App\Addons\SeoContentAi\Support\AiModelCategory::GEMINI_FLASH;
-        }
+        // Field model_category đã gỡ khỏi form — không đẩy vào state (tránh clear cột khi save).
+        unset($data['model_category']);
 
         $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
         $data['settings'] = PromptPostProcessing::mergeIntoSettings(
@@ -72,10 +69,14 @@ class EditPrompt extends SeoEditRecord
             $data['variables'] ?? [],
         );
 
+        // Giữ giá trị DB cũ — không cập nhật từ form.
+        unset($data['model_category']);
+
         $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
         $postProcessing = is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [];
 
-        if (($data['tools'] ?? '') !== 'image' && $postProcessing === []) {
+        if (! \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($data['tools'] ?? 'default')->isImagePipeline()
+            && $postProcessing === []) {
             $existingSettings = is_array($this->record->settings ?? null) ? $this->record->settings : [];
             $postProcessing = is_array($existingSettings['post_processing'] ?? null)
                 ? $existingSettings['post_processing']

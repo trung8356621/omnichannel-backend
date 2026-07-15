@@ -8,13 +8,11 @@ use App\Addons\SeoContentAi\Exceptions\AiModelsNotReadyException;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\TaskResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
 use App\Addons\SeoContentAi\Models\TaskTestResult;
 use App\Addons\SeoContentAi\Services\TaskTestInputResolver;
 use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
-use App\Addons\SeoContentAi\Support\AiModelCatalog;
-use App\Addons\SeoContentAi\Support\AiModelCategory;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use Filament\Actions;
@@ -69,8 +67,6 @@ class TestTask extends Page implements HasForms
     public ?int $selectedResultId = null;
 
     /** @var array<int, string> */
-    public array $stepRerunModels = [];
-
     public function mount(int|string $record): void
     {
         $this->record = $this->resolveRecord($record);
@@ -179,7 +175,6 @@ class TestTask extends Page implements HasForms
             $context = $this->resolveContext($resolver, $state);
             $this->resolvedContext = $context->toArray();
             $this->stepResults = $runner->run($this->getTask(), $context);
-            $this->syncStepRerunModels();
 
             $failed = collect($this->stepResults)->where('status', 'failed')->count();
             $status = $failed > 0 ? 'failed' : 'completed';
@@ -258,15 +253,12 @@ class TestTask extends Page implements HasForms
         try {
             $context = TaskTestContext::fromArray($this->resolvedContext);
             $priorSteps = array_slice($this->stepResults, 0, $stepIndex);
-            $modelOverride = trim((string) ($this->stepRerunModels[$stepIndex] ?? ''));
             $this->stepResults[$stepIndex] = $runner->runSingleStep(
                 $this->getTask(),
                 $context,
                 $nodeId,
                 $priorSteps,
-                $modelOverride !== '' ? $modelOverride : null,
             );
-            $this->syncStepRerunModelForIndex($stepIndex);
 
             $this->syncSelectedResult();
 
@@ -386,42 +378,66 @@ class TestTask extends Page implements HasForms
      */
     public function stepModelLabel(array $step): ?string
     {
+        $renderModel = trim((string) ($step['render_model'] ?? ''));
+        if ($renderModel !== '') {
+            return $renderModel;
+        }
+
         $rawModel = trim((string) ($step['raw_model_used'] ?? ''));
         if ($rawModel !== '') {
             return $rawModel;
         }
 
-        $category = trim((string) ($step['ai_model'] ?? ''));
-        if ($category === '') {
+        $plannerModel = trim((string) ($step['planner_model'] ?? ''));
+        if ($plannerModel !== '') {
+            return $plannerModel;
+        }
+
+        $tools = trim((string) ($step['tools'] ?? ''));
+        if (ImageToolType::fromMixed($tools)->isImagePipeline()) {
             return null;
         }
 
-        return AiModelCategory::promptSelectOptions()[$category] ?? $category;
+        return null;
     }
 
     /**
-     * @return array<string, string>
+     * @param  array<string, mixed>  $step
+     * @return list<string>
      */
-    public function stepModelOptions(int $stepIndex): array
+    public function stepMediaUrls(array $step): array
     {
-        $step = $this->stepResults[$stepIndex] ?? null;
-        if (! is_array($step) || (string) ($step['type'] ?? '') !== 'prompt') {
+        $raw = trim((string) ($step['output'] ?? ''));
+        if ($raw === '') {
             return [];
         }
 
-        $promptId = (int) ($step['prompt_id'] ?? 0);
-        if ($promptId <= 0) {
-            return AiModelCategory::promptSelectOptions();
+        $tools = trim((string) ($step['tools'] ?? ''));
+        $isImagePipeline = $tools !== '' && ImageToolType::fromMixed($tools)->isImagePipeline();
+
+        $urls = [];
+        foreach (preg_split('/\R/u', $raw) ?: [] as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (str_starts_with($line, '/storage/') || preg_match('#^https?://#i', $line) === 1) {
+                $urls[] = $line;
+            }
         }
 
-        $prompt = SeoPrompt::query()->with('aiConnection')->find($promptId);
-        if ($prompt === null) {
-            return AiModelCategory::promptSelectOptions();
+        if ($urls === [] && ! $isImagePipeline) {
+            return [];
         }
 
-        $options = AiModelCatalog::optionsForConnection($prompt->aiConnection);
+        if ($urls === [] && preg_match_all('#(?:/storage/[^\s)\]"\']+|https?://[^\s)\]"\']+)#iu', $raw, $matches) > 0) {
+            foreach ($matches[0] as $match) {
+                $urls[] = rtrim((string) $match, '.,;');
+            }
+        }
 
-        return $options !== [] ? $options : AiModelCategory::promptSelectOptions();
+        return array_values(array_unique($urls));
     }
 
     protected function clearResultView(): void
@@ -429,7 +445,6 @@ class TestTask extends Page implements HasForms
         $this->selectedResultId = null;
         $this->resolvedContext = null;
         $this->stepResults = [];
-        $this->stepRerunModels = [];
         $this->errorMessage = null;
     }
 
@@ -447,7 +462,6 @@ class TestTask extends Page implements HasForms
 
         $this->resolvedContext = is_array($result->resolved_context) ? $result->resolved_context : null;
         $this->stepResults = is_array($result->step_results) ? $result->step_results : [];
-        $this->syncStepRerunModels();
         $this->errorMessage = $result->status === 'failed' && $this->stepResults === []
             ? (string) ($result->error_message ?? 'Test failed.')
             : null;
@@ -658,39 +672,4 @@ class TestTask extends Page implements HasForms
             : self::INPUT_TYPE_ARTICLE;
     }
 
-    private function syncStepRerunModels(): void
-    {
-        $models = [];
-
-        foreach ($this->stepResults as $index => $step) {
-            if (! is_array($step) || (string) ($step['type'] ?? '') !== 'prompt') {
-                continue;
-            }
-
-            $category = trim((string) ($step['ai_model'] ?? ''));
-            if ($category !== '') {
-                $models[$index] = $category;
-
-                continue;
-            }
-
-            $options = $this->stepModelOptions((int) $index);
-            $models[$index] = (string) (array_key_first($options) ?? '');
-        }
-
-        $this->stepRerunModels = $models;
-    }
-
-    private function syncStepRerunModelForIndex(int $stepIndex): void
-    {
-        $step = $this->stepResults[$stepIndex] ?? null;
-        if (! is_array($step)) {
-            return;
-        }
-
-        $category = trim((string) ($step['ai_model'] ?? ''));
-        if ($category !== '') {
-            $this->stepRerunModels[$stepIndex] = $category;
-        }
-    }
 }

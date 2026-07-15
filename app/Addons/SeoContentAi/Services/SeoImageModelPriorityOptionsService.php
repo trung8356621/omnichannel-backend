@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoAiModel;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
+use App\Addons\SeoContentAi\Support\GeminiModelVersionPolicy;
 use App\Addons\SeoContentAi\Support\GoogleAiModelRegistry;
 use App\Addons\SeoContentAi\Support\ImageModelInputLengthPolicy;
 
@@ -31,6 +32,11 @@ final class SeoImageModelPriorityOptionsService
                 continue;
             }
 
+            // Không đưa Gemini legacy (< 3) vào dropdown chọn priority runtime.
+            if (! GeminiModelVersionPolicy::isEligibleForAutoRouting($slug)) {
+                continue;
+            }
+
             $label = trim((string) $model->display_name);
             $options[$slug] = $this->formatOptionLabel(
                 $slug,
@@ -39,7 +45,11 @@ final class SeoImageModelPriorityOptionsService
         }
 
         foreach (GoogleAiModelRegistry::imageSelectOptions() as $slug => $label) {
-            $options[$slug] ??= $this->formatOptionLabel($slug, $label);
+            if (! GeminiModelVersionPolicy::isEligibleForAutoRouting((string) $slug)) {
+                continue;
+            }
+
+            $options[$slug] ??= $this->formatOptionLabel((string) $slug, (string) $label);
         }
 
         return $options;
@@ -53,8 +63,18 @@ final class SeoImageModelPriorityOptionsService
         }
 
         $options = $this->imageModelSelectOptions();
+        if (isset($options[$slug])) {
+            return $options[$slug];
+        }
 
-        return $options[$slug] ?? $slug;
+        // Stored legacy slug: vẫn hiển thị kèm (Legacy) nếu còn trong DB form cũ.
+        if (GeminiModelVersionPolicy::isGeminiFamily($slug)
+            && ! GeminiModelVersionPolicy::meetsMinimumMajorVersion($slug)
+        ) {
+            return $slug.' · Legacy';
+        }
+
+        return $slug;
     }
 
     private function formatOptionLabel(string $slug, string $label): string

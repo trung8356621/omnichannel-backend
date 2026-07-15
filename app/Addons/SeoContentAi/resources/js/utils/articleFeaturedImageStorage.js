@@ -61,6 +61,16 @@ export function saveFeaturedImage(articleId, item) {
         console.warn('Không lưu được ảnh đại diện vào localStorage', error);
     }
 
+    // Sidebar Alpine chỉ sync lúc load / cleared — bắn event để cập nhật featuredImageDraft ngay.
+    window.dispatchEvent(
+        new CustomEvent('seo-featured-image-updated', {
+            detail: {
+                articleId: id,
+                item: normalized,
+            },
+        }),
+    );
+
     return normalized;
 }
 

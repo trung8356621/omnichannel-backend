@@ -55,9 +55,11 @@
                         @foreach ($stepResults as $index => $step)
                             @php
                                 $status = (string) ($step['status'] ?? 'pending');
-                                $isPromptStep = (string) ($step['type'] ?? '') === 'prompt';
+                                $stepType = (string) ($step['type'] ?? '');
+                                $isPromptStep = $stepType === 'prompt';
+                                $canRerun = ! in_array($stepType, ['end'], true);
                                 $modelLabel = $isPromptStep ? $this->stepModelLabel($step) : null;
-                                $modelOptions = $isPromptStep ? $this->stepModelOptions($index) : [];
+                                $mediaUrls = $isPromptStep ? $this->stepMediaUrls($step) : [];
                                 $badgeClass = match ($status) {
                                     'completed', 'ok' => 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
                                     'failed' => 'bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-300',
@@ -79,37 +81,38 @@
                                             title="{{ __('seo-content-ai::filament.task.test_step_model_used') }}"
                                         >{{ $modelLabel }}</span>
                                     @endif
-                                    <div class="ml-auto flex flex-wrap items-center gap-2">
-                                        @if ($isPromptStep && $modelOptions !== [])
-                                            <x-select
-                                                wire:model.live="stepRerunModels.{{ $index }}"
-                                                class="seo-task-step-model-select"
-                                                title="{{ __('seo-content-ai::filament.task.test_step_model_select') }}"
+                                    @if ($canRerun)
+                                        <div class="ml-auto flex flex-wrap items-center gap-2">
+                                            <x-filament::button
+                                                type="button"
+                                                size="sm"
+                                                color="gray"
+                                                outlined
+                                                icon="heroicon-o-arrow-path"
+                                                wire:click="rerunStep({{ $index }})"
+                                                wire:loading.attr="disabled"
+                                                wire:target="rerunStep({{ $index }})"
                                             >
-                                                @foreach ($modelOptions as $value => $label)
-                                                    <option value="{{ $value }}">{{ $label }}</option>
-                                                @endforeach
-                                            </x-select>
-                                        @endif
-                                        <x-filament::button
-                                            type="button"
-                                            size="sm"
-                                            color="gray"
-                                            outlined
-                                            icon="heroicon-o-arrow-path"
-                                            wire:click="rerunStep({{ $index }})"
-                                            wire:loading.attr="disabled"
-                                            wire:target="rerunStep({{ $index }})"
-                                        >
-                                            <span wire:loading.remove wire:target="rerunStep({{ $index }})">Chạy lại</span>
-                                            <span wire:loading wire:target="rerunStep({{ $index }})">Đang chạy…</span>
-                                        </x-filament::button>
-                                    </div>
+                                                <span wire:loading.remove wire:target="rerunStep({{ $index }})">Chạy lại</span>
+                                                <span wire:loading wire:target="rerunStep({{ $index }})">Đang chạy…</span>
+                                            </x-filament::button>
+                                        </div>
+                                    @endif
                                 </div>
                                 @if (! empty($step['message']))
-                                    <p class="text-sm text-gray-600 dark:text-gray-400 mb-2">{{ $step['message'] }}</p>
+                                    <p @class([
+                                        'text-sm mb-2',
+                                        'text-red-600 dark:text-red-400 font-medium' => $status === 'failed',
+                                        'text-gray-600 dark:text-gray-400' => $status !== 'failed',
+                                    ])>{{ $step['message'] }}</p>
                                 @endif
-                                @if (! empty($step['output']))
+                                @if ($mediaUrls !== [])
+                                    <div class="seo-task-step-media {{ count($mediaUrls) > 1 ? 'is-grid' : '' }} mb-2">
+                                        @foreach ($mediaUrls as $mediaUrl)
+                                            <img src="{{ $mediaUrl }}" alt="AI generated image" class="seo-task-step-media__img" />
+                                        @endforeach
+                                    </div>
+                                @elseif (! empty($step['output']))
                                     <x-seo-content-ai::ai-result
                                         :label="'Kết quả bước ' . ($index + 1)"
                                     >{{ $step['output'] }}</x-seo-content-ai::ai-result>
@@ -520,22 +523,31 @@
             border-color: rgba(14, 165, 233, 0.35);
         }
 
-        .seo-task-step-model-select {
-            max-width: 12rem;
-            min-width: 9rem;
-            padding: 0.35rem 0.5rem;
+        .seo-task-step-media {
             border-radius: 0.5rem;
             border: 1px solid #d1d5db;
             background: #fff;
-            font-size: 0.6875rem;
-            line-height: 1.25;
-            color: #374151;
+            overflow: hidden;
         }
 
-        .dark .seo-task-step-model-select {
-            background: #1f2937;
+        .dark .seo-task-step-media {
             border-color: #4b5563;
-            color: #e5e7eb;
+            background: #111827;
+        }
+
+        .seo-task-step-media.is-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+            gap: 0.5rem;
+            padding: 0.5rem;
+        }
+
+        .seo-task-step-media__img {
+            width: 100%;
+            max-height: min(28rem, 60vh);
+            display: block;
+            object-fit: contain;
+            background: #fff;
         }
 
     </style>

@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Jobs\SyncArticleToWordPressFromQueueJob;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use Illuminate\Support\Facades\Bus;
 use Tests\TestCase;
@@ -83,6 +84,22 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
 
         $this->assertFalse($result['success']);
         Bus::assertNothingDispatched();
+    }
+
+    public function test_dispatch_wp_sync_job_targets_seo_queue(): void
+    {
+        Bus::fake();
+
+        $article = new SeoArticle(['id' => 42, 'site_id' => 0, 'status' => 'draft']);
+        $article->wp_sync_queue_meta = json_encode(['status' => ArticleWpSyncQueueService::STATUS_FAILED]);
+        $article->wp_sync_queue_bundle = json_encode(['html' => '<p>retry</p>']);
+
+        $result = app(ArticleWpSyncQueueService::class)->resync($article);
+
+        $this->assertTrue($result['success']);
+        Bus::assertDispatched(SyncArticleToWordPressFromQueueJob::class, function (SyncArticleToWordPressFromQueueJob $job): bool {
+            return $job->articleId === 42 && $job->queue === ArticleWpSyncQueueService::QUEUE_NAME;
+        });
     }
 
     public function test_prepare_bundle_for_immediate_sync_publishes_now(): void

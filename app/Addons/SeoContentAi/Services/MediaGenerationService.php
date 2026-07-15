@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Support\ImageModelInputLengthPolicy;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
 use App\Addons\SeoContentAi\Support\Utf8Sanitizer;
 use App\Models\ApiConnection;
@@ -18,13 +19,14 @@ final class MediaGenerationService
 {
     public function __construct(
         private readonly GeminiMediaGenerationService $geminiMediaGeneration,
+        private readonly TypographyPipelineService $typographyPipeline,
     ) {}
 
     /**
      * Điểm vào chính: phân luồng image vs text (Claude).
      *
      * @param  array<string, string>  $variables
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @return array{0: string, 1: array<string, mixed>|null}|array{url: string, usage: array<string, mixed>|null, model_used: string}
      */
     public function execute(
         SeoPrompt $prompt,
@@ -44,7 +46,6 @@ final class MediaGenerationService
                 $variables,
                 $inputData,
                 $compiledPrompt,
-                $modelOverride,
             );
         }
 
@@ -66,31 +67,29 @@ final class MediaGenerationService
     }
 
     /**
-     * Chỉ khi bước hiện tại là image (sub_task hoặc prompt một bước tools=image).
-     * Bước task cha trong chuỗi luôn effectiveTool = default → không vào Imagen.
+     * Image pipeline khi bước hiện tại là image / image_typography.
      */
     public function shouldUseImagePipeline(SeoPrompt $prompt, string $effectiveToolType): bool
     {
-        return $effectiveToolType === 'image';
+        return ImageToolType::fromMixed($effectiveToolType)->isImagePipeline();
     }
 
     public function isPromptImageTool(SeoPrompt $prompt): bool
     {
-        return $this->normalizePromptTool($prompt) === 'image';
+        return ImageToolType::fromMixed($prompt->tools ?? 'default')->isImagePipeline();
     }
 
     /**
      * Sinh ảnh một lần (Imagen / Nano Banana) — dùng từ PromptRunner::callProvider.
      *
      * @param  array<string, string>  $variables
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @return array{url: string, usage: array<string, mixed>|null, model_used: string}
      */
     public function executeImage(
         ApiConnection $connection,
         SeoPrompt $prompt,
         string $compiled,
         array $variables,
-        ?string $routedModel = null,
     ): array {
         if ($connection->provider !== 'gemini') {
             throw new PromptRunException(
@@ -99,25 +98,33 @@ final class MediaGenerationService
             );
         }
 
+        $toolType = ImageToolType::fromMixed($prompt->tools ?? 'default');
+        if (! $toolType->isImagePipeline()) {
+            $toolType = ImageToolType::Image;
+        }
+
+        if ($toolType->isTypography()) {
+            return $this->typographyPipeline->execute($connection, $prompt, $compiled, $variables);
+        }
+
         $compiledPromptLength = ImageModelInputLengthPolicy::measureCompiledPromptLength($compiled);
         $imagePrompt = $this->buildImageGenerationInput($compiled, $variables, $compiledPromptLength);
-        $excludeImagen = $this->isProductImageContext($variables);
-        [$output, $usage] = $this->geminiMediaGeneration->generateImage(
-            $connection,
-            $imagePrompt,
-            null,
-            excludeImagen: $excludeImagen,
+        $result = $this->geminiMediaGeneration->generateImage(
+            connection: $connection,
+            prompt: $imagePrompt,
+            toolType: $toolType,
+            productContext: $this->isProductImageContext($variables),
             inputLength: $compiledPromptLength,
         );
 
-        $firstLine = trim(explode("\n", trim($output), 2)[0] ?? '');
+        $firstLine = trim(explode("\n", trim($result['url']), 2)[0] ?? '');
         if (! str_starts_with($firstLine, '/storage/')) {
             throw new PromptRunException(
-                'Hình ảnh lỗi: model không trả file ảnh hợp lệ (workflow image priority).',
+                'Hình ảnh lỗi: model không trả file ảnh hợp lệ (ImageRoutingStrategy).',
             );
         }
 
-        return [$output, $usage];
+        return $result;
     }
 
     /**
@@ -142,7 +149,7 @@ final class MediaGenerationService
     }
 
     /**
-     * API cho ImageGenerationChainService / gọi từ bên ngoài khi tools = image.
+     * API cho ImageGenerationChainService / gọi từ bên ngoài khi tools = image*.
      *
      * @param  array<string, string>  $variables
      * @return array<string, mixed>|string
@@ -165,27 +172,25 @@ final class MediaGenerationService
         }
 
         $compiled = app(PromptRunnerService::class)->compilePrompt($prompt, $variables);
-        [$output] = $this->executeImage(
+        $result = $this->executeImage(
             $prompt->aiConnection,
             $prompt,
             $compiled,
             $variables,
-            null,
         );
 
-        return $output;
+        return $result['url'];
     }
 
     /**
      * @param  array<string, string>  $variables
-     * @return array{0: string, 1: array<string, mixed>|null}
+     * @return array{url: string, usage: array<string, mixed>|null, model_used: string}
      */
     private function executeImagePipeline(
         SeoPrompt $prompt,
         array $variables,
         ?string $inputData,
         ?string $compiledPrompt,
-        ?string $modelOverride,
     ): array {
         $connection = $prompt->aiConnection;
         $variables = Utf8Sanitizer::variablesForAi($variables);
@@ -208,7 +213,7 @@ final class MediaGenerationService
             $variables['input'] = Utf8Sanitizer::compactForAiVariable($inputData);
         }
 
-        return $this->executeImage($connection, $prompt, $compiled, $variables, $modelOverride);
+        return $this->executeImage($connection, $prompt, $compiled, $variables);
     }
 
     /**
@@ -241,12 +246,5 @@ final class MediaGenerationService
             ."Visual specification:\n\n"
             .$compiled,
         );
-    }
-
-    private function normalizePromptTool(SeoPrompt $prompt): string
-    {
-        $tool = trim((string) ($prompt->tools ?? 'default'));
-
-        return in_array($tool, ['default', 'image', 'video'], true) ? $tool : 'default';
     }
 }

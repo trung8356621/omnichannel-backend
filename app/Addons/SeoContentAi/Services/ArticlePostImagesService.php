@@ -191,7 +191,7 @@ final class ArticlePostImagesService
             return $html;
         }
 
-        $imgInHtml = preg_match_all('/<img[\s>]/iu', $html) ?: 0;
+        $imgInHtml = $this->countImagesWithSrc($html);
         if ($imgInHtml >= count($normalized)) {
             return $html;
         }
@@ -219,6 +219,56 @@ final class ArticlePostImagesService
             ->insertImagesToEmptySections($html, $items, $article);
 
         return $result['inserted'] > 0 ? $result['html'] : $html;
+    }
+
+    /**
+     * Nguồn editor: raw `post_content` (không dùng `the_content` — tránh &#x entity + markup frontend).
+     * Fallback rendered chỉ khi raw rỗng. Decode entity UTF-8 rồi inject post_images nếu thiếu img.
+     *
+     * @param  array<int, array<string, mixed>>  $postImages
+     */
+    public function prepareEditorHtmlFromWordPressSources(
+        SeoArticle $article,
+        string $rawContent,
+        string $renderedBody,
+        array $postImages = [],
+    ): string {
+        $html = $this->preferImageRichHtml(trim($rawContent), trim($renderedBody));
+        if ($html === '') {
+            return '';
+        }
+
+        return $this->injectIntoEmptySections($article, $html, $postImages);
+    }
+
+    /**
+     * Luôn ưu tiên raw. Chỉ lấy rendered khi raw trống (rồi decode entity).
+     * Không thay cả bài bằng `the_content` chỉ vì đếm được nhiều thẻ img hơn.
+     */
+    public function preferImageRichHtml(string $rawContent, string $renderedBody): string
+    {
+        $html = trim($rawContent) !== '' ? trim($rawContent) : trim($renderedBody);
+
+        return $this->decodeHtmlEntitiesPreservingMarkup($html);
+    }
+
+    public function decodeHtmlEntitiesPreservingMarkup(string $html): string
+    {
+        $html = trim($html);
+        if ($html === '' || ! str_contains($html, '&')) {
+            return $html;
+        }
+
+        return html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    }
+
+    private function countImagesWithSrc(string $html): int
+    {
+        if ($html === '') {
+            return 0;
+        }
+
+        return preg_match_all('/<img\b[^>]*\bsrc\s*=\s*["\'][^"\']+["\']/iu', $html) ?: 0;
     }
 
     /**

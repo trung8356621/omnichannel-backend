@@ -9,6 +9,11 @@
     $aggregateFilters = $this->getAggregateFilterDefinitions();
     $paginator = $hasScanned ? $this->resultsPaginator : new \Illuminate\Pagination\LengthAwarePaginator([], 0, 15);
     $visibleIds = collect($paginator->items())->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
+    $articleFocusMap = collect($paginator->items())
+        ->mapWithKeys(static fn (array $row): array => [
+            (int) ($row['id'] ?? 0) => (bool) ($row['has_focus_keyword'] ?? false),
+        ])
+        ->all();
 @endphp
 
 @if ($defaultLoading)
@@ -24,23 +29,44 @@
     x-data="{
         sidebarProjectId: @entangle('sidebarProjectId').live,
         selectedArticleIds: @entangle('selectedArticleIds').live,
-        sidebarCollapsed: false,
-        assignOpen: false,
+        sidebarCollapsed: true,
+        bulkMenuOpen: false,
         quickCreateOpen: false,
         assignArticleId: null,
-        assignProjectId: '',
         assignType: 'rewrite',
         rewriteMode: 'keyword',
         rewriteNotes: '',
+        assignFocusKeyword: '',
+        assignNeedsKeyword: false,
         assignSubmitting: false,
         quickSiteId: @js((int) ($filterSiteId ?: \App\Addons\SeoContentAi\Support\SeoAccessControl::globalSiteId() ?: 0)),
         quickWriterId: '',
         quickCreateSubmitting: false,
-        sidebarShowLabel: @js(__('seo-content-ai::filament.articles_optimal.sidebar_show')),
-        sidebarHideLabel: @js(__('seo-content-ai::filament.articles_optimal.sidebar_hide')),
         visibleIds: @js($visibleIds),
+        articleFocusMap: @js($articleFocusMap),
+        init() {
+            this.$watch('selectedArticleIds', (value) => {
+                if (! Array.isArray(value) || value.length === 0) {
+                    this.bulkMenuOpen = false;
+                }
+            });
+        },
+        selectableVisibleIds() {
+            return this.visibleIds.map(Number);
+        },
+        assignableSelectedIds() {
+            return this.selectedArticleIds
+                .map(Number)
+                .filter((id) => id > 0 && !! this.articleFocusMap[id]);
+        },
+        hasSelectedMissingKeyword() {
+            return this.selectedArticleIds
+                .map(Number)
+                .some((id) => id > 0 && ! this.articleFocusMap[id]);
+        },
         visibleSelected() {
-            return this.visibleIds.length > 0 && this.visibleIds.every((id) => this.selectedArticleIds.map(Number).includes(Number(id)));
+            const selectable = this.selectableVisibleIds();
+            return selectable.length > 0 && selectable.every((id) => this.selectedArticleIds.map(Number).includes(Number(id)));
         },
         syncVisibleIds(nextVisibleIds) {
             this.visibleIds = nextVisibleIds.map(Number);
@@ -49,25 +75,54 @@
                 .filter((id) => this.visibleIds.includes(id));
         },
         toggleSelectAll(checked) {
-            this.selectedArticleIds = checked ? this.visibleIds.map(Number) : [];
+            this.selectedArticleIds = checked ? this.selectableVisibleIds() : [];
         },
-        openAssign(articleId) {
-            this.assignArticleId = articleId;
-            this.assignProjectId = this.sidebarProjectId || '';
+        openAssignSidebar(articleId = null) {
+            this.bulkMenuOpen = false;
+            this.assignArticleId = articleId ? Number(articleId) : null;
             this.assignType = 'rewrite';
             this.rewriteMode = 'keyword';
             this.rewriteNotes = '';
-            this.assignOpen = true;
+            this.assignFocusKeyword = '';
+            this.assignNeedsKeyword = this.assignArticleId
+                ? ! this.articleFocusMap[this.assignArticleId]
+                : false;
+            this.sidebarCollapsed = false;
         },
-        submitAssign() {
+        closeAssignSidebar() {
+            this.sidebarCollapsed = true;
+            this.assignArticleId = null;
+            this.assignNeedsKeyword = false;
+            this.assignFocusKeyword = '';
+            this.assignSubmitting = false;
+        },
+        assignTargetIds() {
+            if (this.assignArticleId) {
+                return [Number(this.assignArticleId)];
+            }
+
+            return this.assignableSelectedIds();
+        },
+        submitSidebarAssign() {
+            const ids = this.assignTargetIds();
+            if (ids.length === 0 || ! this.sidebarProjectId) {
+                return;
+            }
+
+            if (this.assignNeedsKeyword && ! String(this.assignFocusKeyword || '').trim()) {
+                return;
+            }
+
             this.assignSubmitting = true;
-            this.$wire.assignArticleToContentProject(this.assignArticleId, {
-                project_id: this.assignProjectId,
+            this.$wire.assignFromSidebar(ids, {
+                project_id: this.sidebarProjectId,
                 type: this.assignType,
                 rewrite_mode: this.rewriteMode,
                 rewrite_notes: this.rewriteNotes,
+                focus_keyword: String(this.assignFocusKeyword || '').trim(),
             }).then(() => {
-                this.assignOpen = false;
+                this.closeAssignSidebar();
+                window.location.reload();
             }).finally(() => {
                 this.assignSubmitting = false;
             });
@@ -80,11 +135,27 @@
                 this.quickCreateSubmitting = false;
             });
         },
+        runSkipSelected() {
+            this.bulkMenuOpen = false;
+            this.$wire.skipSelectedSeoAudit(this.selectedArticleIds.map(Number));
+        },
+        runAssignSelected() {
+            this.bulkMenuOpen = false;
+            if (this.hasSelectedMissingKeyword()) {
+                this.$wire.notifyAssignBlockedMissingKeyword();
+
+                return;
+            }
+            if (this.assignableSelectedIds().length === 0) {
+                return;
+            }
+            this.openAssignSidebar(null);
+        },
     }"
 >
     <span
-        wire:key="articles-optimal-visible-ids-{{ md5(json_encode($visibleIds)) }}"
-        x-init="syncVisibleIds(@js($visibleIds))"
+        wire:key="articles-optimal-visible-ids-{{ md5(json_encode([$visibleIds, $articleFocusMap])) }}"
+        x-init="articleFocusMap = @js($articleFocusMap); syncVisibleIds(@js($visibleIds))"
         class="hidden"
     ></span>
 
@@ -234,12 +305,6 @@
                 {{ __('seo-content-ai::filament.articles_optimal.results_heading') }}
             </x-slot>
 
-            @if ($hasScanned)
-                <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">
-                    {{ __('seo-content-ai::filament.articles_optimal.stale_metadata_notice') }}
-                </p>
-            @endif
-
             @if (! $hasScanned)
                 <p class="text-sm text-gray-600 dark:text-gray-300">
                     {{ __('seo-content-ai::filament.articles_optimal.initial_message') }}
@@ -249,27 +314,47 @@
                     {{ __('seo-content-ai::filament.articles_optimal.empty_results') }}
                 </p>
             @else
-                <div class="mb-3 flex items-center gap-2">
-                    <x-filament::button
-                        type="button"
-                        size="sm"
-                        color="warning"
-                        x-on:click="$wire.assignSelectedArticlesToSelectedProject(sidebarProjectId).then(() => window.location.reload())"
-                        wire:loading.attr="disabled"
-                        wire:target="assignSelectedArticlesToSelectedProject"
-                        wire:loading.class="opacity-60 pointer-events-none"
-                        x-bind:disabled="!sidebarProjectId || selectedArticleIds.length === 0"
-                    >
-                        <span wire:loading.remove wire:target="assignSelectedArticlesToSelectedProject">Assign selected</span>
-                        <span wire:loading.inline-flex wire:target="assignSelectedArticlesToSelectedProject" class="items-center gap-2">
-                            <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                            </svg>
-                            Assigning...
-                        </span>
-                    </x-filament::button>
-                    <span class="text-xs text-gray-500">{{ __('seo-content-ai::filament.articles_optimal.bulk_assign_hint') }}</span>
+                <div
+                    class="mb-3 flex flex-wrap items-center gap-3"
+                    x-show="selectedArticleIds.length > 0"
+                    x-cloak
+                >
+                    <div class="relative" @click.outside="bulkMenuOpen = false">
+                        <button
+                            type="button"
+                            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-700 ring-1 ring-inset ring-gray-200 hover:bg-gray-100 dark:bg-white/5 dark:text-gray-200 dark:ring-white/10 dark:hover:bg-white/10"
+                            x-on:click="bulkMenuOpen = ! bulkMenuOpen"
+                        >
+                            <span>{{ __('seo-content-ai::filament.articles_optimal.bulk_actions') }}</span>
+                            <x-filament::icon icon="heroicon-m-chevron-down" class="h-4 w-4 shrink-0" />
+                        </button>
+                        <div
+                            x-show="bulkMenuOpen"
+                            x-cloak
+                            class="absolute left-0 z-20 mt-1 w-64 rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-gray-900"
+                        >
+                            <button
+                                type="button"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5"
+                                x-on:click="runSkipSelected()"
+                                wire:loading.attr="disabled"
+                                wire:target="skipSelectedSeoAudit"
+                            >
+                                <x-filament::icon icon="heroicon-o-eye-slash" class="h-4 w-4 shrink-0 text-warning-600" />
+                                {{ __('seo-content-ai::filament.articles_optimal.action_skip_audit') }}
+                            </button>
+                            <button
+                                type="button"
+                                class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-white/5"
+                                x-on:click="runAssignSelected()"
+                                x-bind:title="hasSelectedMissingKeyword() ? @js(__('seo-content-ai::filament.articles_optimal.assign_missing_keyword_bulk')) : ''"
+                            >
+                                <x-filament::icon icon="heroicon-o-folder-plus" class="h-4 w-4 shrink-0 text-warning-600" />
+                                {{ __('seo-content-ai::filament.articles_optimal.action_assign_project') }}
+                            </button>
+                        </div>
+                    </div>
+                    <span class="text-xs text-gray-500" x-text="`${selectedArticleIds.length} {{ __('seo-content-ai::filament.articles_optimal.bulk_selected_suffix') }}`"></span>
                 </div>
 
                 <div class="overflow-x-auto">
@@ -358,15 +443,12 @@
                                     <td class="px-3 py-3 align-top">
                                         <div class="flex flex-wrap gap-2">
                                             <x-filament::icon-button tag="a" href="{{ $row['edit_url'] }}" icon="heroicon-o-pencil-square" size="sm" color="gray" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_edit') }}" label="{{ __('seo-content-ai::filament.articles_optimal.action_open_article') }}" />
-                                            <x-filament::icon-button icon="heroicon-o-archive-box-arrow-down" size="sm" color="warning" wire:click="demoteToDraft({{ $row['id'] }})" wire:loading.attr="disabled" wire:loading.class="opacity-50 pointer-events-none" wire:target="demoteToDraft" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_demote_draft') }}" />
+                                            <x-filament::icon-button icon="heroicon-o-eye-slash" size="sm" color="warning" wire:click="skipSeoAudit({{ $row['id'] }})" wire:loading.attr="disabled" wire:loading.class="opacity-50 pointer-events-none" wire:target="skipSeoAudit" tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_skip_audit') }}" />
                                             <x-filament::icon-button
                                                 icon="heroicon-o-folder-plus"
                                                 size="sm"
                                                 color="info"
-                                                x-on:click="sidebarProjectId ? $wire.assignArticleToSelectedProject({{ $row['id'] }}) : openAssign({{ $row['id'] }})"
-                                                wire:loading.attr="disabled"
-                                                wire:loading.class="opacity-50 pointer-events-none"
-                                                wire:target="assignArticleToSelectedProject"
+                                                x-on:click="openAssignSidebar({{ (int) $row['id'] }})"
                                                 tooltip="{{ __('seo-content-ai::filament.articles_optimal.action_assign_project') }}"
                                             />
                                         </div>
@@ -385,34 +467,29 @@
         </div>
     </div>
 
-    <button
-        type="button"
-        class="fixed right-0 top-24 z-40 rounded-l-lg border border-r-0 border-gray-200 bg-white px-2 py-3 text-gray-600 shadow dark:border-white/10 dark:bg-gray-900 dark:text-gray-300"
-x-bind:style="sidebarCollapsed ? 'transform: translateX(0);' : 'transform: translateX(-30vw);'"
-        x-on:click="sidebarCollapsed = ! sidebarCollapsed"
-        x-bind:title="sidebarCollapsed ? sidebarShowLabel : sidebarHideLabel"
-    >
-        <span x-show="! sidebarCollapsed">&gt;</span>
-        <span x-show="sidebarCollapsed">&lt;</span>
-    </button>
-
     <aside
-class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transition-transform duration-300 dark:border-white/10 dark:bg-gray-900"
-        style="position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 30;"
+        class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transition-transform duration-300 dark:border-white/10 dark:bg-gray-900"
+        style="position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 50;"
         x-bind:style="sidebarCollapsed
-            ? 'position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 30; transform: translateX(100%);'
-            : 'position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 30; transform: translateX(0);'"
+            ? 'position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 50; transform: translateX(100%); pointer-events: none;'
+            : 'position: fixed; right: 0; top: 0; bottom: 0; width: 30%; z-index: 50; transform: translateX(0); pointer-events: auto;'"
+        x-bind:aria-hidden="sidebarCollapsed"
     >
         <div class="mt-20 space-y-4">
-            <div class="flex justify-end">
+            <div class="flex items-center justify-between gap-2">
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                    {{ __('seo-content-ai::filament.articles_optimal.assign_modal_heading') }}
+                </h3>
                 <x-filament::icon-button
                     type="button"
-                    icon="heroicon-o-chevron-right"
+                    icon="heroicon-o-x-mark"
                     color="gray"
-                    x-on:click="sidebarCollapsed = true"
+                    x-on:click="closeAssignSidebar()"
                     tooltip="{{ __('seo-content-ai::filament.articles_optimal.sidebar_collapse') }}"
                 />
             </div>
+
+            <p class="text-xs text-gray-500" x-text="`${assignTargetIds().length} {{ __('seo-content-ai::filament.articles_optimal.bulk_selected_suffix') }}`"></p>
 
             <div class="flex items-end gap-2">
                 <div class="min-w-0 flex-1">
@@ -431,11 +508,68 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
                 <x-filament::icon-button type="button" icon="heroicon-o-plus" color="success" x-on:click="quickCreateOpen = true" tooltip="{{ __('seo-content-ai::filament.article_list.quick_create_content_project') }}" />
             </div>
 
+            <div>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.article_type') }}</label>
+                <x-select x-model="assignType" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
+                    @foreach ($assignTypeOptions as $value => $label)
+                        <option value="{{ $value }}">{{ $label }}</option>
+                    @endforeach
+                </x-select>
+            </div>
+
+            <div x-show="assignType === 'rewrite'" x-cloak>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.rewrite_mode') }}</label>
+                <x-select x-model="rewriteMode" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
+                    @foreach ($rewriteModeOptions as $value => $label)
+                        <option value="{{ $value }}">{{ $label }}</option>
+                    @endforeach
+                </x-select>
+            </div>
+
+            <div x-show="assignType === 'rewrite' && rewriteMode === 'content'" x-cloak>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.projects.rewrite_notes') }}</label>
+                <textarea x-model="rewriteNotes" rows="3" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"></textarea>
+            </div>
+
+            <div x-show="assignNeedsKeyword" x-cloak>
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-200">
+                    {{ __('seo-content-ai::filament.articles_optimal.assign_focus_keyword') }}
+                    <span class="text-rose-600">*</span>
+                </label>
+                <input
+                    type="text"
+                    x-model="assignFocusKeyword"
+                    required
+                    class="mt-1 block w-full rounded-lg border-gray-300 text-sm shadow-sm dark:border-white/10 dark:bg-gray-950"
+                    placeholder="{{ __('seo-content-ai::filament.articles_optimal.assign_focus_keyword_placeholder') }}"
+                />
+                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ __('seo-content-ai::filament.articles_optimal.assign_focus_keyword_help') }}</p>
+            </div>
+
+            <x-filament::button
+                type="button"
+                color="info"
+                class="w-full"
+                x-on:click="submitSidebarAssign()"
+                x-bind:disabled="assignSubmitting || ! sidebarProjectId || assignTargetIds().length === 0 || (assignNeedsKeyword && ! String(assignFocusKeyword || '').trim())"
+                wire:loading.attr="disabled"
+                wire:target="assignFromSidebar"
+            >
+                <span x-show="! assignSubmitting">{{ __('seo-content-ai::filament.article_list.assign') }}</span>
+                <span x-show="assignSubmitting" class="inline-flex items-center gap-2" x-cloak>
+                    <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                    </svg>
+                    {{ __('seo-content-ai::filament.articles_optimal.assign_selected_loading') }}
+                </span>
+            </x-filament::button>
+
             <div class="rounded-lg border border-gray-200 dark:border-white/10">
                 <div class="border-b border-gray-100 px-3 py-2 text-sm font-semibold dark:border-white/10">
                     {{ __('seo-content-ai::filament.articles_optimal.sidebar_articles_heading') }}
                 </div>
-                <div wire:loading.class="opacity-50" wire:target="selectSidebarProject,assignArticleToSelectedProject,assignSelectedArticlesToSelectedProject,quickCreateSidebarProject" class="divide-y divide-gray-100 dark:divide-white/10">
+                <div wire:loading.class="opacity-50" wire:target="selectSidebarProject,assignFromSidebar,quickCreateSidebarProject" class="divide-y divide-gray-100 dark:divide-white/10">
                     @forelse ($sidebarArticles as $article)
                         <div class="px-3 py-2">
                             <div class="truncate text-sm font-medium">{{ $article['title'] }}</div>
@@ -451,10 +585,10 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
         </div>
     </aside>
 
-    {{-- Loading overlay cho assign / demote — không gắn runScan hay pagination --}}
+    {{-- Loading overlay cho assign / skip audit — không gắn runScan hay pagination --}}
     <div
         wire:loading
-        wire:target="demoteToDraft,assignArticleToContentProject,assignArticleToSelectedProject,assignSelectedArticlesToSelectedProject,quickCreateSidebarProject"
+        wire:target="skipSeoAudit,skipSelectedSeoAudit,assignFromSidebar,assignArticleToContentProject,quickCreateSidebarProject"
         class="fixed inset-0 z-[100] flex items-center justify-center bg-white/70 dark:bg-gray-950/70"
         style="backdrop-filter: blur(2px);"
     >
@@ -465,56 +599,6 @@ class="overflow-y-auto border-l border-gray-200 bg-white p-4 shadow-xl transitio
             </svg>
             <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ __('seo-content-ai::filament.articles_optimal.processing') }}</span>
         </div>
-    </div>
-
-    <div x-show="assignOpen" x-cloak class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 articles-optimal-assign-content-project-modal">
-        <form x-on:submit.prevent="submitAssign()" class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl dark:bg-gray-900">
-            <h3 class="text-base font-semibold">{{ __('seo-content-ai::filament.articles_optimal.assign_modal_heading') }}</h3>
-            <div class="mt-4 space-y-4">
-                <div>
-                    <label class="text-sm font-medium">{{ __('seo-content-ai::filament.articles_optimal.sidebar_project_label') }}</label>
-                    <x-select x-model="assignProjectId" required class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                        <option value="">{{ __('seo-content-ai::filament.articles_optimal.sidebar_select_project') }}</option>
-                        @foreach ($projectOptions as $projectId => $projectLabel)
-                            <option value="{{ $projectId }}">{{ $projectLabel }}</option>
-                        @endforeach
-                    </x-select>
-                </div>
-                <div>
-                    <label class="text-sm font-medium">{{ __('seo-content-ai::filament.projects.article_type') }}</label>
-                    <x-select x-model="assignType" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                        @foreach ($assignTypeOptions as $value => $label)
-                            <option value="{{ $value }}">{{ $label }}</option>
-                        @endforeach
-                    </x-select>
-                </div>
-                <div x-show="assignType === 'rewrite'">
-                    <label class="text-sm font-medium">{{ __('seo-content-ai::filament.projects.rewrite_mode') }}</label>
-                    <x-select x-model="rewriteMode" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950">
-                        @foreach ($rewriteModeOptions as $value => $label)
-                            <option value="{{ $value }}">{{ $label }}</option>
-                        @endforeach
-                    </x-select>
-                </div>
-                <div x-show="assignType === 'rewrite' && rewriteMode === 'content'">
-                    <label class="text-sm font-medium">{{ __('seo-content-ai::filament.projects.rewrite_notes') }}</label>
-                    <textarea x-model="rewriteNotes" rows="3" class="mt-1 block w-full rounded-lg border-gray-300 text-sm dark:border-white/10 dark:bg-gray-950"></textarea>
-                </div>
-            </div>
-            <div class="mt-5 flex justify-end gap-2">
-                <x-filament::button type="button" color="gray" x-on:click="assignOpen = false" x-bind:disabled="assignSubmitting">Cancel</x-filament::button>
-                <x-filament::button type="submit" color="info" x-bind:disabled="assignSubmitting">
-                    <span x-show="! assignSubmitting">Assign</span>
-                    <span x-show="assignSubmitting" class="inline-flex items-center gap-2">
-                        <svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-                        </svg>
-                        Assigning...
-                    </span>
-                </x-filament::button>
-            </div>
-        </form>
     </div>
 
     <div x-show="quickCreateOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">

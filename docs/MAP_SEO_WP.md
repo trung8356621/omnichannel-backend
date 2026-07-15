@@ -4,6 +4,13 @@
 
 **Liên quan:** [React Editor](MAP_SEO_EDITOR.md) · [Content Projects & Workflow](MAP_SEO_PROJECTS.md)
 
+### Nguyên tắc: Laravel bản tạm ↔ WordPress nguồn sống
+
+- Bài trên Laravel = bản tạm: **được** sync nội dung/SEO/media, sửa local, trash/xóa **chỉ trên Laravel**.
+- Outbound Laravel → WP **không** xóa bài WP, **không** move-to-trash WP, **không** demote bài đã có `wp_post_id` xuống `draft` (`resolveWordPressStatusPayload` bỏ `status` trong các trường hợp đó).
+- Create mới (chưa `wp_post_id`) / `scheduled` vẫn gửi `draft` lên WP để giữ luồng đăng bài.
+- Inbound WP → Laravel (push trash / force_delete) vẫn phản ánh trạng thái WP — xem bridge bên dưới.
+
 ---
 
 ## 2.3 WordPress Bridge (inbound từ plugin WP)
@@ -94,7 +101,7 @@ flowchart TB
 
 **Trace MCP (`syncForArticle` outbound):** 30+ callees — `ArticleEditorHtmlSanitizeService`, `WorkflowParserService`, `WordPressLocalMediaSyncService`, `ArticleMediaLocalService`, `SeoMediaBuilder`, `ExternalPluginRegistry`.
 
-**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `ArticlesOptimal.demoteToDraft` ([MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md)), `SeoProjectApprovalService.approveLinkedProject`.
+**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `SeoProjectApprovalService.approveLinkedProject`.
 
 ### Đăng bài mới — tránh bài trùng / `post_content` trắng
 
@@ -111,7 +118,7 @@ Luồng cũ (trước fix): `createForArticle` → `POST /posts` (chỉ title/sl
 
 ### Lên lịch đăng bài (Laravel cron, không WP `future`)
 
-Khi `articles.status = scheduled`, outbound sync gửi WP **`draft`** (xem `resolveWordPressStatusPayload`). Cron `seo:publish-scheduled-articles` (mỗi phút) gọi `ScheduledArticlePublishRunner` → `publishScheduledArticle()` → editor-sync `status=publish`. Chi tiết luồng editor: [MAP_SEO_EDITOR.md §2.6](MAP_SEO_EDITOR.md).
+Khi `articles.status = scheduled`, outbound sync gửi WP **`draft`** (xem `resolveWordPressStatusPayload`). Bài đã có `wp_post_id` với status local `draft`/`trash`: **không** gửi status xuống WP. Cron `seo:publish-scheduled-articles` (mỗi phút) gọi `ScheduledArticlePublishRunner` → `publishScheduledArticle()` → editor-sync `status=publish`. Chi tiết luồng editor: [MAP_SEO_EDITOR.md §2.6](MAP_SEO_EDITOR.md).
 
 ### Plugin WP — tắt WP-Cron & sửa «Lịch trình bị bỏ lỡ»
 
@@ -157,9 +164,10 @@ Core hub đọc `services.config.external_plugins`. Trong addon: `GeneralDomain.
 
 Các Livewire methods trong `EditArticle`:
 - `renameAttachmentSlugsOnWordPress(array)` — `WordPressAttachmentRenameService::renameBatch` → WP `POST …/attachments/rename`; response `renamed[]` gồm `attachment_id`, `old_url`, `new_url`, `new_slug` (slug thực tế trên đĩa, có thể ≠ `new_slug` request nếu WP dedupe). Livewire enrich `block_id` từ request trước event `seo-attachment-slugs-rename-finished`.
+- **Plugin ≥ 1.0.54** — `includes/class-attachment-renamer.php` `resolve_attachment_id()`: nếu `attachment_id` request stale (post đã xóa/reimport) → tìm lại theo `old_url` (`attachment_url_to_postid`) hoặc basename `_wp_attached_file` trước khi rename.
 - `updateAttachmentMetaOnWordPress(array)` — cập nhật alt text + title của WP media
 
-Luồng editor: `callEditArticleLivewire('renameAttachmentSlugsOnWordPress')` → `WordPressAttachmentRenameService` → WP REST. Legacy Alpine `seo-rename-attachment-slugs` vẫn có cho flow khác.
+Luồng editor: `callEditArticleLivewire('renameAttachmentSlugsOnWordPress')` → `WordPressAttachmentRenameService` → WP REST. Legacy Alpine `seo-rename-attachment-slugs` vẫn có cho flow khác. Ảnh local chưa sync không gọi endpoint này; editor rename local trước, rồi `syncHtml` import ảnh lên WP bằng slug đã chuẩn hóa.
 
 ---
 
@@ -203,9 +211,13 @@ flowchart TB
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.51:** `GET /omi-seo-ai/v1/posts/{id}/comment-reviews` đọc `_omi_seo_virtual_comments` (meta) + merge `wp_comments` — editor Reviews tab dùng endpoint này khi bấm **Làm mới**.
 
+**Plugin `omi-seo-ai-bridge` ≥ 1.0.54:** `class-attachment-renamer.php` — rename resolve attachment theo URL khi ID stale.
+
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.50:** `class-attachment-binary-replacer.php` đổi extension file sang `.webp` khi mime `image/webp`.
 
 **Tránh file WP thừa:** Không backfill WebP khi upload thực tế là JPEG `-wp-upload.jpg` (`needsWordPressWebpBackfill` = false). Mỗi lượt `syncHtml` dedupe theo `seo_media.id`. Xem log: `WordPress attachment đã bị xóa trên WP — import mới`, `WordPress upload fallback: ảnh đã nén dưới ngưỡng`.
+
+**Tối ưu ảnh trước upload:** `SyncArticleToWordPressFromQueueJob` đi qua `SeoImageOptimizationService.prepareWordPressUploadFile` → `SeoImagePipeline`; pixel alpha dùng `ImagickPixelColor::normalized()` để tránh `ImagickPixel::getColor(true)` fail trên Imagick mới và làm sync chậm do fallback/retry.
 
 **Ảnh local:** Sync **không** chuyển `seo_media.status` sang `trash`. Xóa disk chỉ khi duyệt bài (Reviewed).
 
@@ -240,6 +252,8 @@ Widget quản lý release của WP plugin `omi-seo-ai-bridge`:
 
 ```
 Hub: Services/WordPressArticleSyncService.php → syncForArticle().
+Queue enqueue: Services/ArticleWpSyncQueueService.php (`QUEUE_NAME=seo`, dispatchWpSyncJob purge+verify).
+Jobs: Jobs/SyncArticleToWordPressFromQueueJob.php, Jobs/SyncArticleBodyMediaToWordPressJob.php (queue `seo`).
 HTTP: Services/WordPressArticleContentService.php (buildEditorSyncUrl).
 Media: Services/WordPressLocalMediaSyncService.php, ArticleMediaLocalService.php.
 Upload encode: Services/SeoImageOptimizationService.php (prepareWordPressUploadFile, fallback 100KB).

@@ -23,6 +23,8 @@ flowchart TB
     SETTINGS --> PROMPT["/prompt<br/>AI Prompts"]
     SETTINGS --> SCORING["/scoring<br/>SEO scoring rules"]
     SETTINGS --> WORKFLOWS["/workflows<br/>Workflows"]
+    SETTINGS --> AI_ADV["/ai-advanced<br/>AI Advanced"]
+    SETTINGS --> REC["/recommendations<br/>Recommendations"]
     SETTINGS --> AI["/settings/api<br/>API Connections<br/>(Resource)"]
     SETTINGS --> IMG["Image Optimization<br/>(Media parent)"]
 ```
@@ -33,13 +35,17 @@ flowchart TB
 
 | Page | Slug | File | Mô tả |
 |------|------|------|-------|
-| **SeoSettingsOverview** | `settings/overview` | `Filament/Pages/SeoSettingsOverview.php` | Tổng quan: chọn default article workflow, SEO analyzer API key, WP REST API key |
+| **SeoSettingsOverview** | `settings/overview` | `Filament/Pages/SeoSettingsOverview.php` | AI model status (sync, capability groups, `routing_status`/`disabled_reason`), team chat limits; teaser → Recommendations |
+| **SeoSettingsWorkflows** | `settings/workflows` | `Filament/Pages/SeoSettingsWorkflows.php` | Gán task/prompt nghiệp vụ; Editor Media (Prompt\|Workflow) — không chọn model per-node |
+| **SeoSettingsAiAdvanced** | `settings/ai-advanced` | `Filament/Pages/SeoSettingsAiAdvanced.php` | Rendering Preference, Image/Typography/Video model priority, typography validation |
 | **SeoSettingsEditor** | `settings/editor` | `Filament/Pages/SeoSettingsEditor.php` | Cấu hình Editor: auto-save interval, editor height, publish behavior |
 | **SeoSettingsKeywords** | `settings/keywords` | `Filament/Pages/SeoSettingsKeywords.php` | CTA blacklist + **Lý do đánh giá từ khóa** (`keyword_review_reasons`, `KeywordReviewReasonService`) |
 | **KeywordReviewService** | — | `Services/KeywordReviewService.php` | `submitReview()` lưu `review_status` + history; `article_suggestion` không `assertKeywordLinkedToArticle`; custom reason → `review_note`, `reason_id` null |
 | **SeoSettingsPrompt** | `settings/prompt` | `Filament/Pages/SeoSettingsPrompt.php` | Cấu hình prompt mặc định, model selection, system prompts |
 | **SeoSettingsScoring** | `settings/scoring` | `Filament/Pages/SeoSettingsScoring.php` | **Quy tắc chấm điểm SEO** — bật/tắt từng rule, chỉnh điểm trừ (lưu `wp_options.seo_scoring_rules_settings`) |
-| **SeoSettingsWorkflows** | `settings/workflows` | `Filament/Pages/SeoSettingsWorkflows.php` | **Cấu hình workflow quan trọng nhất** — gán task cho từng bước |
+| **SeoSettingsRecommendations** | `settings/recommendations` | `Filament/Pages/SeoSettingsRecommendations.php` | Best-practices admin (hard-coded); badge Current Recommendation; không ảnh hưởng runtime |
+| **SeoSettingsRecommendationsContent** | — | `Support/SeoSettingsRecommendationsContent.php` | Constants + cấu trúc card (Image Routing, Typography, Prompt Design, Workflow, AI Models, Experimental) |
+| **SeoSettingsMenu** | — | `Support/SeoSettingsMenu.php` | Sidebar Settings: Overview → Workflows → AI Advanced → … → SEO scoring → **Recommendations** |
 | **SeoSettings** | `settings` | `Filament/Pages/SeoSettings.php` | Redirect → overview |
 
 ### 1.4 Image Optimization Settings
@@ -81,6 +87,22 @@ Page quản lý **quy tắc trừ điểm** khi chấm SEO on-page. Rules cố �
 
 ---
 
+## 1.6 Recommendations (`SeoSettingsRecommendations`)
+
+Trang tài liệu nội bộ admin — **không ảnh hưởng runtime routing**.
+
+| Thành phần | File | Mô tả |
+|------------|------|-------|
+| Page | `Filament/Pages/SeoSettingsRecommendations.php` | Slug `settings/recommendations`; badge Current Recommendation; grid card Info/Success/Warning |
+| Content | `Support/SeoSettingsRecommendationsContent.php` | Hard-coded card blocks (Image Routing, Typography, Prompt Design, Workflow, AI Models, Experimental) |
+| View | `resources/views/filament/pages/seo-settings-recommendations.blade.php` | Heroicons + responsive CSS (`seo-settings.css`) |
+| Menu | `Support/SeoSettingsMenu.php` | Mục cuối sidebar Settings |
+| Overview teaser | `seo-settings-overview.blade.php` | Link «Best practices» → Recommendations |
+
+Lang: `filament.settings_recommendations` (`lang/en|vi/filament.php`).
+
+---
+
 ## 2. Workflow Settings (`SeoSettingsWorkflows`)
 
 Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từng workflow (SeoTask) cho từng bước xử lý**. Dùng service `SeoCreateArticleSettingsService` để lưu.
@@ -92,10 +114,9 @@ Page cấu hình workflow quan trọng nhất — cho phép Manager **gán từn
 | **Task Workflows** | Publish article | `KEY_PUBLISH_ARTICLE` | Workflow chạy khi publish bài mới từ keyword |
 | | Rewrite article | `KEY_REWRITE_ARTICLE` | Workflow chạy khi viết lại bài |
 | | Post review | `KEY_POST_REVIEW` | Workflow chạy sau khi review |
-| **Editor Media** | Image generation workflow | `KEY_CREATE_IMAGE` (`create_image_task_id`) | Quy trình (SeoTask) sinh ảnh AI — widget **Input ({{input}})** + Prompt Hình ảnh |
-| | Product gallery prompt | `KEY_CREATE_PRODUCT_GALLERY_IMAGE` | Prompt sinh ảnh gallery sản phẩm |
-| | Image model priority | `KEY_IMAGE_MODEL_PRIORITY` | Rules: bảng + repeater cho model priority |
-| | Video prompt | `KEY_CREATE_VIDEO` | Prompt sinh video |
+| **Editor Media** | Typography / Infographic | `KEY_CREATE_TYPOGRAPHY_*` | Prompt\|Workflow cho nút **Tạo ảnh** trong editor (tool `image_typography`). **Không còn** field «Ảnh bài viết» riêng. |
+| | Product gallery | `KEY_CREATE_PRODUCT_GALLERY_*` | Prompt\|Workflow gallery sản phẩm |
+| | Video | `KEY_CREATE_VIDEO_*` | Prompt\|Workflow video |
 | **Project Keywords** | Project keywords prompt | `KEY_PROJECT_KEYWORDS_PROMPT_ID` | Prompt sinh keyword cho project |
 | **FAQ** | Renew FAQ prompt | `KEY_RENEW_FAQ_PROMPT_ID` | Prompt tạo FAQ |
 | **Featured Snippet** | Featured snippet prompt | `KEY_FEATURED_SNIPPET_PROMPT_ID` | Prompt sinh featured snippet |
@@ -326,6 +347,30 @@ Router model với failover mechanism:
 - Thử model theo priority
 - Nếu model bị `exhausted` hoặc lỗi → fallback sang model tiếp theo
 - Lưu trạng thái `last_error` vào `SeoAiModel`
+- `overviewForUser()` gắn `routing_status` + `disabled_reason` từ `GeminiModelVersionPolicy::routingDecision()`
+- `getNextActiveModel()` / planner failover bỏ model không eligible; `markModelUnavailableForAutoRouting()` khi provider unavailable
+
+### 5.2.1 Gemini version routing (`Support/GeminiModelVersionPolicy.php`)
+
+Gate auto-routing Gemini/Imagen: **major ≥ 3** (`MIN_MAJOR_VERSION = 3`).
+
+| Symbol | Vai trò |
+|--------|---------|
+| `routingDecision()` | Trả `routing_status` (`enabled`/`disabled`) + `disabled_reason` (`legacy_version`, `provider_unavailable`, …) |
+| `filterEligibleForAutoRouting()` | Lọc slug list theo version + capability `auto_routing` |
+| `preferStableFirst()` | Typography/render ưu tiên stable trước preview |
+| `markCapabilitiesUnavailable()` | Ghi `auto_routing=false` khi API trả unavailable |
+| `isProviderUnavailableError()` | Nhận diện lỗi provider để retry model kế |
+
+Model 2.x vẫn seed/sync trong DB và hiển thị Model Status — chỉ **không** vào auto-routing.
+
+**Wired:** `GoogleAiModelRegistry`, `SeoCreateArticleSettingsService` (default/normalize priority), `ImageRoutingStrategy`, `GeminiModelCatalog`, `GeminiMediaGenerationService`, `AiModelRouterService`.
+
+Default image priority runtime (3.x): `gemini-3.1-flash-image-preview` → `gemini-3-pro-image-preview` → `imagen-4.0-generate-001`.
+
+### 5.2.2 Vision validation router (`Support/VisionValidationModelRouter.php`)
+
+Typography Vision chọn model text có `ImageCapability::ImageInput`, major ≥ 3, failover multi-model. Primary mặc định: `gemini-3.5-flash-preview`. Dùng trong `TypographyValidationService`.
 
 ### 5.3 PromptResult
 
@@ -354,6 +399,8 @@ Cho phép truy xuất nguồn gốc của mỗi output AI (prompt result nào si
 
 ```
 Settings Pages: Filament/Pages/SeoSettings*.php, ImageOptimizationSettings.php
+AI Advanced: Filament/Pages/SeoSettingsAiAdvanced.php → SeoCreateArticleSettingsService (routing keys)
+Recommendations: Filament/Pages/SeoSettingsRecommendations.php → Support/SeoSettingsRecommendationsContent.php (docs only)
 Workflows Settings: Filament/Pages/SeoSettingsWorkflows.php → SeoCreateArticleSettingsService
 API Connections: `AiConnectionResource` (`settings/api`) → `ApiConnection` + external models; list `ApiConnectionsListService` + `ApiConnectionListRow`; registry `SeoProviderRegistry` + `SeoProviderCapabilityResolver`
 Prompt Management: Filament/Resources/PromptResource.php → SeoPrompt model (omi_seo_ai)

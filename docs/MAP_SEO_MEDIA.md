@@ -112,20 +112,35 @@ flowchart TB
     HIST --> T_HIST
 ```
 
-**Trace MCP (`upload` outbound, depth 4):** `SeoMediaController.upload` → `SeoMediaStorageService.storeUpload` → `SeoImageOptimizationService.processUpload` → `SeoImagePipeline.applyMaxDimensions` + `encodeFile` → `SeoWatermarkService.applyToMediaIfEnabled` → `SeoMedia::create` qua `SeoMediaBuilder.where/update`.
+**Trace MCP (`upload` outbound, depth 4):** `SeoMediaController.upload` → `SeoMediaStorageService.storeUpload` → `SeoImageOptimizationService.processUpload` → `processOriginalBytes` (temp source → encode temp out → `SeoConvertedImageValidator.validate`) → `SeoWatermarkService.applyToMediaIfEnabled` → `SeoMedia::create`.
+
+**Clipboard Ctrl+V (`source=clipboard`):** `storeUpload` truyền `$randomFilename=true` → `processUpload` slug `paste-{16 hex}` (không dùng tên OS `image.png`) — tránh URL trùng sau xóa ảnh cũ → browser cache ảnh cũ. Import URL vẫn dùng body `random_filename` → slug `import-{hex}`.
+
+**Validate sau convert (`SeoConvertedImageValidator` + `ImageContentSignature`):** dùng để **chọn** WebP vs fallback — không chặn sync WordPress nếu ảnh gốc còn decode được. Reject WebP blank/collapsed → fallback original. Upload paste: nguồn undecodeable → không tạo `seo_media`.
+
+**Imagick encode:** bỏ `ALPHACHANNEL_ACTIVATE` (tránh WebP alpha=0). Fresh decode mỗi attempt.
+
+**Imagick pixel sample:** `ImagickPixelColor::normalized()` bọc `ImagickPixel::getColor()` để tương thích extension mới (`int $normalized`) và cũ (`bool $normalized`); tránh `getColor(true)` làm fail encode rồi kéo dài sync WP.
+
+**WP upload:** WebP ưu tiên; fail → fallback gốc/compress; **không** return null chỉ vì WebP fail hoặc >100KB. `diagnoseLocalMedia` chỉ cho repair dữ liệu cũ — không bắt buộc trước sync.
 
 **Trace resize (Media Library / workflow):** `SeoMediaLibraryImageActionService` hoặc `PromptPostProcessingApplyService` → `SeoMediaResizeService.resizeLocal|resizeBinary` → `SeoImagePipeline.resizeFile`.
 
 **Trace đồng bộ WP:** `WordPressArticleSyncService.prepareEditorSyncPayload` → `WordPressLocalMediaSyncService.syncHtml` → `syncMedia` → `SeoImageOptimizationService.prepareWordPressUploadFile` → `POST …/attachments/import` hoặc `…/replace-binary` (plugin **≥ 1.0.50** đổi extension sang `.webp` khi mime `image/webp`) — **không ghi đè file PNG/JPG gốc** trên disk Laravel.
 
 **File upload WordPress (`prepareWordPressUploadFile`):**
+1. WebP hợp lệ (ưu tiên) → dùng WebP; >100KB thì ladder shrink; vẫn lớn → vẫn dùng WebP hợp lệ + log `SEO_MEDIA_FALLBACK_OVER_TARGET_SIZE` (không chặn sync).
+2. WebP blank/fail → log `SEO_MEDIA_WEBP_VALIDATION_FAILED` + `SEO_MEDIA_FALLBACK_FROM_ORIGINAL` → **không** return null.
+3. Fallback: original ≤100KB → dùng gốc; original lớn → `ensureLocalOptimizedUploadCopy` (fresh decode, format gốc rồi JPEG) → bản nhỏ nhất hợp lệ kể cả >100KB.
+4. Chỉ `null` khi file gốc thiếu / undecodeable (`getimagesize` fail).
+5. Log sync: `SEO_MEDIA_SYNC_CONTINUED_WITH_FALLBACK`, `SEO_MEDIA_FALLBACK_COMPRESSED`.
 
-| Thứ tự | Điều kiện | File upload | Ghi chú |
-|--------|-----------|-------------|---------|
-| 1 | `auto_convert_webp` + encode WebP OK | `{slug}.webp` cạnh file gốc | Persistent sibling; `encodeSourceToPath` ghi đúng extension |
-| 2 | WebP fail | `{slug}-wp-upload.jpg` ≤ **100KB** | `ensureLocalOptimizedUploadCopy` — giảm quality rồi scale |
-| 3 | WebP fail + không nén được < 100KB nhưng gốc < 100KB | File gốc | Log warning |
-| 4 | Còn lại | `null` → sync ảnh thất bại | |
+| Ưu tiên | Điều kiện | File |
+|---------|-----------|------|
+| 1 | WebP OK | Sibling `.webp` (shrink nếu cần; >100KB vẫn dùng nếu hợp lệ) |
+| 2 | WebP fail, gốc ≤100KB | File gốc |
+| 3 | Gốc >100KB | `-wp-upload.{ext}` best-effort |
+| 4 | Compress fail | File gốc (**vẫn sync**) |
 
 **`syncHtml` — tránh import trùng (mỗi lượt sync):**
 
@@ -140,7 +155,7 @@ Chỉ chạy khi **bản WebP local thật sự dùng được** (`hasUsableLoca
 | Hàm | Khi nào `true` |
 |-----|----------------|
 | `needsWordPressWebpBackfill` | `auto_convert_webp` + file local hợp lệ + sibling `.webp` hợp lệ + URL WP chưa `.webp` + **không** có `-wp-upload.jpg` |
-| `hasPersistentOptimizedUploadFallback` | Sibling `-wp-upload.jpg` mới hơn hoặc bằng mtime file gốc |
+| `hasPersistentOptimizedUploadFallback` | Sibling `-wp-upload.{jpg\|png\|…}` hợp lệ (signature OK) |
 
 **Attachment WP đã xóa thủ công:** `syncMedia` thấy `wp_attachment_id > 0` nhưng `fetchWordPressAttachmentUrl` rỗng → clear `wp_attachment_id` / `wp_synced_at` → **import mới** (không cố `replace-binary` lên ID chết).
 
@@ -202,10 +217,13 @@ flowchart TB
 
 | Thành phần | File | Vai trò |
 |------------|------|---------|
-| Pipeline | `Support/SeoImagePipeline.php` | `resizeFile`, `encodeFile`, `encodeSourceToPath`, `applyMaxDimensions`; log driver qua `lastDriver()` |
+| Pipeline | `Support/SeoImagePipeline.php` | `resizeFile`, `encodeFile`, `encodeSourceToPath` (Imagick coalesce + alpha), `applyMaxDimensions`; log driver qua `lastDriver()` |
+| Validate convert | `Support/SeoConvertedImageValidator.php`, `ImageContentSignature.php`, `ImageContentSignatureSampler.php` | Signature source↔output; `fully_transparent_canvas` / `content_collapsed_*` |
+| Imagick pixel compat | `Support/ImagickPixelColor.php` | `normalized()` gọi `getColor(1)` trước, fallback `getColor(true)` cho Imagick cũ; dùng trong pipeline encode + signature sampler |
+| Pipeline encode | `Support/SeoImagePipeline.php` | Bỏ `ALPHACHANNEL_ACTIVATE`; assert visible trước flatten; fresh decode mỗi encode |
 | Toán resize | `Support/SeoImageResizeMath.php` | Một chiều (width **hoặc** height); upscale ~1.5×/bước; downscale >2× chia ~50%/bước |
 | Driver | `app/Support/ImageDriverResolver.php` | `supportsImagick()`, `supportsGd()`, `shouldUseNativeImagickPipeline()`; Intervention ưu tiên Imagick |
-| Tối ưu + upload | `Services/SeoImageOptimizationService.php` | `prepareWordPressUploadFile`, `ensureLocalWebpCopy`, `ensureLocalOptimizedUploadCopy`, `needsWordPressWebpBackfill`, `WORDPRESS_UPLOAD_FALLBACK_MAX_BYTES` (102400) |
+| Tối ưu + upload | `Services/SeoImageOptimizationService.php` | `processUpload`/`processBinary` → `processOriginalBytes` (transactional); `prepareWordPressUploadFile`, `ensureLocalWebpCopy`, `ensureLocalWebpUnderMaxBytes`, `validateConvertedImage`; log `SEO_MEDIA_WEBP_*` / `SEO_MEDIA_SOURCE_DECODE_FAILED` |
 | Resize thủ công | `Services/SeoMediaResizeService.php` | `resizeLocal` (ghi đè file `public`), `resizeBinary` (in-memory / workflow) |
 | Media Library UI | `Services/SeoMediaLibraryImageActionService.php` | Quick resize → `resizeLocal` |
 | Post-processing | `Services/PromptPostProcessingApplyService.php` | Resize ảnh AI / block → `resizeBinary` hoặc `resizeLocal` |
@@ -216,15 +234,16 @@ flowchart TB
 | Giai đoạn | Định dạng | Ghi chú |
 |-----------|-----------|---------|
 | Lưu local (upload, import, save-edited, resize) | **PNG** chủ đạo | `normalizeExtension` fallback `png`; Imagick PNG compression level 3, quality 100 |
-| Đồng bộ WordPress | **WebP** khi encode OK | Sibling `{basename}.webp`. **Fallback:** `-wp-upload.jpg` ≤ 100KB. **Backfill:** chỉ khi sibling `.webp` hợp lệ; không backfill khi đã JPEG fallback. Plugin **≥ 1.0.50**. |
+| Đồng bộ WordPress | **WebP** khi encode OK và ≤ 100KB | Sibling `{basename}.webp`. Ladder long-edge nếu >100KB. **Fallback:** original ≤100KB → `-wp-upload.{origExt}` → JPEG chỉ khi cần size. **Backfill:** chỉ sibling `.webp` hợp lệ. Plugin **≥ 1.0.50**. |
 | JPEG / GIF / WebP | Hỗ trợ khi nguồn yêu cầu | Encode quality từ `SeoImageOptimizationSetting.quality` (mặc định pipeline 95 qua `ImageDriverResolver::ENCODE_QUALITY`) |
 
 ### Native Imagick (khi có extension)
 
-1. `setImageColorspace(SRGB)`; PNG bật alpha channel.
+1. `transformImageColorspace(SRGB)` (không dùng `setImageColorspace` — dễ WebP blank); PNG/WebP giữ alpha; multi-frame `coalesceImages`.
 2. `progressiveScaleSteps` — nhiều bước Lanczos thay vì một lần thu/phóng lớn.
 3. `unsharpMaskImage` sau upscale (mạnh) hoặc downscale nhẹ.
 4. `try/catch` — lỗi Imagick → log warning → Intervention fallback.
+5. Sau encode: `SeoConvertedImageValidator` — signature source↔output; reject transparent/collapsed.
 
 ### Fallback Intervention
 
@@ -249,7 +268,8 @@ flowchart TB
 |------|---------|
 | `tests/Unit/SeoImageResizeMathTest.php` | `outputDimensions`, `progressiveUpscaleSteps`, `progressiveScaleSteps` |
 | `tests/Unit/ImageDriverResolverTest.php` | Driver preference, `hasAnyDriver` |
-| `tests/Unit/SeoImageOptimizationServiceTest.php` | WebP/JPEG fallback upload, `needsWordPressWebpBackfill`, `ensureLocalOptimizedUploadCopy`, không mutate file local |
+| `tests/Unit/SeoConvertedImageValidatorTest.php` | Transparent blank; content collapse black/white vs source; solid color source OK; logo alpha OK |
+| `tests/Unit/SeoImageOptimizationServiceTest.php` | WebP/original/JPEG fallback, ladder, block blank, diagnose, immutable source, PNG bytes≠`.webp` |
 
 ---
 
@@ -263,6 +283,7 @@ Pipeline: Support/SeoImagePipeline.php + Support/SeoImageResizeMath.php.
 Driver: app/Support/ImageDriverResolver.php (imagick/gd, env IMAGE_DRIVER).
 Model/Query: Models/SeoMedia.php + Models/SeoMediaBuilder.php (meta routing).
 Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx.
+Article Editor local rename: `ArticleImagesTab` không khóa Fix slug khi ảnh còn `/storage/uploads/seo_media`; `SeoArticleEditor` dùng `executeSeoMediaSlugRenamesTwoPhase` để đổi slug local trước sync WP khi cần.
 Watermark batch: POST /api/seo/watermark/* → SeoWatermarkController.
 Image Optimization Settings: SeoImageOptimizationSetting model + ImageOptimizationSettings page.
 AI Image Processing: ImageProcessingPage.php + /api/seo/media/prepare-editor.
@@ -274,7 +295,7 @@ Dashboard: cảnh báo thiếu Imagick/GD khi mount Filament Dashboard.
 
 | Client module | Endpoints |
 |---------------|-----------|
-| `seoMediaApi.js` | `POST upload`, `import-url` (body `random_filename` → slug `import-{hex}` + cache-bust fetch), `prepare-editor`, `apply-watermark`, `rename-by-url`, `update-meta`, `save-split`, `save-edited`, `rename`, `retry-generation`, `delete-ai-job`; `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
+| `seoMediaApi.js` | `POST upload` (`source=clipboard` → server random `paste-{hex}`), `import-url` (body `random_filename` → slug `import-{hex}` + cache-bust fetch), `prepare-editor`, `apply-watermark`, `rename-by-url`, `update-meta`, `save-split`, `save-edited`, `rename`, `retry-generation`, `delete-ai-job`; `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
 | `watermarkApi.js` | `POST /api/seo/watermark/*` (settings, batch, save, save-new) |
 
 **Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — tab Images, media picker modal, video generation.
@@ -334,9 +355,36 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 
 - **Page:** `Filament/Pages/ImageProcessingPage.php`
 - **Entry:** Via `POST /api/seo/media/prepare-editor` để chuẩn bị ảnh cho AI processing
-- **Jobs tracking:** `GET /api/seo/media/article/{article}/ai-jobs` trả về danh sách job AI của article
+- **Jobs tracking:** `GET /api/seo/media/article/{article}/ai-jobs` — `processing`/`failed` + **completed 2h gần đây** (editor reconcile placeholder); `SeoMediaController::articleAiJobs`
 - **Retry:** `POST /api/seo/media/{media}/retry-generation` retry AI job failed
 - **Delete:** `DELETE /api/seo/media/{media}/ai-job` xóa job
+
+### Image routing stack (Phase 1 + 2 + version policy)
+
+| Symbol | File | Vai trò |
+|--------|------|---------|
+| `ImageToolType` | `Support/ImageToolType.php` | Enum tool: image, image_typography, video, … |
+| `ImageCapability` | `Support/ImageCapability.php` | Capability matrix (render, typography_supported, image_input, …) |
+| `ImageCapabilityResolver` | `Support/ImageCapabilityResolver.php` | Map slug → capability; unknown slug → `unknown` (không gán text_generation) |
+| `ImageRoutingStrategy` | `Support/ImageRoutingStrategy.php` | Chọn model/render policy; gate `GeminiModelVersionPolicy`; typography `executionPolicy()` |
+| `ImageRoutingExecutionPolicy` | `Support/ImageRoutingExecutionPolicy.php` | DTO candidate count, resolution, validation threshold |
+| `GeminiModelVersionPolicy` | `Support/GeminiModelVersionPolicy.php` | Auto-routing chỉ major ≥ 3; `routing_status`/`disabled_reason` |
+| `VisionValidationModelRouter` | `Support/VisionValidationModelRouter.php` | Failover Vision models cho typography validation |
+| `GeminiMediaGenerationService` | `Services/GeminiMediaGenerationService.php` | Render + log `render_model`; unavailable → mark + retry next |
+| `MediaGenerationService` | `Services/MediaGenerationService.php` | Entry image gen; delegate typography → `TypographyPipelineService` |
+| `TypographyPipelineService` | `Services/TypographyPipelineService.php` | N candidate → Vision → winner; validation fail không hủy ảnh đã render |
+
+Changelog: `docs/CHANGELOG_AI_IMAGE_ROUTING_PHASE1.md`, `CHANGELOG_AI_IMAGE_ROUTING_PHASE2.md`, `CHANGELOG_AI_MODEL_VERSION_ROUTING.md`.
+
+### Typography candidate (không spam thư viện)
+
+| Service | Vai trò |
+|---------|---------|
+| `TypographyCandidateGenerationService` | Sinh N candidate qua `GeminiMediaGenerationService::generateImageBinary` — chỉ **temp disk** (`TypographyTemporaryStorageService`), không `seo_media` |
+| `TypographyValidationService` | Vision scoring qua `VisionValidationModelRouter`; log `validation_model` |
+| `GeminiMediaGenerationService` | `generateImageBinary` = render binary; `generateImage` = persist qua `PromptMediaStorageService::storeBinaryMedia` (gắn placeholder) |
+| `TypographyPipelineService` | Chọn winner → **một** lần `storeBinaryMedia` vào job placeholder |
+| `GenerateMediaJob` | Skip nếu media đã `failed` hoặc `completed`; nhánh `source=workflow` vs `prompt` |
 
 ### ImageOptimizationSettings (`/seo/settings/image-optimization`)
 
@@ -344,7 +392,7 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 - **Model:** `SeoImageOptimizationSetting` (table `seo_image_optimization_settings`)
 - Cấu hình: `auto_convert_webp`, `quality`, `limit_dimensions`, `max_width` / `max_height` (một chiều hoặc ưu tiên width khi cả hai > 0), `clean_filename`, `auto_alt_tag`
 - **Local:** upload/import qua `processUpload` / `processBinary` — giới hạn kích thước + encode PNG (pipeline)
-- **WordPress:** `prepareWordPressUploadFile` chỉ lúc sync — sibling `.webp` hoặc `-wp-upload.jpg` (≤ 100KB); không đổi file gốc `uploads/seo_media/*.png`
+- **WordPress:** `prepareWordPressUploadFile` — WebP ưu tiên; fail → gốc/`-wp-upload.*`; chỉ fail khi gốc undecodeable; >100KB không chặn sync.
 
 ### Save Edited Image
 
