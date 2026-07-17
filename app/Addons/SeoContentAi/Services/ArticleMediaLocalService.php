@@ -284,6 +284,10 @@ final class ArticleMediaLocalService
      */
     public function saveProductAlbumLocal(SeoArticle $article, array $album): array
     {
+        $article->loadMissing('articleMetas');
+        $existingIdsByUrl = $this->existingProductAlbumIdsByUrl($article);
+        $siteId = (int) ($article->site_id ?? 0);
+
         $normalized = [];
         foreach ($album as $item) {
             if (! is_array($item)) {
@@ -294,7 +298,7 @@ final class ArticleMediaLocalService
                 continue;
             }
 
-            $id = max(0, (int) ($item['id'] ?? 0));
+            $id = $this->resolveIncomingProductAlbumRefId($item, $url, $existingIdsByUrl, $siteId);
             $exists = collect($normalized)->contains(
                 static fn (array $row): bool => ($id > 0 && (int) ($row['id'] ?? 0) === $id)
                     || (string) ($row['url'] ?? '') === $url
@@ -603,6 +607,54 @@ final class ArticleMediaLocalService
             static fn (array $item): int => (int) ($item['id'] ?? 0),
             $this->resolveGallery($article),
         ), static fn (int $id): bool => $id > 0));
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    private function existingProductAlbumIdsByUrl(SeoArticle $article): array
+    {
+        $map = [];
+        foreach ($this->resolveProductAlbum($article) as $row) {
+            $url = trim((string) ($row['url'] ?? ''));
+            $id = (int) ($row['id'] ?? 0);
+            if ($url !== '' && $id > 0) {
+                $map[$url] = $id;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Giữ ID đã lưu khi client chỉ gửi URL (tránh xóa gallery attachment trước sync WP).
+     *
+     * @param  array<string, mixed>  $item
+     * @param  array<string, int>  $existingIdsByUrl
+     */
+    private function resolveIncomingProductAlbumRefId(
+        array $item,
+        string $url,
+        array $existingIdsByUrl,
+        int $siteId,
+    ): int {
+        $wpAttachmentId = max(0, (int) ($item['wp_attachment_id'] ?? $item['wpAttachmentId'] ?? 0));
+        $seoMediaId = max(0, (int) ($item['seo_media_id'] ?? $item['seoMediaId'] ?? 0));
+        $id = max(0, (int) ($item['id'] ?? 0));
+
+        if ($id <= 0) {
+            $id = $wpAttachmentId > 0 ? $wpAttachmentId : $seoMediaId;
+        }
+
+        if ($id <= 0 && isset($existingIdsByUrl[$url])) {
+            $id = $existingIdsByUrl[$url];
+        }
+
+        if ($id <= 0 && $siteId > 0) {
+            $id = $this->resolveLocalRefIdFromImageUrl($siteId, $url);
+        }
+
+        return max(0, $id);
     }
 
     private function markMediaPendingSync(SeoArticle $article): void

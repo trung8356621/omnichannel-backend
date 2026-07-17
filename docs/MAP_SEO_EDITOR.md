@@ -25,7 +25,7 @@
 | Đã duyệt | `TAB_REVIEWED` (`reviewed`) | `is_reviewed = 1` + `reviewed_at` not null — partial `reviewed-articles-tab.blade.php`; **loại `skip_seo_audit`** |
 | Bỏ qua | `TAB_SKIPPED` (`skipped`) | Chỉ bài có `article_meta.skip_seo_audit=1` (ẩn khỏi các tab kia + SEO Audit) |
 
-**Skip list/audit:** action hàng `toggle_skip_seo_audit` → `ArticleResource::toggleSkipSeoAudit()` ghi `article_meta.skip_seo_audit`. Scope: `applyExcludeSkipSeoAuditScope` / `applyOnlySkipSeoAuditScope`. Reviewed group UI: `buildReviewedArticlesGrouped()` cũng loại skip. Cùng flag với SEO Audit skip. Khôi phục từ tab **Bỏ qua**.
+**Skip list/audit:** action hàng `toggle_skip_seo_audit` → `ArticleResource::toggleSkipSeoAudit()` ghi `article_meta.skip_seo_audit`. Bulk: `skip_seo_audit` (ẩn khỏi tab thường) / `unskip_seo_audit` (chỉ tab **Bỏ qua**, via `isArticlesSkippedTab()`). Scope: `applyExcludeSkipSeoAuditScope` / `applyOnlySkipSeoAuditScope`. Reviewed group UI: `buildReviewedArticlesGrouped()` cũng loại skip. Cùng flag với SEO Audit skip. Khôi phục từ tab **Bỏ qua**.
 
 **Filter mặc định (tab Bài viết):** `language=vi`, `post_type=post` — `SelectFilter::default()` + `ListArticles::ensureDefaultPostsTableFilters()`; URL tương đương `?tableFilters[language][value]=vi&tableFilters[post_type][value]=post`. Có `tableFilters` trên query thì không ghi đè. Link tab Posts (`getContentTabUrl`) bổ sung default nếu thiếu. **Mount:** chỉ ghi `$this->tableFilters` — không gọi `getTableFiltersForm()` / `handleTableFilterUpdates()` (tránh `$table` chưa init trước `bootedInteractsWithTable`).
 
@@ -141,6 +141,8 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 
 **FAQ:** `ArticleFaqEditor` mount riêng `#seo-article-faq-root` — `__seoCollectArticleFaqs`, events `save-article-faqs`, `generate-article-faqs`. Ngoài ra còn có `renewArticleFaq` (regenerate 1 item), `checkFaqQuestionDuplicate`, `extractFaqsFromSelection`, FAQ extract debug. **Extract FAQ** nằm trên FAQ bar (cùng Generate / Import / Add); disable đến khi có selection (`seo-editor-text-selection`).
 
+**FAQ heading detection:** source of truth = `SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS` (`faq_catch_keywords`, UI SeoSettingsEditor → Nhận diện FAQ). Matcher canonical: `Support/FaqHeadingMatcher` (`keywords()`, `matches()`) qua `faqHeadingMatcher()`. `WorkflowParserService` dùng matcher cho mọi path (Markdown/HTML extract, `[omi_faq]` strip/cut). Normalize match-only (UTF-8 lower, trim, collapse space, decode entity, bỏ emphasis / prefix số / trailing `:`); token-boundary tránh false positive. Trong khối FAQ: bóc `Q:` / bullet+bold / `ul>li` / H3+; đóng block ở heading cùng cấp hoặc cao hơn. Default song ngữ VI+EN khi setting trống — không ghi đè giá trị đã lưu.
+
 **FAB:** `ArticleAiFloatingLauncher` — click mở thẳng AI images & videos (`seo-article-ai-chat-open`); không còn menu phụ (Extract FAQ đã chuyển sang FAQ bar).
 
 ### 2.5.3 Backend phục vụ EditArticleExcept
@@ -167,7 +169,7 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 | `editor-html-collected`          | `persistArticleLocal`                                                                                                |
 | `__seoExecuteHeavyArticleAction` | `executeHeavyArticleAction`                                                                                          |
 | Sync shortcut                    | `syncArticleToWordPress`                                                                                             |
-| SEO modal                        | `updateSeoMetaFromEditor`                                                                                            |
+| SEO modal                        | `POST /api/seo/articles/{id}/seo-meta` → `ArticleEditorSeoMetaService` (không Livewire; chấm điểm queue)            |
 | FAQ                              | `saveArticleFaqs`, `generateArticleFaqs`, `renewArticleFaq`, `checkFaqQuestionDuplicate`, `extractFaqsFromSelection` |
 | AI image / snippet               | `generateArticleImageFromEditor`, `generateFeaturedSnippetFromEditor`                                                |
 | AI video                         | `generateArticleVideoFromEditor`                                                                                     |
@@ -178,11 +180,11 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 | Keyboard shortcuts               | `requestSaveArticle`, `requestSyncToWordPress` (bridge → collect HTML → action); UI panel `article-editor-shortcuts-rail.blade.php` dưới Outline (`mountShortcutsBelowOutline`) — Prev/Next đổi nhóm shortcut |
 | Page action bar (Edit Article)   | Partial `article-editor-page-actions.blade.php`: primary **Save → Sync WP → Preview (split WP/nội bộ) → Approve**; More `...` = History, Prompts, Assign/Open project, Restore (sync from WP), Debug MD import (icon+chữ), Delete. `EditArticle::getHeaderActions()` trống — UI More Blade; `articleEditorHeaderActions.js` mount Debug MD + dedupe |
 | Polylang                         | `quickTranslateLinkedArticle`, `importMissingTranslation`, `requestTranslationGeneration`                            |
-| WP Attachment meta               | `renameAttachmentSlugsOnWordPress`, `updateAttachmentMetaOnWordPress`                                                |
+| WP Attachment meta               | `renameAttachmentSlugsOnWordPress($items, $silent=false)`, `updateAttachmentMetaOnWordPress($items, $silent=false)` — bulk Fix all dùng `$silent` + 1 toast client; sửa 1 ảnh giữ toast Filament |
 | Gallery picker                   | `confirmGallerySelectionFromPicker` (multi-select → album)                                                           |
 | Outline                          | `rewriteOutlineFromWorkflow`                                                                                         |
 | AI Prompt preview                | `previewGenerateArticleImagePrompt`                                                                                  |
-| Debug                            | `importMarkdownDebug`, `importMarkdownFaqDebug`                                                                      |
+| Debug                            | `importMarkdownDebug`, `importMarkdownFaqDebug` — MD import qua `ArticleMarkdownToHtmlService::prepareImport()` → `ArticleMarkdownImportParser` (plain numbered meta/structure labels + allowlist) |
 | Notification forwarding          | `handleEditorNotify` (Alpine → Filament notification)                                                                |
 | Slug                             | `confirmArticleSlug`                                                                                                 |
 | SEO description                  | `updateSeoMetaDescriptionFromEditor`                                                                                 |
@@ -216,10 +218,10 @@ sequenceDiagram
 
 | Nút                       | Phạm vi                                            | Hành vi                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Ảnh local/chưa sync: chạy local rename (`applyQuickFixSlugToBlocks(..., { wpOnly:false, includeWordPressRenames:false })` + `executeSeoMediaSlugRenamesTwoPhase`) rồi apply qua `finalizeBlocksAfterWpRename([], localResults)`. Ảnh đã có WP attachment: giữ queue `renameAttachmentSlugsOnWordPress` như cũ, map theo `attachment_id` / `seo_media_id` / `block_id` / `old_url` — không `replaceUrlSlug` theo index. |
-| **Fix slug** (1 ảnh)      | Một dòng                                           | Ảnh local đổi slug local ngay; ảnh WP confirm rồi gọi `renameAttachmentSlugsOnWordPress`. Không còn gate “phải Sync WP trước” trên ảnh local.                                                                                                                                                                                                        |
-| **Fix alt/title all**     | Ảnh không Except                                   | `alt` + `title` = focus keyword; đẩy meta lên SEO media + WP attachment.                                                                                                                                                                                                                                                                              |
-| **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + meta stores.                                                                                                                                                                                                                                                                                                   |
+| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Ảnh local/chưa sync: local rename (`executeSeoMediaSlugRenamesTwoPhase`) + `finalizeBlocksAfterWpRename`. Ảnh WP: 1 batch `renameAttachmentSlugsOnWordPress(..., silent=true)` → **1 toast** React (`editor_quick_fix_slug_all_done_*`). Map `attachment_id` / `seo_media_id` / `block_id` / `old_url`. |
+| **Fix slug** (1 ảnh)      | Một dòng                                           | Ảnh local đổi slug local ngay; ảnh WP confirm rồi `renameAttachmentSlugsOnWordPress` (toast Filament). Không gate “phải Sync WP trước” trên ảnh local. |
+| **Fix alt/title all**     | Ảnh không Except                                   | `alt`+`title`=focus keyword. **Gộp batch:** 1 `updateSeoMediaMeta(items)` + tối đa 1 `updateAttachmentMetaOnWordPress` (chỉ WP chưa sync qua SEO media) → **1 toast** tổng (không spam từng ảnh). |
+| **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + `pushAltTitleMetaToStores` (1 toast). |
 | **Except**                | Ảnh có `blockId`                                   | Toggle `excludeQuickFix` trên block image → lưu `localStorage` draft + `data-exclude-quick-fix="1"` trên `<img>`/`<figure>`. **Tự động Except** khi chọn ảnh tab **Gốc (WP)** (`pickerTab === 'original'`, `withWpPickerExcludeQuickFix` trong `onEditorBlockImageSelected`). Ảnh Except: disable Fix slug/alt; không tính slug `-N`; không bị `finalizeBlocksAfterWpRename` ghi đè.                                                                                                    |
 | **UI hàng ảnh**           | Mỗi dòng trong tab                                 | Chỉ nút **Except** hiển thị trực tiếp; các thao tác còn lại (Fix slug, Fix alt/title, Xóa, Chỉnh sửa, Đóng dấu, Tách lưới) gom menu `⋯` (`.seo-article-images-more-*` trong `ArticleImagesTab.jsx` + `article-editor.css`). Cần `npm run build` bundle `article-editor` sau đổi JS/CSS. |
 
@@ -237,6 +239,8 @@ Logic slug/index: `assignInArticleQuickFixIndices`, `quickFixSlugIndexForBlock`,
 | `/api/seo/media/*`                      | `SeoMediaController`                                         | [MAP_SEO_MEDIA.md](MAP_SEO_MEDIA.md) |
 | `/seo/articles/{article}/media-picker`  | `ArticleMediaPickerController`                               | Alpine `fetchPickerImages`           |
 | `/api/ai/chat`                          | `GlobalAiChatController`                                     | `ArticleAiChatPanel`                 |
+| `/api/seo/articles/{article}/save`      | `ArticleEditorSyncController::save`                          | `saveArticleViaApi`                  |
+| `/api/seo/articles/{article}/seo-meta`  | `ArticleEditorSyncController::saveSeoMeta`                   | `saveSeoMetaViaApi` (`ArticleGoogleSerpPreview`) |
 | `/seo/articles/{article}/seo-preview`   | `ArticleSeoPreviewController`                                | `ArticleGoogleSerpPreview`           |
 | `/seo/articles/{article}/preview`       | `ArticlePreviewController`                                   | Frontend preview                     |
 | `/api/seo/articles/{article}/revisions` | `ArticleRevisionController` + `SeoArticleRevisionController` | Revision tab                         |
@@ -370,7 +374,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Job | `SyncArticleToWordPressFromQueueJob` | Queue `seo`; gọi `ArticleEditorSyncOrchestrator::syncFromEditorBundle()` nền |
 | Job media body | `SyncArticleBodyMediaToWordPressJob` | Queue `seo`; ảnh inline sau editor-sync nhanh |
 | API | `ArticleEditorSyncController::syncWp` | Không sync inline — enqueue + toast, `reload: false` |
-| Tab Publish | `publish-sync-panel.blade.php` | Checkbox **Đăng ngay** (+5 phút), lịch tùy chỉnh khi uncheck, nút **Đồng bộ** |
+| Tab Publish | `publish-sync-panel.blade.php` | Checkbox **Đăng ngay** → Laravel `published` + sync WP `publish` (không +5 phút / không WP schedule); lịch tùy chỉnh khi uncheck chỉ ảnh hưởng Laravel |
 | Nút đồng bộ CSS | `article-editor.css` → `.seo-publish-sync-btn` | Primary full-width; dark mode `.dark .wp-article-edit …` (không dùng Tailwind utility trong Blade) |
 | Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`) |
 | Shortcut | `Ctrl+Shift+S` | `seo-publish-tab-request-sync` → tab Publish + queue sync |
@@ -512,7 +516,7 @@ flowchart TB
 | Module                           | Endpoints / bridge                   |
 | -------------------------------- | ------------------------------------ |
 | `seoMediaApi.js`                 | [MAP_SEO_MEDIA.md](MAP_SEO_MEDIA.md) |
-| `outlineApiRequest`              | `GET/POST/PUT/DELETE .../outline*`   |
+| `outlineApiRequest` / `ArticleOutlineTab.requestJson` | `GET/POST/PUT/DELETE .../outline*` — `Accept: application/json` + `seoArticleApiHeaders()` (`X-SEO-Connection`); truncate `heading_text` 255 (khớp DB/`Str::limit`); chặn id `pending-*` trước PUT |
 | `articleEditorLivewire.js`       | Livewire save/sync (không REST)      |
 | `articleFeaturedImageStorage.js` | Livewire featured image + event `seo-featured-image-updated` cho sidebar Alpine |
 | `articleWpCategoriesStorage.js`  | Livewire categories                  |
@@ -583,28 +587,24 @@ CSS bước: `article-edit-page.css` — `.seo-article-sync-overlay__steps`.
 
 | Trạng thái Laravel (`articles.status`) | Khi **đồng bộ** lên WP | Ghi chú |
 |----------------------------------------|------------------------|---------|
-| `draft` | `draft` | Bản nháp |
-| `published` | `publish` + `post_date` | Đăng ngay |
-| `private` | `private` | |
-| `scheduled` | **`draft`** (không dùng WP `future`) | Nội dung + media đã push; WP giữ nháp |
+| `draft` / `published` / `private` / `scheduled` | **`publish`** + `post_date` (clamp ≤ now) | Outbound chỉ một status: publish |
+| `trash` / `deleted` | (không gửi status) | Không đụng WP |
 
-**Lên lịch do Laravel xử lý**, không gửi `future` lên WordPress:
+**Lên lịch chỉ trên Laravel** — không đặt WP `future` / `draft` khi sync:
 
-1. Editor sidebar (`publish-sidebar.blade.php`) — `status=scheduled`, `published_at` tương lai.
-2. Lưu local / sync → Laravel giữ `status=scheduled`, WP nhận `draft`.
-3. **Cron** `seo:publish-scheduled-articles` (mỗi phút, `SeoContentAiServiceProvider`) → `ScheduledArticlePublishRunner` → `WordPressArticleSyncService::publishScheduledArticle()`:
-   - Điều kiện: `status=scheduled`, `published_at <= now()`, `wp_post_id > 0`
-   - Gọi editor-sync `status=publish` + `post_date`
-   - Thành công → Laravel `status=published`; thất bại → giữ `scheduled` để retry
+1. Editor: `status=scheduled` + `published_at` tương lai (local).
+2. Sync thủ công / queue → WP nhận **`publish`** (`resolveWordPressStatusPayload`; `applyPublishImmediatelyToBundle` ép Laravel `published` khi Đăng ngay).
+3. **Cron** `seo:publish-scheduled-articles` → `ScheduledArticlePublishRunner` → `publishScheduledArticle()` khi `published_at <= now()` (retry nếu lỗi).
+4. Plugin ≥ 1.0.57: chặn demote publish→draft; clamp `post_date` tương lai; elevate admin + `force_post_status`.
 
 ```mermaid
 flowchart LR
     subgraph Editor
-        SCH["status=scheduled<br/>published_at=tương lai"]
+        SCH["Laravel scheduled<br/>published_at tương lai"]
     end
 
     subgraph Sync
-        WP_DRAFT["WP: draft<br/>(full content + media)"]
+        WP_PUB_NOW["WP: publish<br/>(clamp post_date)"]
     end
 
     subgraph Cron["Laravel schedule mỗi phút"]
@@ -613,16 +613,12 @@ flowchart LR
         PUB["publishScheduledArticle()"]
     end
 
-    subgraph WP_Pub
-        WP_PUB["WP: publish"]
-    end
-
-    SCH -->|"Sync"| WP_DRAFT
-    SCH -->|"đến giờ"| CMD --> RUN --> PUB --> WP_PUB
+    SCH -->|"Sync thủ công"| WP_PUB_NOW
+    SCH -->|"đến giờ"| CMD --> RUN --> PUB --> WP_PUB_NOW
     PUB -->|"OK"| LAR["Laravel: published"]
 ```
 
-**Inbound từ WP:** `SyncDomainContentService` vẫn map `future` → `scheduled` khi pull (đọc trạng thái cũ trên WP). Outbound mới **không** tạo `future` trên WP.
+**Inbound từ WP:** `SyncDomainContentService` vẫn map `future` → `scheduled` khi pull. Outbound **không** tạo `future` / demote `draft` trên WP.
 
 ### 2.6.4 Các bước xử lý đồng bộ (phased)
 
@@ -641,7 +637,7 @@ Chi tiết trong `syncForArticle` / `buildEditorSyncPayload`:
 |------|---------|--------|
 | — | `ArticleEditorHtmlSanitizeService` | Chuẩn hóa HTML trước khi đẩy |
 | — | `ArticleCtaPlaceholderService` | Thay CTA placeholder |
-| — | `WorkflowParserService` | FAQ → shortcode `[omi_faq]` |
+| — | `WorkflowParserService` + `FaqHeadingMatcher` | FAQ detect theo `faq_catch_keywords` → shortcode `[omi_faq]` |
 | 2 | `WordPressLocalMediaSyncService::syncHtml` | Upload ảnh local trong body, thay URL (dedupe `seo_media.id`) |
 | 3 | HTTP `editor-sync` | Title, slug, status, content, FAQ, SEO meta |
 | 4 | `ArticleMediaLocalService` | Featured + product gallery pending |
@@ -657,8 +653,8 @@ Sau sync thành công: `body` Laravel có thể set `null` (nội dung authorita
 
 | Livewire method | Service | Khi dùng |
 |-----------------|---------|----------|
-| `renameAttachmentSlugsOnWordPress` | `WordPressAttachmentRenameService` | Fix slug all / từng ảnh — enrich `renamed[]` với `block_id`/`old_url` từ request |
-| `updateAttachmentMetaOnWordPress` | `WordPressArticleAttachmentService` | Fix alt/title |
+| `renameAttachmentSlugsOnWordPress` | `WordPressAttachmentRenameService` | Fix slug all (`silent`) / từng ảnh — enrich `renamed[]` với `block_id`/`old_url` |
+| `updateAttachmentMetaOnWordPress` | `WordPressAttachmentMetaUpdateService` | Fix alt/title — bulk 1 lần / batch; `$silent` khi client tự toast |
 
 ### 2.6.6 Entry points khác (ngoài editor)
 
@@ -688,7 +684,8 @@ Hub: resources/js/components/SeoArticleEditor.jsx
 Entry: resources/js/article-editor.jsx
 Livewire: resources/js/utils/articleEditorLivewire.js
 Blade: edit-article.blade.php (Alpine media modal + Assistant Dock seoAssistantNavigator + $wire events)
-Outline: ArticleOutlineTab.jsx → ArticleOutlineController
+Outline: ArticleOutlineTab.jsx → ArticleOutlineController (`requestJson`/`outlineApiRequest` + tenant headers; `heading_text` truncate 255; PUT chặn `pending-*`)
+Quick-fix toast: Fix alt/title all + Fix slug all = 1 toast batch (`quickFixAltTitleAllImages` / `quickFixSlugAllImages`)
 ```
 
 ### AI image placeholder → replace (editor)

@@ -45,12 +45,13 @@ SeoProject (kế hoạch tháng)
 - `runs()`: HasMany → `SeoProjectRun`
 
 **Helper methods:**
+- `isArchive()` / `KIND_MONTHLY` / `KIND_ARCHIVE`: project tháng vs kho lưu trữ domain
 - `monthCarbon()`: parse month thành Carbon
-- `maxTasksAllowed()`: số ngày trong tháng (= số task tối đa)
-- `isExecutionMonthOpen()`: kiểm tra tháng còn hạn chạy
-- `registeredTaskCount()` / `remainingTaskCapacity()` / `canRegisterMoreTasks()`: capacity tracking
+- `maxTasksAllowed()`: archive = unlimited (`PHP_INT_MAX`); monthly = số ngày trong tháng
+- `isExecutionMonthOpen()`: archive luôn mở; monthly kiểm tra hạn tháng
+- `registeredTaskCount()` / `remainingTaskCapacity()` / `canRegisterMoreTasks()`: capacity (archive không giới hạn)
 - `syncTotalTasksCounter()`: đồng bộ counter
-- `defaultNameFromMonth($month)`: sinh tên mặc định `"project n/Y"`
+- `defaultNameFromMonth($month)` / `archiveProjectName()` / `archiveSentinelMonth()`: tên + month sentinel `2000-01-01` cho archive
 
 ### 2.2 SeoProjectTask
 
@@ -73,6 +74,9 @@ SeoProject (kế hoạch tháng)
 - `loai_san_pham` → loại sản phẩm thủ công cho prompt ảnh
 - `target_date` → ngày KPI
 - `status` → `pending`, `writing`, `reviewing`, `completed`, `failed`
+- `connected_at` → thời điểm gắn bài / vào project (nullable datetime)
+- `completed_at` → thời điểm hoàn thành xử lý (nullable datetime)
+- `archived_from_project_id` → project tháng nguồn khi chuyển sang archive (nullable)
 
 **Task types:**
 | Type | Mô tả |
@@ -210,9 +214,13 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 
 **Filters:** status, user_id, site_id, month
 
-**Row actions:** `view_runs`, `view_archives` (khi có batch), `archive_project_articles` (Manager/Admin, chỉ khi có bài active), `view`, `edit`
+**Row actions:** `ActionGroup (...)` chứa `view_runs`, `view_archives` (link Project Lưu trữ domain), `archive_project_articles`, `Delete` (rollback tháng trước); bên ngoài chỉ `Edit` (hoặc `View`)
 
-**Bulk actions:** Delete (cần permission)
+**Bulk actions:** Delete — cùng logic rollback tháng trước (`SeoProjectTaskMoveService`)
+
+**Header list:** `open_site_archive` → `findOrCreateArchiveProject` + edit archive; Create
+
+**List query:** ẩn `kind=archive` (chỉ hiện project tháng)
 
 ### 3.5 ListSeoProjectRuns (`Filament/.../Pages/ListSeoProjectRuns.php`)
 
@@ -230,10 +238,15 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 - Routes: `/runs/{run}`
 - Custom view với queue heading (partial Blade)
 - Query param `?autorun=1` → tự động start workflow execution
-- Hiển thị: stats (total/succeeded/failed/pending) từ `getRunStatsPayload()` + bảng `getAllItems()` (merge `run.items` + pending chưa có trong items)
+- Hiển thị: stats (total/succeeded/failed/pending) từ `getRunStatsPayload()` + bảng `getAllItems()` (merge `run.items` + pending chưa có trong items → `SeoProjectRunItemsDisplayPresenter::consolidate()` → enrich → sort)
+- **Display consolidate (view-only):** 1 article/task = 1 hàng; gom theo `task_id` → `article_id` → `retry_task_id` (nối pending shadow); không ghi đè raw `run.items`. Status/message/AI stats lấy attempt mới nhất; `retry_count` = số lần chạy lại thêm (badge `data-run-retry-badge` trên `...`, tooltip `run_item_rerun_badge_tooltip`; ghi chú chèn `run_item_rerun_count_inline`)
 - Mount: `ensureFailedTasksQueued()` + `reconcileMissingCompletedItems()` (khôi phục hàng completed bị thiếu trên run cũ)
 - Gọi `SeoProjectWorkflowRunService::retryTask()` qua Livewire `runItemQueued` / `completeRunQueue`
-- Frontend: `project-run-queue.js` — không `$refresh` Livewire khi queue đang chạy; chặn Alpine re-init spawn queue thứ 2
+- Trước khi rerun: `syncResolvedArticleIdForRunTask()` resolve `article_id` từ raw `run.items` (nếu > 0) rồi fallback `seo_project_tasks.article_id` — **không** fuzzy title/keyword; ghi lại cả `run.items` + task rồi truyền `forcedArticleId` vào `retryTask()`. `enrichItemArticleLink()` ưu tiên `task.article_id` trước khi resolve theo source content
+- Row actions: chỉ nút `...` (Alpine + `position:fixed`); menu gồm `archiveItem`, xem steps, chạy lại, đánh dấu đã fix — CSS `project-run-queue.css` + `white-space: nowrap`
+- Cột «Chạy lần cuối» (`last_run_at`, `itemLastRunAt()`); `getAllItems()` sort theo `last_run_at` desc
+- `archiveItem(taskId)` → `SeoProjectArchiveService::archiveTasks()` chuyển task có `article_id` sang Project Lưu trữ domain
+- Frontend: `project-run-queue.js` — không `$refresh` Livewire khi queue đang chạy; chặn Alpine re-init spawn queue thứ 2; `runSingleTask()` update in-place (status/message/last-run/badge, highlight + scroll), `updateRetryBadge()` realtime (+ title tooltip)
 
 ### 3.7 ViewSeoProjectRunStep (`Filament/.../Pages/ViewSeoProjectRunStep.php`)
 
@@ -319,12 +332,14 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` | Điều phối run: `startRun()` → `prepareRunQueue()` (seed toàn bộ pending vào `run.items`) → autorun `retryTask()` → `completeRunQueue()`. `persistRunItems()` lock + merge theo `task_id`; `reconcileMissingCompletedItems()` sửa run cũ thiếu hàng. |
+| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` | Điều phối run: `startRun()` → `prepareRunQueue()` (seed toàn bộ pending vào `run.items`) → autorun `retryTask()` → `completeRunQueue()`. `retryTask(...)`: task stale → `retry_task_id` / `createRetryTaskFromItem` (copy `article_id` + `post_type`); relink `article_id` (forced > task > item). **Giữ `article_id`:** `markTaskWriting` / `markTaskFailed` không xóa link; side-effect sau success (meta/links/readiness) bọc try/catch — không làm fail hạng mục đã tạo bài. Content Project **chỉ** Laravel article (không WP sync). `persistRunItems()` lock + merge theo `task_id`. |
 | **SeoProjectRunPreflightService** | `SeoProjectRunPreflightService.php` | Kiểm tra preflight trước khi chạy: tìm conflict keyword/title giữa các pending task. formatWarningsForModal() sinh HTML cảnh báo. |
-| **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Hợp nhất sau run. Các method: hasRunnablePendingTasks(), isProjectFullyCompleted(), syncObsoleteTaskStatuses(), maybeConsolidate(). |
-| **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` (310 dòng) | Đồng bộ task vào project: sync(), sanitizeTasksData(), tasksDataFromProject(). assertWithinMonthlyLimit() kiểm tra giới hạn tháng. tasksSignature() chống save trùng. |
+| **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Hợp nhất sau run (nhiều `SeoProjectRun` → 1 keeper khi project fully completed). Các method: hasRunnablePendingTasks(), isProjectFullyCompleted(), syncObsoleteTaskStatuses(), maybeConsolidate(). |
+| **SeoProjectRunItemsDisplayPresenter** | `Support/SeoProjectRunItemsDisplayPresenter.php` | Gom hàng bảng ViewSeoProjectRun: `consolidate()` — 1 task/article = 1 row (view layer); giữ raw history; badge/note `retry_count`. Test: `SeoProjectRunItemsDisplayPresenterTest`. |
+| **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` | Đồng bộ task: sync(), sanitizeTasksData(), tasksDataFromProject() (kèm `id`/`connected_at`/`completed_at`). assertWithinMonthlyLimit() bỏ qua khi project archive. |
 | **SeoProjectApprovalService** | `SeoProjectApprovalService.php` | approveLinkedProject() → đánh dấu project là "approved", yêu cầu user là Content Manager. |
-| **SeoProjectArchiveService** | `SeoProjectArchiveService.php` | `archiveProject()` tạo batch + items; `batchesForProject()` load lịch sử. Không ghi `articles.*`. |
+| **SeoProjectArchiveService** | `SeoProjectArchiveService.php` | `findOrCreateArchiveProject()` (1 archive / site); `archiveProject()` / `archiveTasks()` chuyển task sang archive (không giới hạn tháng); `buildGroupedDashboard()` group theo `completed_at`. Legacy `batchesForProject()` giữ đọc batch cũ. |
+| **SeoProjectTaskMoveService** | `SeoProjectTaskMoveService.php` | `deleteProjectRollingBackToPreviousMonth()` — xóa project tháng, chuyển mọi task về tháng −1 (tạo nếu thiếu, chặn nếu đầy); `moveTasksToProject()` di chuyển item sang tháng/archive khác. |
 | **SeoProjectKeywordListParser** | `SeoProjectKeywordListParser.php` | parse() → phân tích raw text (bullet, numbered, plain lines) thành mảng keyword. appendKeywordsToTasks() → gộp vào tasks_data hiện tại. |
 | **SeoProjectKeywordAiGeneratorService** | `SeoProjectKeywordAiGeneratorService.php` | generate() → gọi AI sinh danh sách keyword cho tháng, dựa trên brief + description. |
 | **SeoProjectArticleOwnerSyncService** | `SeoProjectArticleOwnerSyncService.php` | syncProjectArticles() → đồng bộ user_id từ project sang article liên kết. |
@@ -333,9 +348,10 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **CreateArticlesFromTaskService** | `CreateArticlesFromTaskService.php` (377 dòng) | Điều phối tạo article từ task: resolve input, chạy workflow (TaskWorkflowTestRunner), gán writer, sync link list. Method: runFromKeywords(), runFromKeywordsForSite(), runFromProjectTask(). |
-| **TaskWorkflowTestRunner** | `TaskWorkflowTestRunner.php` (2077 dòng) | Engine chạy workflow cho 1 task: thực thi prompt AI, xử lý output, tạo article, attach SEO/tags/FAQs/media. |
-| **TaskTestInputResolver** | `TaskTestInputResolver.php` | Chuẩn bị input cho workflow run: SEO analyzer data, prompt settings, WordPress content. |
+| **CreateArticlesFromTaskService** | `CreateArticlesFromTaskService.php` | `runPublishWorkflowForContext()`: chạy workflow → resolve/create `SeoArticle` local; `ensureArticlePostType()` theo `TaskTestContext.postType` (skip REWRITE). Không gọi WP sync. |
+| **TaskWorkflowTestRunner** | `TaskWorkflowTestRunner.php` | Engine workflow: AI → `PromptTestPublishService.publishArticle` (chỉ Laravel). Gallery product chỉ khi `isProductWorkflowContext`. Tạo bài qua `createArticleFromContext()` dùng `context.postType`. |
+| **TaskTestInputResolver** | `TaskTestInputResolver.php` | `resolveForProjectTask()`: NEW → `contextForNewArticleOnSite` chỉ reuse bài **cùng** `post_type`; `applyProjectPostType()` ép `task.post_type` + `_project_post_type` + prompt vars. REWRITE: `article_id` > title > keyword; không thấy bài → **throw**, không tạo mới. |
+| **PromptTestPublishService** | `PromptTestPublishService.php` | `publishArticle()` lưu title/body/meta Laravel + `markLocalEditPending` — **không** `WordPressArticleSyncService`. |
 | **PromptRunnerService** | `PromptRunnerService.php` | Engine AI cấp thấp nhất: gửi request đến AI model, xử lý streaming, lưu PromptResult. |
 
 #### Workflow Parser services (3 files)
@@ -344,7 +360,10 @@ flowchart TB
 |---------|------|-------|
 | **WorkflowParserService** | `WorkflowParserService.php` (2609 dòng) | Phân tích output workflow từ AI (Markdown outline, structured content) → cấu trúc dữ liệu article. FAQ parsing + shortcode. |
 | **WorkflowTagExtractorService** | `WorkflowTagExtractorService.php` | Trích xuất tagged sections từ raw text output (VD: `<OUTLINE>`, `<CONTENT>`). |
-| **WorkflowExistingAiOutputService** | `WorkflowExistingAiOutputService.php` | Xác định output AI có sẵn (outline/content) có thể tái sử dụng. |
+| **WorkflowExistingAiOutputService** | `WorkflowExistingAiOutputService.php` | Xác định output AI có sẵn (outline/content) có thể tái sử dụng. Task REWRITE / có `rewriteMode` → không reuse (`TaskWorkflowTestRunner::shouldReuseExistingAiOutput()`). |
+| **SimpleMarkdownHtmlConverter** | `Support/SimpleMarkdownHtmlConverter.php` | Markdown → HTML cho editor. `prepareImport()` ủy quyền `ArticleMarkdownImportParser`: tách `h1_title` / `seo_title` / `meta_description`, bỏ structural wrappers, giữ body sạch. |
+| **ArticleMarkdownImportParser** | `Support/ArticleMarkdownImportParser.php` | Parser theo dòng + allowlist exact. Nhận `# Title`, `H1:`, `**Meta Description:**`, `### 1. Meta Description`, plain numbered `1. Meta Description:` / `2. SEO Title:` / `3. Introduction` / `4. Main Content:`; không xóa list số thường; HTML document trả nguyên; outer ` ```markdown ` fence gỡ khi bọc cả document. |
+| **ArticlePostTypeResolver** | `Support/ArticlePostTypeResolver.php` | Resolve post type hiệu lực của article: ưu tiên `articles.type` local, `wp_post_type` meta chỉ fallback khi type trống (tránh meta WP stale ép nhầm product). Rewrite không ghi đè type bài (`CreateArticlesFromTaskService::ensureArticlePostType()` skip TYPE_REWRITE). |
 
 #### Supporting services (4 files)
 
@@ -394,8 +413,8 @@ sequenceDiagram
     participant Consol as SeoProjectRunConsolidationService
     participant Create as CreateArticlesFromTaskService
     participant Runner as TaskWorkflowTestRunner
+    participant Publish as PromptTestPublishService
     participant Prompt as PromptRunnerService
-    participant WP as WordPressArticleSyncService
     participant AI as AI Model
 
     Planner->>Runs: Click "Run Workflow"
@@ -408,20 +427,19 @@ sequenceDiagram
     Run->>DB: UPDATE run (total=N, items=[...])
     Runs->>Planner: Open view-run tab
 
-    Note over Create,AI: Autorun loop (trong ViewSeoProjectRun)
-    Run->>Create: runFromProjectTask(project, task, run)
-    Create->>Runner: executeWorkflow(task, input)
+    Note over Create,AI: Autorun loop (trong ViewSeoProjectRun) — chỉ Laravel, không WP sync
+    Run->>Create: runPublishWorkflowForContext(context, siteId)
+    Create->>Runner: run(task, context)
     Runner->>Prompt: runPrompt(prompt, context)
     Prompt->>AI: Gửi request AI
     AI-->>Prompt: Response (outline + content)
     Prompt->>DB: INSERT prompt_result
-    Runner->>Runner: Parse output → tạo/update SeoArticle
-    Runner->>WP: syncArticleToWordPress(article)
+    Runner->>Publish: publishArticle(article, markdown) — local only
     Runner->>DB: INSERT seo_prompt_result_link
-    Create->>DB: UPDATE task (status=completed, article_id=X)
+    Run->>DB: UPDATE task (status=completed, article_id=X) + run.items[].article_id
 
     loop Mỗi task pending
-        Run->>Create: runFromProjectTask()
+        Run->>Create: runPublishWorkflowForContext()
     end
 
     Run->>DB: UPDATE run (status=completed, succeeded=N, failed=M)
@@ -436,27 +454,38 @@ rewrite      ───→ SeoArticle.update() bài cũ (keyword mode hoặc cont
 improve      ───→ SeoArticle cần tối ưu thủ công (không chạy AI tự động)
 ```
 
-### 5.4 Archive project (batch thuộc project)
+### 5.4 Archive project (Project Lưu trữ domain)
 
-**Tables:** `seo_project_archives`, `seo_project_archive_items` (connection `omi_seo_ai`)
+**Model:** `SeoProject` với `kind=archive` — 1 kho / `site_id`, không giới hạn số bài theo tháng.
 
-**Models:** `SeoProjectArchive`, `SeoProjectArchiveItem`
+**Migration:** `2026_07_16_120000_add_archive_project_kind_and_task_timestamps` — thêm `seo_projects.kind`, `seo_project_tasks.connected_at` / `completed_at` / `archived_from_project_id`; backfill + migrate batch legacy.
 
 ```
 SeoProjectArchiveService.archiveProject(project, archivedByUserId, note?)
   1. DB::transaction + lockForUpdate
-  2. INSERT seo_project_archives (project_id, archived_by, note, articles_count)
-  3. INSERT seo_project_archive_items cho mỗi article_id đang active trong seo_project_tasks
-  4. DELETE active seo_project_tasks (không sửa articles.*)
-  5. UPDATE seo_projects SET total_tasks = 0, status = manual
+  2. findOrCreateArchiveProject(site_id)
+  3. UPDATE seo_project_tasks (có article_id) → project_id = archive, set connected_at/completed_at
+  4. DELETE task còn lại trên project tháng; total_tasks = 0
+SeoProjectArchiveService.archiveTasks(project, taskIds, ...) — archive 1 hoặc nhiều task từ run UI
 ```
 
 **UI:**
-- List: counters `active_tasks_count`, `active_completed_count` (withCount, không tính archive batches)
-- Detail: tabs `Bài viết hiện tại` / `Lưu trữ` trong `SeoProjectResource::form()` — tab Lưu trữ chỉ `canViewProjectArchives()`
-- Blade: `resources/views/filament/resources/seo-project-resource/partials/archives-tab.blade.php`
+- List: nút **Mở kho lưu trữ**; row `Lưu trữ (n)` → edit archive project
+- Edit archive: dashboard giống Articles Reviewed — `partials/archive-dashboard.blade.php`, group theo ngày hoàn tất, lọc tháng, mỗi item: tác giả + `connected_at`
+- Project tháng: **không còn tab Lưu trữ**; form chỉ hạng mục hiện tại
+- Không cho xóa Project Lưu trữ
 
-**Article module:** không đổi — bài archive vẫn mở qua `ArticleResource`.
+**Legacy tables** `seo_project_archives` / `seo_project_archive_items`: giữ đọc; flow mới không tạo batch.
+
+### 5.5 Xóa project tháng (rollback)
+
+```
+SeoProjectTaskMoveService.deleteProjectRollingBackToPreviousMonth(project)
+  → chuyển mọi task về tháng trước cùng domain (tạo nếu chưa có)
+  → nếu tháng trước đầy capacity → chặn xóa
+```
+
+Edit repeater: `extraItemActions` **Di chuyển** item sang project tháng/archive khác còn chỗ.
 
 ---
 
@@ -487,8 +516,10 @@ Core Service: SeoProjectWorkflowRunService
 Task Execution: CreateArticlesFromTaskService → TaskWorkflowTestRunner
 Preflight: SeoProjectRunPreflightService
 Consolidation: SeoProjectRunConsolidationService
+Run table display: SeoProjectRunItemsDisplayPresenter (1 task = 1 row)
 Task Sync: SeoProjectTaskSyncService
-Archive: SeoProjectArchiveService + models SeoProjectArchive/SeoProjectArchiveItem + tab Lưu trữ trong SeoProjectResource
+Move/Delete rollback: SeoProjectTaskMoveService
+Archive: SeoProjectArchiveService (kind=archive project + archive-dashboard) ; legacy SeoProjectArchive/Item
 Keyword Parser: SeoProjectKeywordListParser
 Keyword AI Gen: SeoProjectKeywordAiGeneratorService
 Approval: SeoProjectApprovalService

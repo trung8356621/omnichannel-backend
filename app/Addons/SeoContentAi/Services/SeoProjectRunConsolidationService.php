@@ -135,7 +135,10 @@ final class SeoProjectRunConsolidationService
                 continue;
             }
 
-            $task->update(['status' => SeoProjectTask::STATUS_COMPLETED]);
+            $task->update([
+                'status' => SeoProjectTask::STATUS_COMPLETED,
+                'completed_at' => $task->completed_at ?? now(),
+            ]);
         }
     }
 

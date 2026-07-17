@@ -28,6 +28,10 @@ class SeoProject extends Model
 
     public const STATUS_APPROVED = 'approved';
 
+    public const KIND_MONTHLY = 'monthly';
+
+    public const KIND_ARCHIVE = 'archive';
+
     protected $connection = 'omi_seo_ai';
 
     protected $table = 'seo_projects';
@@ -65,6 +69,11 @@ class SeoProject extends Model
         return $this->hasMany(SeoProjectArchive::class, 'project_id');
     }
 
+    public function isArchive(): bool
+    {
+        return (string) ($this->kind ?? self::KIND_MONTHLY) === self::KIND_ARCHIVE;
+    }
+
     public function activeArticleCount(): int
     {
         if ($this->relationLoaded('tasks')) {
@@ -93,11 +102,19 @@ class SeoProject extends Model
 
     public function maxTasksAllowed(): int
     {
+        if ($this->isArchive()) {
+            return PHP_INT_MAX;
+        }
+
         return $this->monthCarbon()->daysInMonth;
     }
 
     public function isExecutionMonthOpen(): bool
     {
+        if ($this->isArchive()) {
+            return true;
+        }
+
         return now()->lte($this->monthCarbon()->copy()->endOfMonth()->endOfDay());
     }
 
@@ -112,11 +129,19 @@ class SeoProject extends Model
 
     public function remainingTaskCapacity(): int
     {
+        if ($this->isArchive()) {
+            return PHP_INT_MAX;
+        }
+
         return max(0, $this->maxTasksAllowed() - $this->registeredTaskCount());
     }
 
     public function canRegisterMoreTasks(): bool
     {
+        if ($this->isArchive()) {
+            return true;
+        }
+
         return $this->isExecutionMonthOpen() && $this->remainingTaskCapacity() > 0;
     }
 
@@ -136,6 +161,20 @@ class SeoProject extends Model
         $carbon = Carbon::parse($month)->startOfMonth();
 
         return 'project '.$carbon->format('n/Y');
+    }
+
+    public static function archiveProjectName(?string $domain = null): string
+    {
+        $domain = trim((string) $domain);
+
+        return $domain !== ''
+            ? __('seo-content-ai::filament.projects.archive_project_name_with_domain', ['domain' => $domain])
+            : __('seo-content-ai::filament.projects.archive_project_name');
+    }
+
+    public static function archiveSentinelMonth(): string
+    {
+        return '2000-01-01';
     }
 
     /**

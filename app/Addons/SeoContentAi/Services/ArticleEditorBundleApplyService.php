@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 
 final class ArticleEditorBundleApplyService
@@ -44,6 +45,26 @@ final class ArticleEditorBundleApplyService
 
         $this->persistSeoMetaFields($article, $context);
         $this->persistArticlePostTypeMeta($article, $context->postType);
+    }
+
+    public function applySeoMetaOnly(SeoArticle $article, string $focusKeyword, string $seoMetaDescription): void
+    {
+        $context = new ArticleEditorSaveContext(
+            title: trim((string) ($article->title ?? '')),
+            slug: trim((string) ($article->slug ?? '')),
+            postType: ArticlePostTypeResolver::resolve($article),
+            status: (string) ($article->status ?? 'draft'),
+            visibility: 'public',
+            publishDay: '01',
+            publishMonth: '01',
+            publishYear: '2020',
+            publishHour: '00',
+            publishMinute: '00',
+            seoMetaDescription: trim($seoMetaDescription),
+            focusKeyword: trim($focusKeyword),
+        );
+
+        $this->persistSeoMetaFields($article, $context);
     }
 
     /**

@@ -756,4 +756,176 @@ HTML;
 
         $this->assertSame('Literal [gallery] here.', $result);
     }
+
+    public function test_parse_faqs_from_q_bullet_markdown_sample(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['faq']),
+        );
+
+        $markdown = <<<'MD'
+## 5. FAQ
+
+- **Q: Balo bị bẹp có thể phục hồi lại form cũ không?**
+
+Có, bạn hoàn toàn có thể phục hồi form balo bằng cách nhồi vật liệu mềm vào bên trong.
+
+- **Q: Có nên dùng máy sấy để làm khô balo sau khi giặt không?**
+
+Không nên dùng máy sấy vì nhiệt độ cao có thể làm hỏng keo chống thấm.
+
+- **Q: Bao lâu thì nên vệ sinh balo một lần để giữ độ bền?**
+
+Nên vệ sinh định kỳ từ 1 đến 3 tháng một lần.
+
+## Kết luận
+
+Nội dung kết luận.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(3, $faqs);
+        $this->assertSame('Balo bị bẹp có thể phục hồi lại form cũ không?', $faqs[0]['question']);
+        $this->assertStringContainsString('nhồi vật liệu mềm', $faqs[0]['answer']);
+        $this->assertSame('Có nên dùng máy sấy để làm khô balo sau khi giặt không?', $faqs[1]['question']);
+        $this->assertStringContainsString('Không nên dùng máy sấy', $faqs[1]['answer']);
+        $this->assertSame('Bao lâu thì nên vệ sinh balo một lần để giữ độ bền?', $faqs[2]['question']);
+        $this->assertStringContainsString('1 đến 3 tháng', $faqs[2]['answer']);
+        $this->assertStringNotContainsString('Kết luận', $faqs[2]['answer']);
+        $this->assertStringNotContainsString('Nội dung kết luận', implode("\n", array_column($faqs, 'answer')));
+    }
+
+    public function test_parse_faqs_from_converter_html_q_list_items(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['faq']),
+        );
+
+        $html = <<<'HTML'
+<h2>5. FAQ</h2>
+<ul>
+<li><strong>Q: Balo bị bẹp có thể phục hồi lại form cũ không?</strong></li>
+</ul>
+<p>Có, bạn hoàn toàn có thể phục hồi form balo bằng cách nhồi vật liệu mềm vào bên trong.</p>
+<ul>
+<li><strong>Q: Có nên dùng máy sấy để làm khô balo sau khi giặt không?</strong></li>
+</ul>
+<p>Không nên dùng máy sấy vì nhiệt độ cao có thể làm hỏng keo chống thấm.</p>
+<ul>
+<li><strong>Q: Bao lâu thì nên vệ sinh balo một lần để giữ độ bền?</strong></li>
+</ul>
+<p>Nên vệ sinh định kỳ từ 1 đến 3 tháng một lần.</p>
+<h2>Kết luận</h2>
+<p>Nội dung kết luận.</p>
+HTML;
+
+        $faqs = $parser->parseFaqsFromHtml($html);
+
+        $this->assertCount(3, $faqs);
+        $this->assertSame('Balo bị bẹp có thể phục hồi lại form cũ không?', $faqs[0]['question']);
+        $this->assertStringContainsString('nhồi vật liệu mềm', strip_tags($faqs[0]['answer']));
+        $this->assertStringNotContainsString('Nội dung kết luận', strip_tags(implode("\n", array_column($faqs, 'answer'))));
+    }
+
+    public function test_parse_faqs_h3_questions_stay_inside_h2_faq_block(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['faq']),
+        );
+
+        $markdown = <<<'MD'
+## FAQ
+
+### Question one?
+Answer one.
+
+### Question two?
+Answer two.
+
+## Kết luận
+
+Outside.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(2, $faqs);
+        $this->assertSame('Question one?', $faqs[0]['question']);
+        $this->assertStringContainsString('Answer one', $faqs[0]['answer']);
+        $this->assertSame('Question two?', $faqs[1]['question']);
+        $this->assertStringNotContainsString('Outside', implode("\n", array_column($faqs, 'answer')));
+    }
+
+    public function test_parse_faqs_english_frequently_asked_questions_heading(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['frequently asked questions']),
+        );
+
+        $markdown = <<<'MD'
+## Frequently Asked Questions
+
+### Is shipping free?
+Yes for orders over 500k.
+
+## Next section
+Ignore.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(1, $faqs);
+        $this->assertSame('Is shipping free?', $faqs[0]['question']);
+    }
+
+    public function test_parse_faqs_vietnamese_hoi_dap_heading(): void
+    {
+        $parser = new WorkflowParserService(
+            SeoPromptSettingsService::withDefaults(),
+            SeoOverviewSettingsService::withFaqCatchKeywords(['hỏi đáp']),
+        );
+
+        $markdown = <<<'MD'
+## Hỏi đáp
+
+### Có ship COD không?
+Có.
+MD;
+
+        $faqs = $parser->parseFaqsFromContent($markdown);
+
+        $this->assertCount(1, $faqs);
+        $this->assertStringContainsString('ship COD', $faqs[0]['question']);
+    }
+
+    public function test_normal_question_heading_outside_faq_is_not_extracted(): void
+    {
+        $parser = $this->parser();
+
+        $markdown = <<<'MD'
+## Tại sao cần giữ form cho balo?
+Bạn có biết vì sao balo dễ mất form không?
+
+1. Chuẩn bị balo
+2. Vệ sinh balo
+MD;
+
+        $this->assertSame([], $parser->parseFaqsFromContent($markdown));
+    }
+
+    public function test_default_faq_catch_keywords_include_english_entries(): void
+    {
+        $keywords = SeoOverviewSettingsService::withDefaults()->getFaqCatchKeywords();
+
+        $this->assertContains('faq', $keywords);
+        $this->assertContains('frequently asked questions', $keywords);
+        $this->assertContains('q&a', $keywords);
+        $this->assertContains('câu hỏi thường gặp', $keywords);
+        $this->assertContains('hỏi đáp', $keywords);
+    }
 }

@@ -315,7 +315,12 @@ final class CreateArticlesFromTaskService
 
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_type'],
-            ['meta_value' => $postType],
+            ['meta_value' => match ($postType) {
+                SeoProjectTask::POST_TYPE_PRODUCT => 'product',
+                SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'product_cat',
+                SeoProjectTask::POST_TYPE_CATEGORY => 'category',
+                default => 'post',
+            }],
         );
 
         return $article;
@@ -323,6 +328,11 @@ final class CreateArticlesFromTaskService
 
     private function ensureArticlePostType(SeoArticle $article, TaskTestContext $context): void
     {
+        // Rewrite: giữ nguyên type bài có sẵn — không ghi đè product/article.
+        if ($context->projectTaskType === SeoProjectTask::TYPE_REWRITE) {
+            return;
+        }
+
         if ($context->postType === null || trim((string) $context->postType) === '') {
             return;
         }
@@ -335,7 +345,12 @@ final class CreateArticlesFromTaskService
         $article->update(['type' => $postType]);
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_type'],
-            ['meta_value' => $postType],
+            ['meta_value' => match ($postType) {
+                SeoProjectTask::POST_TYPE_PRODUCT => 'product',
+                SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'product_cat',
+                SeoProjectTask::POST_TYPE_CATEGORY => 'category',
+                default => 'post',
+            }],
         );
     }
 

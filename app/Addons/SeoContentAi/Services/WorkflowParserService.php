@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\FaqHeadingMatcher;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
-use Illuminate\Support\Str;
 
 class WorkflowParserService
 {
@@ -483,53 +483,71 @@ class WorkflowParserService
             return $this->parseFaqsFromMarkdownLegacy($html, $treatAllAsFaqSection);
         }
 
-        $dom = new \DOMDocument;
-        libxml_use_internal_errors(true);
-        @$dom->loadHTML('<?xml encoding="utf-8" ?><div id="omi-faq-root">'.$html.'</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
-        libxml_clear_errors();
-
-        $xpath = new \DOMXPath($dom);
-        $rootNodes = $xpath->query('//div[@id="omi-faq-root"]');
-        if ($rootNodes === false || $rootNodes->length === 0) {
-            return [];
-        }
-        $root = $rootNodes->item(0);
-        if (! $root instanceof \DOMElement) {
+        $root = $this->loadHtmlFaqRoot($html);
+        if ($root === null) {
             return [];
         }
 
+        $blocks = $this->collectFaqBlockElements($root);
         $faqs = [];
         $inFaqSection = $treatAllAsFaqSection;
+        $faqSectionLevel = $treatAllAsFaqSection ? 2 : null;
         $currentQuestion = null;
         $currentAnswerHtml = [];
 
-        foreach ($root->childNodes as $node) {
-            if (! $node instanceof \DOMElement) {
-                continue;
-            }
-
+        foreach ($blocks as $node) {
             $tag = strtolower($node->tagName);
-            $text = trim($node->textContent);
-            $lowerText = mb_strtolower($text);
+            $level = $this->htmlHeadingLevel($tag);
+            $text = $this->elementText($node);
+            $dom = $node->ownerDocument;
 
-            if (in_array($tag, ['h2', 'h3'], true)) {
-                $isFaqHeading = $this->isFaqSectionHeading('## '.$text);
-                $isQuestionHeading = preg_match('/^(❓\s*)?(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $text) === 1;
+            if ($level !== null) {
+                $headingLine = str_repeat('#', $level).' '.$text;
 
-                if ($isFaqHeading) {
-                    $inFaqSection = true;
-
-                    continue;
-                } elseif ($inFaqSection && ! $treatAllAsFaqSection && ! $isQuestionHeading) {
-                    $inFaqSection = false;
-
-                    if ($currentQuestion && $this->isValidAnswer($currentAnswerHtml)) {
+                if ($this->isFaqSectionHeading($headingLine)) {
+                    if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
                         $faqs[] = [
                             'question' => $currentQuestion,
                             'answer' => trim(implode("\n", $currentAnswerHtml)),
                         ];
                     }
+
+                    $inFaqSection = true;
+                    $faqSectionLevel = $level;
                     $currentQuestion = null;
+                    $currentAnswerHtml = [];
+
+                    continue;
+                }
+
+                if ($inFaqSection && $faqSectionLevel !== null && $level <= $faqSectionLevel) {
+                    if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
+                        $faqs[] = [
+                            'question' => $currentQuestion,
+                            'answer' => trim(implode("\n", $currentAnswerHtml)),
+                        ];
+                    }
+
+                    $inFaqSection = false;
+                    $faqSectionLevel = null;
+                    $currentQuestion = null;
+                    $currentAnswerHtml = [];
+
+                    continue;
+                }
+
+                if ($inFaqSection && $level > ($faqSectionLevel ?? 2) && ! $this->isFaqSectionHeading($headingLine)) {
+                    if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
+                        $faqs[] = [
+                            'question' => $currentQuestion,
+                            'answer' => trim(implode("\n", $currentAnswerHtml)),
+                        ];
+                    }
+
+                    $question = $this->normalizeExtractedFaqQuestion($text);
+                    $currentQuestion = ($question !== '' && ! $this->isLikelyNonFaqQuestion($question))
+                        ? $question
+                        : null;
                     $currentAnswerHtml = [];
 
                     continue;
@@ -540,82 +558,45 @@ class WorkflowParserService
                 continue;
             }
 
-            $isQuestion = false;
-            $cleanTextStart = preg_replace('/^[^a-z0-9]+/iu', '', $text);
-            $cleanTextStart = is_string($cleanTextStart) ? $cleanTextStart : $text;
-
-            if (
-                preg_match('/^(q:|q\s*\d+\s*:|hỏi\s*:)/iu', $cleanTextStart)
-                || preg_match('/^(câu\s*hỏi|cau\s*hoi)\s*\d*\s*[:\?]/iu', $cleanTextStart)
-            ) {
-                $isQuestion = true;
-            } elseif (in_array($tag, ['p', 'div', 'li'], true)) {
-                foreach (['strong', 'b'] as $boldTag) {
-                    $boldNodes = $node->getElementsByTagName($boldTag);
-                    if ($boldNodes->length === 0) {
-                        continue;
-                    }
-
-                    $boldText = mb_strtolower(trim((string) $boldNodes->item(0)?->textContent));
-
-                    if (str_contains($boldText, 'câu hỏi') || str_contains($boldText, 'cau hoi')) {
-                        $isQuestion = true;
-                        break;
-                    }
-
-                    if (str_ends_with(trim($text), '?') || str_ends_with(trim($boldText), '?')) {
-                        $isQuestion = true;
-                        break;
-                    }
-
-                    if (preg_match('/^q\s*\d+\s*:/iu', $boldText)) {
-                        $isQuestion = true;
-                        break;
-                    }
-                }
-            }
-
-            if ($isQuestion) {
-                if ($currentQuestion && $this->isValidAnswer($currentAnswerHtml)) {
+            if ($this->isStrongQuestionParagraph($node) || $this->isHtmlFaqQuestionBlock($node)) {
+                if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
                     $faqs[] = [
                         'question' => $currentQuestion,
                         'answer' => trim(implode("\n", $currentAnswerHtml)),
                     ];
                 }
 
-                $cleanQuestion = preg_replace(
-                    '/^(.*?)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*\d+|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d+|Q|Hỏi)\s*:\s*/iu',
-                    '',
-                    $text,
-                );
-                $finalQ = trim((string) $cleanQuestion) !== '' ? (string) $cleanQuestion : $text;
-                $finalQ = trim(str_replace(['**', '*'], '', $finalQ));
+                $question = $this->extractStrongQuestionText($node);
+                if ($question === '') {
+                    $question = $this->normalizeExtractedFaqQuestion($text);
+                }
 
-                $currentQuestion = $finalQ;
+                $currentQuestion = ($question !== '' && ! $this->isLikelyNonFaqQuestion($question))
+                    ? $question
+                    : null;
                 $currentAnswerHtml = [];
-            } elseif ($currentQuestion !== null) {
-                if ($tag === 'hr' && $currentAnswerHtml === []) {
-                    continue;
-                }
 
-                if ($tag === 'blockquote') {
-                    $nodeHtml = (string) $dom->saveHTML($node);
-                    if ($currentAnswerHtml === []) {
-                        $nodeHtml = $this->stripFaqAnswerLabelFromHtml($nodeHtml);
-                    }
-                    $currentAnswerHtml[] = $nodeHtml;
-
-                    continue;
-                }
-
-                $nodeHtml = (string) $dom->saveHTML($node);
-
-                if ($currentAnswerHtml === []) {
-                    $nodeHtml = $this->stripFaqAnswerLabelFromHtml($nodeHtml);
-                }
-
-                $currentAnswerHtml[] = $nodeHtml;
+                continue;
             }
+
+            if ($currentQuestion === null) {
+                continue;
+            }
+
+            if ($tag === 'hr' && $currentAnswerHtml === []) {
+                continue;
+            }
+
+            $nodeHtml = $dom instanceof DOMDocument ? (string) $dom->saveHTML($node) : '';
+            if ($nodeHtml === '') {
+                continue;
+            }
+
+            if ($currentAnswerHtml === []) {
+                $nodeHtml = $this->stripFaqAnswerLabelFromHtml($nodeHtml);
+            }
+
+            $currentAnswerHtml[] = $nodeHtml;
         }
 
         if ($currentQuestion !== null && $this->isValidAnswer($currentAnswerHtml)) {
@@ -626,6 +607,44 @@ class WorkflowParserService
         }
 
         return $faqs;
+    }
+
+    private function isHtmlFaqQuestionBlock(DOMElement $element): bool
+    {
+        $tag = strtolower($element->tagName);
+        if (! in_array($tag, ['p', 'li', 'div'], true)) {
+            return false;
+        }
+
+        return $this->looksLikePrefixedFaqQuestionText($this->elementText($element));
+    }
+
+    private function elementLooksLikeFaqQuestionStart(DOMElement $element): bool
+    {
+        if ($this->isStrongQuestionParagraph($element) || $this->isHtmlFaqQuestionBlock($element)) {
+            return true;
+        }
+
+        $tag = strtolower($element->tagName);
+        if (! in_array($tag, ['ul', 'ol'], true)) {
+            return false;
+        }
+
+        foreach ($element->childNodes as $child) {
+            if (! $child instanceof DOMElement) {
+                continue;
+            }
+
+            if (strtolower($child->tagName) !== 'li') {
+                continue;
+            }
+
+            if ($this->isStrongQuestionParagraph($child) || $this->isHtmlFaqQuestionBlock($child)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -931,7 +950,7 @@ class WorkflowParserService
                 }
 
                 if ($inFaqSection) {
-                    if (! $sawFaqQuestionInSection && ! $this->isStrongQuestionParagraph($node)) {
+                    if (! $sawFaqQuestionInSection && ! $this->elementLooksLikeFaqQuestionStart($node)) {
                         // Giữ nguyên phần giữa title FAQ và câu hỏi đầu tiên.
                         $container->appendChild($outDom->importNode($node, true));
 
@@ -1540,24 +1559,12 @@ class WorkflowParserService
      */
     public function normalizeForFaqMatch(string $text): string
     {
-        $text = trim(str_replace(['**', '*'], '', $text));
-        if ($text === '') {
-            return '';
-        }
-
-        $lower = mb_strtolower($text, 'UTF-8');
-        $lower = (string) preg_replace('/[^\p{L}\p{N}]+/u', ' ', $lower);
-
-        return trim((string) preg_replace('/\s+/u', ' ', $lower));
+        return $this->faqHeadingMatcher()->normalize($text);
     }
 
-    private function normalizeForFaqAsciiMatch(string $text): string
+    private function faqHeadingMatcher(): FaqHeadingMatcher
     {
-        $ascii = Str::ascii($text, 'vi');
-        $ascii = mb_strtolower(trim($ascii), 'UTF-8');
-        $ascii = (string) preg_replace('/[^a-z0-9]+/u', ' ', $ascii);
-
-        return trim((string) preg_replace('/\s+/u', ' ', $ascii));
+        return $this->overviewSettings->faqHeadingMatcher();
     }
 
     private function isFaqSectionHeading(string $headingLine): bool
@@ -1567,58 +1574,7 @@ class WorkflowParserService
             return false;
         }
 
-        $lower = $this->normalizeForFaqMatch($text);
-        if ($this->headingMatchesFaqCatchKeywords($lower, $text)) {
-            return true;
-        }
-
-        return $this->headingLooksLikeFaqSection($lower);
-    }
-
-    private function headingMatchesFaqCatchKeywords(string $lowerHeading, string $rawHeading = ''): bool
-    {
-        if ($lowerHeading === '' && trim($rawHeading) === '') {
-            return false;
-        }
-
-        $rawHeading = trim($rawHeading) !== '' ? trim($rawHeading) : $lowerHeading;
-        $asciiHeading = $this->normalizeForFaqAsciiMatch($lowerHeading);
-
-        foreach ($this->overviewSettings->getFaqCatchKeywords() as $keyword) {
-            $keyword = trim($keyword);
-            if ($keyword === '') {
-                continue;
-            }
-
-            if (mb_stripos($rawHeading, $keyword, 0, 'UTF-8') !== false) {
-                return true;
-            }
-
-            $normalizedKeyword = $this->normalizeForFaqMatch($keyword);
-            if ($normalizedKeyword !== '' && $lowerHeading !== '' && str_contains($lowerHeading, $normalizedKeyword)) {
-                return true;
-            }
-
-            $asciiKeyword = $this->normalizeForFaqAsciiMatch($keyword);
-            if ($asciiKeyword !== '' && $asciiHeading !== '' && str_contains($asciiHeading, $asciiKeyword)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function headingLooksLikeFaqSection(string $lowerHeading): bool
-    {
-        if (preg_match('/\bfaq\b/u', $lowerHeading) === 1) {
-            return true;
-        }
-
-        if (preg_match('/câu\s*hỏi|cau\s*hoi/u', $lowerHeading) === 1) {
-            return true;
-        }
-
-        return preg_match('/hỏi\s*đáp|hoi\s*dap|giải\s*đáp|giai\s*dap/u', $lowerHeading) === 1;
+        return $this->faqHeadingMatcher()->matches($headingLine);
     }
 
     /** Tiêu đề H3/H4 kiểu «Câu hỏi 1: …?» — không phải tiêu đề vùng FAQ. */
@@ -1713,7 +1669,8 @@ class WorkflowParserService
         return preg_match('/^(❓\s*)?(\d+[\.\)]\s*)?(câu\s*hỏi|cau\s*hoi)/iu', $plain) === 1
             || preg_match('/^(❓\s*)?\d+[\.\)]\s+.+\?/u', $plain) === 1
             || preg_match('/^(❓\s*)?Q\s*\d*\s*:\s*.+/iu', $plain) === 1
-            || preg_match('/^(❓\s*)?Hỏi\s*:\s*.+/iu', $plain) === 1;
+            || preg_match('/^(❓\s*)?(Hỏi|Hoi|Câu\s*hỏi|Cau\s*hoi)\s*:\s*.+/iu', $plain) === 1
+            || (str_ends_with($plain, '?') && preg_match('/^(❓\s*)?\*\*.+\*\*$/u', trim($line)) === 1);
     }
 
     private function normalizeFaqQuestionLine(string $line): string
@@ -1723,24 +1680,35 @@ class WorkflowParserService
 
     private function isFaqMarkdownBulletQuestion(string $line): bool
     {
-        if (preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line), $matches) !== 1) {
+        if (preg_match('/^[-*]\s+(.+)$/u', trim($line), $matches) !== 1) {
             return false;
         }
 
         $inner = trim(str_replace(['**', '*'], '', $matches[1]));
+        if ($inner === '' || $this->looksLikeNumberedOutlineItem($inner)) {
+            return false;
+        }
 
-        return ! $this->looksLikeNumberedOutlineItem($inner);
+        if ($this->looksLikePrefixedFaqQuestionText($inner)) {
+            return true;
+        }
+
+        return str_ends_with($inner, '?')
+            && preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line)) === 1;
     }
 
     private function parseFaqMarkdownBulletQuestion(string $line): string
     {
-        if (preg_match('/^[-*]\s+\*\*(.+?)\*\*\s*$/u', trim($line), $matches) !== 1) {
+        if (preg_match('/^[-*]\s+(.+)$/u', trim($line), $matches) !== 1) {
             return '';
         }
 
         $inner = trim(str_replace(['**', '*'], '', $matches[1]));
+        if ($inner === '' || $this->looksLikeNumberedOutlineItem($inner)) {
+            return '';
+        }
 
-        return $this->looksLikeNumberedOutlineItem($inner) ? '' : $inner;
+        return $this->normalizeExtractedFaqQuestion($inner);
     }
 
     /** Mục dàn ý / từ vựng kiểu «1. …» hoặc «2) …» không có dấu ? — không phải câu hỏi FAQ. */
@@ -1765,7 +1733,11 @@ class WorkflowParserService
             $content = trim($matches[1]);
         }
 
-        $content = preg_replace('/^\*{1,2}\s*(trả\s*lời|tra\s*loi|answer)\s*\*{1,2}\s*:\s*/iu', '', $content) ?? $content;
+        $content = preg_replace(
+            '/^\*{0,2}\s*(?:trả\s*lời|tra\s*loi|answer|đáp|dap|a)\s*\*{0,2}\s*:\s*/iu',
+            '',
+            $content,
+        ) ?? $content;
         $content = preg_replace('/^\*(?:Trả lời bởi|Tra loi boi)[^*]*\*:\s*/iu', '', $content) ?? $content;
         $content = preg_replace('/^\*([^*]+?)\*:\s*/u', '', $content) ?? $content;
         $content = str_replace(['**', '*'], '', $content);
@@ -1831,13 +1803,13 @@ class WorkflowParserService
 
             $tag = strtolower($child->tagName);
 
-            if (in_array($tag, ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'], true)) {
+            if (in_array($tag, ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'li'], true)) {
                 $blocks[] = $child;
 
                 continue;
             }
 
-            if (in_array($tag, ['div', 'section', 'article', 'blockquote', 'ul', 'ol', 'li', 'main'], true)) {
+            if (in_array($tag, ['div', 'section', 'article', 'blockquote', 'ul', 'ol', 'main'], true)) {
                 $this->appendFaqBlockElements($child, $blocks);
             }
         }
@@ -1881,16 +1853,12 @@ class WorkflowParserService
 
     private function isStrongQuestionParagraph(DOMElement $element): bool
     {
-        if (strtolower($element->tagName) !== 'p') {
+        $tag = strtolower($element->tagName);
+        if (! in_array($tag, ['p', 'li'], true)) {
             return false;
         }
 
         if ($this->isFaqPromoParagraph($element)) {
-            return false;
-        }
-
-        $strongText = $this->concatBoldText($element);
-        if (mb_strlen($strongText) < 2) {
             return false;
         }
 
@@ -1901,6 +1869,19 @@ class WorkflowParserService
 
         if ($this->looksLikeStandaloneFaqSectionTitle($fullText)) {
             return false;
+        }
+
+        if ($this->looksLikePrefixedFaqQuestionText($fullText)) {
+            return true;
+        }
+
+        $strongText = $this->concatBoldText($element);
+        if (mb_strlen($strongText) < 2) {
+            return false;
+        }
+
+        if ($this->looksLikePrefixedFaqQuestionText($strongText)) {
+            return true;
         }
 
         $normalizedFull = preg_replace('/\s+/u', '', $fullText) ?? '';
@@ -1916,7 +1897,21 @@ class WorkflowParserService
 
         return $this->firstElementChildTag($element) !== null
             && in_array((string) $this->firstElementChildTag($element), ['strong', 'b'], true)
-            && mb_strlen($strongText) >= (int) (mb_strlen($fullText) * 0.45);
+            && mb_strlen($strongText) >= (int) (mb_strlen($fullText) * 0.45)
+            && (str_ends_with(trim($fullText), '?') || str_ends_with(trim($strongText), '?'));
+    }
+
+    private function looksLikePrefixedFaqQuestionText(string $text): bool
+    {
+        $plain = trim(str_replace(['**', '*'], '', $text));
+        if ($plain === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/^(❓\s*)?(?:\d+[\.\)]\s*)?(?:Q\s*\d*\s*:|Hỏi\s*:|Hoi\s*:|Câu\s*hỏi\s*:|Cau\s*hoi\s*:)/iu',
+            $plain,
+        ) === 1;
     }
 
     private function isFaqPromoParagraph(DOMElement $element): bool
@@ -1940,7 +1935,7 @@ class WorkflowParserService
         $plain = trim(str_replace(['**', '*'], '', $text));
 
         return preg_match(
-            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d+)\s*:/iu',
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d*)\s*:/iu',
             $plain,
         ) === 1;
     }
@@ -2098,13 +2093,14 @@ class WorkflowParserService
 
     private function normalizeExtractedFaqQuestion(string $text): string
     {
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $text = trim(str_replace(['**', '*'], '', $text));
         if ($text === '') {
             return '';
         }
 
         $normalized = preg_replace(
-            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*(\d+)|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*(\d+))\s*:\s*/iu',
+            '/^(❓\s*)?(?:(?:câu\s*hỏi|cau\s*hoi)\s*\d*|(?:\d+[\.\)]\s*)?(?:câu\s*hỏi|cau\s*hoi)|Q\s*\d*|Q|Hỏi|Hoi)\s*:\s*/iu',
             '',
             $text,
         );
@@ -2149,7 +2145,13 @@ class WorkflowParserService
     private function stripFaqAnswerLabelFromHtml(string $html): string
     {
         $html = (string) preg_replace(
-            '/<(?:strong|b)[^>]*>[^<]*(?:trả\s*lời|tra\s*loi|đáp|dap|^a)\s*:[^<]*<\/(?:strong|b)>\s*/iu',
+            '/<(?:strong|b)[^>]*>[^<]*(?:trả\s*lời|tra\s*loi|đáp|dap|answer|a)\s*:[^<]*<\/(?:strong|b)>\s*/iu',
+            '',
+            $html,
+        );
+
+        $html = (string) preg_replace(
+            '/^(?:<p[^>]*>)?\s*(?:trả\s*lời|tra\s*loi|đáp|dap|answer|a)\s*:\s*/iu',
             '',
             $html,
         );

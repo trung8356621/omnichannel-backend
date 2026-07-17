@@ -36,6 +36,7 @@ class CreateSeoProject extends SeoCreateRecord
 
         $data['total_tasks'] = count($sanitized);
         $data['status'] = SeoProject::STATUS_MANUAL;
+        $data['kind'] = SeoProject::KIND_MONTHLY;
 
         unset($data['tasks_data']);
 

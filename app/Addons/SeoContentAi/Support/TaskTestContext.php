@@ -88,6 +88,22 @@ final class TaskTestContext
         );
     }
 
+    public function withPostType(?string $postType): self
+    {
+        return new self(
+            article: $this->article,
+            isNewArticle: $this->isNewArticle,
+            matchedBy: $this->matchedBy,
+            variables: $this->variables,
+            summary: $this->summary,
+            siteId: $this->siteId,
+            postType: $postType,
+            projectTaskType: $this->projectTaskType,
+            rewriteMode: $this->rewriteMode,
+            rewriteNotes: $this->rewriteNotes,
+        );
+    }
+
     /**
      * @return array<string, mixed>
      */

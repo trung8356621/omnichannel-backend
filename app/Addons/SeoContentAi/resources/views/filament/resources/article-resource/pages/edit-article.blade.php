@@ -1591,8 +1591,8 @@
                 window.dispatchEvent(new CustomEvent('google-serp-preview-open-edit'));
             }
         "
-        x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [])"
-        x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [])"
+        x-on:seo-rename-attachment-slugs.window="$wire.renameAttachmentSlugsOnWordPress($event.detail.items ?? [], !!($event.detail.silent ?? false))"
+        x-on:seo-update-attachment-meta.window="$wire.updateAttachmentMetaOnWordPress($event.detail.items ?? [], !!($event.detail.silent ?? false))"
         @seo-analyze-result.window="window.dispatchEvent(new CustomEvent('seo-editor-analyze-result', { detail: $event.detail }))"
         x-on:save-article-faqs.window="$wire.saveArticleFaqs($event.detail.faqs ?? [])"
         x-on:dismiss-faq-extract-debug.window="$wire.clearFaqExtractDebug()"
@@ -1660,7 +1660,13 @@
                         />
                     </div>
 
-                    <div class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+                    <div
+                        class="wp-permalink mt-3 flex flex-wrap items-baseline gap-x-1 gap-y-1 text-sm text-gray-600 dark:text-gray-400"
+                        data-seo-permalink-root
+                        data-permalink-base="{{ rtrim($this->getPermalinkBase(), '/') }}"
+                        data-permalink-suffix="{{ $this->getPermalinkSuffix() }}"
+                        data-article-slug="{{ trim($this->articleSlug) }}"
+                    >
                         <span class="font-medium text-gray-700 dark:text-gray-300">Đường dẫn:</span>
                         @php($displayPermalink = trim($this->getDisplayPermalink()))
                         @if($displayPermalink !== '' && (int) ($record->wp_post_id ?? 0) > 0)
@@ -1668,10 +1674,12 @@
                                 href="{{ $displayPermalink }}"
                                 target="_blank"
                                 rel="noopener"
+                                data-seo-permalink-url
                                 class="text-sky-600 dark:text-sky-400 hover:underline break-all"
                             >{{ $displayPermalink }}</a>
                         @else
                             <span
+                                data-seo-permalink-url
                                 class="break-all text-gray-500 dark:text-gray-400"
                                 title="URL dự kiến, chưa tồn tại trên WordPress"
                             >{{ $displayPermalink !== '' ? $displayPermalink : (trim($this->getPermalinkBase()) !== '' ? rtrim($this->getPermalinkBase(), '/') . '/' . $this->getDisplaySlug() : '#') }}</span>

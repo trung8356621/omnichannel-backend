@@ -119,13 +119,14 @@ class ArticleOutlineController extends Controller
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
         $validated = $request->validate([
-            'heading_text' => ['required', 'string', 'max:255'],
+            'heading_text' => ['required', 'string', 'max:5000'],
             'level' => ['sometimes', 'integer', 'min:2', 'max:4'],
             'parent_id' => ['nullable', 'integer'],
             'after_heading_id' => ['nullable', 'integer'],
         ]);
 
         $text = trim(preg_replace('/\s+/u', ' ', $validated['heading_text']) ?? $validated['heading_text']);
+        $text = Str::limit($text, 255, '');
         if ($text === '') {
             return response()->json([
                 'success' => false,
@@ -219,10 +220,11 @@ class ArticleOutlineController extends Controller
         abort_unless((int) $heading->article_id === (int) $article->id, 404);
 
         $validated = $request->validate([
-            'heading_text' => ['required', 'string', 'max:255'],
+            'heading_text' => ['required', 'string', 'max:5000'],
         ]);
 
         $text = trim(preg_replace('/\s+/u', ' ', $validated['heading_text']) ?? $validated['heading_text']);
+        $text = Str::limit($text, 255, '');
         if ($text === '') {
             return response()->json([
                 'success' => false,
@@ -235,15 +237,20 @@ class ArticleOutlineController extends Controller
             'heading_slug' => Str::slug($text),
         ]);
 
-        $duplicates = $this->duplicateCheck
-            ->checkExactMatch($heading->heading_slug, (int) $article->site_id, (int) $article->id, (int) $heading->level)
-            ->map(fn (SeoArticleHeading $row): array => [
-                'heading_id' => (int) $row->id,
-                'article_id' => (int) $row->article_id,
-                'article_title' => (string) ($row->article?->title ?? ''),
-                'heading_text' => (string) $row->heading_text,
-            ])
-            ->values();
+        $duplicates = collect();
+        try {
+            $duplicates = $this->duplicateCheck
+                ->checkExactMatch($heading->heading_slug, (int) $article->site_id, (int) $article->id, (int) $heading->level)
+                ->map(fn (SeoArticleHeading $row): array => [
+                    'heading_id' => (int) $row->id,
+                    'article_id' => (int) $row->article_id,
+                    'article_title' => (string) ($row->article?->title ?? ''),
+                    'heading_text' => (string) $row->heading_text,
+                ])
+                ->values();
+        } catch (\Throwable) {
+            // Lưu heading đã thành công — dò trùng chỉ phụ, không làm fail request.
+        }
 
         return response()->json([
             'success' => true,
@@ -277,6 +284,14 @@ class ArticleOutlineController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => $e->getMessage(),
+            ], 422);
+        }
+
+        $text = Str::limit(trim(preg_replace('/\s+/u', ' ', $text) ?? $text), 255, '');
+        if ($text === '') {
+            return response()->json([
+                'success' => false,
+                'message' => 'AI không sinh được heading hợp lệ.',
             ], 422);
         }
 

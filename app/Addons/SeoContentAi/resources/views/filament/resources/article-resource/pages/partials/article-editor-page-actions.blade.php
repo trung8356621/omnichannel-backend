@@ -25,6 +25,7 @@
     $historyUrl = route('seo.articles.revisions.compare', ['article' => $record->getKey()]);
     $promptsUrl = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('prompts', ['record' => $record]);
     $inContentProject = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsInContentProject($record);
+    $isContentArchived = \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleIsContentArchived($record);
     $contentProjectUrl = $inContentProject
         ? \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::articleContentProjectUrl($record)
         : null;
@@ -273,7 +274,7 @@
                     </svg>
                     <span>{{ __('seo-content-ai::filament.article_edit.open_content_project') }}</span>
                 </a>
-            @else
+            @elseif (! $isContentArchived)
                 <button
                     type="button"
                     class="seo-editor-menu-item"

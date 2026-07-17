@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 final class SeoProjectWorkflowRunService
 {
@@ -246,6 +247,17 @@ final class SeoProjectWorkflowRunService
         return app(SeoProjectRunConsolidationService::class)->maybeConsolidate($project) ?? $run;
     }
 
+    /**
+     * Đánh dấu run completed + cập nhật counter từ items hiện tại, không consolidate.
+     */
+    public function markRunCompletedQuietly(SeoProjectRun $run): SeoProjectRun
+    {
+        $run->refresh();
+        $items = is_array($run->items) ? $run->items : [];
+
+        return $this->persistRunItems($run, $items, true);
+    }
+
     public function execute(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
     {
         @set_time_limit(0);
@@ -326,7 +338,7 @@ final class SeoProjectWorkflowRunService
     /**
      * @return array<string, mixed>
      */
-    public function retryTask(SeoProjectRun $run, int $taskId, bool $markCompleted = true): array
+    public function retryTask(SeoProjectRun $run, int $taskId, bool $markCompleted = true, ?int $forcedArticleId = null): array
     {
         @set_time_limit(0);
 
@@ -336,15 +348,6 @@ final class SeoProjectWorkflowRunService
             throw new \InvalidArgumentException('Không tìm thấy dự án của lần run này.');
         }
 
-        $task = SeoProjectTask::query()
-            ->where('project_id', (int) $project->id)
-            ->whereKey($taskId)
-            ->first();
-
-        if (! $task instanceof SeoProjectTask) {
-            throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong dự án.');
-        }
-
         // Luôn đọc items mới nhất từ DB trước khi merge — tránh Livewire stale ghi đè mất hàng đã OK.
         $run->refresh();
         $items = is_array($run->items) ? $run->items : [];
@@ -352,10 +355,36 @@ final class SeoProjectWorkflowRunService
         $existingItem = collect($items)
             ->first(fn (mixed $item): bool => is_array($item) && (int) ($item['task_id'] ?? 0) === $taskId);
 
+        $task = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereKey($taskId)
+            ->first();
+
+        // Task gốc có thể đã bị gộp/xóa (consolidation). Thử retry_task_id rồi dựng lại từ item.
         $retryTaskId = is_array($existingItem)
             ? (int) ($existingItem['retry_task_id'] ?? 0)
             : 0;
-        if ($retryTaskId > 0) {
+        if (! $task instanceof SeoProjectTask && $retryTaskId > 0) {
+            $task = SeoProjectTask::query()
+                ->where('project_id', (int) $project->id)
+                ->whereKey($retryTaskId)
+                ->first();
+        }
+
+        if (! $task instanceof SeoProjectTask && is_array($existingItem)) {
+            $task = $this->createRetryTaskFromItem($project, $existingItem);
+            Log::info('seo.project_run.retry.rebuilt_task', [
+                'run_id' => (int) $run->id,
+                'stale_task_id' => $taskId,
+                'rebuilt_task_id' => (int) $task->id,
+            ]);
+        }
+
+        if (! $task instanceof SeoProjectTask) {
+            throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong dự án.');
+        }
+
+        if ($retryTaskId > 0 && $task->getKey() !== $retryTaskId && $task->getKey() === $taskId) {
             $retryTask = SeoProjectTask::query()
                 ->where('project_id', (int) $project->id)
                 ->whereKey($retryTaskId)
@@ -366,9 +395,39 @@ final class SeoProjectWorkflowRunService
             }
         }
 
+        // Chạy lại phải bám đúng bài đã tạo/liên kết trước đó — tránh match nhầm bài khác cùng tiêu đề.
+        $linkedArticleId = (int) ($forcedArticleId ?? 0);
+        if ($linkedArticleId <= 0) {
+            $linkedArticleId = (int) ($task->article_id ?? 0);
+        }
+        if ($linkedArticleId <= 0 && is_array($existingItem)) {
+            $linkedArticleId = (int) ($existingItem['article_id'] ?? 0);
+        }
+
+        if ($linkedArticleId > 0 && (int) ($task->article_id ?? 0) !== $linkedArticleId) {
+            $articleExists = SeoArticle::query()
+                ->whereKey($linkedArticleId)
+                ->where('site_id', (int) $project->site_id)
+                ->exists();
+
+            if ($articleExists) {
+                $task->article_id = $linkedArticleId;
+                $task->save();
+
+                Log::info('seo.project_run.retry.relink_article', [
+                    'run_id' => (int) $run->id,
+                    'task_id' => (int) $task->id,
+                    'relinked_article_id' => $linkedArticleId,
+                ]);
+            }
+        }
+
         $projectSiteId = (int) ($project->site_id ?? 0);
+        $previousRetryCount = is_array($existingItem) ? (int) ($existingItem['retry_count'] ?? 0) : 0;
+
         $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId);
         $itemRow['task_id'] = $taskId;
+        $itemRow['retry_count'] = $previousRetryCount + 1;
         unset($itemRow['retry_task_id']);
 
         // Refresh lần nữa sau AI (có thể dài) rồi merge — chống mất item do request song song.
@@ -512,35 +571,92 @@ final class SeoProjectWorkflowRunService
 
         try {
             $context = $this->inputResolver->resolveForProjectTask($task, $scope);
+
+            Log::info('seo.project_run.task.start', [
+                'run_id' => (int) $run->id,
+                'task_id' => (int) $task->id,
+                'task_type' => (string) $task->type,
+                'article_id' => (int) ($task->article_id ?? 0),
+                'context_project_task_type' => $context->projectTaskType,
+                'context_rewrite_mode' => $context->rewriteMode,
+                'context_post_type' => $context->postType,
+                'context_is_new_article' => $context->isNewArticle,
+                'context_article_id' => (int) ($context->article?->id ?? 0),
+            ]);
+
             $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
+            $steps = is_array($result['steps'] ?? null) ? $result['steps'] : [];
+            $stepStats = $this->summarizeStepStats($steps);
+            $ranAt = now();
+
+            Log::info('seo.project_run.task.finished', [
+                'run_id' => (int) $run->id,
+                'task_id' => (int) $task->id,
+                'success' => (bool) ($result['success'] ?? false),
+                'article_id' => (int) ($result['article_id'] ?? 0),
+                'message' => (string) ($result['message'] ?? ''),
+                'step_stats' => $stepStats,
+                'step_statuses' => collect($steps)
+                    ->filter(static fn (mixed $step): bool => is_array($step))
+                    ->map(static fn (array $step): array => [
+                        'type' => (string) ($step['type'] ?? ''),
+                        'title' => (string) ($step['title'] ?? ''),
+                        'status' => (string) ($step['status'] ?? ''),
+                        'message' => mb_substr((string) ($step['message'] ?? ''), 0, 180),
+                    ])
+                    ->values()
+                    ->all(),
+            ]);
 
             if ($result['success']) {
                 $articleId = (int) ($result['article_id'] ?? 0);
                 $this->markTaskCompleted($task, $articleId);
 
+                $readiness = null;
                 if ($articleId > 0) {
-                    $this->storeArticleRunMeta($articleId, $run, $task);
-                    $this->promptResultLinks->linkFromWorkflowSteps(
-                        steps: is_array($result['steps'] ?? null) ? $result['steps'] : [],
-                        articleId: $articleId,
-                        runId: (int) $run->id,
-                        taskId: (int) $task->id,
-                    );
-                    $article = SeoArticle::query()->find($articleId);
-                    if ($article instanceof SeoArticle) {
-                        $readiness = $this->editorReadiness->queueAfterWorkflowRun($article, (int) $run->id);
+                    try {
+                        $this->storeArticleRunMeta($articleId, $run, $task);
+                        $this->promptResultLinks->linkFromWorkflowSteps(
+                            steps: $steps,
+                            articleId: $articleId,
+                            runId: (int) $run->id,
+                            taskId: (int) $task->id,
+                        );
+                        $article = SeoArticle::query()->find($articleId);
+                        if ($article instanceof SeoArticle) {
+                            $readiness = $this->editorReadiness->queueAfterWorkflowRun($article, (int) $run->id);
+                        }
+                    } catch (\Throwable $sideEffectException) {
+                        // Bài + task.article_id đã lưu — không để side-effect làm fail cả hạng mục / xóa link.
+                        Log::warning('seo.project_run.task.post_success_side_effect', [
+                            'run_id' => (int) $run->id,
+                            'task_id' => (int) $task->id,
+                            'article_id' => $articleId,
+                            'error' => $sideEffectException->getMessage(),
+                            'class' => $sideEffectException::class,
+                        ]);
                     }
                 }
 
+                $message = $this->formatRunResultMessage((string) $result['message'], $ranAt, $stepStats);
                 $itemRow = $this->buildItemRow(
                     $task,
                     true,
-                    $articleId,
-                    (string) $result['message'],
-                    $this->promptSteps($result['steps'] ?? []),
+                    $articleId > 0 ? $articleId : null,
+                    $message,
+                    $this->promptSteps($steps),
+                    $ranAt,
                 );
+                $itemRow['step_stats'] = $stepStats;
+                $itemRow['debug'] = [
+                    'project_task_type' => $context->projectTaskType,
+                    'rewrite_mode' => $context->rewriteMode,
+                    'post_type' => $context->postType,
+                    'ai_completed' => $stepStats['completed'],
+                    'ai_skipped' => $stepStats['skipped'],
+                ];
 
-                if (isset($readiness)) {
+                if ($readiness !== null) {
                     $itemRow['article_editor_ready'] = $readiness->isReady;
                     $itemRow['article_editor_preparing_message'] = $this->editorReadiness->userMessage($readiness);
                 }
@@ -548,22 +664,24 @@ final class SeoProjectWorkflowRunService
                 return $itemRow;
             }
 
-            $this->markTaskFailed($task);
+            $failedArticleId = (int) ($result['article_id'] ?? 0);
+            $this->markTaskFailed($task, $failedArticleId > 0 ? $failedArticleId : null);
 
             $failedStep = is_array($result['failed_step'] ?? null) ? $result['failed_step'] : null;
 
             $item = $this->buildFailedItemRow(
                 $task,
-                isset($result['article_id']) ? (int) $result['article_id'] : null,
+                $failedArticleId > 0 ? $failedArticleId : null,
                 $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep),
-                $this->promptSteps($result['steps'] ?? []),
+                $this->promptSteps($steps),
+                $ranAt,
             );
+            $item['step_stats'] = $stepStats;
 
-            $failedArticleId = (int) ($result['article_id'] ?? 0);
             if ($failedArticleId > 0) {
                 $this->storeArticleRunMeta($failedArticleId, $run, $task);
                 $this->promptResultLinks->linkFromWorkflowSteps(
-                    steps: is_array($result['steps'] ?? null) ? $result['steps'] : [],
+                    steps: $steps,
                     articleId: $failedArticleId,
                     runId: (int) $run->id,
                     taskId: (int) $task->id,
@@ -575,9 +693,23 @@ final class SeoProjectWorkflowRunService
 
             return $item;
         } catch (\Throwable $exception) {
-            $this->markTaskFailed($task);
+            Log::error('seo.project_run.task.exception', [
+                'run_id' => (int) $run->id,
+                'task_id' => (int) $task->id,
+                'error' => $exception->getMessage(),
+                'class' => $exception::class,
+            ]);
 
-            $item = $this->buildFailedItemRow($task, null, $this->errorFormatter->fromThrowable($exception));
+            $keptArticleId = (int) ($task->article_id ?? 0);
+            $this->markTaskFailed($task, $keptArticleId > 0 ? $keptArticleId : null);
+
+            $item = $this->buildFailedItemRow(
+                $task,
+                $keptArticleId > 0 ? $keptArticleId : null,
+                $this->errorFormatter->fromThrowable($exception),
+                [],
+                now(),
+            );
             $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
 
             return $item;
@@ -633,16 +765,26 @@ final class SeoProjectWorkflowRunService
      */
     private function createRetryTaskFromItem(SeoProject $project, array $item): SeoProjectTask
     {
+        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
+        $articleId = (int) ($item['article_id'] ?? 0);
+
         return $project->tasks()->create([
             'site_id' => (int) $project->site_id,
-            'type' => (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD),
-            'post_type' => SeoProjectTask::isNewArticleType($item['type'] ?? null)
+            'type' => $type,
+            'post_type' => SeoProjectTask::isNewArticleType($type)
                 ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
                 : null,
             'loai_san_pham' => trim((string) ($item['loai_san_pham'] ?? '')) ?: null,
             'source_content' => trim((string) ($item['source_content'] ?? '')),
             'description' => trim((string) ($item['gallery_description'] ?? $item['description'] ?? '')) ?: null,
             'target_date' => $item['target_date'] ?? null,
+            'article_id' => $articleId > 0 ? $articleId : null,
+            'rewrite_mode' => $type === SeoProjectTask::TYPE_REWRITE
+                ? SeoProjectTask::normalizeRewriteMode($item['rewrite_mode'] ?? null)
+                : SeoProjectTask::REWRITE_MODE_KEYWORD,
+            'rewrite_notes' => $type === SeoProjectTask::TYPE_REWRITE
+                ? (trim((string) ($item['rewrite_notes'] ?? '')) ?: null)
+                : null,
             'status' => SeoProjectTask::STATUS_PENDING,
         ]);
     }
@@ -894,7 +1036,12 @@ final class SeoProjectWorkflowRunService
         ?int $articleId,
         string $message,
         array $steps = [],
+        mixed $ranAt = null,
     ): array {
+        $lastRunAt = $ranAt instanceof \DateTimeInterface
+            ? $ranAt->format('Y-m-d H:i:s')
+            : (is_string($ranAt) && trim($ranAt) !== '' ? trim($ranAt) : now()->format('Y-m-d H:i:s'));
+
         return [
             'task_id' => (int) $task->id,
             'type' => (string) $task->type,
@@ -911,6 +1058,7 @@ final class SeoProjectWorkflowRunService
                     ? (string) ($task->description ?? '')
                     : null,
             'target_date' => $task->target_date?->format('Y-m-d'),
+            'last_run_at' => $lastRunAt,
             'status' => $success ? 'success' : 'failed',
             'article_id' => $articleId,
             'article_edit_url' => $articleId > 0 && $this->editorReadiness->isReady($articleId)
@@ -937,8 +1085,9 @@ final class SeoProjectWorkflowRunService
         ?int $articleId,
         array $error,
         array $steps = [],
+        mixed $ranAt = null,
     ): array {
-        $row = $this->buildItemRow($task, false, $articleId, $error['message'], $steps);
+        $row = $this->buildItemRow($task, false, $articleId, $error['message'], $steps, $ranAt);
 
         $row['error_detail'] = $error['error_detail'];
 
@@ -958,6 +1107,58 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
+     * @param  list<array<string, mixed>>  $steps
+     * @return array{completed: int, skipped: int, failed: int, total: int}
+     */
+    private function summarizeStepStats(array $steps): array
+    {
+        $completed = 0;
+        $skipped = 0;
+        $failed = 0;
+
+        foreach ($steps as $step) {
+            if (! is_array($step)) {
+                continue;
+            }
+
+            $status = (string) ($step['status'] ?? '');
+            match ($status) {
+                'completed' => $completed++,
+                'skipped' => $skipped++,
+                'failed' => $failed++,
+                default => null,
+            };
+        }
+
+        return [
+            'completed' => $completed,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'total' => $completed + $skipped + $failed,
+        ];
+    }
+
+    /**
+     * @param  array{completed: int, skipped: int, failed: int, total: int}  $stepStats
+     */
+    private function formatRunResultMessage(string $baseMessage, \DateTimeInterface $ranAt, array $stepStats): string
+    {
+        $base = trim($baseMessage);
+        if ($base === '') {
+            $base = 'Đã chạy quy trình và tạo/cập nhật bài.';
+        }
+
+        return sprintf(
+            '%s · Chạy lúc %s · AI xong %d / bỏ qua %d / lỗi %d.',
+            $base,
+            $ranAt->format('d/m/Y H:i:s'),
+            (int) ($stepStats['completed'] ?? 0),
+            (int) ($stepStats['skipped'] ?? 0),
+            (int) ($stepStats['failed'] ?? 0),
+        );
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     private function promptSteps(mixed $steps): array
@@ -974,12 +1175,22 @@ final class SeoProjectWorkflowRunService
 
     private function markTaskWriting(SeoProjectTask $task): void
     {
-        $this->persistTaskState($task, SeoProjectTask::STATUS_WRITING, null);
+        $existingArticleId = (int) ($task->article_id ?? 0);
+
+        $this->persistTaskState(
+            $task,
+            SeoProjectTask::STATUS_WRITING,
+            $existingArticleId > 0 ? $existingArticleId : null,
+        );
     }
 
-    private function markTaskFailed(SeoProjectTask $task): void
+    private function markTaskFailed(SeoProjectTask $task, ?int $articleId = null): void
     {
-        $this->persistTaskState($task, SeoProjectTask::STATUS_FAILED, null);
+        $resolvedArticleId = $articleId !== null && $articleId > 0
+            ? $articleId
+            : (((int) ($task->article_id ?? 0) > 0) ? (int) $task->article_id : null);
+
+        $this->persistTaskState($task, SeoProjectTask::STATUS_FAILED, $resolvedArticleId);
     }
 
     private function markTaskCompleted(SeoProjectTask $task, int $articleId): void
@@ -1006,10 +1217,20 @@ final class SeoProjectWorkflowRunService
 
     private function persistTaskState(SeoProjectTask $task, string $status, ?int $articleId): void
     {
-        SeoProjectTask::query()->whereKey($task->id)->update([
+        $payload = [
             'status' => $status,
             'article_id' => $articleId,
-        ]);
+        ];
+
+        if ($articleId !== null && $articleId > 0 && $task->connected_at === null) {
+            $payload['connected_at'] = now();
+        }
+
+        if ($status === SeoProjectTask::STATUS_COMPLETED && $task->completed_at === null) {
+            $payload['completed_at'] = now();
+        }
+
+        SeoProjectTask::query()->whereKey($task->id)->update($payload);
 
         $task->refresh();
     }

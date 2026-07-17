@@ -25,6 +25,7 @@ final class ArticleEditorSyncOrchestrator
         private readonly WordPressArticleContentService $wpContent,
         private readonly SeoImageOptimizationService $imageOptimization,
         private readonly WordPressLocalMediaSyncService $localMediaSync,
+        private readonly ArticleWpSyncQueueService $syncQueue,
     ) {}
 
     /**
@@ -73,6 +74,8 @@ final class ArticleEditorSyncOrchestrator
     {
         $steps = [];
         $warnings = [];
+        // Đăng ngay phải còn hiệu lực khi worker chạy — đè draft/scheduled trong bundle cũ.
+        $bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);
         $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
         $this->bundleApply->apply($article, $bundle, $context);
 

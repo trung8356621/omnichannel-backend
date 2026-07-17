@@ -1061,6 +1061,16 @@ final class WordPressArticleSyncService
             return ['skip' => false, 'reason' => 'missing_wp_post_id'];
         }
 
+        $payloadStatus = strtolower(trim((string) (
+            is_array($prepared['request_payload'] ?? null)
+                ? ($prepared['request_payload']['status'] ?? '')
+                : ''
+        )));
+        // Luôn đẩy publish/private lên WP — đè draft cũ, không skip theo fingerprint.
+        if (in_array($payloadStatus, ['publish', 'private'], true)) {
+            return ['skip' => false, 'reason' => 'force_status_override'];
+        }
+
         if (app(ArticleWordPressSyncFlagService::class)->hasLocalEditPending($article)) {
             return ['skip' => false, 'reason' => 'local_edit_pending'];
         }
@@ -1324,21 +1334,12 @@ final class WordPressArticleSyncService
         }
     }
 
-    private function mapStatusForWordPress(string $status): string
-    {
-        return match ($status) {
-            'published' => 'publish',
-            'private' => 'private',
-            default => 'draft',
-        };
-    }
-
     /**
-     * Trạng thái gửi lên WP khi đồng bộ.
-     * Laravel là bản tạm: được sync/sửa nội dung; không xóa / trash / hạ draft bài đã có trên WP.
-     * Scheduled → draft (giữ bài chờ cron publish). Create mới (chưa wp_post_id) vẫn gửi draft được.
+     * Outbound sync → WordPress: chỉ có một trạng thái `publish`.
+     * Lịch đăng (scheduled) chỉ sống trên Laravel; cron tới giờ mới gọi sync.
+     * Không gửi draft/future/private lên WP.
      *
-     * @return array{status?: string, post_date?: string|null}
+     * @return array{status?: string, post_date?: string}
      */
     private function resolveWordPressStatusPayload(SeoArticle $article): array
     {
@@ -1349,30 +1350,27 @@ final class WordPressArticleSyncService
             return [];
         }
 
-        if ($status === 'scheduled') {
-            return [
-                'status' => 'draft',
-            ];
-        }
-
-        $wpStatus = $this->mapStatusForWordPress($status);
-        $wpPostId = (int) ($article->wp_post_id ?? 0);
-
-        // Bài đã gắn WP: không demote xuống draft qua sync.
-        if ($wpPostId > 0 && $wpStatus === 'draft') {
-            return [];
-        }
-
-        $payload = [
-            'status' => $wpStatus,
+        return [
+            'status' => 'publish',
+            'post_date' => $this->formatPostDateForWordPressPublish($article),
         ];
+    }
 
-        $postDate = $this->formatPostDateForWordPress($article);
-        if ($postDate !== null) {
-            $payload['post_date'] = $postDate;
+    /**
+     * Ngày đăng gửi WP khi publish. post_date tương lai khiến WP đổi thành `future` — clamp về now.
+     */
+    private function formatPostDateForWordPressPublish(SeoArticle $article): string
+    {
+        $tz = \App\Addons\SeoContentAi\Support\SeoDisplayTimezone::name();
+        $at = $article->published_at instanceof Carbon
+            ? $article->published_at->copy()->timezone($tz)
+            : \App\Addons\SeoContentAi\Support\SeoDisplayTimezone::now();
+
+        if ($at->isFuture()) {
+            $at = \App\Addons\SeoContentAi\Support\SeoDisplayTimezone::now();
         }
 
-        return $payload;
+        return $at->format('Y-m-d H:i:s');
     }
 
     private function formatPostDateForWordPress(SeoArticle $article): ?string

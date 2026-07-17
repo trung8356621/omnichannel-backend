@@ -951,10 +951,64 @@ body:has(.keyword-dictionary-page) .fi-page-content {
     overflow: hidden;
 }
 
+.keyword-dictionary-drawer__list-aside {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    align-items: flex-end;
+    gap: 0.375rem;
+    max-width: 42%;
+}
+
 .keyword-dictionary-drawer__list-badge {
     flex-shrink: 0;
-    align-self: flex-start;
-    max-width: 42%;
+    max-width: 100%;
+}
+
+.keyword-dictionary-drawer__project-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.5rem;
+    border: 1px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    cursor: pointer;
+}
+
+.keyword-dictionary-drawer__project-icon--assign {
+    border-color: rgb(253 230 138);
+    background: rgb(255 251 235);
+    color: rgb(146 64 14);
+}
+
+.keyword-dictionary-drawer__project-icon--assign:hover {
+    background: rgb(254 243 199);
+    border-color: rgb(252 211 77);
+}
+
+.keyword-dictionary-drawer__project-icon--open {
+    border-color: rgb(167 243 208);
+    background: rgb(236 253 245);
+    color: rgb(4 120 87);
+}
+
+.keyword-dictionary-drawer__project-icon--open:hover {
+    background: rgb(209 250 229);
+    border-color: rgb(110 231 183);
+}
+
+.dark .keyword-dictionary-drawer__project-icon--assign {
+    border-color: rgb(245 158 11 / 0.3);
+    background: rgb(245 158 11 / 0.1);
+    color: rgb(252 211 77);
+}
+
+.dark .keyword-dictionary-drawer__project-icon--open {
+    border-color: rgb(16 185 129 / 0.3);
+    background: rgb(16 185 129 / 0.1);
+    color: rgb(110 231 183);
 }
 
 .keyword-dictionary-drawer__list-title {

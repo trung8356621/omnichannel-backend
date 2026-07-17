@@ -620,6 +620,64 @@ class ArticleResource extends SeoPanelResource
                                 ->success()
                                 ->send();
                         }),
+                    Tables\Actions\BulkAction::make('skip_seo_audit')
+                        ->label(__('seo-content-ai::filament.article_list.skip_articles'))
+                        ->icon('heroicon-o-eye-slash')
+                        ->color('gray')
+                        ->visible(fn (): bool => ! static::isArticlesSkippedTab())
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records): void {
+                            $skippedCount = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof SeoArticle) {
+                                    continue;
+                                }
+
+                                if (static::articleIsSkipSeoAudit($record)) {
+                                    continue;
+                                }
+
+                                static::toggleSkipSeoAudit($record);
+                                $skippedCount++;
+                            }
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.bulk_skip_completed', [
+                                    'count' => $skippedCount,
+                                ]))
+                                ->success()
+                                ->send();
+                        }),
+                    Tables\Actions\BulkAction::make('unskip_seo_audit')
+                        ->label(__('seo-content-ai::filament.article_list.unskip_articles'))
+                        ->icon('heroicon-o-eye')
+                        ->color('warning')
+                        ->visible(fn (): bool => static::isArticlesSkippedTab())
+                        ->deselectRecordsAfterCompletion()
+                        ->action(function (Collection $records): void {
+                            $restoredCount = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof SeoArticle) {
+                                    continue;
+                                }
+
+                                if (! static::articleIsSkipSeoAudit($record)) {
+                                    continue;
+                                }
+
+                                static::toggleSkipSeoAudit($record);
+                                $restoredCount++;
+                            }
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.article_list.bulk_unskip_completed', [
+                                    'count' => $restoredCount,
+                                ]))
+                                ->success()
+                                ->send();
+                        }),
                     Tables\Actions\DeleteBulkAction::make(),
                 ]),
             ]));
@@ -1011,6 +1069,18 @@ class ArticleResource extends SeoPanelResource
             && $livewire->contentTab === Pages\ListArticles::TAB_QUEUE;
     }
 
+    public static function isArticlesSkippedTab(): bool
+    {
+        if (request()->query('tab') === Pages\ListArticles::TAB_SKIPPED) {
+            return true;
+        }
+
+        $livewire = \Livewire\Livewire::current();
+
+        return $livewire instanceof Pages\ListArticles
+            && $livewire->contentTab === Pages\ListArticles::TAB_SKIPPED;
+    }
+
     /**
      * @return array<int, Tables\Actions\Action>
      */
@@ -1351,7 +1421,8 @@ class ArticleResource extends SeoPanelResource
                 ->color('warning')
                 ->tooltip(__('seo-content-ai::filament.article_list.assign_to_content_project'))
                 ->visible(fn (SeoArticle $record): bool => SeoAccessControl::canMutateInSeoPanel()
-                    && ! static::articleIsInContentProject($record))
+                    && ! static::articleIsInContentProject($record)
+                    && ! static::articleIsContentArchived($record))
                 ->form(function (SeoArticle $record): array {
                     $siteId = static::resolveArticleSiteId($record);
 
@@ -1894,6 +1965,7 @@ class ArticleResource extends SeoPanelResource
             'site_id' => $siteId,
             'month' => $targetMonth->format('Y-m-d'),
             'status' => SeoProject::STATUS_MANUAL,
+            'kind' => SeoProject::KIND_MONTHLY,
             'total_tasks' => 0,
             'description' => null,
         ]);
@@ -1916,7 +1988,10 @@ class ArticleResource extends SeoPanelResource
             ->with(['site', 'user'])
             ->orderByDesc('month')
             ->orderBy('id')
-            ->where('site_id', $siteId);
+            ->where('site_id', $siteId)
+            ->where(function ($builder): void {
+                $builder->where('kind', SeoProject::KIND_MONTHLY)->orWhereNull('kind');
+            });
 
         if (SeoAccessControl::isContentManager()) {
             $query->where('user_id', (int) auth()->id());
@@ -1970,6 +2045,7 @@ class ArticleResource extends SeoPanelResource
 
     /**
      * SEO Audit candidates only: exclude reviewed + bài đã gắn Content Project (`article_id`)
+     * + bài đã archive khỏi content project (`content_archived_at`)
      * + bài có meta skip_seo_audit.
      *
      * @param  Builder<SeoArticle>  $query
@@ -1981,6 +2057,8 @@ class ArticleResource extends SeoPanelResource
             $sub->where('is_reviewed', false)->orWhereNull('is_reviewed');
         });
 
+        $query->whereNull('content_archived_at');
+
         // Chỉ match article_id — assign rewrite/improve luôn set cột này.
         // Không OR theo title: correlated scan trên cả domain dễ timeout → scan_failed.
         $query->whereNotExists(function ($sub): void {
@@ -1990,6 +2068,11 @@ class ArticleResource extends SeoPanelResource
         });
 
         return static::applyExcludeSkipSeoAuditScope($query);
+    }
+
+    public static function articleIsContentArchived(SeoArticle $article): bool
+    {
+        return $article->content_archived_at !== null;
     }
 
     public static function articleAssignedContentProjectId(SeoArticle $article): ?int
@@ -2109,6 +2192,12 @@ class ArticleResource extends SeoPanelResource
             foreach ($records as $record) {
                 if ($currentTotal >= $max) {
                     $overflow++;
+
+                    continue;
+                }
+
+                if (static::articleIsContentArchived($record)) {
+                    $alreadyInProject++;
 
                     continue;
                 }

@@ -21,6 +21,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
 use App\Addons\SeoContentAi\Services\ArticleEditorHtmlSanitizeService;
 use App\Addons\SeoContentAi\Services\ArticleEditorMediaAiService;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
+use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\ArticleFaqBodySyncService;
 use App\Addons\SeoContentAi\Services\ArticleFaqEditorService;
@@ -278,9 +279,17 @@ class EditArticle extends SeoEditRecord
     private function dispatchEditorSlugUpdated(): void
     {
         $slug = trim($this->articleSlug);
+        $detail = [
+            'slug' => $slug,
+            'article_slug' => $slug,
+            'permalink' => trim($this->getDisplayPermalink()),
+            'permalink_base' => rtrim($this->getPermalinkBase(), '/'),
+            'permalink_suffix' => $this->getPermalinkSuffix(),
+        ];
+
         $this->js(sprintf(
-            'window.dispatchEvent(new CustomEvent("seo-editor-slug-updated", { detail: { slug: %s } }))',
-            json_encode($slug, JSON_THROW_ON_ERROR),
+            'window.dispatchEvent(new CustomEvent("seo-editor-slug-updated", { detail: %s }))',
+            json_encode($detail, JSON_THROW_ON_ERROR),
         ));
     }
 
@@ -294,7 +303,7 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
-     * @return array{google_serp_preview: array<string, mixed>, score: int|null, focus_keyword: string, article_slug: string, permalink_base: string, permalink_suffix: string}
+     * @return array{google_serp_preview: array<string, mixed>, score: int|null, focus_keyword: string, article_slug: string, permalink: string, permalink_base: string, permalink_suffix: string, meta_description: string, seo_analysis_pending: bool}
      */
     public function updateSeoMetaFromEditor(string $focusKeyword, string $description, string $slug = ''): array
     {
@@ -305,24 +314,17 @@ class EditArticle extends SeoEditRecord
             $this->articleSlug = Str::slug($slug);
         }
 
-        $this->persistSeoMetaFields();
-        $this->persistArticleSlugFromEditor(silent: true);
-        $this->clearInvalidRankMathSeoTitleMeta();
-        $scoreResult = $this->rescoreAndDispatchSeoAnalysis();
+        $result = app(ArticleEditorSeoMetaService::class)->save(
+            $this->record,
+            $this->focusKeyword,
+            $this->seoMetaDescription,
+            $this->articleSlug,
+        );
 
-        $preview = $this->getGoogleSerpPreview();
+        $preview = $result['google_serp_preview'] ?? $this->getGoogleSerpPreview();
         $this->dispatch('google-serp-preview-updated', preview: $preview);
 
-        $score = $scoreResult['score'] ?? $this->record->fresh()?->seo_score;
-
-        return [
-            'google_serp_preview' => $preview,
-            'score' => $score !== null ? (int) round((float) $score) : null,
-            'focus_keyword' => trim($this->focusKeyword),
-            'article_slug' => trim($this->articleSlug),
-            'permalink_base' => $this->getPermalinkBase(),
-            'permalink_suffix' => $this->getPermalinkSuffix(),
-        ];
+        return $result;
     }
 
     private function persistArticleSlugFromEditor(bool $silent = false): void
@@ -1853,12 +1855,9 @@ class EditArticle extends SeoEditRecord
 
     public function getDisplayPermalink(): string
     {
-        if ((int) ($this->record->wp_post_id ?? 0) > 0) {
-            return $this->getArticlePermalink();
-        }
-
+        $displaySlug = $this->getDisplaySlug();
         $preview = app(\App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder::class)
-            ->preview($this->record, $this->getDisplaySlug());
+            ->preview($this->record, $displaySlug);
         if ($preview !== '') {
             return $preview;
         }
@@ -1866,7 +1865,7 @@ class EditArticle extends SeoEditRecord
         $base = $this->getPermalinkBase();
 
         return $base !== ''
-            ? rtrim($base, '/').'/'.$this->getDisplaySlug()
+            ? rtrim($base, '/').'/'.$displaySlug
             : '';
     }
 
@@ -3717,6 +3716,7 @@ class EditArticle extends SeoEditRecord
             'product_gallery' => collect($this->productGallery)
                 ->map(static fn (array $item): array => [
                     'url' => (string) ($item['url'] ?? ''),
+                    'id' => max(0, (int) ($item['id'] ?? 0)),
                 ])
                 ->filter(static fn (array $item): bool => ($item['url'] ?? '') !== '')
                 ->values()
@@ -4951,7 +4951,7 @@ class EditArticle extends SeoEditRecord
      *
      * @param  array<int, array<string, mixed>>  $items
      */
-    public function renameAttachmentSlugsOnWordPress(array $items): void
+    public function renameAttachmentSlugsOnWordPress(array $items, bool $silent = false): void
     {
         $result = app(WordPressAttachmentRenameService::class)->renameBatch($this->record, $items);
 
@@ -4961,22 +4961,26 @@ class EditArticle extends SeoEditRecord
         if ($result['success']) {
             $this->dispatch('seo-attachment-slugs-rename-finished', success: true, renamed: $renamed, message: $result['message']);
 
-            Notification::make()
-                ->title('Image renamed on WordPress')
-                ->body($result['message'])
-                ->success()
-                ->send();
+            if (! $silent) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_edit.image_slug_renamed_wp'))
+                    ->body($result['message'])
+                    ->success()
+                    ->send();
+            }
 
             return;
         }
 
         $this->dispatch('seo-attachment-slugs-rename-finished', success: false, renamed: $renamed, message: $result['message']);
 
-        Notification::make()
-            ->title('Unable to rename image on WordPress')
-            ->body($result['message'])
-            ->danger()
-            ->send();
+        if (! $silent) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.image_slug_rename_wp_failed'))
+                ->body($result['message'])
+                ->danger()
+                ->send();
+        }
     }
 
     /**
@@ -5064,13 +5068,17 @@ class EditArticle extends SeoEditRecord
      *
      * @param  array<int, array<string, mixed>>  $items
      */
-    public function updateAttachmentMetaOnWordPress(array $items): void
+    public function updateAttachmentMetaOnWordPress(array $items, bool $silent = false): void
     {
         $result = app(WordPressAttachmentMetaUpdateService::class)->updateBatch($this->record, $items);
 
+        if ($silent) {
+            return;
+        }
+
         if ($result['success']) {
             Notification::make()
-                ->title('Image alt/title updated on WordPress')
+                ->title(__('seo-content-ai::filament.article_edit.image_alt_title_updated_wp'))
                 ->body($result['message'])
                 ->success()
                 ->send();
@@ -5079,7 +5087,7 @@ class EditArticle extends SeoEditRecord
         }
 
         Notification::make()
-            ->title('Unable to update image alt/title on WordPress')
+            ->title(__('seo-content-ai::filament.article_edit.image_alt_title_update_wp_failed'))
             ->body($result['message'])
             ->danger()
             ->send();

@@ -144,7 +144,7 @@
                 },
 
                 applyPublishImmediatelySchedule() {
-                    const parts = window.seoSchedulePartsInTimezone(this.displayTimezone, 5);
+                    const parts = window.seoSchedulePartsInTimezone(this.displayTimezone, 0);
 
                     this.publishYear = String(parts.publishYear);
                     this.publishMonth = String(parts.publishMonth).padStart(2, '0');
@@ -152,15 +152,18 @@
                     this.publishHour = String(parts.publishHour).padStart(2, '0');
                     this.publishMinute = String(parts.publishMinute).padStart(2, '0');
                     this.publishIso = this.buildIso();
-                    this.status = 'scheduled';
-                    this.publishWhenLabel = window.seoFormatScheduleLabelInTimezone(this.displayTimezone, 5);
+                    this.status = 'published';
+                    // Đăng ngay = publish tức thì — không hiện dòng "lên lịch".
+                    this.publishWhenLabel = '';
+                    this.applyScheduleToPublishBox();
                 },
 
                 onPublishImmediatelyChange() {
                     if (this.publishImmediately) {
                         this.applyPublishImmediatelySchedule();
+                    } else {
+                        this.applyScheduleToPublishBox();
                     }
-                    this.applyScheduleToPublishBox();
                 },
 
                 applyPublishIso() {

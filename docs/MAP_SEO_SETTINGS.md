@@ -38,7 +38,9 @@ flowchart TB
 | **SeoSettingsOverview** | `settings/overview` | `Filament/Pages/SeoSettingsOverview.php` | AI model status (sync, capability groups, `routing_status`/`disabled_reason`), team chat limits; teaser → Recommendations |
 | **SeoSettingsWorkflows** | `settings/workflows` | `Filament/Pages/SeoSettingsWorkflows.php` | Gán task/prompt nghiệp vụ; Editor Media (Prompt\|Workflow) — không chọn model per-node |
 | **SeoSettingsAiAdvanced** | `settings/ai-advanced` | `Filament/Pages/SeoSettingsAiAdvanced.php` | Rendering Preference, Image/Typography/Video model priority, typography validation |
-| **SeoSettingsEditor** | `settings/editor` | `Filament/Pages/SeoSettingsEditor.php` | Cấu hình Editor: auto-save interval, editor height, publish behavior |
+| **SeoSettingsEditor** | `settings/editor` | `Filament/Pages/SeoSettingsEditor.php` | Cấu hình Editor: auto-save, height, publish; **Nhận diện FAQ** (`faq_catch_keywords`, 1 keyword/dòng) |
+| **SeoOverviewSettingsService** | — | `Services/SeoOverviewSettingsService.php` | Option `seo_overview_settings`; key `faq_catch_keywords` + `outline_skip_words` + team chat limits; `getFaqCatchKeywords()`, `faqHeadingMatcher()`; default FAQ song ngữ VI+EN khi trống (không merge/ghi đè setting đã lưu) |
+| **FaqHeadingMatcher** | — | `Support/FaqHeadingMatcher.php` | So khớp tiêu đề H2–H6 với `faq_catch_keywords` (normalize + token-boundary); dùng chung parser/editor/form_faq |
 | **SeoSettingsKeywords** | `settings/keywords` | `Filament/Pages/SeoSettingsKeywords.php` | CTA blacklist (`SeoKeywordSettingsService`, default phrases) + **Lý do đánh giá từ khóa** (`keyword_review_reasons`, `KeywordReviewReasonService`) |
 
 **CTA blacklist phạm vi:** `CtaKeywordBlacklistFilter` — import keyword từ bài, child/related Topic Cluster (skip im lặng). **Không** chặn từ khóa chính khi `WorkflowKeywordResearchService::syncTopicCluster()` (action `save_vocabulary_research`).

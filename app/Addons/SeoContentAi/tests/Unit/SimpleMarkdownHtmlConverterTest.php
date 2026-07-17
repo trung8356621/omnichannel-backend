@@ -35,6 +35,21 @@ MD;
         $this->assertStringContainsString('Đoạn nội dung', $htmlResult['html']);
     }
 
+    public function test_prepare_import_extracts_bold_seo_title_with_extra_colon(): void
+    {
+        $markdown = <<<'MD'
+**SEO Title:**: Tiêu đề SEO cần lưu
+
+Đoạn nội dung.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Tiêu đề SEO cần lưu', $prepared['h1_title']);
+        $this->assertStringNotContainsString('SEO Title', $prepared['markdown']);
+        $this->assertStringContainsString('Đoạn nội dung.', $prepared['markdown']);
+    }
+
     public function test_prepare_import_extracts_multiline_meta_description(): void
     {
         $markdown = <<<'MD'
@@ -205,5 +220,264 @@ MD;
 
         $this->assertSame('Mô tả SEO cho bài viết.', $prepared['meta_description']);
         $this->assertSame('Tiêu đề chính', $prepared['h1_title']);
+    }
+
+    public function test_prepare_import_extracts_numbered_section_headings(): void
+    {
+        $markdown = <<<'MD'
+### 1. Meta Description
+Đặt may balo quà tặng từ thiện theo yêu cầu.
+
+### 2. SEO Title
+May Balo Quà Tặng Từ Thiện Tâm Lòng Vàng: Lan Tỏa Yêu Thương Ý Nghĩa
+
+### 3. Introduction
+Hoạt động **may balo quà tặng từ thiện** mang ý nghĩa nhân văn.
+
+### 4. Main Content
+## Ý nghĩa của hoạt động may balo quà tặng từ thiện
+
+Nội dung chính của bài.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame(
+            'Đặt may balo quà tặng từ thiện theo yêu cầu.',
+            $prepared['meta_description'],
+        );
+        $this->assertSame(
+            'May Balo Quà Tặng Từ Thiện Tâm Lòng Vàng: Lan Tỏa Yêu Thương Ý Nghĩa',
+            $prepared['h1_title'],
+        );
+        $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
+        $this->assertStringNotContainsString('SEO Title', $prepared['markdown']);
+        $this->assertStringNotContainsString('Introduction', $prepared['markdown']);
+        $this->assertStringNotContainsString('Main Content', $prepared['markdown']);
+        $this->assertStringContainsString('Hoạt động **may balo quà tặng từ thiện** mang ý nghĩa nhân văn.', $prepared['markdown']);
+        $this->assertStringContainsString('## Ý nghĩa của hoạt động may balo quà tặng từ thiện', $prepared['markdown']);
+        $this->assertStringContainsString('Nội dung chính của bài.', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_plain_numbered_metadata_labels(): void
+    {
+        $markdown = <<<'MD'
+1. Meta Description: Khám phá cách xếp đồ trong quân đội giúp tối ưu không gian.
+
+2. SEO Title: Cách xếp đồ trong quân đội: Bí quyết tối ưu không gian
+
+3. Introduction
+
+Trong môi trường quân đội việc sắp xếp đồ đạc rất quan trọng.
+
+4. Main Content:
+
+## Nghệ thuật xếp đồ trong quân đội
+
+Nội dung chính của bài.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+        $html = $this->converter()->toHtml($prepared['markdown']);
+
+        $this->assertSame(
+            'Khám phá cách xếp đồ trong quân đội giúp tối ưu không gian.',
+            $prepared['meta_description'],
+        );
+        $this->assertSame(
+            'Cách xếp đồ trong quân đội: Bí quyết tối ưu không gian',
+            $prepared['h1_title'],
+        );
+        $this->assertSame(
+            'Cách xếp đồ trong quân đội: Bí quyết tối ưu không gian',
+            $prepared['seo_title'],
+        );
+        $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
+        $this->assertStringNotContainsString('SEO Title', $prepared['markdown']);
+        $this->assertStringNotContainsString('Introduction', $prepared['markdown']);
+        $this->assertStringNotContainsString('Main Content', $html);
+        $this->assertStringContainsString('<p>Trong môi trường quân đội', $html);
+        $this->assertStringContainsString('<h2>Nghệ thuật xếp đồ trong quân đội</h2>', $html);
+        $this->assertStringContainsString('Nội dung chính của bài', $html);
+    }
+
+    public function test_prepare_import_keeps_numbered_list_false_positives(): void
+    {
+        $markdown = <<<'MD'
+## Các bước thực hiện
+
+1. Chuẩn bị balo phù hợp
+2. Phân loại vật dụng
+3. Cuộn quần áo theo Ranger Roll
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertNull($prepared['meta_description']);
+        $this->assertStringContainsString('1. Chuẩn bị balo phù hợp', $prepared['markdown']);
+        $this->assertStringContainsString('2. Phân loại vật dụng', $prepared['markdown']);
+        $this->assertStringContainsString('3. Cuộn quần áo theo Ranger Roll', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_bold_mixed_punctuation_and_dashes(): void
+    {
+        $markdown = <<<'MD'
+**Meta Description**: Mô tả đậm với dấu hai chấm ngoài bold
+2) **SEO Title:** Tiêu đề SEO dạng ngoặc
+3 - **Introduction:**
+Đoạn mở đầu giữ lại.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Mô tả đậm với dấu hai chấm ngoài bold', $prepared['meta_description']);
+        $this->assertSame('Tiêu đề SEO dạng ngoặc', $prepared['h1_title']);
+        $this->assertStringNotContainsString('Introduction', $prepared['markdown']);
+        $this->assertStringContainsString('Đoạn mở đầu giữ lại.', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_unwraps_outer_markdown_fence(): void
+    {
+        $markdown = <<<'MD'
+```markdown
+# Tiêu đề trong fence
+
+**Meta Description:** Mô tả trong fence
+
+Đoạn body trong fence.
+```
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Tiêu đề trong fence', $prepared['h1_title']);
+        $this->assertSame('Mô tả trong fence', $prepared['meta_description']);
+        $this->assertStringNotContainsString('```', $prepared['markdown']);
+        $this->assertStringContainsString('Đoạn body trong fence.', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_preserves_existing_html_document(): void
+    {
+        $html = '<p>Đã là HTML sẵn.</p><h2>Section</h2>';
+
+        $prepared = $this->converter()->prepareImport($html);
+
+        $this->assertNull($prepared['h1_title']);
+        $this->assertNull($prepared['meta_description']);
+        $this->assertSame($html, $prepared['markdown']);
+    }
+
+    public function test_prepare_import_keeps_visible_vietnamese_section_headings(): void
+    {
+        $markdown = <<<'MD'
+## Giới thiệu về kỹ thuật Ranger Roll
+
+Đoạn 1.
+
+## Nội dung chính của khóa huấn luyện
+
+Đoạn 2.
+
+## Kết luận
+
+Đoạn 3.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+        $html = $this->converter()->toHtml($prepared['markdown']);
+
+        $this->assertStringContainsString('<h2>Giới thiệu về kỹ thuật Ranger Roll</h2>', $html);
+        $this->assertStringContainsString('<h2>Nội dung chính của khóa huấn luyện</h2>', $html);
+        $this->assertStringContainsString('<h2>Kết luận</h2>', $html);
+    }
+
+    public function test_prepare_import_duplicate_metadata_first_wins(): void
+    {
+        $markdown = <<<'MD'
+1. Meta Description: Mô tả đầu tiên
+2. SEO Title: Tiêu đề đầu
+Meta Description: Mô tả thứ hai không ghi đè
+
+## Section
+
+Body.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Mô tả đầu tiên', $prepared['meta_description']);
+        $this->assertSame('Tiêu đề đầu', $prepared['h1_title']);
+        $this->assertStringNotContainsString('Mô tả thứ hai', $prepared['markdown']);
+        $this->assertStringContainsString('Body.', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_handles_vietnamese_unicode_nbsp_and_crlf(): void
+    {
+        $markdown = "1. Meta Description: Khám phá\u{00A0}cách xếp đồ\r\n\r\n2. SEO Title: Tiêu đề có dấu\r\n\r\n## Mục lục\r\n\r\nNội dung.";
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Khám phá cách xếp đồ', $prepared['meta_description']);
+        $this->assertSame('Tiêu đề có dấu', $prepared['h1_title']);
+        $this->assertStringContainsString('## Mục lục', $prepared['markdown']);
+        $this->assertStringContainsString('Nội dung.', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_keeps_meta_description_sentence_as_content(): void
+    {
+        $markdown = <<<'MD'
+## SEO basics
+
+Meta description là một yếu tố quan trọng trong SEO.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertNull($prepared['meta_description']);
+        $this->assertStringContainsString(
+            'Meta description là một yếu tố quan trọng trong SEO.',
+            $prepared['markdown'],
+        );
+    }
+
+    public function test_prepare_import_classic_hash_title_bold_meta_hr(): void
+    {
+        $markdown = <<<'MD'
+# My article title
+
+**Meta Description:** My description
+
+---
+
+## First section
+Content
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('My article title', $prepared['h1_title']);
+        $this->assertSame('My description', $prepared['meta_description']);
+        $this->assertStringNotContainsString('My article title', $prepared['markdown']);
+        $this->assertStringNotContainsString('Meta Description', $prepared['markdown']);
+        $this->assertStringNotContainsString('---', $prepared['markdown']);
+        $this->assertStringContainsString('## First section', $prepared['markdown']);
+        $this->assertStringContainsString('Content', $prepared['markdown']);
+    }
+
+    public function test_prepare_import_separates_h1_and_seo_title_when_both_present(): void
+    {
+        $markdown = <<<'MD'
+H1: Tiêu đề bài viết H1
+2. SEO Title: Tiêu đề SEO riêng
+
+Đoạn body.
+MD;
+
+        $prepared = $this->converter()->prepareImport($markdown);
+
+        $this->assertSame('Tiêu đề bài viết H1', $prepared['h1_title']);
+        $this->assertSame('Tiêu đề SEO riêng', $prepared['seo_title']);
+        $this->assertStringNotContainsString('SEO Title', $prepared['markdown']);
+        $this->assertStringContainsString('Đoạn body.', $prepared['markdown']);
     }
 }

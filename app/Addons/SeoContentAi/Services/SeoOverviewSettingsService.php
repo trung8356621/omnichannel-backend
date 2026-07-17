@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Support\FaqHeadingMatcher;
 use App\Models\WpOption;
 
 final class SeoOverviewSettingsService
@@ -50,14 +51,25 @@ final class SeoOverviewSettingsService
     /** @var list<string> */
     private const DEFAULT_FAQ_CATCH_KEYWORDS = [
         'faq',
+        'faqs',
+        'frequently asked questions',
+        'frequently asked question',
+        'common questions',
+        'common question',
+        'questions and answers',
+        'question and answer',
+        'q&a',
+        'q & a',
+        'faq section',
+        'faq questions',
+        'common faq',
         'câu hỏi thường gặp',
-        'cau hoi thuong gap',
-        'câu hỏi',
-        'cau hoi',
+        'các câu hỏi thường gặp',
         'hỏi đáp',
-        'hoi dap',
         'giải đáp',
-        'giai dap',
+        'giải đáp thắc mắc',
+        'thắc mắc thường gặp',
+        'câu hỏi',
     ];
 
     public static function withDefaults(): self
@@ -123,6 +135,11 @@ final class SeoOverviewSettingsService
         $keywords = $this->getSettings()[self::KEY_FAQ_CATCH_KEYWORDS];
 
         return $this->normalizeKeywords($keywords);
+    }
+
+    public function faqHeadingMatcher(): FaqHeadingMatcher
+    {
+        return new FaqHeadingMatcher($this->getFaqCatchKeywords());
     }
 
     /**

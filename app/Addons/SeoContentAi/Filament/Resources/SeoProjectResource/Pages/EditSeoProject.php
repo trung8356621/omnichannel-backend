@@ -8,14 +8,28 @@ use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Services\SeoProjectArticleOwnerSyncService;
+use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Carbon\Carbon;
 use Filament\Actions;
+use Filament\Notifications\Notification;
+use Illuminate\Validation\ValidationException;
 
 class EditSeoProject extends SeoEditRecord
 {
     protected static string $resource = SeoProjectResource::class;
+
+    public function mount(int|string $record): void
+    {
+        parent::mount($record);
+
+        /** @var SeoProject $project */
+        $project = $this->getRecord();
+        if ($project->isArchive()) {
+            $this->redirect(SeoProjectResource::getUrl('archive'));
+        }
+    }
 
     public function getTitle(): string
     {
@@ -49,6 +63,9 @@ class EditSeoProject extends SeoEditRecord
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
+        /** @var SeoProject $record */
+        $record = $this->getRecord();
+
         $data = SeoProjectResource::normalizeProjectSiteId($data);
 
         if (! empty($data['month'])) {
@@ -63,7 +80,7 @@ class EditSeoProject extends SeoEditRecord
         app(SeoProjectTaskSyncService::class)->assertWithinMonthlyLimit($data['month'], $sanitized);
 
         $data['total_tasks'] = count($sanitized);
-        $data['status'] = $this->getRecord()->status === SeoProject::STATUS_APPROVED
+        $data['status'] = $record->status === SeoProject::STATUS_APPROVED
             ? SeoProject::STATUS_APPROVED
             : SeoProject::STATUS_MANUAL;
 
@@ -78,6 +95,7 @@ class EditSeoProject extends SeoEditRecord
 
         /** @var SeoProject $record */
         $record = $this->getRecord();
+
         $monthChanged = $record->wasChanged('month');
         $record = $record->fresh(['tasks']);
 
@@ -100,35 +118,73 @@ class EditSeoProject extends SeoEditRecord
         app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($record);
     }
 
-    protected function shouldDisableSeoFormSave(): bool
-    {
-        return false;
-    }
-
-    protected function getFormActions(): array
-    {
-        return [
-            $this->getSaveFormAction(),
-            $this->getCancelFormAction(),
-        ];
-    }
-
     protected function getHeaderActions(): array
     {
         /** @var SeoProject $record */
         $record = $this->getRecord();
 
         return [
-            SeoProjectResource::makeViewProjectArchivesPageAction($record),
-            SeoProjectResource::makeArchiveProjectPageAction($record),
-            Actions\Action::make('view_runs')
-                ->label(__('seo-content-ai::filament.projects.view_runs'))
-                ->icon('heroicon-o-queue-list')
-                ->color('gray')
-                ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($this->getRecord()))
-                ->url(fn (): string => SeoProjectResource::getRunHistoryUrl($this->getRecord())),
-            Actions\DeleteAction::make()
-                ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects()),
+            Actions\ActionGroup::make([
+                SeoProjectResource::makeViewProjectArchivesPageAction($record),
+                SeoProjectResource::makeArchiveProjectPageAction($record),
+                Actions\Action::make('view_runs')
+                    ->label(__('seo-content-ai::filament.projects.view_runs'))
+                    ->icon('heroicon-o-queue-list')
+                    ->color('gray')
+                    ->visible(fn (): bool => SeoAccessControl::canAccessContentProjectRun($this->getRecord()))
+                    ->url(fn (): string => SeoProjectResource::getRunHistoryUrl($this->getRecord())),
+                Actions\DeleteAction::make()
+                    ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects())
+                    ->requiresConfirmation()
+                    ->modalHeading(__('seo-content-ai::filament.projects.delete_heading'))
+                    ->modalDescription(__('seo-content-ai::filament.projects.delete_description'))
+                    ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.delete_submit'))
+                    ->successNotification(null)
+                    ->using(function (SeoProject $record): bool {
+                        try {
+                            $result = app(SeoProjectTaskMoveService::class)
+                                ->deleteProjectRollingBackToPreviousMonth($record);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.delete_completed'))
+                                ->body(
+                                    (int) ($result['moved'] ?? 0) > 0
+                                        ? __('seo-content-ai::filament.projects.delete_completed_rollback_body', $result)
+                                        : __('seo-content-ai::filament.projects.delete_completed_body', [
+                                            'moved' => 0,
+                                        ])
+                                )
+                                ->success()
+                                ->send();
+
+                            return true;
+                        } catch (ValidationException $exception) {
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.delete_blocked', [
+                                    'name' => (string) $record->name,
+                                ]))
+                                ->body($exception->validator->errors()->first() ?: $exception->getMessage())
+                                ->danger()
+                                ->send();
+
+                            throw $exception;
+                        } catch (\Throwable $exception) {
+                            report($exception);
+
+                            Notification::make()
+                                ->title(__('seo-content-ai::filament.projects.delete_failed'))
+                                ->body($exception->getMessage())
+                                ->danger()
+                                ->send();
+
+                            throw $exception;
+                        }
+                    }),
+            ])
+                ->icon('heroicon-m-ellipsis-vertical')
+                ->label(__('seo-content-ai::filament.projects.more_actions'))
+                ->button()
+                ->color('gray'),
         ];
     }
 

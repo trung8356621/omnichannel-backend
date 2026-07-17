@@ -101,16 +101,41 @@
                                 <p class="keyword-dictionary-drawer__list-title">{{ $article['title'] }}</p>
                             @endif
                         </div>
-                        @if (! empty($article['is_focus']))
-                            <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--info ws-badge--status">
-                                {{ __('seo-content-ai::filament.keyword.focus_short') }}
-                            </span>
-                        @else
-                            <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--success ws-badge--status">
-                                <x-filament::icon icon="heroicon-m-check-circle" class="h-3 w-3" />
-                                {{ __('seo-content-ai::filament.keyword.stat_active') }}
-                            </span>
-                        @endif
+                        <div class="keyword-dictionary-drawer__list-aside">
+                            @if (! empty($article['is_focus']))
+                                <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--info ws-badge--status">
+                                    {{ __('seo-content-ai::filament.keyword.focus_short') }}
+                                </span>
+                            @else
+                                <span class="keyword-dictionary-drawer__list-badge ws-badge ws-badge--success ws-badge--status">
+                                    <x-filament::icon icon="heroicon-m-check-circle" class="h-3 w-3" />
+                                    {{ __('seo-content-ai::filament.keyword.stat_active') }}
+                                </span>
+                            @endif
+
+                            @if ($article['can_assign_content_project'] ?? false)
+                                <button
+                                    type="button"
+                                    data-assign-article="{{ (int) ($article['id'] ?? 0) }}"
+                                    class="keyword-dictionary-drawer__project-icon keyword-dictionary-drawer__project-icon--assign"
+                                    title="{{ __('seo-content-ai::filament.article_list.assign_to_content_project') }}"
+                                    aria-label="{{ __('seo-content-ai::filament.article_list.assign_to_content_project') }}"
+                                >
+                                    <x-filament::icon icon="heroicon-m-folder-plus" class="h-4 w-4" />
+                                </button>
+                            @elseif (! empty($article['content_project_url']))
+                                <a
+                                    href="{{ $article['content_project_url'] }}"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="keyword-dictionary-drawer__project-icon keyword-dictionary-drawer__project-icon--open"
+                                    title="{{ __('seo-content-ai::filament.article_edit.open_content_project') }}"
+                                    aria-label="{{ __('seo-content-ai::filament.article_edit.open_content_project') }}"
+                                >
+                                    <x-filament::icon icon="heroicon-m-folder-open" class="h-4 w-4" />
+                                </a>
+                            @endif
+                        </div>
                     </li>
                 @endforeach
             </ul>

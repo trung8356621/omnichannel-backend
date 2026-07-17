@@ -123,4 +123,29 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $this->assertFalse(filter_var($publishBox['publish_immediately'] ?? true, FILTER_VALIDATE_BOOL));
         $this->assertNotSame('2099', $publishBox['publish_year'] ?? null);
     }
+
+    public function test_apply_publish_immediately_overrides_draft_status_in_returned_bundle(): void
+    {
+        $input = [
+            'html' => '<p>x</p>',
+            'publish_box' => [
+                'publish_immediately' => true,
+                'status' => 'draft',
+                'publish_day' => '01',
+                'publish_month' => '01',
+                'publish_year' => '2099',
+                'publish_hour' => '10',
+                'publish_minute' => '00',
+            ],
+        ];
+
+        $bundle = app(ArticleWpSyncQueueService::class)->applyPublishImmediatelyToBundle($input);
+        $publishBox = is_array($bundle['publish_box'] ?? null) ? $bundle['publish_box'] : [];
+
+        $this->assertSame('published', $publishBox['status'] ?? null);
+        $this->assertTrue(filter_var($publishBox['publish_immediately'] ?? false, FILTER_VALIDATE_BOOL));
+        $this->assertNotSame('2099', $publishBox['publish_year'] ?? null);
+        // Input không bị mutate (PHP array copy) — caller phải gán lại.
+        $this->assertSame('draft', $input['publish_box']['status'] ?? null);
+    }
 }

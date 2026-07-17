@@ -91,22 +91,39 @@ final class TaskTestInputResolver
             }
 
             $taskSiteId = (int) ($task->site_id ?? 0);
-            $rewriteContext = $this->resolve(null, $keyword, $keyword, $scopeArticles)
-                ->withProjectTaskType($task->type);
+            $articleId = (int) ($task->article_id ?? 0);
+            $rewriteContext = $this->resolve(
+                $articleId > 0 ? $articleId : null,
+                $keyword,
+                $keyword,
+                $scopeArticles,
+            )
+                ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
+                ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_KEYWORD, null);
 
             if ($rewriteContext->isNewArticle && $taskSiteId > 0) {
                 $siteOnlyScope = static fn (Builder $builder): Builder => $builder->where('site_id', $taskSiteId);
-                $siteScopedContext = $this->resolve(null, $keyword, $keyword, $siteOnlyScope)
-                    ->withProjectTaskType($task->type);
+                $siteScopedContext = $this->resolve(
+                    $articleId > 0 ? $articleId : null,
+                    $keyword,
+                    $keyword,
+                    $siteOnlyScope,
+                )
+                    ->withProjectTaskType(SeoProjectTask::TYPE_REWRITE)
+                    ->withRewriteOptions(SeoProjectTask::REWRITE_MODE_KEYWORD, null);
 
                 if (! $siteScopedContext->isNewArticle) {
                     $rewriteContext = $siteScopedContext;
                 }
             }
 
-            // Nếu không tìm thấy bài cũ (sẽ tạo bài mới), đảm bảo site đúng với task/project
-            if ($rewriteContext->siteId === null && $taskSiteId > 0) {
-                $rewriteContext = $rewriteContext->withSiteId($taskSiteId);
+            // REWRITE bắt buộc phải có bài sẵn để viết lại — TUYỆT ĐỐI không tạo bài mới.
+            if ($rewriteContext->isNewArticle || ! $rewriteContext->article instanceof SeoArticle) {
+                throw new \InvalidArgumentException(
+                    'Không tìm thấy bài viết để viết lại (task #'.(int) $task->id.', keyword: «'.$keyword.'»). '
+                    .'Hệ thống KHÔNG tạo bài mới cho hạng mục Viết lại. '
+                    .'Hãy gắn đúng bài (article_id) cho hạng mục hoặc xóa hạng mục lỗi.',
+                );
             }
 
             return $this->withProductPromptVariables($rewriteContext, $galleryDescription, $loaiSanPham);
@@ -116,11 +133,47 @@ final class TaskTestInputResolver
         $postType = SeoProjectTask::normalizePostType($task->post_type);
 
         return $this->withProductPromptVariables(
-            $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
-                ->withProjectTaskType($task->type),
+            $this->applyProjectPostType(
+                $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
+                    ->withProjectTaskType($task->type),
+                $postType,
+            ),
             $galleryDescription,
             $loaiSanPham,
         );
+    }
+
+    /**
+     * Task.post_type là nguồn sự thật cho hạng mục viết bài mới.
+     * Không để bài match nhầm (stale product/article) ghi đè context.
+     */
+    private function applyProjectPostType(TaskTestContext $context, string $postType): TaskTestContext
+    {
+        $normalized = SeoProjectTask::normalizePostType($postType);
+        $variables = $context->variables;
+        $promptVars = $this->promptSettings->promptVariables($normalized);
+        $variables = array_merge($variables, $promptVars);
+        $variables['_project_post_type'] = $normalized;
+
+        $site = null;
+        if ($context->article?->relationLoaded('site')) {
+            $site = $context->article->site;
+        } elseif ($context->siteId !== null && $context->siteId > 0) {
+            $site = Site::query()->find($context->siteId);
+        }
+
+        $variables = array_merge(
+            $variables,
+            $this->sitePromptContext->promptVariablesForSite($site instanceof Site ? $site : null),
+        );
+        $variables['tone'] = $this->sitePromptContext->resolveToneForSite(
+            $site instanceof Site ? $site : null,
+            $promptVars['tone'] ?? ($variables['tone'] ?? ''),
+        );
+
+        return $context
+            ->withVariables($variables)
+            ->withPostType($normalized);
     }
 
     private function withProductPromptVariables(
@@ -275,6 +328,8 @@ final class TaskTestInputResolver
                 $matchedBy === 'id' ? 'ID' : ($matchedBy === 'title' ? 'tiêu đề' : 'từ khóa'),
                 $postTitle !== '' ? $postTitle : ($focusKeyword !== '' ? $focusKeyword : '—'),
             ),
+            siteId: (int) ($article->site_id ?? 0) > 0 ? (int) $article->site_id : null,
+            postType: $postType,
         );
     }
 
@@ -311,23 +366,30 @@ final class TaskTestInputResolver
                 $focusKeyword = $postTitle;
             }
 
+            $normalizedPostType = SeoProjectTask::normalizePostType($postType);
+
             if ($postTitle !== '') {
                 $byTitle = $this->findArticleByTitle($postTitle);
-                if ($byTitle instanceof SeoArticle) {
+                if (
+                    $byTitle instanceof SeoArticle
+                    && $this->articleMatchesPostType($byTitle, $normalizedPostType)
+                ) {
                     return $this->contextFromArticle($byTitle, 'title');
                 }
             }
 
             if ($focusKeyword !== '') {
                 $byKeyword = $this->findArticleByKeyword($focusKeyword);
-                if ($byKeyword instanceof SeoArticle) {
+                if (
+                    $byKeyword instanceof SeoArticle
+                    && $this->articleMatchesPostType($byKeyword, $normalizedPostType)
+                ) {
                     return $this->contextFromArticle($byKeyword, 'keyword');
                 }
             }
 
             $variables = $this->baseVariables($postTitle, $focusKeyword, null);
             $site = $siteId > 0 ? Site::query()->find($siteId) : $this->mainDomain->resolveMainSite();
-            $normalizedPostType = SeoProjectTask::normalizePostType($postType);
             $promptVars = $this->promptSettings->promptVariables($normalizedPostType);
             $variables = array_merge(
                 $variables,
@@ -338,6 +400,7 @@ final class TaskTestInputResolver
                 $site instanceof Site ? $site : null,
                 $promptVars['tone'] ?? '',
             );
+            $variables['_project_post_type'] = $normalizedPostType;
 
             $label = $postTitle !== '' ? $postTitle : $focusKeyword;
             $summary = sprintf(
@@ -376,6 +439,11 @@ final class TaskTestInputResolver
         }
 
         return $variables;
+    }
+
+    private function articleMatchesPostType(SeoArticle $article, string $postType): bool
+    {
+        return ArticlePostTypeResolver::resolve($article) === SeoProjectTask::normalizePostType($postType);
     }
 
     private function findArticleByTitle(string $title): ?SeoArticle

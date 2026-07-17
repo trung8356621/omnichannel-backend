@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Http\Requests\ArticleEditorActionRequest;
+use App\Addons\SeoContentAi\Http\Requests\ArticleEditorSeoMetaRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
+use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -20,6 +22,7 @@ use Illuminate\Http\JsonResponse;
  *
  * - POST /api/seo/articles/{article}/save
  * - POST /api/seo/articles/{article}/sync-wp
+ * - POST /api/seo/articles/{article}/seo-meta
  */
 final class ArticleEditorSyncController extends Controller
 {
@@ -27,6 +30,7 @@ final class ArticleEditorSyncController extends Controller
         private readonly ArticleEditorBundleApplyService $bundleApply,
         private readonly ArticleEditorPersistService $persist,
         private readonly ArticleEditorSavePatchService $savePatch,
+        private readonly ArticleEditorSeoMetaService $seoMeta,
         private readonly ArticleWpSyncQueueService $syncQueue,
     ) {}
 
@@ -102,5 +106,23 @@ final class ArticleEditorSyncController extends Controller
         }
 
         return response()->json($result, $status);
+    }
+
+    public function saveSeoMeta(ArticleEditorSeoMetaRequest $request, SeoArticle $article): JsonResponse
+    {
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
+
+        $payload = $this->seoMeta->save(
+            $article,
+            $request->focusKeyword(),
+            $request->metaDescription(),
+            $request->slug(),
+        );
+
+        return response()->json([
+            'success' => true,
+            'message' => 'SEO fields saved',
+            ...$payload,
+        ]);
     }
 }

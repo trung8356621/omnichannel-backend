@@ -50,7 +50,9 @@ final class ArticleWpSyncQueueService
             ];
         }
 
-        $context = $this->buildContextForQueue($article, $bundle);
+        // Phải gán lại $bundle — applyPublishImmediatelyToBundle trả về bản mới (PHP array copy).
+        $bundle = $this->applyPublishImmediatelyToBundle($bundle);
+        $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
         $this->bundleApply->apply($article, $bundle, $context);
 
         $html = (string) ($bundle['html'] ?? '');
@@ -317,6 +319,35 @@ final class ArticleWpSyncQueueService
         return $bundle;
     }
 
+    /**
+     * Đăng ngay: ép publish_box.status = published (đè draft/scheduled cũ).
+     * Trả về bundle mới — caller phải gán lại (PHP array truyền theo copy).
+     *
+     * @param  array<string, mixed>  $bundle
+     * @return array<string, mixed>
+     */
+    public function applyPublishImmediatelyToBundle(array $bundle): array
+    {
+        if (! $this->resolvePublishImmediately($bundle)) {
+            return $bundle;
+        }
+
+        $now = SeoDisplayTimezone::now();
+        $publishBox = is_array($bundle['publish_box'] ?? null) ? $bundle['publish_box'] : [];
+
+        $bundle['publish_box'] = array_merge($publishBox, [
+            'publish_immediately' => true,
+            'status' => 'published',
+            'publish_day' => $now->format('d'),
+            'publish_month' => $now->format('m'),
+            'publish_year' => $now->format('Y'),
+            'publish_hour' => $now->format('H'),
+            'publish_minute' => $now->format('i'),
+        ]);
+
+        return $bundle;
+    }
+
     private function bootstrapArticleDatabase(SeoArticle $article): SeoArticle
     {
         $this->databaseConnection->bootstrapLegacySharedConnection();
@@ -330,29 +361,6 @@ final class ArticleWpSyncQueueService
         $fresh = SeoArticle::query()->find($article->getKey());
 
         return $fresh instanceof SeoArticle ? $fresh : $article;
-    }
-
-    /**
-     * @param  array<string, mixed>  $bundle
-     */
-    private function buildContextForQueue(SeoArticle $article, array $bundle): ArticleEditorSaveContext
-    {
-        $publishBox = is_array($bundle['publish_box'] ?? null) ? $bundle['publish_box'] : [];
-
-        if ($this->resolvePublishImmediately($bundle)) {
-            $scheduledAt = SeoDisplayTimezone::now()->addMinutes(5);
-            $publishBox = array_merge($publishBox, [
-                'status' => 'scheduled',
-                'publish_day' => $scheduledAt->format('d'),
-                'publish_month' => $scheduledAt->format('m'),
-                'publish_year' => $scheduledAt->format('Y'),
-                'publish_hour' => $scheduledAt->format('H'),
-                'publish_minute' => $scheduledAt->format('i'),
-            ]);
-            $bundle['publish_box'] = $publishBox;
-        }
-
-        return ArticleEditorSaveContext::fromBundle($article, $bundle);
     }
 
     /**

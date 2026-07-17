@@ -28,7 +28,12 @@ final class ArticleMarkdownToHtmlService
     }
 
     /**
-     * @return array{markdown: string, h1_title: string|null, meta_description: string|null}
+     * @return array{
+     *     markdown: string,
+     *     h1_title: string|null,
+     *     meta_description: string|null,
+     *     seo_title?: string|null
+     * }
      */
     public function prepareImport(string $markdown): array
     {

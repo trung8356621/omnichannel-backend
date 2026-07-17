@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Monitor, Smartphone, X } from 'lucide-react';
-import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import { applyArticleSeoMetaSaveResult, saveSeoMetaViaApi } from '../utils/articleEditorApi';
 import { normalizeArticleSlug } from '../utils/articleSlugUtils';
 import {
     SLUG_LENGTH_MAX,
@@ -85,6 +85,7 @@ function PreviewDeviceToggle({ device, onChange }) {
 }
 
 export default function ArticleGoogleSerpPreview({
+    articleId = 0,
     initialPreview = null,
     fallbackUrl = '#',
     skipSeoScore = false,
@@ -238,23 +239,34 @@ export default function ArticleGoogleSerpPreview({
     };
 
     const saveSeoMeta = async () => {
+        const resolvedArticleId = Number(articleId ?? 0);
+        if (resolvedArticleId <= 0) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('google_serp_save_failed'),
+                        body: t('google_serp_try_again'),
+                        status: 'danger',
+                    },
+                }),
+            );
+
+            return;
+        }
+
         setSaving(true);
 
         try {
-            const result = await callEditArticleLivewire(
-                'updateSeoMetaFromEditor',
-                draftFocusKeyword,
-                draftDescription,
-                draftSlug,
-            );
+            const result = await saveSeoMetaViaApi(resolvedArticleId, {
+                focus_keyword: draftFocusKeyword,
+                meta_description: draftDescription,
+                slug: draftSlug,
+            });
+
+            applyArticleSeoMetaSaveResult(result);
             applyPreview(result?.google_serp_preview ?? result);
             if (result?.focus_keyword != null) {
                 setFocusKeyword(String(result.focus_keyword).trim());
-                window.dispatchEvent(
-                    new CustomEvent('seo-focus-keyword-updated', {
-                        detail: { focus_keyword: result.focus_keyword },
-                    }),
-                );
             }
             if (result?.article_slug != null) {
                 setArticleSlug(String(result.article_slug).trim());

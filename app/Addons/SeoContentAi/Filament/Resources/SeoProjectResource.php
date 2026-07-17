@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordAiGeneratorService;
 use App\Addons\SeoContentAi\Services\SeoProjectKeywordListParser;
 use App\Addons\SeoContentAi\Services\SeoProjectRunPreflightService;
+use App\Addons\SeoContentAi\Services\SeoProjectTaskMoveService;
 use App\Addons\SeoContentAi\Services\SeoProjectTaskSyncService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -92,6 +93,10 @@ class SeoProjectResource extends SeoPanelResource
 
     public static function canDelete(\Illuminate\Database\Eloquent\Model $record): bool
     {
+        if ($record instanceof SeoProject && $record->isArchive()) {
+            return false;
+        }
+
         return static::allowsSeoPanelMutation()
             && SeoAccessControl::canAccessPlannerFeatures();
     }
@@ -114,34 +119,7 @@ class SeoProjectResource extends SeoPanelResource
     public static function form(Form $form): Form
     {
         return $form
-            ->schema([
-                Forms\Components\Tabs::make('project_workspace_tabs')
-                    ->id(self::PROJECT_WORKSPACE_TABS_ID)
-                    ->tabs([
-                        Forms\Components\Tabs\Tab::make('current')
-                            ->label(__('seo-content-ai::filament.projects.tab_current_articles'))
-                            ->schema(static::currentArticlesFormSchema()),
-                        Forms\Components\Tabs\Tab::make('archives')
-                            ->label(fn (?SeoProject $record): string => $record instanceof SeoProject
-                                ? __('seo-content-ai::filament.projects.tab_archives_count', [
-                                    'count' => static::archivesCountFor($record),
-                                ])
-                                : __('seo-content-ai::filament.projects.tab_archives'))
-                            ->visible(fn (?SeoProject $record): bool => $record instanceof SeoProject
-                                && SeoAccessControl::canViewProjectArchives())
-                            ->schema([
-                                Forms\Components\View::make('seo-content-ai::filament.resources.seo-project-resource.partials.archives-tab')
-                                    ->viewData(fn (?SeoProject $record): array => [
-                                        'batches' => $record instanceof SeoProject
-                                            ? app(SeoProjectArchiveService::class)->batchesForProject($record)
-                                            : collect(),
-                                    ]),
-                            ]),
-                    ])
-                    ->activeTab(fn (): int => static::resolveWorkspaceTabIndex())
-                    ->persistTabInQueryString('tab')
-                    ->columnSpanFull(),
-            ]);
+            ->schema(static::currentArticlesFormSchema());
     }
 
     /**
@@ -152,12 +130,24 @@ class SeoProjectResource extends SeoPanelResource
         return [
             Forms\Components\Section::make(__('seo-content-ai::filament.projects.project_info'))
                 ->schema([
+                    Forms\Components\Placeholder::make('archive_kind_banner')
+                        ->label(__('seo-content-ai::filament.projects.archive_project_badge'))
+                        ->content(__('seo-content-ai::filament.projects.archive_project_banner'))
+                        ->visible(fn (?SeoProject $record): bool => $record instanceof SeoProject && $record->isArchive())
+                        ->columnSpanFull(),
+
                     Forms\Components\Placeholder::make('project_name_preview')
                         ->label(__('seo-content-ai::filament.projects.project_name'))
                         ->content(
-                            fn (Get $get): string => $get('month')
-                                ? SeoProject::defaultNameFromMonth($get('month'))
-                                : __('seo-content-ai::filament.projects.project_name_placeholder'),
+                            function (Get $get, ?SeoProject $record): string {
+                                if ($record instanceof SeoProject && $record->isArchive()) {
+                                    return (string) $record->name;
+                                }
+
+                                return $get('month')
+                                    ? SeoProject::defaultNameFromMonth($get('month'))
+                                    : __('seo-content-ai::filament.projects.project_name_placeholder');
+                            },
                         )
                         ->columnSpanFull(),
 
@@ -180,6 +170,8 @@ class SeoProjectResource extends SeoPanelResource
                         ->required()
                         ->native(false)
                         ->live()
+                        ->disabled(fn (?SeoProject $record): bool => $record instanceof SeoProject && $record->isArchive())
+                        ->dehydrated()
                         ->dehydrateStateUsing(fn (mixed $state): ?int => $state !== null && $state !== ''
                             ? (int) $state
                             : null),
@@ -191,10 +183,16 @@ class SeoProjectResource extends SeoPanelResource
                         ->format('Y-m-d')
                         ->default(fn (): string => now()->startOfMonth()->format('Y-m-d'))
                         ->required()
-                        ->live(),
+                        ->live()
+                        ->visible(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
+                        ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive())),
 
                     Forms\Components\Hidden::make('status')
                         ->default(SeoProject::STATUS_MANUAL)
+                        ->dehydrated(),
+
+                    Forms\Components\Hidden::make('kind')
+                        ->default(SeoProject::KIND_MONTHLY)
                         ->dehydrated(),
 
                     Forms\Components\Placeholder::make('status_display')
@@ -211,11 +209,24 @@ class SeoProjectResource extends SeoPanelResource
                 ->columns(2),
 
             Forms\Components\Section::make(__('seo-content-ai::filament.projects.article_keyword_list'))
-                ->description(__('seo-content-ai::filament.projects.article_keyword_list_description'))
+                ->description(fn (?SeoProject $record): string => $record instanceof SeoProject && $record->isArchive()
+                    ? __('seo-content-ai::filament.projects.archive_article_list_description')
+                    : __('seo-content-ai::filament.projects.article_keyword_list_description'))
                 ->schema([
                     Forms\Components\Placeholder::make('month_limit_hint')
-                        ->label(__('seo-content-ai::filament.projects.month_limit'))
-                        ->content(function (Get $get): string {
+                        ->label(fn (?SeoProject $record): string => $record instanceof SeoProject && $record->isArchive()
+                            ? __('seo-content-ai::filament.projects.archive_capacity_label')
+                            : __('seo-content-ai::filament.projects.month_limit'))
+                        ->content(function (Get $get, ?SeoProject $record): string {
+                            $count = app(SeoProjectTaskSyncService::class)
+                                ->countEffectiveTasks(is_array($get('tasks_data')) ? $get('tasks_data') : []);
+
+                            if ($record instanceof SeoProject && $record->isArchive()) {
+                                return __('seo-content-ai::filament.projects.archive_capacity_hint', [
+                                    'count' => $count,
+                                ]);
+                            }
+
                             $month = $get('month');
                             if (! $month) {
                                 return __('seo-content-ai::filament.projects.choose_month_to_view_limit');
@@ -223,8 +234,6 @@ class SeoProjectResource extends SeoPanelResource
 
                             $carbon = Carbon::parse($month)->startOfMonth();
                             $max = $carbon->daysInMonth;
-                            $count = app(SeoProjectTaskSyncService::class)
-                                ->countEffectiveTasks(is_array($get('tasks_data')) ? $get('tasks_data') : []);
                             $monthOpen = now()->lte($carbon->copy()->endOfMonth()->endOfDay());
 
                             return __('seo-content-ai::filament.projects.month_limit_hint', [
@@ -289,6 +298,18 @@ class SeoProjectResource extends SeoPanelResource
                     Forms\Components\Repeater::make('tasks_data')
                         ->label(__('seo-content-ai::filament.projects.article_items'))
                         ->schema([
+                            Forms\Components\Hidden::make('id'),
+
+                            Forms\Components\Placeholder::make('connected_at_display')
+                                ->label(__('seo-content-ai::filament.projects.connected_at'))
+                                ->content(fn (Get $get): string => static::formatTaskTimestamp($get('connected_at')))
+                                ->visible(fn (?SeoProject $record): bool => $record instanceof SeoProject && $record->isArchive()),
+
+                            Forms\Components\Placeholder::make('completed_at_display')
+                                ->label(__('seo-content-ai::filament.projects.completed_at'))
+                                ->content(fn (Get $get): string => static::formatTaskTimestamp($get('completed_at')))
+                                ->visible(fn (?SeoProject $record): bool => $record instanceof SeoProject && $record->isArchive()),
+
                             Forms\Components\Select::make('type')
                                 ->label(__('seo-content-ai::filament.projects.article_type'))
                                 ->options(SeoProjectTask::typeOptions())
@@ -407,7 +428,90 @@ class SeoProjectResource extends SeoPanelResource
                         ->reorderable()
                         ->collapsible()
                         ->collapsed()
-                        ->itemLabel(function (array $state): ?string {
+                        ->extraItemActions([
+                            Action::make('move_task')
+                                ->label(__('seo-content-ai::filament.projects.move_task'))
+                                ->icon('heroicon-m-arrows-right-left')
+                                ->color('gray')
+                                ->visible(fn (?SeoProject $record): bool => $record instanceof SeoProject
+                                    && SeoAccessControl::canMutateContentProjects())
+                                ->modalHeading(__('seo-content-ai::filament.projects.move_task_heading'))
+                                ->modalDescription(__('seo-content-ai::filament.projects.move_task_description'))
+                                ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.move_task_submit'))
+                                ->form(function (?SeoProject $record): array {
+                                    if (! $record instanceof SeoProject) {
+                                        return [];
+                                    }
+
+                                    return [
+                                        Forms\Components\Select::make('target_project_id')
+                                            ->label(__('seo-content-ai::filament.projects.move_target'))
+                                            ->options(app(SeoProjectTaskMoveService::class)->moveTargetOptions($record))
+                                            ->searchable()
+                                            ->required()
+                                            ->native(false),
+                                    ];
+                                })
+                                ->action(function (array $arguments, array $data, Forms\Components\Repeater $component, ?SeoProject $record): void {
+                                    if (! $record instanceof SeoProject) {
+                                        return;
+                                    }
+
+                                    $itemKey = (string) ($arguments['item'] ?? '');
+                                    $items = $component->getState();
+                                    $itemData = is_array($items[$itemKey] ?? null) ? $items[$itemKey] : [];
+                                    $taskId = (int) ($itemData['id'] ?? 0);
+
+                                    if ($taskId <= 0) {
+                                        Notification::make()
+                                            ->title(__('seo-content-ai::filament.projects.move_task_save_first'))
+                                            ->warning()
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    $targetId = (int) ($data['target_project_id'] ?? 0);
+                                    $target = SeoProject::query()->find($targetId);
+                                    if (! $target instanceof SeoProject) {
+                                        Notification::make()
+                                            ->title(__('seo-content-ai::filament.projects.move_failed'))
+                                            ->danger()
+                                            ->send();
+
+                                        return;
+                                    }
+
+                                    try {
+                                        $result = app(SeoProjectTaskMoveService::class)
+                                            ->moveTasksToProject($record, $target, [$taskId]);
+
+                                        unset($items[$itemKey]);
+                                        $component->state($items);
+
+                                        Notification::make()
+                                            ->title(__('seo-content-ai::filament.projects.move_completed'))
+                                            ->body(__('seo-content-ai::filament.projects.move_completed_body', $result))
+                                            ->success()
+                                            ->send();
+                                    } catch (ValidationException $exception) {
+                                        Notification::make()
+                                            ->title(__('seo-content-ai::filament.projects.move_failed'))
+                                            ->body($exception->validator->errors()->first() ?: $exception->getMessage())
+                                            ->danger()
+                                            ->send();
+                                    } catch (\Throwable $exception) {
+                                        report($exception);
+
+                                        Notification::make()
+                                            ->title(__('seo-content-ai::filament.projects.move_failed'))
+                                            ->body($exception->getMessage())
+                                            ->danger()
+                                            ->send();
+                                    }
+                                }),
+                        ])
+                        ->itemLabel(function (array $state, ?SeoProject $record): ?string {
                             $type = $state['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD;
                             $content = trim((string) ($state['source_content'] ?? ''));
 
@@ -431,12 +535,27 @@ class SeoProjectResource extends SeoPanelResource
                                 $prefix = '['.($postTypeLabels[$postType] ?? 'Article').']';
                             }
 
-                            return $content !== '' ? "{$prefix} {$content}" : __('seo-content-ai::filament.projects.article_items');
+                            $label = $content !== '' ? "{$prefix} {$content}" : __('seo-content-ai::filament.projects.article_items');
+
+                            if ($record instanceof SeoProject && $record->isArchive()) {
+                                $connected = static::formatTaskTimestamp($state['connected_at'] ?? null);
+                                $completed = static::formatTaskTimestamp($state['completed_at'] ?? null);
+                                $label .= ' · '.__('seo-content-ai::filament.projects.archive_item_timestamps', [
+                                    'connected' => $connected,
+                                    'completed' => $completed,
+                                ]);
+                            }
+
+                            return $label;
                         })
                         ->live()
                         ->columnSpanFull()
                         ->rules([
-                            fn (Get $get): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get): void {
+                            fn (Get $get, ?SeoProject $record): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get, $record): void {
+                                if ($record instanceof SeoProject && $record->isArchive()) {
+                                    return;
+                                }
+
                                 $month = $get('month');
                                 if (! $month) {
                                     return;
@@ -557,60 +676,116 @@ class SeoProjectResource extends SeoPanelResource
                     }),
             ])
             ->actions([
-                Tables\Actions\Action::make('view_runs')
-                    ->label(__('seo-content-ai::filament.projects.view_runs'))
-                    ->icon('heroicon-o-queue-list')
-                    ->color('gray')
-                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
-                    ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
-                Tables\Actions\Action::make('view_archives')
-                    ->label(fn (SeoProject $record): string => __('seo-content-ai::filament.projects.view_archives', [
-                        'count' => (int) ($record->archives_count ?? static::archivesCountFor($record)),
-                    ]))
-                    ->icon('heroicon-o-archive-box')
-                    ->color('gray')
-                    ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives())
-                    ->url(fn (SeoProject $record): string => static::projectArchivesUrl($record)),
-                Tables\Actions\Action::make('archive_project_articles')
-                    ->label(__('seo-content-ai::filament.projects.archive_project'))
-                    ->icon('heroicon-o-archive-box')
-                    ->color('warning')
-                    ->visible(fn (SeoProject $record): bool => SeoAccessControl::canArchiveContentProjects()
-                        && (int) ($record->active_articles_count ?? 0) > 0)
-                    ->modalHeading(__('seo-content-ai::filament.projects.archive_project_heading'))
-                    ->modalDescription(__('seo-content-ai::filament.projects.archive_project_description'))
-                    ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))
-                    ->form([
-                        Forms\Components\Textarea::make('note')
-                            ->label(__('seo-content-ai::filament.projects.archive_note'))
-                            ->placeholder(__('seo-content-ai::filament.projects.archive_note_placeholder'))
-                            ->rows(2)
-                            ->maxLength(500),
-                    ])
-                    ->action(function (SeoProject $record, array $data): void {
-                        try {
-                            $result = app(SeoProjectArchiveService::class)
-                                ->archiveProject(
-                                    $record,
-                                    (int) auth()->id(),
-                                    isset($data['note']) ? (string) $data['note'] : null,
-                                );
+                Tables\Actions\ActionGroup::make([
+                    Tables\Actions\Action::make('view_runs')
+                        ->label(__('seo-content-ai::filament.projects.view_runs'))
+                        ->icon('heroicon-o-queue-list')
+                        ->color('gray')
+                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canAccessContentProjectRun($record))
+                        ->url(fn (SeoProject $record): string => static::getRunHistoryUrl($record)),
+                    Tables\Actions\Action::make('view_archives')
+                        ->label(fn (SeoProject $record): string => __('seo-content-ai::filament.projects.view_archives', [
+                            'count' => (int) ($record->archives_count ?? static::archivesCountFor($record)),
+                        ]))
+                        ->icon('heroicon-o-archive-box')
+                        ->color('gray')
+                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canViewProjectArchives()
+                            && ! $record->isArchive()
+                            && (int) ($record->site_id ?? 0) > 0)
+                        ->url(fn (SeoProject $record): string => static::projectArchivesUrl($record)),
+                    Tables\Actions\Action::make('archive_project_articles')
+                        ->label(__('seo-content-ai::filament.projects.archive_project'))
+                        ->icon('heroicon-o-archive-box')
+                        ->color('warning')
+                        ->visible(fn (SeoProject $record): bool => SeoAccessControl::canArchiveContentProjects()
+                            && ! $record->isArchive()
+                            && (int) ($record->active_articles_count ?? 0) > 0)
+                        ->modalHeading(__('seo-content-ai::filament.projects.archive_project_heading'))
+                        ->modalDescription(__('seo-content-ai::filament.projects.archive_project_description'))
+                        ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.archive_project_submit'))
+                        ->form([
+                            Forms\Components\Textarea::make('note')
+                                ->label(__('seo-content-ai::filament.projects.archive_note'))
+                                ->placeholder(__('seo-content-ai::filament.projects.archive_note_placeholder'))
+                                ->rows(2)
+                                ->maxLength(500),
+                        ])
+                        ->action(function (SeoProject $record, array $data): void {
+                            try {
+                                $result = app(SeoProjectArchiveService::class)
+                                    ->archiveProject(
+                                        $record,
+                                        (int) auth()->id(),
+                                        isset($data['note']) ? (string) $data['note'] : null,
+                                    );
 
-                            Notification::make()
-                                ->title(__('seo-content-ai::filament.projects.archive_completed'))
-                                ->body(__('seo-content-ai::filament.projects.archive_completed_body', $result))
-                                ->success()
-                                ->send();
-                        } catch (\Throwable $exception) {
-                            report($exception);
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.archive_completed'))
+                                    ->body(__('seo-content-ai::filament.projects.archive_completed_body', $result))
+                                    ->success()
+                                    ->send();
+                            } catch (\Throwable $exception) {
+                                report($exception);
 
-                            Notification::make()
-                                ->title(__('seo-content-ai::filament.projects.archive_failed'))
-                                ->body($exception->getMessage())
-                                ->danger()
-                                ->send();
-                        }
-                    }),
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.archive_failed'))
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+                            }
+                        }),
+                    Tables\Actions\DeleteAction::make()
+                        ->visible(fn (SeoProject $record): bool => static::canDelete($record))
+                        ->requiresConfirmation()
+                        ->modalHeading(__('seo-content-ai::filament.projects.delete_heading'))
+                        ->modalDescription(__('seo-content-ai::filament.projects.delete_description'))
+                        ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.delete_submit'))
+                        ->successNotification(null)
+                        ->using(function (SeoProject $record): bool {
+                            try {
+                                $result = app(SeoProjectTaskMoveService::class)
+                                    ->deleteProjectRollingBackToPreviousMonth($record);
+
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.delete_completed'))
+                                    ->body(
+                                        (int) ($result['moved'] ?? 0) > 0
+                                            ? __('seo-content-ai::filament.projects.delete_completed_rollback_body', $result)
+                                            : __('seo-content-ai::filament.projects.delete_completed_body', [
+                                                'moved' => 0,
+                                            ])
+                                    )
+                                    ->success()
+                                    ->send();
+
+                                return true;
+                            } catch (ValidationException $exception) {
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.delete_blocked', [
+                                        'name' => (string) $record->name,
+                                    ]))
+                                    ->body($exception->validator->errors()->first() ?: $exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
+                                throw $exception;
+                            } catch (\Throwable $exception) {
+                                report($exception);
+
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.delete_failed'))
+                                    ->body($exception->getMessage())
+                                    ->danger()
+                                    ->send();
+
+                                throw $exception;
+                            }
+                        }),
+                ])
+                    ->icon('heroicon-m-ellipsis-vertical')
+                    ->tooltip(__('seo-content-ai::filament.projects.more_actions'))
+                    ->button()
+                    ->color('gray'),
                 Tables\Actions\ViewAction::make()
                     ->visible(fn (SeoProject $record): bool => static::canView($record) && ! static::canEdit($record)),
                 Tables\Actions\EditAction::make()
@@ -619,7 +794,54 @@ class SeoProjectResource extends SeoPanelResource
             ->bulkActions(static::seoPanelBulkActions([
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make()
-                        ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects()),
+                        ->visible(fn (): bool => SeoAccessControl::canMutateContentProjects())
+                        ->requiresConfirmation()
+                        ->modalHeading(__('seo-content-ai::filament.projects.delete_heading'))
+                        ->modalDescription(__('seo-content-ai::filament.projects.delete_description'))
+                        ->modalSubmitActionLabel(__('seo-content-ai::filament.projects.delete_submit'))
+                        ->action(function (\Illuminate\Support\Collection $records): void {
+                            $movedTotal = 0;
+                            $failed = 0;
+
+                            foreach ($records as $record) {
+                                if (! $record instanceof SeoProject) {
+                                    continue;
+                                }
+
+                                try {
+                                    $result = app(SeoProjectTaskMoveService::class)
+                                        ->deleteProjectRollingBackToPreviousMonth($record);
+                                    $movedTotal += (int) ($result['moved'] ?? 0);
+                                } catch (ValidationException $exception) {
+                                    $failed++;
+                                    Notification::make()
+                                        ->title(__('seo-content-ai::filament.projects.delete_blocked', [
+                                            'name' => (string) $record->name,
+                                        ]))
+                                        ->body($exception->validator->errors()->first() ?: $exception->getMessage())
+                                        ->danger()
+                                        ->send();
+                                } catch (\Throwable $exception) {
+                                    $failed++;
+                                    report($exception);
+                                    Notification::make()
+                                        ->title(__('seo-content-ai::filament.projects.delete_failed'))
+                                        ->body($exception->getMessage())
+                                        ->danger()
+                                        ->send();
+                                }
+                            }
+
+                            if ($failed === 0) {
+                                Notification::make()
+                                    ->title(__('seo-content-ai::filament.projects.delete_completed'))
+                                    ->body(__('seo-content-ai::filament.projects.delete_completed_body', [
+                                        'moved' => $movedTotal,
+                                    ]))
+                                    ->success()
+                                    ->send();
+                            }
+                        }),
                 ]),
             ]));
     }
@@ -636,7 +858,6 @@ class SeoProjectResource extends SeoPanelResource
                     'tasks as active_articles_count' => static fn (Builder $sub): Builder => $sub
                         ->whereNotNull('article_id')
                         ->where('article_id', '>', 0),
-                    'archives as archives_count',
                 ]),
         );
 
@@ -683,6 +904,7 @@ class SeoProjectResource extends SeoPanelResource
         return [
             'index' => Pages\ListSeoProjects::route('/'),
             'create' => Pages\CreateSeoProject::route('/create'),
+            'archive' => Pages\ContentProjectArchive::route('/archive'),
             'run-history' => Pages\ListSeoProjectRuns::route('/{record}/runs'),
             'view-run-step' => Pages\ViewSeoProjectRunStep::route('/runs/{run}/items/{article}'),
             'view-run' => Pages\ViewSeoProjectRun::route('/runs/{run}'),
@@ -701,39 +923,32 @@ class SeoProjectResource extends SeoPanelResource
         return self::PROJECT_WORKSPACE_TABS_ID.'-'.$tabKey.'-tab';
     }
 
-    public static function resolveWorkspaceTabIndex(): int
-    {
-        $requested = (string) request()->query('tab', '');
-
-        if (in_array($requested, [
-            static::workspaceTabQueryValue('archives'),
-            'archives',
-            '-archives-tab',
-        ], true)) {
-            return 2;
-        }
-
-        return 1;
-    }
-
     public static function projectArchivesUrl(SeoProject $project): string
     {
-        return static::projectRecordUrl($project).'?'.http_build_query([
-            'tab' => static::workspaceTabQueryValue('archives'),
-        ]);
+        return static::getUrl('archive');
     }
 
     public static function archivesCountFor(SeoProject $project): int
     {
-        if (array_key_exists('archives_count', $project->getAttributes())) {
-            return (int) $project->archives_count;
+        $siteId = (int) ($project->site_id ?? 0);
+        if ($siteId <= 0) {
+            return 0;
         }
 
-        if ($project->relationLoaded('archives')) {
-            return $project->archives->count();
+        return app(SeoProjectArchiveService::class)->countForSite($siteId);
+    }
+
+    public static function formatTaskTimestamp(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '—';
         }
 
-        return (int) $project->archives()->count();
+        try {
+            return Carbon::parse((string) $value)->format('d/m/Y H:i');
+        } catch (\Throwable) {
+            return '—';
+        }
     }
 
     public static function makeViewProjectArchivesPageAction(SeoProject $project): \Filament\Actions\Action
@@ -744,7 +959,9 @@ class SeoProjectResource extends SeoPanelResource
             ]))
             ->icon('heroicon-o-archive-box')
             ->color('gray')
-            ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives())
+            ->visible(fn (): bool => SeoAccessControl::canViewProjectArchives()
+                && ! $project->isArchive()
+                && (int) ($project->site_id ?? 0) > 0)
             ->url(static::projectArchivesUrl($project));
     }
 
@@ -755,6 +972,7 @@ class SeoProjectResource extends SeoPanelResource
             ->icon('heroicon-o-archive-box')
             ->color('warning')
             ->visible(fn (): bool => SeoAccessControl::canArchiveContentProjects()
+                && ! $project->isArchive()
                 && $project->activeArticleCount() > 0)
             ->modalHeading(__('seo-content-ai::filament.projects.archive_project_heading'))
             ->modalDescription(__('seo-content-ai::filament.projects.archive_project_description'))

@@ -52,7 +52,10 @@ class SeoProjectTask extends Model
     protected $casts = [
         'site_id' => 'integer',
         'article_id' => 'integer',
+        'archived_from_project_id' => 'integer',
         'target_date' => 'date',
+        'connected_at' => 'datetime',
+        'completed_at' => 'datetime',
     ];
 
     public function site(): BelongsTo

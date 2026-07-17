@@ -21,6 +21,7 @@ import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
     finishArticleEditorApiAction,
+    patchPermalinkDisplay,
     saveArticleViaApi,
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
@@ -32,6 +33,7 @@ import {
 import {
     appendProductAlbumItems,
     loadProductAlbum,
+    mergeProductAlbumBootstrap,
     normalizeProductAlbumList,
     persistProductAlbumDraftToServer,
     removeProductAlbumItem,
@@ -47,6 +49,17 @@ import {
     saveWpCategoryIds,
 } from './utils/articleWpCategoriesStorage';
 installArticleAutosaveLock();
+
+window.addEventListener('seo-editor-slug-updated', (event) => {
+    const detail = event?.detail ?? {};
+    patchPermalinkDisplay({
+        permalink: detail.permalink,
+        article_slug: detail.article_slug ?? detail.slug,
+        slug: detail.slug,
+        permalink_base: detail.permalink_base,
+        permalink_suffix: detail.permalink_suffix,
+    });
+});
 
 window.normalizeArticleSlug = normalizeArticleSlug;
 window.__seoClearArticleLocalState = clearArticleLocalState;
@@ -603,7 +616,7 @@ function mountArticleEditorPage() {
     } = bootstrap;
 
     if (articleId && initialProductGallery.length > 0) {
-        saveProductAlbum(articleId, initialProductGallery);
+        saveProductAlbum(articleId, mergeProductAlbumBootstrap(initialProductGallery, articleId));
     }
 
     const scoringRules = Array.isArray(editorSettings?.seo_scoring_rules) && editorSettings.seo_scoring_rules.length > 0

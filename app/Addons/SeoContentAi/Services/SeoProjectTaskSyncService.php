@@ -70,7 +70,9 @@ final class SeoProjectTaskSyncService
         $sanitized = $this->sanitizeTasksData($tasksData, $project->site_id !== null ? (int) $project->site_id : null);
         $carbonMonth = $project->monthCarbon();
 
-        $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
+        if (! $project->isArchive()) {
+            $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
+        }
 
         $existing = $project->tasks()
             ->get()
@@ -114,6 +116,17 @@ final class SeoProjectTaskSyncService
                     );
                 }
 
+                $connectedAt = $previous?->connected_at;
+                if ($connectedAt === null && $articleId !== null) {
+                    $connectedAt = now();
+                }
+
+                $completedAt = $previous?->completed_at;
+                $status = $previous?->status ?? SeoProjectTask::STATUS_PENDING;
+                if ($completedAt === null && $status === SeoProjectTask::STATUS_COMPLETED) {
+                    $completedAt = $previous?->updated_at ?? now();
+                }
+
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
                     'article_id' => $articleId,
@@ -124,8 +137,13 @@ final class SeoProjectTaskSyncService
                     'description' => $task['description'] ?? null,
                     'rewrite_mode' => $task['rewrite_mode'] ?? $previous?->rewrite_mode ?? SeoProjectTask::REWRITE_MODE_KEYWORD,
                     'rewrite_notes' => $task['rewrite_notes'] ?? $previous?->rewrite_notes,
-                    'target_date' => $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
-                    'status' => $previous?->status ?? SeoProjectTask::STATUS_PENDING,
+                    'target_date' => $project->isArchive()
+                        ? Carbon::parse(SeoProject::archiveSentinelMonth())->addDays(min($index, 36000))->format('Y-m-d')
+                        : $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
+                    'status' => $status,
+                    'connected_at' => $connectedAt,
+                    'completed_at' => $completedAt,
+                    'archived_from_project_id' => $previous?->archived_from_project_id,
                 ]);
             }
 
@@ -307,6 +325,7 @@ final class SeoProjectTaskSyncService
             ->orderBy('id')
             ->get()
             ->map(fn (SeoProjectTask $task): array => [
+                'id' => (int) $task->id,
                 'site_id' => $task->site_id !== null ? (int) $task->site_id : null,
                 'type' => $task->type,
                 'source_content' => $task->source_content,
@@ -327,6 +346,8 @@ final class SeoProjectTaskSyncService
                 'rewrite_notes' => $task->type === SeoProjectTask::TYPE_REWRITE
                     ? $task->rewrite_notes
                     : null,
+                'connected_at' => $task->connected_at?->format('Y-m-d H:i:s'),
+                'completed_at' => $task->completed_at?->format('Y-m-d H:i:s'),
             ])
             ->all();
     }

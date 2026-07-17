@@ -364,6 +364,20 @@ function createKeywordDetailPanel(root, config) {
     });
 
     contentEl?.addEventListener('click', (event) => {
+        const assignArticleButton = event.target.closest('[data-assign-article]');
+        if (assignArticleButton) {
+            event.preventDefault();
+
+            const articleId = Number(assignArticleButton.dataset.assignArticle);
+            if (!Number.isFinite(articleId) || articleId <= 0) {
+                return;
+            }
+
+            resolveLivewireComponent(config)?.call('mountAction', 'assignArticleToContentProject', { articleId });
+
+            return;
+        }
+
         const assignButton = event.target.closest('[data-assign-link-map]');
         if (!assignButton) {
             return;

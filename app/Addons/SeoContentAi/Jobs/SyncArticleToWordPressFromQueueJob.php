@@ -71,6 +71,13 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
             $queueService->markProcessing($article);
 
             try {
+                $queueMeta = $queueService->readQueueMeta($article);
+                if (filter_var($queueMeta['publish_immediately'] ?? false, FILTER_VALIDATE_BOOL)) {
+                    $publishBox = is_array($bundle['publish_box'] ?? null) ? $bundle['publish_box'] : [];
+                    $publishBox['publish_immediately'] = true;
+                    $bundle['publish_box'] = $publishBox;
+                }
+
                 $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle, fromQueue: true);
 
                 if (! ($result['success'] ?? false)) {

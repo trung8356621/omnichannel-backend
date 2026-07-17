@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
 final class KeywordLinkDetailPanelPresenter
 {
@@ -78,7 +79,15 @@ final class KeywordLinkDetailPanelPresenter
     }
 
     /**
-     * @return list<array{id: int, title: string, wp_url: string|null, edit_url: string|null, is_focus: bool}>
+     * @return list<array{
+     *     id: int,
+     *     title: string,
+     *     wp_url: string|null,
+     *     edit_url: string|null,
+     *     is_focus: bool,
+     *     can_assign_content_project: bool,
+     *     content_project_url: string|null
+     * }>
      */
     public function buildLinkedSourceArticles(Keyword $keyword): array
     {
@@ -118,13 +127,13 @@ final class KeywordLinkDetailPanelPresenter
             $title = trim((string) ($sourceArticle->title ?? ''))
                 ?: KeywordResource::resolveLinkMapSourceLabel($sourceArticle);
 
-            $items[] = [
-                'id' => $articleId,
-                'title' => $title,
-                'wp_url' => $resolver->resolveArticlePublicUrl($sourceArticle),
-                'edit_url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
-                'is_focus' => $focusArticleIds->contains($articleId),
-            ];
+            $items[] = $this->presentLinkedSourceArticle(
+                $sourceArticle,
+                $articleId,
+                $title,
+                $resolver,
+                $focusArticleIds->contains($articleId),
+            );
         }
 
         if ($keyword->relationLoaded('mainArticles')) {
@@ -142,17 +151,55 @@ final class KeywordLinkDetailPanelPresenter
                 $title = trim((string) ($focusArticle->title ?? ''))
                     ?: KeywordResource::resolveLinkMapSourceLabel($focusArticle);
 
-                $items[] = [
-                    'id' => $articleId,
-                    'title' => $title,
-                    'wp_url' => $resolver->resolveArticlePublicUrl($focusArticle),
-                    'edit_url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
-                    'is_focus' => true,
-                ];
+                $items[] = $this->presentLinkedSourceArticle(
+                    $focusArticle,
+                    $articleId,
+                    $title,
+                    $resolver,
+                    true,
+                );
             }
         }
 
         return $items;
+    }
+
+    /**
+     * @return array{
+     *     id: int,
+     *     title: string,
+     *     wp_url: string|null,
+     *     edit_url: string|null,
+     *     is_focus: bool,
+     *     can_assign_content_project: bool,
+     *     content_project_url: string|null
+     * }
+     */
+    private function presentLinkedSourceArticle(
+        SeoArticle $article,
+        int $articleId,
+        string $title,
+        KeywordLinkTargetResolver $resolver,
+        bool $isFocus,
+    ): array {
+        $canAssign = $this->canAssignLinkedArticleToContentProject($article);
+
+        return [
+            'id' => $articleId,
+            'title' => $title,
+            'wp_url' => $resolver->resolveArticlePublicUrl($article),
+            'edit_url' => ArticleResource::getUrl('edit', ['record' => $articleId]),
+            'is_focus' => $isFocus,
+            'can_assign_content_project' => $canAssign,
+            'content_project_url' => $canAssign ? null : ArticleResource::articleContentProjectUrl($article),
+        ];
+    }
+
+    private function canAssignLinkedArticleToContentProject(SeoArticle $article): bool
+    {
+        return SeoAccessControl::canMutateInSeoPanel()
+            && ! ArticleResource::articleIsInContentProject($article)
+            && ! ArticleResource::articleIsContentArchived($article);
     }
 
     /**

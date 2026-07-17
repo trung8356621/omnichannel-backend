@@ -2,7 +2,7 @@
     <span>{{ $title }}</span>
     <button
         type="button"
-        class="inline-flex items-center gap-2 rounded-lg bg-danger-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-danger-500 disabled:cursor-not-allowed disabled:opacity-60"
+        class="seo-run-stop-button inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
         x-data
         x-cloak
         x-show="$store.seoRunQueue.isRunning"

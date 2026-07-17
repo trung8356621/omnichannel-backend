@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
 use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use DOMDocument;
+use DOMElement;
 use Illuminate\Support\Str;
 
 final class SeoScoringEngine
@@ -248,21 +249,16 @@ final class SeoScoringEngine
         ];
 
         foreach ($dom->getElementsByTagName('table') as $table) {
-            $rows = $table->getElementsByTagName('tr');
-            if ($rows->length === 0) {
+            if (! $table instanceof DOMElement || ! $this->isTopLevelHtmlTable($table)) {
                 continue;
             }
 
-            $firstRow = $rows->item(0);
-            $columns = $firstRow?->getElementsByTagName('th')->length
-                + $firstRow?->getElementsByTagName('td')->length;
-            if ($columns < $minCols || $columns > $maxCols) {
+            $metrics = $this->htmlTableFeaturedSnippetMetrics($table, $minCols, $maxCols);
+            if ($metrics === null) {
                 continue;
             }
 
-            $hasHeader = $firstRow?->getElementsByTagName('th')->length > 0;
-            $dataRows = $hasHeader ? max(0, $rows->length - 1) : $rows->length;
-            $tier = $this->featuredSnippetTierFromDataRows($dataRows, $thresholds);
+            $tier = $this->featuredSnippetTierFromDataRows($metrics['data_rows'], $thresholds);
 
             if ($rank[$tier] > $rank[$best]) {
                 $best = $tier;
@@ -270,6 +266,108 @@ final class SeoScoringEngine
         }
 
         return $best;
+    }
+
+    /**
+     * @return array{data_rows: int, columns: int}|null
+     */
+    private function htmlTableFeaturedSnippetMetrics(DOMElement $table, int $minCols, int $maxCols): ?array
+    {
+        $rowColCounts = [];
+        $headerRowCount = 0;
+        $hasFirstColumnDescriptor = true;
+
+        foreach ($table->getElementsByTagName('tr') as $row) {
+            if (! $row instanceof DOMElement) {
+                continue;
+            }
+
+            $cellCount = 0;
+            $hasTh = false;
+            $firstCellText = '';
+            $colIndex = 0;
+            foreach ($row->childNodes as $cell) {
+                if (! $cell instanceof DOMElement) {
+                    continue;
+                }
+
+                $tag = strtolower($cell->tagName);
+                if ($tag !== 'td' && $tag !== 'th') {
+                    continue;
+                }
+
+                $cellCount++;
+                $hasTh = $hasTh || $tag === 'th';
+                if ($colIndex === 0) {
+                    $firstCellText = trim((string) $cell->textContent);
+                }
+                $colIndex++;
+            }
+
+            if ($cellCount === 0) {
+                continue;
+            }
+
+            $rowColCounts[] = $cellCount;
+            if ($hasTh) {
+                $headerRowCount++;
+            }
+            if ($firstCellText === '') {
+                $hasFirstColumnDescriptor = false;
+            }
+        }
+
+        if ($rowColCounts === []) {
+            return null;
+        }
+
+        $colCount = max($rowColCounts);
+        if (! $this->featuredSnippetColumnCountPasses($colCount, $minCols, $maxCols, $hasFirstColumnDescriptor)) {
+            return null;
+        }
+
+        $dataRowCount = count($rowColCounts) - ($headerRowCount > 0 ? 1 : 0);
+
+        return [
+            'data_rows' => max(0, $dataRowCount),
+            'columns' => $colCount,
+        ];
+    }
+
+    private function isTopLevelHtmlTable(DOMElement $table): bool
+    {
+        $parent = $table->parentNode;
+        while ($parent instanceof DOMElement) {
+            if (strtolower($parent->tagName) === 'table') {
+                return false;
+            }
+
+            $parent = $parent->parentNode;
+        }
+
+        return true;
+    }
+
+    /**
+     * Cho phép bảng so sánh có thêm 1 cột đầu làm tiêu chí (vd. STT).
+     */
+    private function featuredSnippetColumnCountPasses(
+        int $colCount,
+        int $minCols,
+        int $maxCols,
+        bool $hasFirstColumnDescriptor,
+    ): bool {
+        if ($colCount >= $minCols && $colCount <= $maxCols) {
+            return true;
+        }
+
+        if ($hasFirstColumnDescriptor && $colCount > 1) {
+            $effective = $colCount - 1;
+
+            return $effective >= $minCols && $effective <= $maxCols;
+        }
+
+        return false;
     }
 
     /**

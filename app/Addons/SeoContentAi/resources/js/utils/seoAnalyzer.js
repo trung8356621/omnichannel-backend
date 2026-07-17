@@ -11,6 +11,7 @@ import {
     sanitizeViolations,
     scoreFromViolations,
 } from './seoScoreCalculator';
+import { resolveFeaturedSnippetTableScore } from './seoContentBonus';
 import { DEFAULT_WIKI_TRUST_DOMAINS, isWikiTrustUrl, normalizeDomainHost, resolveLinkHost } from './wikiTrustDomains';
 
 const RULE_KEYS = {
@@ -362,41 +363,6 @@ function resolveArticleLengthTarget(postType, settings = {}) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function countTableDataRows(table) {
-    const rows = Array.from(table.querySelectorAll('tr'));
-    if (rows.length === 0) {
-        return 0;
-    }
-
-    const firstCells = rows[0]?.querySelectorAll('th, td')?.length ?? 0;
-    const hasHeader = rows[0]?.querySelector('th') !== null;
-    const dataRows = hasHeader ? Math.max(0, rows.length - 1) : rows.length;
-
-    return { dataRows, columns: firstCells };
-}
-
-function columnCountPasses(colCount, minCols, maxCols) {
-    return colCount >= minCols && colCount <= maxCols;
-}
-
-function resolveFeaturedSnippetTier(dataRows, thresholds) {
-    const rowsMin = Number(thresholds?.rows_min ?? 6);
-    const rowsRange = Number(thresholds?.rows_range ?? 8);
-    const rowsMax = Number(thresholds?.rows_max ?? 10);
-
-    if (dataRows >= rowsMax) {
-        return 'excellent';
-    }
-    if (dataRows >= rowsRange) {
-        return 'good';
-    }
-    if (dataRows >= rowsMin) {
-        return 'average';
-    }
-
-    return 'none';
-}
-
 function resolveFeaturedSnippetViolation(html, thresholds = {}) {
     const source = String(html ?? '').trim();
     if (source === '' || !/<table\b/i.test(source)) {
@@ -407,33 +373,21 @@ function resolveFeaturedSnippetViolation(html, thresholds = {}) {
         return RULE_KEYS.featuredSnippetMissing;
     }
 
-    const minCols = Number(thresholds?.min_columns ?? 2);
-    const maxCols = Number(thresholds?.max_columns ?? 5);
-    const container = document.createElement('div');
-    container.innerHTML = source;
-
-    let bestTier = 'none';
-    const tierRank = { none: 0, average: 1, good: 2, excellent: 3 };
-
-    container.querySelectorAll('table').forEach((table) => {
-        const { dataRows, columns } = countTableDataRows(table);
-        if (!columnCountPasses(columns, minCols, maxCols)) {
-            return;
-        }
-
-        const tier = resolveFeaturedSnippetTier(dataRows, thresholds);
-        if (tierRank[tier] > tierRank[bestTier]) {
-            bestTier = tier;
-        }
+    const score = resolveFeaturedSnippetTableScore(source, {
+        rows_min: Number(thresholds?.rows_min ?? 6),
+        rows_range: Number(thresholds?.rows_range ?? 8),
+        rows_max: Number(thresholds?.rows_max ?? 10),
+        min_columns: Number(thresholds?.min_columns ?? 2),
+        max_columns: Number(thresholds?.max_columns ?? 5),
     });
 
-    if (bestTier === 'excellent') {
+    if (score.tier === 'excellent') {
         return null;
     }
-    if (bestTier === 'good') {
+    if (score.tier === 'good') {
         return RULE_KEYS.featuredSnippetBelowExcellent;
     }
-    if (bestTier === 'average') {
+    if (score.tier === 'average') {
         return RULE_KEYS.featuredSnippetBelowGood;
     }
 

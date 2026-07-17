@@ -95,6 +95,240 @@ export async function saveArticleViaApi(articleId, payload) {
 
 /**
  * @param {number} articleId
+ * @param {{ focus_keyword?: string, meta_description?: string, slug?: string }} payload
+ */
+export async function saveSeoMetaViaApi(articleId, payload) {
+    const { response, data } = await seoArticleApiFetch(`/api/seo/articles/${articleId}/seo-meta`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+        },
+        body: JSON.stringify(payload),
+    });
+
+    if (!response.ok || data.success === false) {
+        throw new Error(data.message ?? 'Không lưu được trường SEO.');
+    }
+
+    return data;
+}
+
+function resolveEditArticleLivewireComponent() {
+    if (typeof Livewire === 'undefined') {
+        return null;
+    }
+
+    const wireId =
+        String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '').trim()
+        || document.querySelector('.seo-article-edit-page[wire\\:id]')?.getAttribute('wire:id')
+        || document.querySelector('.seo-article-edit-page [wire\\:id]')?.getAttribute('wire:id')
+        || '';
+
+    if (wireId === '') {
+        return null;
+    }
+
+    const component = Livewire.find(wireId);
+
+    return component?.set || component?.call ? component : null;
+}
+
+/**
+ * Đồng bộ meta SEO lên Livewire snapshot (không gọi method server).
+ *
+ * @param {{ focus_keyword?: string, meta_description?: string, article_slug?: string }} patch
+ */
+export function patchLivewireSeoMeta(patch) {
+    if (!patch || typeof patch !== 'object') {
+        return;
+    }
+
+    const component = resolveEditArticleLivewireComponent();
+    if (!component) {
+        return;
+    }
+
+    if (patch.focus_keyword != null) {
+        component.set('focusKeyword', String(patch.focus_keyword).trim());
+    }
+
+    if (patch.meta_description != null) {
+        component.set('seoMetaDescription', String(patch.meta_description).trim());
+    }
+
+    if (patch.article_slug != null) {
+        component.set('articleSlug', String(patch.article_slug).trim());
+    }
+}
+
+/**
+ * Ghép URL hiển thị từ base + slug + suffix (vd. `.html`).
+ *
+ * @param {string} base
+ * @param {string} slug
+ * @param {string} suffix
+ */
+export function buildPermalinkDisplayUrl(base, slug, suffix = '') {
+    const host = String(base ?? '').trim().replace(/\/+$/, '');
+    const normalizedSlug = String(slug ?? '').trim().replace(/^\/+|\/+$/g, '');
+    const suf = String(suffix ?? '').trim();
+
+    if (host === '' || normalizedSlug === '') {
+        return '';
+    }
+
+    if (suf !== '' && suf.startsWith('.')) {
+        return `${host}/${normalizedSlug}${suf}`;
+    }
+
+    if (suf !== '' && suf !== '/') {
+        const pathSuffix = suf.startsWith('/') ? suf : `/${suf}`;
+
+        return `${host}/${normalizedSlug}${pathSuffix}`;
+    }
+
+    return `${host}/${normalizedSlug}/`;
+}
+
+/**
+ * Cập nhật dòng «Đường dẫn» dưới tiêu đề (`.wp-permalink`) + slug input nếu có.
+ *
+ * @param {{
+ *   permalink?: string,
+ *   article_slug?: string,
+ *   slug?: string,
+ *   permalink_base?: string,
+ *   permalink_suffix?: string,
+ * }} patch
+ */
+export function patchPermalinkDisplay(patch) {
+    if (!patch || typeof patch !== 'object') {
+        return;
+    }
+
+    const slug = String(patch.article_slug ?? patch.slug ?? '').trim();
+    const root = document.querySelector('[data-seo-permalink-root], .wp-permalink');
+    const baseFromDom = String(root?.getAttribute('data-permalink-base') ?? '').trim();
+    const suffixFromDom = String(root?.getAttribute('data-permalink-suffix') ?? '').trim();
+
+    const base = String(patch.permalink_base ?? baseFromDom).trim().replace(/\/+$/, '');
+    const suffix = String(patch.permalink_suffix ?? suffixFromDom).trim();
+
+    let permalink = String(patch.permalink ?? '').trim();
+    if (permalink === '' && slug !== '') {
+        permalink = buildPermalinkDisplayUrl(base, slug, suffix);
+    }
+
+    if (slug !== '') {
+        const slugInput = document.querySelector(
+            '.seo-article-edit-page input[data-seo-article-slug-input]',
+        );
+        if (slugInput instanceof HTMLInputElement) {
+            slugInput.value = slug;
+        }
+
+        if (root) {
+            root.setAttribute('data-article-slug', slug);
+        }
+    }
+
+    if (base !== '' && root) {
+        root.setAttribute('data-permalink-base', base);
+    }
+
+    if (root && patch.permalink_suffix != null) {
+        root.setAttribute('data-permalink-suffix', suffix);
+    }
+
+    if (permalink === '') {
+        return;
+    }
+
+    const target = root?.querySelector('[data-seo-permalink-url]')
+        ?? root?.querySelector('a')
+        ?? root?.querySelector('span.break-all');
+
+    if (!target) {
+        return;
+    }
+
+    target.textContent = permalink;
+    if (target instanceof HTMLAnchorElement) {
+        target.href = permalink;
+    }
+}
+
+/**
+ * @param {Record<string, unknown>} result
+ */
+export function applyArticleSeoMetaSaveResult(result) {
+    if (!result || typeof result !== 'object') {
+        return;
+    }
+
+    const preview = result.google_serp_preview ?? null;
+    if (preview && typeof preview === 'object') {
+        window.dispatchEvent(
+            new CustomEvent('google-serp-preview-updated', {
+                detail: { preview },
+            }),
+        );
+    }
+
+    if (result.focus_keyword != null) {
+        window.dispatchEvent(
+            new CustomEvent('seo-focus-keyword-updated', {
+                detail: { focus_keyword: result.focus_keyword },
+            }),
+        );
+    }
+
+    const slug = String(result.article_slug ?? '').trim();
+    const permalink = String(
+        result.permalink
+            ?? preview?.url
+            ?? '',
+    ).trim();
+
+    patchPermalinkDisplay({
+        permalink,
+        article_slug: slug,
+        permalink_base: result.permalink_base,
+        permalink_suffix: result.permalink_suffix,
+    });
+
+    if (slug !== '') {
+        window.dispatchEvent(
+            new CustomEvent('seo-editor-slug-updated', {
+                detail: {
+                    slug,
+                    article_slug: slug,
+                    permalink,
+                    permalink_base: result.permalink_base,
+                    permalink_suffix: result.permalink_suffix,
+                },
+            }),
+        );
+    }
+
+    patchLivewireSeoMeta({
+        focus_keyword: result.focus_keyword,
+        meta_description: result.meta_description ?? preview?.description ?? undefined,
+        article_slug: result.article_slug,
+    });
+
+    if (result.seo_analysis_pending) {
+        window.dispatchEvent(
+            new CustomEvent('article-editor-save-patched', {
+                detail: { seo_analysis_pending: true },
+            }),
+        );
+    }
+}
+
+/**
+ * @param {number} articleId
  * @param {Record<string, unknown>} payload
  */
 export async function syncArticleToWordPressViaApi(articleId, payload) {

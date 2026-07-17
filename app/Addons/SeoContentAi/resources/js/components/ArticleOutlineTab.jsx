@@ -9,11 +9,35 @@ const headingUrl = (articleId, headingId) => `/api/seo/articles/${articleId}/out
 const generateUrl = (articleId, headingId) =>
     `/api/seo/articles/${articleId}/outline/${headingId}/generate`;
 
+function extractOutlineApiErrorMessage(data, response) {
+    if (response.status === 419) {
+        return 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.';
+    }
+
+    const direct = typeof data?.message === 'string' ? data.message.trim() : '';
+    if (direct !== '') {
+        return direct;
+    }
+
+    const errors = data?.errors;
+    if (errors && typeof errors === 'object') {
+        for (const key of Object.keys(errors)) {
+            const first = Array.isArray(errors[key]) ? errors[key][0] : null;
+            if (typeof first === 'string' && first.trim() !== '') {
+                return first.trim();
+            }
+        }
+    }
+
+    return `Yêu cầu thất bại (HTTP ${response.status}).`;
+}
+
 async function requestJson(url, options = {}) {
     const response = await fetch(url, {
         credentials: 'same-origin',
         ...options,
         headers: {
+            Accept: 'application/json',
             'Content-Type': 'application/json',
             ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
             ...seoArticleApiHeaders(),
@@ -23,18 +47,30 @@ async function requestJson(url, options = {}) {
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.success === false) {
-        const message =
-            response.status === 419
-                ? 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.'
-                : (data.message ?? 'Yêu cầu thất bại.');
-        throw new Error(message);
+        throw new Error(extractOutlineApiErrorMessage(data, response));
     }
 
     return data;
 }
 
+const OUTLINE_HEADING_TEXT_MAX = 255;
+
 function normalizeOutlineHeadingText(text) {
     return String(text ?? '').replace(/\s+/g, ' ').trim();
+}
+
+/** Khớp server Str::limit(..., 255) / cột heading_text. */
+function truncateOutlineHeadingText(text) {
+    return Array.from(normalizeOutlineHeadingText(text)).slice(0, OUTLINE_HEADING_TEXT_MAX).join('');
+}
+
+function isPersistedOutlineHeadingId(headingId) {
+    const raw = String(headingId ?? '').trim();
+    if (raw === '' || raw.startsWith('pending-')) {
+        return false;
+    }
+
+    return /^\d+$/.test(raw);
 }
 
 function headingHtmlHasLink(html) {
@@ -94,13 +130,13 @@ function insertRootOutlineNodeAfter(tree, afterHeadingId, newNode) {
 
 /** Tìm node outline theo level + text, kèm groupId (H2 container). */
 function findOutlineNodeWithGroup(nodes, level, headingText, groupId = null) {
-    const normalized = normalizeOutlineHeadingText(headingText);
+    const normalized = truncateOutlineHeadingText(headingText);
 
     for (const node of nodes) {
         const ownGroupId = node.level <= 2 ? node.id : groupId;
         if (
             node.level === level &&
-            normalizeOutlineHeadingText(node.heading_text) === normalized
+            truncateOutlineHeadingText(node.heading_text) === normalized
         ) {
             return { node, groupId: ownGroupId };
         }
@@ -1152,12 +1188,26 @@ export default function ArticleOutlineTab({
 
     const handleSaveText = useCallback(
         async (node, newText) => {
+            if (!isPersistedOutlineHeadingId(node?.id)) {
+                notify(
+                    'Outline',
+                    'Heading chưa lưu xong trên server — đợi giây lát rồi sửa lại.',
+                    'warning',
+                );
+                return;
+            }
+
+            const trimmed = truncateOutlineHeadingText(newText);
+            if (trimmed === '') {
+                return;
+            }
+
             // Optimistic update để UI mượt; lỗi thì revert.
-            applyHeadingPatch(node, newText);
+            applyHeadingPatch(node, trimmed);
             try {
                 const data = await requestJson(headingUrl(articleId, node.id), {
                     method: 'PUT',
-                    body: JSON.stringify({ heading_text: newText }),
+                    body: JSON.stringify({ heading_text: trimmed }),
                 });
 
                 const duplicates = Array.isArray(data.duplicates) ? data.duplicates : [];
@@ -1171,7 +1221,7 @@ export default function ArticleOutlineTab({
                     notify('Outline', 'Đã lưu heading.', 'success');
                 }
             } catch (e) {
-                applyHeadingPatch({ ...node, heading_text: newText }, node.heading_text);
+                applyHeadingPatch({ ...node, heading_text: trimmed }, node.heading_text);
                 notify('Outline', e.message || 'Không lưu được heading.', 'danger');
             }
         },
@@ -1180,7 +1230,16 @@ export default function ArticleOutlineTab({
 
     const handleSaveHtml = useCallback(
         async (node, headingHtml, plainText) => {
-            const newText = normalizeOutlineHeadingText(plainText);
+            if (!isPersistedOutlineHeadingId(node?.id)) {
+                notify(
+                    'Outline',
+                    'Heading chưa lưu xong trên server — đợi giây lát rồi sửa lại.',
+                    'warning',
+                );
+                return;
+            }
+
+            const newText = truncateOutlineHeadingText(plainText);
             if (newText === '') {
                 return;
             }

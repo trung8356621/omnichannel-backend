@@ -41,6 +41,7 @@ import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import { csrfToken, seoArticleApiHeaders } from '../utils/seoArticleApi';
 import {
     buildSeoAnalysisPayload,
     computeSeoAnalysis,
@@ -297,6 +298,60 @@ const blockHasOutlineHeading = (block) => {
 
 const normalizeOutlineHeadingText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
 
+const OUTLINE_HEADING_TEXT_MAX = 255;
+
+/** Khớp server Str::limit(..., 255) / cột heading_text — tránh lệch key DB truncated vs editor full. */
+const truncateOutlineHeadingText = (value) =>
+    Array.from(normalizeOutlineHeadingText(value)).slice(0, OUTLINE_HEADING_TEXT_MAX).join('');
+
+const extractOutlineApiErrorMessage = (data, response) => {
+    if (response.status === 419) {
+        return 'Phiên đăng nhập hết hạn — tải lại trang rồi thử lại.';
+    }
+
+    const direct = typeof data?.message === 'string' ? data.message.trim() : '';
+    if (direct !== '') {
+        return direct;
+    }
+
+    const errors = data?.errors;
+    if (errors && typeof errors === 'object') {
+        for (const key of Object.keys(errors)) {
+            const first = Array.isArray(errors[key]) ? errors[key][0] : null;
+            if (typeof first === 'string' && first.trim() !== '') {
+                return first.trim();
+            }
+        }
+    }
+
+    return data?.success === false
+        ? 'Yêu cầu outline thất bại.'
+        : `Yêu cầu outline thất bại (HTTP ${response.status}).`;
+};
+
+const outlineApiCsrfToken = () => csrfToken();
+
+async function outlineApiRequest(articleId, path, options = {}) {
+    const response = await fetch(`/api/seo/articles/${articleId}/outline${path}`, {
+        credentials: 'same-origin',
+        ...options,
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            ...seoArticleApiHeaders(),
+            ...(outlineApiCsrfToken() ? { 'X-CSRF-TOKEN': outlineApiCsrfToken() } : {}),
+            ...(options.headers ?? {}),
+        },
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.success === false) {
+        throw new Error(extractOutlineApiErrorMessage(data, response));
+    }
+
+    return data;
+}
+
 const flattenOutlineNodes = (nodes, result = []) => {
     for (const node of nodes ?? []) {
         result.push(node);
@@ -329,7 +384,7 @@ const extractOutlineHeadingFromBlock = (block) => {
 };
 
 const findBlockIdForOutlineHeading = (blocks, level, headingText) => {
-    const target = normalizeOutlineHeadingText(headingText);
+    const target = truncateOutlineHeadingText(headingText);
     if (!target) {
         return null;
     }
@@ -343,7 +398,7 @@ const findBlockIdForOutlineHeading = (blocks, level, headingText) => {
 
         const doc = new DOMParser().parseFromString(block.content, 'text/html');
         const match = Array.from(doc.body.querySelectorAll(selector)).find(
-            (node) => normalizeOutlineHeadingText(node.textContent) === target,
+            (node) => truncateOutlineHeadingText(node.textContent) === target,
         );
         if (match) {
             return block.id;
@@ -363,9 +418,9 @@ const flattenOutlineHeadingKeys = (nodes) => {
 
         for (const node of items) {
             const level = Number(node?.level ?? 0);
-            const text = normalizeOutlineHeadingText(node?.heading_text);
+            const text = truncateOutlineHeadingText(node?.heading_text);
             if (level >= 2 && text !== '') {
-                keys.add(`${level}|${text}`);
+                keys.add(outlineHeadingKey(level, text));
             }
             if (Array.isArray(node?.children) && node.children.length > 0) {
                 walk(node.children);
@@ -379,7 +434,7 @@ const flattenOutlineHeadingKeys = (nodes) => {
 };
 
 const outlineHeadingKey = (level, headingText) =>
-    `${Number(level)}|${normalizeOutlineHeadingText(headingText)}`;
+    `${Number(level)}|${truncateOutlineHeadingText(headingText)}`;
 
 const isSectionHeadingBlock = (block, section) =>
     !section?.isIntro &&
@@ -426,29 +481,6 @@ const sectionHasOnlyEmptyHeadingBody = (section, blockById) => {
         return false;
     }
 };
-
-const outlineApiCsrfToken = () =>
-    document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
-
-async function outlineApiRequest(articleId, path, options = {}) {
-    const response = await fetch(`/api/seo/articles/${articleId}/outline${path}`, {
-        credentials: 'same-origin',
-        ...options,
-        headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            ...(outlineApiCsrfToken() ? { 'X-CSRF-TOKEN': outlineApiCsrfToken() } : {}),
-            ...(options.headers ?? {}),
-        },
-    });
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.success === false) {
-        throw new Error(data.message ?? 'Yêu cầu outline thất bại.');
-    }
-
-    return data;
-}
 
 const INTRO_SECTION_ID = 'section-intro';
 
@@ -1752,6 +1784,7 @@ function SectionHeaderTitle({ sectionNumber, title, onSave, onFocusOutline, auto
                     type="text"
                     className="seo-section-header-title__input"
                     value={draft}
+                    maxLength={255}
                     onChange={(event) => setDraft(event.target.value)}
                     onBlur={commit}
                     onKeyDown={(event) => {
@@ -3141,11 +3174,12 @@ export default function SeoArticleEditor({
         [scheduleAutosave, updateBlocksWithoutHistory],
     );
 
-    const requestWordPressRenames = useCallback((items) => {
+    const requestWordPressRenames = useCallback((items, options = {}) => {
         if (!items?.length) {
             return;
         }
 
+        const silent = options.silent === true;
         pendingWpRenameRequestRef.current = Array.isArray(items) ? [...items] : [];
 
         window.dispatchEvent(
@@ -3154,7 +3188,7 @@ export default function SeoArticleEditor({
             }),
         );
 
-        callEditArticleLivewire('renameAttachmentSlugsOnWordPress', items).catch((error) => {
+        callEditArticleLivewire('renameAttachmentSlugsOnWordPress', items, silent).catch((error) => {
             pendingWpRenameRequestRef.current = [];
             window.dispatchEvent(
                 new CustomEvent('seo-attachment-slugs-rename-finished', {
@@ -3178,8 +3212,16 @@ export default function SeoArticleEditor({
         [siteId, articleId],
     );
 
-    const requestWordPressAttachmentMetaUpdate = useCallback((items) => {
-        dispatchWordPressAttachmentMetaUpdate(items);
+    const requestWordPressAttachmentMetaUpdate = useCallback((items, options = {}) => {
+        dispatchWordPressAttachmentMetaUpdate(items, { silent: options.silent === true });
+    }, []);
+
+    const notifyEditor = useCallback((title, body, status = 'success') => {
+        window.dispatchEvent(
+            new CustomEvent('seo-article-editor-notify', {
+                detail: { title, body, status },
+            }),
+        );
     }, []);
 
     const pushAltTitleMetaToStores = useCallback(
@@ -3475,9 +3517,10 @@ export default function SeoArticleEditor({
     );
 
     const applyQuickFixSlugPreview = useCallback(
-        (preview, keyword) => {
+        (preview, keyword, options = {}) => {
             const renameCount = preview.renameQueue.length;
             const localRenameCount = (preview.localRenameQueue ?? []).length;
+            const silent = options.silent === true;
 
             pendingQuickFixKeywordRef.current = keyword;
             pendingLocalRenameResultsRef.current = [];
@@ -3485,7 +3528,7 @@ export default function SeoArticleEditor({
             const tasks = [];
 
             if (renameCount > 0) {
-                requestWordPressRenames(preview.renameQueue);
+                requestWordPressRenames(preview.renameQueue, { silent });
             } else if (localRenameCount === 0) {
                 setImagesReloadKey((k) => k + 1);
             }
@@ -3856,7 +3899,7 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
-                await applyQuickFixSlugPreview(mergedPreview, keyword);
+                await applyQuickFixSlugPreview(mergedPreview, keyword, { silent: true });
 
                 const wpDetail =
                     totalWpRenames > 0 ? await waitForWordPressSlugRenameFinished(1) : null;
@@ -3866,6 +3909,22 @@ export default function SeoArticleEditor({
                 }
 
                 finalizeSlugRenameSideEffects();
+
+                const wpRenamedCount = Array.isArray(wpDetail?.renamed) ? wpDetail.renamed.length : 0;
+                const localDoneCount = Math.max(totalLocalRenames, 0);
+                const totalDone = Math.max(wpRenamedCount, totalWpRenames) + localDoneCount;
+                const failed = wpDetail != null && wpDetail.success === false;
+
+                notifyEditor(
+                    failed ? t('editor_quick_fix_slug_all_failed_title') : t('editor_quick_fix_slug_all_done_title'),
+                    failed
+                        ? String(wpDetail?.message ?? t('editor_try_again_later'))
+                        : String(
+                              wpDetail?.message
+                                  || t('editor_quick_fix_slug_all_done_body', { count: totalDone || totalWpRenames + totalLocalRenames }),
+                          ),
+                    failed ? 'danger' : 'success',
+                );
             } finally {
                 slugRenameManagedByBatchRef.current = false;
                 setQuickFixSlugAllBusy(false);
@@ -3877,6 +3936,7 @@ export default function SeoArticleEditor({
             applySlugRenameFinished,
             buildQuickFixContext,
             finalizeSlugRenameSideEffects,
+            notifyEditor,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
             waitForWordPressSlugRenameFinished,
@@ -3915,55 +3975,134 @@ export default function SeoArticleEditor({
             sourceRows
                 .filter((row) => !row?.excludeQuickFix)
                 .forEach((row) => {
-                patchSupplementalImageRow(row, { alt: keyword, title: keyword });
-            });
+                    patchSupplementalImageRow(row, { alt: keyword, title: keyword });
+                });
 
             supplementalOutcomes
                 .filter(({ row }) => !row?.excludeQuickFix)
                 .forEach(({ row, outcome }) => {
-                patchSupplementalImageRow(row, outcome.patch);
-            });
+                    patchSupplementalImageRow(row, outcome.patch);
+                });
 
-            const pushedWp = new Set();
+            const seoMetaItems = [];
+            const wpMetaItems = [];
             const pushedSeo = new Set();
-            sourceRows
-                .filter((row) => !row?.excludeQuickFix)
-                .forEach((row) => {
-                const { seoMediaId, wpAttachmentId } = buildAltTitleMetaUpdatePayload(row, keyword);
+            const pushedWp = new Set();
+            const wpIdsSyncedViaSeo = new Set();
+
+            const enqueueRowMeta = (row, phrase) => {
+                const trimmed = String(phrase ?? '').trim();
+                if (!trimmed || !row) {
+                    return;
+                }
+
+                const { seoMediaId, wpAttachmentId } = buildAltTitleMetaUpdatePayload(row, trimmed);
 
                 if (seoMediaId > 0 && !pushedSeo.has(seoMediaId)) {
                     pushedSeo.add(seoMediaId);
-                    updateSeoMediaMeta([
-                        { id: seoMediaId, alt_text: keyword, title: keyword },
-                    ]).catch((error) => {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: t('editor_cannot_update_image_meta'),
-                                    body: error?.message ?? t('editor_try_again_later'),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
+                    seoMetaItems.push({
+                        id: seoMediaId,
+                        alt_text: trimmed,
+                        title: trimmed,
                     });
+                    if (wpAttachmentId > 0) {
+                        wpIdsSyncedViaSeo.add(wpAttachmentId);
+                    }
                 }
 
                 if (wpAttachmentId > 0 && !pushedWp.has(wpAttachmentId)) {
                     pushedWp.add(wpAttachmentId);
-                    requestWordPressAttachmentMetaUpdate([
-                        {
-                            attachment_id: wpAttachmentId,
-                            alt_text: keyword,
-                            title: keyword,
-                        },
-                    ]);
+                    wpMetaItems.push({
+                        attachment_id: wpAttachmentId,
+                        alt_text: trimmed,
+                        title: trimmed,
+                    });
                 }
+            };
+
+            sourceRows
+                .filter((row) => !row?.excludeQuickFix)
+                .forEach((row) => enqueueRowMeta(row, keyword));
+
+            supplementalOutcomes
+                .filter(({ row }) => !row?.excludeQuickFix)
+                .forEach(({ row, outcome }) => {
+                    const phrase = String(outcome?.patch?.alt ?? keyword).trim() || keyword;
+                    enqueueRowMeta(row, phrase);
+                });
+
+            (preview.wpMetaQueue ?? []).forEach((item) => {
+                const attachmentId = Number(item?.attachment_id ?? 0);
+                if (attachmentId <= 0 || pushedWp.has(attachmentId)) {
+                    return;
+                }
+                pushedWp.add(attachmentId);
+                wpMetaItems.push(item);
             });
+
+            const wpOnlyItems = wpMetaItems.filter(
+                (item) => !wpIdsSyncedViaSeo.has(Number(item.attachment_id ?? 0)),
+            );
+
+            const finishNotify = (wpCount, localCount, errorMessage = null) => {
+                if (errorMessage) {
+                    notifyEditor(
+                        t('editor_cannot_update_image_meta'),
+                        errorMessage,
+                        'danger',
+                    );
+                    return;
+                }
+
+                const total = Math.max(localCount, wpCount, preview.applied);
+                notifyEditor(
+                    t('editor_quick_fix_alt_title_all_done_title'),
+                    wpCount > 0
+                        ? t('editor_quick_fix_alt_title_all_done_body_wp', {
+                              count: total,
+                              wp: wpCount,
+                          })
+                        : t('editor_quick_fix_alt_title_all_done_body', { count: total }),
+                    'success',
+                );
+            };
+
+            const seoPromise =
+                seoMetaItems.length > 0
+                    ? updateSeoMediaMeta(seoMetaItems)
+                    : Promise.resolve({ updated_count: 0, wp_updated_count: 0 });
+
+            seoPromise
+                .then((data) => {
+                    const localCount = Number(data?.updated_count ?? seoMetaItems.length);
+                    const wpFromSeo = Number(data?.wp_updated_count ?? 0);
+
+                    if (wpOnlyItems.length > 0) {
+                        // Một lần Livewire → một toast Filament (không spam từng ảnh).
+                        requestWordPressAttachmentMetaUpdate(wpOnlyItems);
+                        return;
+                    }
+
+                    finishNotify(wpFromSeo, localCount || preview.applied);
+                })
+                .catch((error) => {
+                    if (wpOnlyItems.length > 0) {
+                        // Vẫn đẩy WP batch; toast Filament báo kết quả WP.
+                        requestWordPressAttachmentMetaUpdate(wpOnlyItems);
+                        return;
+                    }
+                    finishNotify(0, 0, error?.message ?? t('editor_try_again_later'));
+                });
+
+            if (seoMetaItems.length === 0 && wpOnlyItems.length === 0 && preview.applied > 0) {
+                finishNotify(0, preview.applied);
+            }
 
             setImagesReloadKey((k) => k + 1);
         },
         [
             buildQuickFixContext,
+            notifyEditor,
             patchSupplementalImageRow,
             requestWordPressAttachmentMetaUpdate,
         ],
@@ -7646,10 +7785,9 @@ export default function SeoArticleEditor({
     }, []);
 
     const applyOutlineHeadingText = useCallback(({ level, oldText, newText, headingId = null }) => {
-        const normalizeText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
         const targetLevel = Number(level) || 0;
-        const target = normalizeText(oldText);
-        const replacement = normalizeText(newText);
+        const target = truncateOutlineHeadingText(oldText);
+        const replacement = truncateOutlineHeadingText(newText);
         if (target === '' || replacement === '' || target === replacement) {
             return;
         }
@@ -7671,7 +7809,7 @@ export default function SeoArticleEditor({
 
                 const doc = new DOMParser().parseFromString(block.content, 'text/html');
                 let headingNode = Array.from(doc.body.querySelectorAll(selector)).find(
-                    (node) => normalizeText(node.textContent) === target,
+                    (node) => truncateOutlineHeadingText(node.textContent) === target,
                 );
 
                 if (!headingNode && mappedBlockId === block.id) {
@@ -7707,10 +7845,10 @@ export default function SeoArticleEditor({
             }
             next.add(newKey);
 
-            const headingId = outlineHeadingIdsByKeyRef.current.get(oldKey);
-            if (headingId != null) {
+            const mappedHeadingId = outlineHeadingIdsByKeyRef.current.get(oldKey);
+            if (mappedHeadingId != null) {
                 outlineHeadingIdsByKeyRef.current.delete(oldKey);
-                outlineHeadingIdsByKeyRef.current.set(newKey, headingId);
+                outlineHeadingIdsByKeyRef.current.set(newKey, mappedHeadingId);
             }
 
             return next;
@@ -7738,11 +7876,11 @@ export default function SeoArticleEditor({
 
         const selector = level >= 2 && level <= 4 ? `h${level}` : 'h2, h3, h4';
         const doc = new DOMParser().parseFromString(block.content, 'text/html');
+        const target = truncateOutlineHeadingText(headingText);
         const headingNode =
-            doc.body.querySelector(selector) ??
             Array.from(doc.body.querySelectorAll(selector)).find(
-                (item) => normalizeOutlineHeadingText(item.textContent) === headingText,
-            );
+                (item) => truncateOutlineHeadingText(item.textContent) === target,
+            ) ?? doc.body.querySelector(selector);
 
         return String(headingNode?.innerHTML ?? '').trim();
     }, [resolveBlockIdForOutlineHeadingId]);
@@ -7904,7 +8042,7 @@ export default function SeoArticleEditor({
 
             try {
                 const payload = {
-                    heading_text: meta.headingText,
+                    heading_text: truncateOutlineHeadingText(meta.headingText),
                     level: meta.level,
                 };
                 if (afterHeadingId !== null) {
@@ -8008,8 +8146,8 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const trimmed = String(newText ?? '').replace(/\s+/g, ' ').trim();
-            const oldText = String(section.title ?? '').replace(/\s+/g, ' ').trim();
+            const trimmed = truncateOutlineHeadingText(newText);
+            const oldText = truncateOutlineHeadingText(section.title);
             if (trimmed === '' || trimmed === oldText) {
                 return;
             }
@@ -8798,6 +8936,7 @@ export default function SeoArticleEditor({
             <div className="seo-article-editor-workspace">
                 <div className="seo-article-editor-left-rail">
                     <ArticleGoogleSerpPreview
+                        articleId={articleId}
                         initialPreview={initialSeo?.google_serp_preview ?? null}
                         fallbackUrl={String(initialSeo?.google_serp_preview?.url ?? initialSeo?.site_domain ?? '#')}
                         skipSeoScore={Boolean(initialSeo?.skip_seo_score)}

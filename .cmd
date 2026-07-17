@@ -22,3 +22,4 @@ php artisan queue:work --queue=seo,media_generation,default --timeout=360
 
 
 
+nohup php artisan queue:work --queue=seo,media_generation,default --timeout=360 > storage/logs/laravel-queue.log 2>&1 &

@@ -7,8 +7,9 @@
 ### Nguyên tắc: Laravel bản tạm ↔ WordPress nguồn sống
 
 - Bài trên Laravel = bản tạm: **được** sync nội dung/SEO/media, sửa local, trash/xóa **chỉ trên Laravel**.
-- Outbound Laravel → WP **không** xóa bài WP, **không** move-to-trash WP, **không** demote bài đã có `wp_post_id` xuống `draft` (`resolveWordPressStatusPayload` bỏ `status` trong các trường hợp đó).
-- Create mới (chưa `wp_post_id`) / `scheduled` vẫn gửi `draft` lên WP để giữ luồng đăng bài.
+- Outbound Laravel → WP **không** xóa / trash WP. Sync status **chỉ** gửi `publish` (+ `post_date` clamp ≤ now) — `WordPressArticleSyncService::resolveWordPressStatusPayload()`.
+- Lịch đăng (`scheduled`) sống **chỉ trên Laravel**; cron tới giờ mới sync. **Không** gửi `draft` / WP `future` khi đồng bộ.
+- Plugin `omi-seo-ai-bridge` ≥ **1.0.57**: chặn demote `publish/private/future` → `draft`; elevate admin + `force_post_status`; clamp `post_date` tương lai khi publish.
 - Inbound WP → Laravel (push trash / force_delete) vẫn phản ánh trạng thái WP — xem bridge bên dưới.
 
 ---
@@ -48,10 +49,11 @@ flowchart TB
     subgraph Triggers["Entry Points"]
         EDIT["EditArticle.syncArticleToWordPress"]
         LIST["ListArticles actions"]
-        TASK["TaskWorkflowTestRunner<br/>executeActionNode"]
-        PROMPT["PromptTestPublishService.publishArticle"]
+        QUEUE["ArticleWpSyncQueueService / scheduled publish"]
         APPROVE["SeoProjectApprovalService.approveLinkedProject"]
     end
+
+    Note1["Content Project workflow + PromptTestPublishService.publishArticle<br/>chỉ lưu Laravel — không gọi sync outbound"]
 
     subgraph Hub["WordPressArticleSyncService"]
         SYNC["syncForArticle()"]
@@ -85,7 +87,7 @@ flowchart TB
         RELEASE["WpPluginReleaseWidget"]
     end
 
-    EDIT & LIST & TASK & PROMPT & APPROVE --> SYNC
+    EDIT & LIST & QUEUE & APPROVE --> SYNC
     SYNC --> CTX --> CONTENT
     SYNC --> SANITIZE --> FAQ
     SYNC --> LOCAL_MEDIA --> MEDIA_LOCAL
@@ -101,7 +103,7 @@ flowchart TB
 
 **Trace MCP (`syncForArticle` outbound):** 30+ callees — `ArticleEditorHtmlSanitizeService`, `WorkflowParserService`, `WordPressLocalMediaSyncService`, `ArticleMediaLocalService`, `SeoMediaBuilder`, `ExternalPluginRegistry`.
 
-**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, `TaskWorkflowTestRunner`, `PromptTestPublishService`, `SeoProjectApprovalService.approveLinkedProject`.
+**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, ListArticles sync actions, `ArticleWpSyncQueueService` / scheduled publish, `SeoProjectApprovalService.approveLinkedProject`. **Không** từ Content Project run / `PromptTestPublishService.publishArticle` (local-only).
 
 ### Đăng bài mới — tránh bài trùng / `post_content` trắng
 
@@ -116,9 +118,9 @@ Luồng cũ (trước fix): `createForArticle` → `POST /posts` (chỉ title/sl
 
 `EditArticle.syncArticleToWordPress` gọi `publishForArticle()` thay vì tách `create` + `sync`.
 
-### Lên lịch đăng bài (Laravel cron, không WP `future`)
+### Lên lịch đăng bài (Laravel cron, không WP `future` / `draft`)
 
-Khi `articles.status = scheduled`, outbound sync gửi WP **`draft`** (xem `resolveWordPressStatusPayload`). Bài đã có `wp_post_id` với status local `draft`/`trash`: **không** gửi status xuống WP. Cron `seo:publish-scheduled-articles` (mỗi phút) gọi `ScheduledArticlePublishRunner` → `publishScheduledArticle()` → editor-sync `status=publish`. Chi tiết luồng editor: [MAP_SEO_EDITOR.md §2.6](MAP_SEO_EDITOR.md).
+Outbound sync **luôn** `status=publish` (kể cả Laravel `draft` / `scheduled`). `post_date` tương lai bị clamp về now — tránh WP đổi thành `future`. Lịch chờ ngày X: Laravel giữ `articles.status=scheduled` + `published_at`; cron `seo:publish-scheduled-articles` (mỗi phút) → `ScheduledArticlePublishRunner` → `publishScheduledArticle()` → editor-sync publish. Queue: `ArticleWpSyncQueueService::applyPublishImmediatelyToBundle()` ép `publish_box.status=published` trước persist/worker. Chi tiết editor: [MAP_SEO_EDITOR.md §2.6](MAP_SEO_EDITOR.md).
 
 ### Plugin WP — tắt WP-Cron & sửa «Lịch trình bị bỏ lỡ»
 

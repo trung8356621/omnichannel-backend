@@ -31,7 +31,6 @@ final class TaskWorkflowTestRunner
         private readonly WorkflowTagExtractorService $tagExtractor,
         private readonly WordPressCommentReviewService $commentReviewPublisher,
         private readonly PromptTestPublishService $promptPublisher,
-        private readonly WordPressArticleSyncService $wordPressArticleSync,
         private readonly WorkflowExistingAiOutputService $existingAiOutput,
         private readonly SeoMediaStorageService $mediaStorage,
         private readonly SeoCreateArticleSettingsService $createArticleSettings,
@@ -396,7 +395,7 @@ final class TaskWorkflowTestRunner
                     $node,
                     $prompt,
                     $state->article ?? $context->article,
-                    allowReuse: $context->projectTaskType !== SeoProjectTask::TYPE_REWRITE,
+                    allowReuse: $this->shouldReuseExistingAiOutput($context),
                 );
                 if ($reused !== null) {
                     $output = $reused['output'];
@@ -836,23 +835,6 @@ final class TaskWorkflowTestRunner
             $state->meta['article_markdown_published'] = true;
             $messages[] = (string) ($publish['message'] ?? 'Đã lưu nội dung bài viết (tiêu đề + body + meta).');
 
-            $wpSync = $this->syncRewrittenArticleToWordPressIfNeeded($context, $article);
-            if ($wpSync !== null) {
-                if (! ($wpSync['success'] ?? false)) {
-                    return [
-                        'node_id' => $nodeId,
-                        'type' => 'action',
-                        'title' => $title,
-                        'action_type' => $actionType,
-                        'status' => 'failed',
-                        'article_id' => $article->id,
-                        'message' => (string) ($wpSync['message'] ?? 'Không thể đồng bộ bài viết lên WordPress.'),
-                    ];
-                }
-
-                $messages[] = (string) ($wpSync['message'] ?? 'Đã đồng bộ bài viết lên WordPress.');
-            }
-
             $outlineMarkdown = trim((string) ($state->meta['direct_publish_outline_markdown'] ?? ''));
             if ($outlineMarkdown !== '') {
                 $article->articleMetas()->updateOrCreate(
@@ -888,7 +870,7 @@ final class TaskWorkflowTestRunner
                     }
                 }
             }
-        } else {
+        } elseif ($this->isProductWorkflowContext($context, $state)) {
             $messages[] = 'Giữ nguyên album hình ảnh sản phẩm đã có.';
         }
 
@@ -1283,34 +1265,6 @@ final class TaskWorkflowTestRunner
     }
 
     /**
-     * @return array{success: bool, message: string}|null
-     */
-    private function syncRewrittenArticleToWordPressIfNeeded(TaskTestContext $context, SeoArticle $article): ?array
-    {
-        if (! $this->shouldSyncRewrittenArticleToWordPress($context, $article)) {
-            return null;
-        }
-
-        return $this->wordPressArticleSync->syncForArticle($article->fresh() ?? $article);
-    }
-
-    private function shouldSyncRewrittenArticleToWordPress(TaskTestContext $context, SeoArticle $article): bool
-    {
-        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
-            return false;
-        }
-
-        $isRewriteTask = $context->projectTaskType === SeoProjectTask::TYPE_REWRITE
-            || $context->rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT;
-
-        if (! $isRewriteTask) {
-            return false;
-        }
-
-        return (int) ($article->wp_post_id ?? 0) > 0;
-    }
-
-    /**
      * @param  array<string, mixed>  $node
      */
     private function shouldMergeOutlineToSave(array $node): bool
@@ -1419,7 +1373,7 @@ final class TaskWorkflowTestRunner
 
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => 'wp_post_type'],
-            ['meta_value' => $postType],
+            ['meta_value' => $this->wpPostTypeMetaValue($postType)],
         );
 
         $this->persistProductPromptMeta($article, $variables);
@@ -1458,11 +1412,30 @@ final class TaskWorkflowTestRunner
         return $this->articleMediaLocal->resolveProductAlbum($article) === [];
     }
 
+    private function shouldReuseExistingAiOutput(TaskTestContext $context): bool
+    {
+        // Viết lại / có rewriteMode → luôn gọi AI lại (tránh OK giả vì reuse body/dàn ý cũ).
+        if ($context->projectTaskType === SeoProjectTask::TYPE_REWRITE) {
+            return false;
+        }
+
+        if ($context->rewriteMode !== null && trim((string) $context->rewriteMode) !== '') {
+            return false;
+        }
+
+        return true;
+    }
+
     private function isProductWorkflowContext(TaskTestContext $context, WorkflowExecutionState $state): bool
     {
         $postType = SeoProjectTask::normalizePostType((string) ($context->postType ?? ''));
         if ($postType === SeoProjectTask::POST_TYPE_PRODUCT) {
             return true;
+        }
+
+        // Context đã gắn postType (vd. article) → không suy luận lại từ article.type lệch.
+        if (trim((string) ($context->postType ?? '')) !== '') {
+            return false;
         }
 
         $article = $this->resolveArticleForProductAlbumCheck($context, $state);
@@ -1471,6 +1444,16 @@ final class TaskWorkflowTestRunner
         }
 
         return ArticlePostTypeResolver::resolve($article) === SeoProjectTask::POST_TYPE_PRODUCT;
+    }
+
+    private function wpPostTypeMetaValue(string $postType): string
+    {
+        return match (SeoProjectTask::normalizePostType($postType)) {
+            SeoProjectTask::POST_TYPE_PRODUCT => 'product',
+            SeoProjectTask::POST_TYPE_PRODUCT_CATEGORY => 'product_cat',
+            SeoProjectTask::POST_TYPE_CATEGORY => 'category',
+            default => 'post',
+        };
     }
 
     private function resolveArticleForProductAlbumCheck(TaskTestContext $context, WorkflowExecutionState $state): ?SeoArticle

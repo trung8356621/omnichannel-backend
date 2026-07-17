@@ -36,6 +36,8 @@ class SeoArticle extends Model
         'skip_seo_score' => 'boolean',
         'is_reviewed' => 'boolean',
         'reviewed_at' => 'datetime',
+        'content_archived_at' => 'datetime',
+        'content_archived_by' => 'integer',
         'published_at' => 'datetime',
     ];
 

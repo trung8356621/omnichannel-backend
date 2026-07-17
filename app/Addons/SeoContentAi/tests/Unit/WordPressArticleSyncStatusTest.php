@@ -8,15 +8,17 @@ use App\Addons\SeoContentAi\Models\ArticleMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use Illuminate\Support\Carbon;
 use ReflectionMethod;
 use Tests\TestCase;
 
 final class WordPressArticleSyncStatusTest extends TestCase
 {
-    public function test_scheduled_status_syncs_as_wordpress_draft_without_future_date(): void
+    public function test_outbound_sync_always_publishes_even_when_laravel_scheduled(): void
     {
         $article = new SeoArticle([
             'status' => 'scheduled',
+            'wp_post_id' => 888,
             'published_at' => now()->addDay(),
         ]);
 
@@ -24,11 +26,14 @@ final class WordPressArticleSyncStatusTest extends TestCase
         $method = new ReflectionMethod($service, 'resolveWordPressStatusPayload');
         $method->setAccessible(true);
 
-        /** @var array{status: string, post_date?: string|null} $payload */
         $payload = $method->invoke($service, $article);
 
-        $this->assertSame('draft', $payload['status']);
-        $this->assertArrayNotHasKey('post_date', $payload);
+        $this->assertSame('publish', $payload['status']);
+        $this->assertNotEmpty($payload['post_date'] ?? null);
+        // post_date tương lai bị clamp — không đẩy WP thành future.
+        $this->assertTrue(
+            Carbon::parse((string) $payload['post_date'])->lessThanOrEqualTo(now()->addMinute()),
+        );
     }
 
     public function test_published_status_maps_to_wordpress_publish(): void
@@ -48,12 +53,46 @@ final class WordPressArticleSyncStatusTest extends TestCase
         $this->assertNotEmpty($payload['post_date'] ?? null);
     }
 
+    public function test_draft_with_existing_wp_post_still_publishes_on_sync(): void
+    {
+        $article = new SeoArticle([
+            'status' => 'draft',
+            'wp_post_id' => 55,
+            'published_at' => now()->subHour(),
+        ]);
+
+        $service = app(WordPressArticleSyncService::class);
+        $method = new ReflectionMethod($service, 'resolveWordPressStatusPayload');
+        $method->setAccessible(true);
+
+        $payload = $method->invoke($service, $article);
+
+        $this->assertSame('publish', $payload['status']);
+        $this->assertNotEmpty($payload['post_date'] ?? null);
+    }
+
+    public function test_trash_status_omits_wordpress_status_payload(): void
+    {
+        $article = new SeoArticle([
+            'status' => 'trash',
+            'wp_post_id' => 55,
+        ]);
+
+        $service = app(WordPressArticleSyncService::class);
+        $method = new ReflectionMethod($service, 'resolveWordPressStatusPayload');
+        $method->setAccessible(true);
+
+        $payload = $method->invoke($service, $article);
+
+        $this->assertSame([], $payload);
+    }
+
     public function test_publish_for_article_entry_point_exists(): void
     {
         $this->assertTrue(method_exists(WordPressArticleSyncService::class, 'publishForArticle'));
     }
 
-    public function test_should_skip_editor_sync_when_fingerprint_matches_and_no_local_edit(): void
+    public function test_should_not_skip_editor_sync_when_forcing_publish_status(): void
     {
         $article = new SeoArticle([
             'id' => 4092,
@@ -90,8 +129,8 @@ final class WordPressArticleSyncStatusTest extends TestCase
 
         $result = $service->shouldSkipEditorSyncRequest($article, $prepared);
 
-        $this->assertTrue($result['skip']);
-        $this->assertSame('fingerprint_match', $result['reason']);
+        $this->assertFalse($result['skip']);
+        $this->assertSame('force_status_override', $result['reason']);
     }
 
     public function test_should_not_skip_editor_sync_when_local_edit_pending(): void

@@ -169,54 +169,24 @@ final class SimpleMarkdownHtmlConverter
     }
 
     /**
-     * Tách H1 / Meta Description khỏi markdown trước khi convert (H1 → tiêu đề, không vào body).
+     * Tách H1 / SEO Title / Meta Description / structural wrappers khỏi markdown AI.
      *
-     * @return array{markdown: string, h1_title: string|null, meta_description: string|null}
+     * @return array{
+     *     markdown: string,
+     *     h1_title: string|null,
+     *     meta_description: string|null,
+     *     seo_title?: string|null
+     * }
      */
     public function prepareImport(string $markdown): array
     {
-        $markdown = trim($markdown);
-        if ($markdown === '') {
-            return ['markdown' => '', 'h1_title' => null, 'meta_description' => null];
-        }
-
-        $extracted = $this->extractMetaDescriptionFromMarkdown($markdown);
-        $markdown = $extracted['markdown'];
-        $metaDescription = $extracted['meta_description'];
-
-        if ($markdown === '') {
-            return [
-                'markdown' => '',
-                'h1_title' => null,
-                'meta_description' => $metaDescription,
-            ];
-        }
-
-        $lines = preg_split('/\r\n|\r|\n/', $markdown) ?: [];
-        $h1Title = null;
-        $result = [];
-        $h1Stripped = false;
-
-        foreach ($lines as $line) {
-            $trimmed = trim($line);
-
-            if (! $h1Stripped && $trimmed !== '') {
-                $h1 = $this->parseH1Line($trimmed);
-                if ($h1 !== null && $h1Title === null) {
-                    $h1Title = $h1;
-                    $h1Stripped = true;
-
-                    continue;
-                }
-            }
-
-            $result[] = $line;
-        }
+        $parsed = (new ArticleMarkdownImportParser)->parse($markdown);
 
         return [
-            'markdown' => trim(implode("\n", $result)),
-            'h1_title' => $h1Title,
-            'meta_description' => $metaDescription,
+            'markdown' => $parsed['markdown'],
+            'h1_title' => $parsed['h1_title'],
+            'meta_description' => $parsed['meta_description'],
+            'seo_title' => $parsed['seo_title'],
         ];
     }
 
@@ -296,7 +266,13 @@ final class SimpleMarkdownHtmlConverter
                     continue;
                 }
 
-                if ($this->isMetaDescriptionLine($nextLine) || $this->parseH1Line($nextLine) !== null || $this->parseHeading($nextLine) !== null) {
+                if (
+                    $this->isMetaDescriptionLine($nextLine)
+                    || $this->isSeoTitleLine($nextLine)
+                    || $this->isStructuralSectionHeading($nextLine)
+                    || $this->parseH1Line($nextLine) !== null
+                    || $this->parseHeading($nextLine) !== null
+                ) {
                     break;
                 }
 
@@ -318,12 +294,16 @@ final class SimpleMarkdownHtmlConverter
 
     private function parseH1Line(string $line): ?string
     {
-        if (preg_match('/^H1:\s*(.+)$/iu', $line, $matches) === 1) {
-            return $this->cleanPlainHeadingText($matches[1]);
-        }
+        $parsed = (new ArticleMarkdownImportParser)->parseLabelLine($line);
+        if ($parsed !== null && $parsed['type'] === 'seo_title') {
+            $inline = trim((string) ($parsed['value'] ?? ''));
 
-        if (preg_match('/^#{1,6}\s+H1:\s*(.+)$/iu', $line, $matches) === 1) {
-            return $this->cleanPlainHeadingText($matches[1]);
+            return $inline !== '' ? $inline : null;
+        }
+        if ($parsed !== null && $parsed['type'] === 'h1_title') {
+            $inline = trim((string) ($parsed['value'] ?? ''));
+
+            return $inline !== '' ? $inline : null;
         }
 
         if (preg_match('/^#\s+(?!#)(.+)$/u', $line, $matches) === 1) {
@@ -338,15 +318,16 @@ final class SimpleMarkdownHtmlConverter
 
             $title = $this->cleanPlainHeadingText($text);
 
-            if ($title === '' || $this->isMetaDescriptionHeadingLabel($title)) {
+            if (
+                $title === ''
+                || $this->isMetaDescriptionHeadingLabel($title)
+                || $this->isSeoTitleHeadingLabel($title)
+                || $this->isStructuralSectionHeadingLabel($title)
+            ) {
                 return null;
             }
 
             return $title;
-        }
-
-        if (preg_match('/^\*{0,2}\s*H1\s*:\s*(.+?)\*{0,2}\s*$/iu', $line, $matches) === 1) {
-            return $this->cleanPlainHeadingText($matches[1]);
         }
 
         return null;
@@ -362,30 +343,63 @@ final class SimpleMarkdownHtmlConverter
 
     private function isMetaDescriptionLine(string $line): bool
     {
-        if (preg_match('/^\*{0,2}\s*Meta\s+Description\s*:\*{0,2}/iu', $line) === 1) {
-            return true;
-        }
+        return (new ArticleMarkdownImportParser)->isMetaDescriptionLine($line);
+    }
 
-        return preg_match('/^#{1,6}\s+Meta\s+Description\s*:?\s*$/iu', $line) === 1;
+    private function isSeoTitleLine(string $line): bool
+    {
+        return (new ArticleMarkdownImportParser)->isSeoTitleLine($line);
+    }
+
+    private function isStructuralSectionHeading(string $line): bool
+    {
+        return (new ArticleMarkdownImportParser)->isInvisibleStructureLine($line);
     }
 
     private function isMetaDescriptionHeadingLabel(string $text): bool
     {
-        return preg_match('/^meta\s+description$/iu', trim($text)) === 1;
+        $label = (new ArticleMarkdownImportParser)->parseLabelLine($text);
+
+        return $label !== null && $label['type'] === 'meta_description' && ($label['value'] ?? null) === null;
+    }
+
+    private function isSeoTitleHeadingLabel(string $text): bool
+    {
+        $label = (new ArticleMarkdownImportParser)->parseLabelLine($text);
+
+        return $label !== null && $label['type'] === 'seo_title' && ($label['value'] ?? null) === null;
+    }
+
+    private function isStructuralSectionHeadingLabel(string $text): bool
+    {
+        $label = (new ArticleMarkdownImportParser)->parseLabelLine($text);
+
+        return $label !== null && $label['type'] === 'structure';
     }
 
     private function parseMetaDescriptionLine(string $line): string
     {
-        if (preg_match('/^\*{0,2}\s*Meta\s+Description\s*:\*{0,2}\s*(.*)$/iu', $line, $matches) !== 1) {
+        $label = (new ArticleMarkdownImportParser)->parseLabelLine($line);
+        if ($label === null || $label['type'] !== 'meta_description') {
             return '';
         }
 
-        return trim($matches[1]);
+        return trim((string) ($label['value'] ?? ''));
+    }
+
+    private function parseSeoTitleLine(string $line): string
+    {
+        $label = (new ArticleMarkdownImportParser)->parseLabelLine($line);
+        if ($label === null || $label['type'] !== 'seo_title') {
+            return '';
+        }
+
+        return trim((string) ($label['value'] ?? ''));
     }
 
     private function isHorizontalRule(string $line): bool
     {
-        return preg_match('/^-{3,}\s*$/u', $line) === 1;
+        return (new ArticleMarkdownImportParser)->isHorizontalRule($line);
     }
 
     /**

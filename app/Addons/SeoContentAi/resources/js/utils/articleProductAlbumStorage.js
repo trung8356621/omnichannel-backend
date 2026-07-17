@@ -67,6 +67,34 @@ export function loadProductAlbum(articleId) {
     }
 }
 
+/**
+ * Bootstrap server có thể chỉ gửi URL — giữ id từ localStorage nếu URL trùng.
+ */
+export function mergeProductAlbumBootstrap(serverItems, articleId) {
+    const fromServer = normalizeProductAlbumList(serverItems);
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0 || fromServer.length === 0) {
+        return fromServer;
+    }
+
+    const existing = loadProductAlbum(id);
+    if (existing.length === 0) {
+        return fromServer;
+    }
+
+    return fromServer.map((item) => {
+        if (Number(item.id) > 0) {
+            return item;
+        }
+
+        const match = existing.find(
+            (row) => String(row?.url ?? '').trim() === item.url && Number(row?.id ?? 0) > 0,
+        );
+
+        return match ? { ...item, id: Number(match.id) } : item;
+    });
+}
+
 export function saveProductAlbum(articleId, items, { dispatch = true } = {}) {
     const id = Number(articleId ?? 0);
     if (!Number.isFinite(id) || id <= 0) {
