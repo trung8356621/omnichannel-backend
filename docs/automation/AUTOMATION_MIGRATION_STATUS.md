@@ -13,6 +13,11 @@
 | 3 Full | Extract Filament deps, classify catalog, skill, chạy test | **done** |
 | 4A | Migrate local-only callers (flag + shadow) | **in progress** — Group 1 wired, default `legacy` |
 | 4B | Group 2 wire (bridges + production callers) | **wired** (default `legacy`) — chưa deployed/shadow/promoted; see `AUTOMATION_PHASE4B_PREP.md` + `AUTOMATION_PHASE4B_HOSTING_VALIDATION.md` |
+| 5A | Audit Prompt Workflows + Hook Spec v0.1 | **done** — docs `automation/prompt/*`; fixtures; Spec helpers; không đổi production prompt behavior |
+| 5B | Prompt Hook Runtime Core (single-hook) | **done** — loader/registry/engine/bridge; default **legacy**; experimental@0.1.0; outline/FAQ/keywords wired |
+| 5C | Production adapter + PromptResult attach + rollout gates | **code ready** — `PromptRunnerProviderAdapter`; `prompt_result.attach`; promotion/live-shadow gates; default **legacy** |
+| 5D1 | Hosting rollout + single-hook stabilization support | **code ready** — parity aggregator; per-hook thresholds; mode/rollback policy; status/parity commands; runbook + fill-in report; defaults still **legacy**; title/meta experimental |
+| Outline vertical slice | Editor binding → ExplicitBinding → RuntimeEngine | **code ready** — `article.outline.generate@0.1.0` selectable; hosting tested = no; stable = no |
 | 4 full | Migrate high-risk / WP | not started |
 | 5 | Regression + static guards + docs finalize | not started |
 

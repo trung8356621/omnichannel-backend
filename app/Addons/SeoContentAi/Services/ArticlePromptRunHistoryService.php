@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use Illuminate\Support\Collection;
 
@@ -27,12 +28,84 @@ final class ArticlePromptRunHistoryService
     {
         $articleId = (int) $article->getKey();
 
-        $runs = SeoProjectRun::query()
-            ->with('project:id,name')
+        $accessibleRunIds = SeoProjectRun::query()
             ->whereIn('project_id', $accessibleProjectIds)
-            ->latest('id')
-            ->get()
-            ->map(function (SeoProjectRun $run) use ($articleId): ?array {
+            ->pluck('id')
+            ->map(static fn (mixed $id): int => (int) $id)
+            ->all();
+
+        $runsWithDbItems = $accessibleRunIds === []
+            ? []
+            : SeoProjectRunItem::query()
+                ->whereIn('run_id', $accessibleRunIds)
+                ->distinct()
+                ->pluck('run_id')
+                ->map(static fn (mixed $id): int => (int) $id)
+                ->all();
+        $runsWithDbSet = array_fill_keys($runsWithDbItems, true);
+
+        $dbMatchedByRun = $accessibleRunIds === []
+            ? collect()
+            : SeoProjectRunItem::query()
+                ->whereIn('run_id', $accessibleRunIds)
+                ->where('article_id', $articleId)
+                ->orderBy('id')
+                ->get()
+                ->groupBy(static fn (SeoProjectRunItem $item): int => (int) $item->run_id);
+
+        $candidateRunIds = array_values(array_unique(array_merge(
+            $dbMatchedByRun->keys()->map(static fn (mixed $id): int => (int) $id)->all(),
+            // Legacy JSON chỉ cho run chưa có bất kỳ DB run item nào.
+            array_values(array_filter(
+                $accessibleRunIds,
+                static fn (int $runId): bool => ! isset($runsWithDbSet[$runId]),
+            )),
+        )));
+
+        $runModels = $candidateRunIds === []
+            ? collect()
+            : SeoProjectRun::query()
+                ->with('project:id,name')
+                ->whereIn('id', $candidateRunIds)
+                ->latest('id')
+                ->get()
+                ->keyBy(static fn (SeoProjectRun $run): int => (int) $run->id);
+
+        $runs = collect($candidateRunIds)
+            ->map(function (int $runId) use ($articleId, $dbMatchedByRun, $runModels, $runsWithDbSet): ?array {
+                $run = $runModels->get($runId);
+                if (! $run instanceof SeoProjectRun) {
+                    return null;
+                }
+
+                if (isset($runsWithDbSet[$runId])) {
+                    $dbItems = $dbMatchedByRun->get($runId, collect());
+                    if ($dbItems->isEmpty()) {
+                        return null;
+                    }
+
+                    $matchingItems = $dbItems
+                        ->map(static function (SeoProjectRunItem $item): array {
+                            $output = is_array($item->output_snapshot) ? $item->output_snapshot : [];
+
+                            return [
+                                'run_item_id' => (int) $item->id,
+                                'task_id' => $item->task_id !== null ? (int) $item->task_id : 0,
+                                'article_id' => $item->article_id !== null ? (int) $item->article_id : null,
+                                'status' => (string) $item->status,
+                                'steps' => is_array($output['steps'] ?? null) ? $output['steps'] : [],
+                            ];
+                        })
+                        ->values();
+
+                    return [
+                        'run' => $run,
+                        'items' => $matchingItems,
+                        'source' => 'database',
+                    ];
+                }
+
+                // Legacy fallback — chỉ khi run không có DB items.
                 $matchingItems = collect(is_array($run->items) ? $run->items : [])
                     ->filter(
                         fn (mixed $item): bool => is_array($item)
@@ -47,16 +120,11 @@ final class ArticlePromptRunHistoryService
                 return [
                     'run' => $run,
                     'items' => $matchingItems,
+                    'source' => 'legacy_json',
                 ];
             })
             ->filter()
             ->values();
-
-        $accessibleRunIds = SeoProjectRun::query()
-            ->whereIn('project_id', $accessibleProjectIds)
-            ->pluck('id')
-            ->map(static fn (mixed $id): int => (int) $id)
-            ->all();
 
         $linkedRows = SeoPromptResultLink::query()
             ->where('article_id', $articleId)
@@ -109,15 +177,25 @@ final class ArticlePromptRunHistoryService
             ->keyBy(fn (PromptResult $result): int => (int) $result->getKey());
 
         $seenResultIds = [];
+        $seenRunItemIds = [];
+        $seenLinkIds = [];
         $groups = $runs
-            ->map(function (array $entry) use ($results, $linkedRows, &$seenResultIds): array {
+            ->map(function (array $entry) use ($results, $linkedRows, &$seenResultIds, &$seenRunItemIds, &$seenLinkIds): array {
                 /** @var SeoProjectRun $run */
                 $run = $entry['run'];
                 /** @var Collection<int, array<string, mixed>> $items */
                 $items = $entry['items'];
 
                 $prompts = $items
-                    ->flatMap(function (array $item) use ($run, $results, &$seenResultIds): array {
+                    ->flatMap(function (array $item) use ($run, $results, &$seenResultIds, &$seenRunItemIds): array {
+                        $runItemId = (int) ($item['run_item_id'] ?? 0);
+                        if ($runItemId > 0) {
+                            if (isset($seenRunItemIds[$runItemId])) {
+                                return [];
+                            }
+                            $seenRunItemIds[$runItemId] = true;
+                        }
+
                         $steps = array_values(array_filter(
                             is_array($item['steps'] ?? null) ? $item['steps'] : [],
                             'is_array',
@@ -147,7 +225,15 @@ final class ArticlePromptRunHistoryService
 
                 $runLinkedPrompts = $linkedRows
                     ->filter(fn (SeoPromptResultLink $link): bool => (int) ($link->project_run_id ?? 0) === (int) $run->id)
-                    ->map(function (SeoPromptResultLink $link) use ($run, $results, &$seenResultIds): ?array {
+                    ->map(function (SeoPromptResultLink $link) use ($run, $results, &$seenResultIds, &$seenLinkIds): ?array {
+                        $linkId = (int) $link->getKey();
+                        if ($linkId > 0) {
+                            if (isset($seenLinkIds[$linkId])) {
+                                return null;
+                            }
+                            $seenLinkIds[$linkId] = true;
+                        }
+
                         $source = trim((string) $link->source);
                         if (in_array($source, self::HIDDEN_SOURCES, true)) {
                             return null;

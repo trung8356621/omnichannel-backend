@@ -120,6 +120,12 @@ final class KeywordProjectAssignmentService
                         'article_id' => null,
                         'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
                         'source_content' => $sourceContent,
+                        'source_key' => app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(
+                            (int) $project->id,
+                            SeoProjectTask::TYPE_NEW_KEYWORD,
+                            SeoProjectTask::POST_TYPE_ARTICLE,
+                            $sourceContent,
+                        ),
                         'description' => null,
                         'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
                         'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),

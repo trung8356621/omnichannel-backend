@@ -44,6 +44,46 @@ class SeoContentAiServiceProvider extends ServiceProvider
             );
         });
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader::class, function () {
+            return new \App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader(
+                \App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader::defaultV01Directory(),
+                \App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader::defaultPhase1Directory(),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookMigrationFlags::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptBudgetStore::class, \App\Addons\SeoContentAi\PromptHooks\Runtime\InMemoryPromptBudgetStore::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBudgetGuard::class, function ($app): \App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBudgetGuard {
+            return new \App\Addons\SeoContentAi\PromptHooks\Runtime\InMemoryPromptHookBudgetGuard(
+                $app->make(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptBudgetStore::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Provider\PromptCostEstimator::class, \App\Addons\SeoContentAi\PromptHooks\Provider\ConfigPromptCostEstimator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Provider\PromptProviderUsageNormalizer::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\PromptHooks\Provider\PromptProviderAdapter::class,
+            \App\Addons\SeoContentAi\PromptHooks\Provider\PromptRunnerProviderAdapter::class,
+        );
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Provider\PromptProviderCapabilityResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Output\PromptHookRuntimeOutputPipeline::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookAuditRecorder::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEnvelopeValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeLocaleResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeSettingsResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDeterministicTemplateRenderer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookShadowParityRecorder::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookLiveShadowGate::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookPromotionThresholds::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookModeTransitionPolicy::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRollbackPolicy::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookPromotionGate::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeEngine::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExplicitBindingExecutor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Contracts\PromptResultAttacher::class, \App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\PromptHookExecutionService::class);
 
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Contracts\AutomationEventDispatcher::class, \App\Addons\SeoContentAi\Automation\Events\LoggingAutomationEventDispatcher::class);
@@ -106,6 +146,10 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 CleanCtaKeywordsCommand::class,
                 ExtractOldArticleTocsCommand::class,
                 PublishScheduledArticlesCommand::class,
+                \App\Addons\SeoContentAi\Console\ClearPromptHookDefinitionCacheCommand::class,
+                \App\Addons\SeoContentAi\Console\PromptHookStatusCommand::class,
+                \App\Addons\SeoContentAi\Console\PromptHookParityReportCommand::class,
+                \App\Addons\SeoContentAi\Console\BackfillContentProjectRunItemsCommand::class,
             ]);
         }
 

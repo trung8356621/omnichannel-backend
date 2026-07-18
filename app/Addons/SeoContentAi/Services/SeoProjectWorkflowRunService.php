@@ -4,10 +4,15 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectErrorCode;
+use App\Addons\SeoContentAi\Enums\SeoProjectRunAction;
+use App\Addons\SeoContentAi\Enums\SeoProjectRunItemStatus;
+use App\Addons\SeoContentAi\Enums\SeoProjectTaskEventType;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
@@ -28,6 +33,8 @@ final class SeoProjectWorkflowRunService
         private readonly SeoProjectArticleOwnerSyncService $articleOwnerSync,
         private readonly ArticleEditorReadinessService $editorReadiness,
         private readonly \App\Addons\SeoContentAi\Automation\Migration\ProjectTaskCallerBridge $taskCallerBridge,
+        private readonly SeoProjectRunItemService $runItemService,
+        private readonly SeoProjectTaskEventRecorder $eventRecorder,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -49,30 +56,38 @@ final class SeoProjectWorkflowRunService
     {
         $pendingCount = (int) $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->whereNull('archived_at')
+            ->whereNull('deleted_at')
             ->count();
 
         if ($pendingCount <= 0) {
             throw new \InvalidArgumentException(__('seo-content-ai::filament.projects.run_items_empty'));
         }
 
-        $plannedTotal = $limit !== null && $limit > 0
-            ? min($pendingCount, $limit)
-            : $pendingCount;
-
         $project->loadMissing('site');
-        $projectSiteId = (int) ($project->site_id ?? 0);
-        $plannedItems = $this->seedPlannedItems($project, $projectSiteId, $limit);
 
-        $run->update([
-            'status' => SeoProjectRun::STATUS_RUNNING,
-            'total' => count($plannedItems) > 0 ? count($plannedItems) : $plannedTotal,
-            'succeeded' => 0,
-            'failed' => 0,
-            'items' => $plannedItems,
-            'finished_at' => null,
-        ]);
+        $query = $project->tasks()
+            ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->whereNull('archived_at')
+            ->whereNull('deleted_at')
+            ->orderBy('target_date')
+            ->orderBy('id');
 
-        $run = $run->fresh(['project']);
+        if ($limit !== null && $limit > 0) {
+            $query->limit($limit);
+        }
+
+        $tasks = $query->get();
+
+        foreach ($tasks as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $this->runItemService->prepareOperation($run, $project, $task);
+        }
+
+        $run = $this->runItemService->syncMirrorAndCounters($run, false);
 
         if ($this->pendingAiTasksInBatch($project, $limit) === 0) {
             return $this->completeRunQueue($run);
@@ -85,6 +100,8 @@ final class SeoProjectWorkflowRunService
     {
         $query = $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->whereNull('archived_at')
+            ->whereNull('deleted_at')
             ->where('type', '!=', SeoProjectTask::TYPE_IMPROVE)
             ->orderBy('target_date')
             ->orderBy('id');
@@ -161,83 +178,17 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
-     * Gắn lại các task đã completed sau khi run bắt đầu nhưng bị thiếu trong items (run cũ / race).
+     * Reconcile JSON mirror từ seo_project_run_items.
+     * Không tạo task mới. Không tạo article. Không fuzzy identity.
      */
     public function reconcileMissingCompletedItems(SeoProjectRun $run): SeoProjectRun
     {
-        $run->loadMissing('project.site');
-        $project = $run->project;
-        if (! $project instanceof SeoProject) {
-            return $run;
-        }
-
-        $items = is_array($run->items) ? $run->items : [];
-        $knownTaskIds = collect($items)
-            ->map(static fn (mixed $item): int => is_array($item) ? (int) ($item['task_id'] ?? 0) : 0)
-            ->filter(static fn (int $id): bool => $id > 0)
-            ->values()
-            ->all();
-
-        $completedQuery = $project->tasks()
-            ->where('status', SeoProjectTask::STATUS_COMPLETED)
-            ->orderBy('target_date')
-            ->orderBy('id');
-
-        if ($knownTaskIds !== []) {
-            $completedQuery->whereNotIn('id', $knownTaskIds);
-        }
-
-        if ($run->started_at !== null) {
-            $completedQuery->where(function ($query) use ($run): void {
-                $query->where('updated_at', '>=', $run->started_at)
-                    ->orWhere('created_at', '>=', $run->started_at);
-            });
-        }
-
-        $missing = $completedQuery->get();
-        if ($missing->isEmpty()) {
-            return $run;
-        }
-
-        $projectSiteId = (int) ($project->site_id ?? 0);
-
-        foreach ($missing as $task) {
-            if (! $task instanceof SeoProjectTask) {
-                continue;
-            }
-
-            if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
-                $items[] = $this->buildImproveManualItemRow($task, $projectSiteId);
-                continue;
-            }
-
-            $articleId = (int) ($task->article_id ?? 0);
-            $items[] = $this->buildItemRow(
-                $task,
-                true,
-                $articleId > 0 ? $articleId : null,
-                'Đã chạy quy trình và tạo/cập nhật bài.',
-            );
-        }
-
-        $succeeded = collect($items)->where('status', 'success')->count();
-        $failed = collect($items)->where('status', 'failed')->count();
-
-        $run->update([
-            'items' => array_values($items),
-            'succeeded' => $succeeded,
-            'failed' => $failed,
-            'total' => max((int) $run->total, count($items)),
-        ]);
-
-        return $run->fresh(['project.site', 'user', 'project.tasks']) ?? $run;
+        return $this->runItemService->syncMirrorAndCounters($run, false);
     }
 
     public function completeRunQueue(SeoProjectRun $run): SeoProjectRun
     {
-        $items = is_array($run->items) ? $run->items : [];
-
-        $run = $this->persistRunItems($run, $items, true);
+        $run = $this->runItemService->syncMirrorAndCounters($run, true);
         $run->loadMissing('project');
 
         $project = $run->project;
@@ -249,14 +200,13 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
-     * Đánh dấu run completed + cập nhật counter từ items hiện tại, không consolidate.
+     * Đánh dấu run completed + cập nhật counter từ run items, không consolidate.
      */
     public function markRunCompletedQuietly(SeoProjectRun $run): SeoProjectRun
     {
         $run->refresh();
-        $items = is_array($run->items) ? $run->items : [];
 
-        return $this->persistRunItems($run, $items, true);
+        return $this->runItemService->syncMirrorAndCounters($run, true);
     }
 
     public function execute(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
@@ -294,46 +244,49 @@ final class SeoProjectWorkflowRunService
             return;
         }
 
-        $items = is_array($run->items) ? $run->items : [];
-        $changed = false;
+        // Phase 3A: không tạo task copy. Reset task failed → pending trên task gốc + run item.
+        $failedItems = SeoProjectRunItem::query()
+            ->where('run_id', (int) $run->id)
+            ->where('status', SeoProjectRunItemStatus::Failed->value)
+            ->get();
 
-        $consolidation = app(SeoProjectRunConsolidationService::class);
-
-        foreach ($items as $index => $item) {
-            if (! is_array($item) || (string) ($item['status'] ?? '') !== 'failed') {
+        foreach ($failedItems as $runItem) {
+            if (! $runItem instanceof SeoProjectRunItem) {
                 continue;
             }
 
-            if ($consolidation->hasSuccessfulRunItem($project, $item)) {
+            $taskId = (int) ($runItem->task_id ?? 0);
+            if ($taskId <= 0) {
                 continue;
             }
 
-            $pending = $this->matchingTaskQuery($project, $item)
-                ->where('status', SeoProjectTask::STATUS_PENDING)
-                ->orderBy('id')
+            $task = SeoProjectTask::query()
+                ->where('project_id', (int) $project->id)
+                ->whereKey($taskId)
                 ->first();
 
-            if (! $pending instanceof SeoProjectTask) {
-                $failedTask = $this->matchingTaskQuery($project, $item)
-                    ->where('status', SeoProjectTask::STATUS_FAILED)
-                    ->orderBy('id')
-                    ->first();
-
-                $pending = $failedTask instanceof SeoProjectTask
-                    ? SeoProjectTask::query()->find($this->enqueueFailedTaskOnce($project, $failedTask))
-                    : $this->createRetryTaskFromItem($project, $item);
+            if (! $task instanceof SeoProjectTask) {
+                continue;
             }
 
-            $retryTaskId = (int) ($pending?->id ?? 0);
-            if ($retryTaskId > 0 && (int) ($item['retry_task_id'] ?? 0) !== $retryTaskId) {
-                $items[$index]['retry_task_id'] = $retryTaskId;
-                $changed = true;
+            if ((string) $task->status === SeoProjectTask::STATUS_FAILED) {
+                SeoProjectTask::query()->whereKey($taskId)->update([
+                    'status' => SeoProjectTask::STATUS_PENDING,
+                ]);
+            }
+
+            if ((string) $runItem->status === SeoProjectRunItemStatus::Failed->value) {
+                $runItem->fill([
+                    'status' => SeoProjectRunItemStatus::Pending->value,
+                    'error_code' => null,
+                    'error_message' => null,
+                    'finished_at' => null,
+                ]);
+                $runItem->save();
             }
         }
 
-        if ($changed) {
-            $run->update(['items' => array_values($items)]);
-        }
+        $this->runItemService->mirrorJsonSafely($run);
     }
 
     /**
@@ -349,60 +302,55 @@ final class SeoProjectWorkflowRunService
             throw new \InvalidArgumentException('Không tìm thấy dự án của lần run này.');
         }
 
-        // Luôn đọc items mới nhất từ DB trước khi merge — tránh Livewire stale ghi đè mất hàng đã OK.
         $run->refresh();
-        $items = is_array($run->items) ? $run->items : [];
-
-        $existingItem = collect($items)
-            ->first(fn (mixed $item): bool => is_array($item) && (int) ($item['task_id'] ?? 0) === $taskId);
 
         $task = SeoProjectTask::query()
             ->where('project_id', (int) $project->id)
             ->whereKey($taskId)
             ->first();
 
-        // Task gốc có thể đã bị gộp/xóa (consolidation). Thử retry_task_id rồi dựng lại từ item.
-        $retryTaskId = is_array($existingItem)
-            ? (int) ($existingItem['retry_task_id'] ?? 0)
-            : 0;
-        if (! $task instanceof SeoProjectTask && $retryTaskId > 0) {
-            $task = SeoProjectTask::query()
-                ->where('project_id', (int) $project->id)
-                ->whereKey($retryTaskId)
-                ->first();
-        }
-
-        if (! $task instanceof SeoProjectTask && is_array($existingItem)) {
-            $task = $this->createRetryTaskFromItem($project, $existingItem);
-            Log::info('seo.project_run.retry.rebuilt_task', [
-                'run_id' => (int) $run->id,
-                'stale_task_id' => $taskId,
-                'rebuilt_task_id' => (int) $task->id,
-            ]);
-        }
-
         if (! $task instanceof SeoProjectTask) {
+            $action = SeoProjectRunAction::ArticleCreate;
+            $existingRunItem = $this->runItemService->findByLogicalOperation(
+                (int) $run->id,
+                $taskId,
+                $action->value,
+            );
+            // Thử tìm theo bất kỳ action nào của task_id
+            if (! $existingRunItem instanceof SeoProjectRunItem) {
+                $existingRunItem = SeoProjectRunItem::query()
+                    ->where('run_id', (int) $run->id)
+                    ->where('task_id', $taskId)
+                    ->orderByDesc('id')
+                    ->first();
+            }
+
+            if ($existingRunItem instanceof SeoProjectRunItem) {
+                $this->runItemService->markFailed(
+                    $existingRunItem,
+                    ContentProjectErrorCode::TaskNotFound,
+                    'Task không còn tồn tại — không reconstruct từ JSON.',
+                );
+                $this->runItemService->syncMirrorAndCounters($run, $markCompleted);
+
+                return [
+                    'task_id' => $taskId,
+                    'retry_task_id' => $taskId,
+                    'status' => 'failed',
+                    'message' => 'Task không còn tồn tại.',
+                    'error_code' => ContentProjectErrorCode::TaskNotFound->value,
+                    'error_detail' => 'Task không còn tồn tại — không reconstruct từ JSON.',
+                    'article_id' => $existingRunItem->article_id,
+                    'steps' => [],
+                ];
+            }
+
             throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong dự án.');
         }
 
-        if ($retryTaskId > 0 && $task->getKey() !== $retryTaskId && $task->getKey() === $taskId) {
-            $retryTask = SeoProjectTask::query()
-                ->where('project_id', (int) $project->id)
-                ->whereKey($retryTaskId)
-                ->first();
-
-            if ($retryTask instanceof SeoProjectTask) {
-                $task = $retryTask;
-            }
-        }
-
-        // Chạy lại phải bám đúng bài đã tạo/liên kết trước đó — tránh match nhầm bài khác cùng tiêu đề.
         $linkedArticleId = (int) ($forcedArticleId ?? 0);
         if ($linkedArticleId <= 0) {
             $linkedArticleId = (int) ($task->article_id ?? 0);
-        }
-        if ($linkedArticleId <= 0 && is_array($existingItem)) {
-            $linkedArticleId = (int) ($existingItem['article_id'] ?? 0);
         }
 
         if ($linkedArticleId > 0 && (int) ($task->article_id ?? 0) !== $linkedArticleId) {
@@ -418,42 +366,23 @@ final class SeoProjectWorkflowRunService
                     auth()->id() !== null ? (int) auth()->id() : null,
                     (int) ($project->site_id ?? 0),
                 );
-
-                Log::info('seo.project_run.retry.relink_article', [
-                    'run_id' => (int) $run->id,
-                    'task_id' => (int) $task->id,
-                    'relinked_article_id' => $linkedArticleId,
-                ]);
+                $task->refresh();
             }
+        }
+
+        if ((string) $task->status === SeoProjectTask::STATUS_FAILED) {
+            SeoProjectTask::query()->whereKey((int) $task->id)->update([
+                'status' => SeoProjectTask::STATUS_PENDING,
+            ]);
+            $task->refresh();
         }
 
         $projectSiteId = (int) ($project->site_id ?? 0);
-        $previousRetryCount = is_array($existingItem) ? (int) ($existingItem['retry_count'] ?? 0) : 0;
-
         $itemRow = $this->runOneTask($project, $run, $task, $projectSiteId);
         $itemRow['task_id'] = $taskId;
-        $itemRow['retry_count'] = $previousRetryCount + 1;
-        unset($itemRow['retry_task_id']);
+        $itemRow['retry_task_id'] = $taskId;
 
-        // Refresh lần nữa sau AI (có thể dài) rồi merge — chống mất item do request song song.
-        $run->refresh();
-        $items = is_array($run->items) ? $run->items : [];
-        $replaced = false;
-
-        foreach ($items as $index => $existing) {
-            if ((int) ($existing['task_id'] ?? 0) === $taskId) {
-                $items[$index] = $itemRow;
-                $replaced = true;
-
-                break;
-            }
-        }
-
-        if (! $replaced) {
-            $items[] = $itemRow;
-        }
-
-        $this->persistRunItems($run, array_values($items), $markCompleted);
+        $this->runItemService->syncMirrorAndCounters($run, $markCompleted);
 
         return $itemRow;
     }
@@ -546,7 +475,19 @@ final class SeoProjectWorkflowRunService
             $items[$existingIndex] = $itemRow;
         }
 
-        $this->finalizeRun($run, array_values($items));
+        $primary = $currentTasks->first();
+        if ($primary instanceof SeoProjectTask) {
+            $action = $this->runItemService->resolveAction($primary);
+            $runItem = $this->runItemService->findByLogicalOperation((int) $run->id, (int) $primary->id, $action->value)
+                ?? $this->runItemService->prepareOperation($run, $project, $primary);
+            $this->runItemService->markSuccess(
+                $runItem,
+                $resolvedArticleId,
+                'Đã sửa lỗi thủ công.',
+            );
+        }
+
+        $this->runItemService->syncMirrorAndCounters($run, false);
 
         return $itemRow;
     }
@@ -556,22 +497,81 @@ final class SeoProjectWorkflowRunService
      */
     private function runOneTask(SeoProject $project, SeoProjectRun $run, SeoProjectTask $task, int $projectSiteId): array
     {
+        $action = $this->runItemService->resolveAction($task);
+
         if ($task->type === SeoProjectTask::TYPE_IMPROVE) {
-            return $this->buildImproveManualItemRow($task, $projectSiteId);
+            $this->runItemService->prepareOperation($run, $project, $task);
+            $row = $this->buildImproveManualItemRow($task, $projectSiteId);
+            $this->runItemService->mirrorJsonSafely($run);
+
+            return $row;
+        }
+
+        $claim = $this->runItemService->claimForExecution($run, (int) $task->id, $action);
+        $runItem = $claim['run_item'];
+        $task = $claim['task'] ?? $task;
+
+        if ($claim['outcome'] === 'already_processing') {
+            return [
+                'task_id' => (int) ($task?->id ?? 0),
+                'retry_task_id' => (int) ($task?->id ?? 0),
+                'action' => $action->value,
+                'status' => 'pending',
+                'message' => (string) ($claim['message'] ?? 'Operation đang processing.'),
+                'error_code' => $claim['error_code'],
+                'article_id' => $claim['article_id'],
+                'steps' => [],
+            ];
+        }
+
+        if ($claim['outcome'] === 'already_processed' || $claim['outcome'] === 'skipped') {
+            if ($task instanceof SeoProjectTask && ($claim['article_id'] ?? 0) > 0) {
+                $this->markTaskCompleted($task, (int) $claim['article_id']);
+            }
+            $this->runItemService->syncMirrorAndCounters($run, false);
+            if ($task instanceof SeoProjectTask && $runItem instanceof SeoProjectRunItem) {
+                return app(\App\Addons\SeoContentAi\Support\ProjectRunItemLegacyJsonPresenter::class)
+                    ->present($runItem->fresh() ?? $runItem, $task->fresh() ?? $task);
+            }
+
+            return [
+                'task_id' => (int) ($task?->id ?? 0),
+                'retry_task_id' => (int) ($task?->id ?? 0),
+                'status' => 'success',
+                'message' => (string) ($claim['message'] ?? 'Already processed.'),
+                'article_id' => $claim['article_id'],
+                'steps' => [],
+            ];
+        }
+
+        if ($claim['outcome'] === 'failed' || ! $task instanceof SeoProjectTask || ! $runItem instanceof SeoProjectRunItem) {
+            $this->runItemService->syncMirrorAndCounters($run, false);
+
+            return [
+                'task_id' => (int) ($task?->id ?? $runItem?->task_id ?? 0),
+                'retry_task_id' => (int) ($task?->id ?? $runItem?->task_id ?? 0),
+                'status' => 'failed',
+                'message' => (string) ($claim['message'] ?? 'Claim failed.'),
+                'error_code' => $claim['error_code'],
+                'error_detail' => (string) ($claim['message'] ?? ''),
+                'article_id' => $claim['article_id'],
+                'steps' => [],
+            ];
         }
 
         $taskSiteId = (int) ($task->site_id ?? $projectSiteId);
         if ($taskSiteId <= 0) {
             $this->markTaskFailed($task);
-
-            return $this->buildFailedItemRow(
-                $task,
-                null,
-                $this->errorFormatter->fromPlainDetail('Thiếu site_id.'),
+            $this->runItemService->markFailed(
+                $runItem,
+                ContentProjectErrorCode::ExternalWorkflowFailed,
+                'Thiếu site_id.',
             );
+            $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskFailed, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_FAILED, $run, $runItem);
+
+            return $this->finalizeFailedJson($run, $task, $runItem, $this->errorFormatter->fromPlainDetail('Thiếu site_id.'));
         }
 
-        $this->markTaskWriting($task);
         $scope = $this->articleScopeForProject($projectSiteId);
 
         try {
@@ -582,11 +582,8 @@ final class SeoProjectWorkflowRunService
                 'task_id' => (int) $task->id,
                 'task_type' => (string) $task->type,
                 'article_id' => (int) ($task->article_id ?? 0),
-                'context_project_task_type' => $context->projectTaskType,
-                'context_rewrite_mode' => $context->rewriteMode,
-                'context_post_type' => $context->postType,
-                'context_is_new_article' => $context->isNewArticle,
-                'context_article_id' => (int) ($context->article?->id ?? 0),
+                'run_item_id' => (int) $runItem->id,
+                'attempt' => (int) $runItem->attempt,
             ]);
 
             $result = $this->articleRunner->runPublishWorkflowForContext($context, $taskSiteId);
@@ -594,28 +591,56 @@ final class SeoProjectWorkflowRunService
             $stepStats = $this->summarizeStepStats($steps);
             $ranAt = now();
 
-            Log::info('seo.project_run.task.finished', [
-                'run_id' => (int) $run->id,
-                'task_id' => (int) $task->id,
-                'success' => (bool) ($result['success'] ?? false),
-                'article_id' => (int) ($result['article_id'] ?? 0),
-                'message' => (string) ($result['message'] ?? ''),
-                'step_stats' => $stepStats,
-                'step_statuses' => collect($steps)
-                    ->filter(static fn (mixed $step): bool => is_array($step))
-                    ->map(static fn (array $step): array => [
-                        'type' => (string) ($step['type'] ?? ''),
-                        'title' => (string) ($step['title'] ?? ''),
-                        'status' => (string) ($step['status'] ?? ''),
-                        'message' => mb_substr((string) ($step['message'] ?? ''), 0, 180),
-                    ])
-                    ->values()
-                    ->all(),
-            ]);
-
             if ($result['success']) {
                 $articleId = (int) ($result['article_id'] ?? 0);
-                $this->markTaskCompleted($task, $articleId);
+
+                if ($articleId > 0) {
+                    $bind = $this->runItemService->bindArticleAfterExternal(
+                        $task,
+                        $runItem,
+                        $articleId,
+                        (int) $run->id,
+                        created: true,
+                    );
+                    $task->refresh();
+                    $runItem->refresh();
+
+                    if (! $bind['ok']) {
+                        $errorCode = ContentProjectErrorCode::tryFrom((string) $bind['error_code'])
+                            ?? ContentProjectErrorCode::ArticleRelationConflict;
+                        $this->markTaskFailed($task, (int) ($task->article_id ?? 0) ?: null);
+                        $this->runItemService->markFailed(
+                            $runItem,
+                            $errorCode,
+                            (string) $bind['message'],
+                            articleId: $articleId,
+                        );
+                        $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskFailed, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_FAILED, $run, $runItem);
+
+                        return $this->finalizeFailedJson($run, $task, $runItem, [
+                            'message' => (string) $bind['message'],
+                            'error_detail' => (string) $bind['message'],
+                            'error_class' => null,
+                            'error_trace' => null,
+                            'failed_step' => null,
+                        ]);
+                    }
+                }
+
+                $this->markTaskCompleted($task, $articleId > 0 ? $articleId : (int) ($task->article_id ?? 0));
+                $message = $this->formatRunResultMessage((string) $result['message'], $ranAt, $stepStats);
+
+                $this->runItemService->markSuccess(
+                    $runItem,
+                    $articleId > 0 ? $articleId : null,
+                    $message,
+                    [
+                        'steps' => $this->promptSteps($steps),
+                        'step_stats' => $stepStats,
+                    ],
+                );
+
+                $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskCompleted, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_COMPLETED, $run, $runItem);
 
                 $readiness = null;
                 if ($articleId > 0) {
@@ -632,56 +657,55 @@ final class SeoProjectWorkflowRunService
                             $readiness = $this->editorReadiness->queueAfterWorkflowRun($article, (int) $run->id);
                         }
                     } catch (\Throwable $sideEffectException) {
-                        // Bài + task.article_id đã lưu — không để side-effect làm fail cả hạng mục / xóa link.
                         Log::warning('seo.project_run.task.post_success_side_effect', [
                             'run_id' => (int) $run->id,
                             'task_id' => (int) $task->id,
                             'article_id' => $articleId,
                             'error' => $sideEffectException->getMessage(),
-                            'class' => $sideEffectException::class,
                         ]);
                     }
                 }
 
-                $message = $this->formatRunResultMessage((string) $result['message'], $ranAt, $stepStats);
-                $itemRow = $this->buildItemRow(
-                    $task,
-                    true,
-                    $articleId > 0 ? $articleId : null,
-                    $message,
-                    $this->promptSteps($steps),
-                    $ranAt,
-                );
-                $itemRow['step_stats'] = $stepStats;
-                $itemRow['debug'] = [
-                    'project_task_type' => $context->projectTaskType,
-                    'rewrite_mode' => $context->rewriteMode,
-                    'post_type' => $context->postType,
-                    'ai_completed' => $stepStats['completed'],
-                    'ai_skipped' => $stepStats['skipped'],
-                ];
+                $this->runItemService->syncMirrorAndCounters($run, false);
+                $freshItem = $runItem->fresh() ?? $runItem;
+                $row = app(\App\Addons\SeoContentAi\Support\ProjectRunItemLegacyJsonPresenter::class)
+                    ->present($freshItem, $task->fresh() ?? $task, [
+                        'step_stats' => $stepStats,
+                    ]);
 
                 if ($readiness !== null) {
-                    $itemRow['article_editor_ready'] = $readiness->isReady;
-                    $itemRow['article_editor_preparing_message'] = $this->editorReadiness->userMessage($readiness);
+                    $row['article_editor_ready'] = $readiness->isReady;
+                    $row['article_editor_preparing_message'] = $this->editorReadiness->userMessage($readiness);
                 }
 
-                return $itemRow;
+                return $row;
             }
 
             $failedArticleId = (int) ($result['article_id'] ?? 0);
+            if ($failedArticleId > 0) {
+                $this->runItemService->bindArticleAfterExternal(
+                    $task,
+                    $runItem,
+                    $failedArticleId,
+                    (int) $run->id,
+                    created: false,
+                );
+                $task->refresh();
+            }
+
             $this->markTaskFailed($task, $failedArticleId > 0 ? $failedArticleId : null);
-
             $failedStep = is_array($result['failed_step'] ?? null) ? $result['failed_step'] : null;
+            $error = $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep);
 
-            $item = $this->buildFailedItemRow(
-                $task,
+            $this->runItemService->markFailed(
+                $runItem,
+                ContentProjectErrorCode::ExternalWorkflowFailed,
+                $error['error_detail'] ?? $error['message'],
+                $error['message'],
+                ['steps' => $this->promptSteps($steps), 'step_stats' => $stepStats],
                 $failedArticleId > 0 ? $failedArticleId : null,
-                $this->errorFormatter->fromWorkflowFailure((string) $result['message'], $failedStep),
-                $this->promptSteps($steps),
-                $ranAt,
             );
-            $item['step_stats'] = $stepStats;
+            $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskFailed, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_FAILED, $run, $runItem);
 
             if ($failedArticleId > 0) {
                 $this->storeArticleRunMeta($failedArticleId, $run, $task);
@@ -694,9 +718,7 @@ final class SeoProjectWorkflowRunService
                 );
             }
 
-            $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
-
-            return $item;
+            return $this->finalizeFailedJson($run, $task, $runItem, $error, $stepStats);
         } catch (\Throwable $exception) {
             Log::error('seo.project_run.task.exception', [
                 'run_id' => (int) $run->id,
@@ -707,91 +729,113 @@ final class SeoProjectWorkflowRunService
 
             $keptArticleId = (int) ($task->article_id ?? 0);
             $this->markTaskFailed($task, $keptArticleId > 0 ? $keptArticleId : null);
-
-            $item = $this->buildFailedItemRow(
-                $task,
-                $keptArticleId > 0 ? $keptArticleId : null,
-                $this->errorFormatter->fromThrowable($exception),
-                [],
-                now(),
+            $error = $this->errorFormatter->fromThrowable($exception);
+            $this->runItemService->markFailed(
+                $runItem,
+                ContentProjectErrorCode::ExternalWorkflowFailed,
+                $error['error_detail'] ?? $error['message'],
+                $error['message'],
+                articleId: $keptArticleId > 0 ? $keptArticleId : null,
             );
-            $item['retry_task_id'] = $this->enqueueFailedTaskOnce($project, $task);
+            $this->safeTaskEvent($task, SeoProjectTaskEventType::TaskFailed, SeoProjectTask::STATUS_WRITING, SeoProjectTask::STATUS_FAILED, $run, $runItem);
 
-            return $item;
+            return $this->finalizeFailedJson($run, $task, $runItem, $error);
         }
     }
 
     /**
-     * Add one pending copy for a failed task. Existing pending copies are reused.
+     * @deprecated Phase 3A — không tạo task copy. Trả về task gốc.
      */
     private function enqueueFailedTaskOnce(SeoProject $project, SeoProjectTask $failedTask): int
     {
-        $pending = $this->matchingTaskQuery($project, [
-            'type' => (string) $failedTask->type,
-            'source_content' => (string) $failedTask->source_content,
-            'post_type' => $failedTask->post_type,
-        ])
-            ->where('id', '!=', (int) $failedTask->id)
-            ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->orderBy('id')
-            ->first();
-
-        if ($pending instanceof SeoProjectTask) {
-            return (int) $pending->id;
+        if ((string) $failedTask->status === SeoProjectTask::STATUS_FAILED) {
+            SeoProjectTask::query()->whereKey((int) $failedTask->id)->update([
+                'status' => SeoProjectTask::STATUS_PENDING,
+            ]);
         }
 
-        $retryTask = $project->tasks()->create([
-            'site_id' => $failedTask->site_id ?: $project->site_id,
-            'type' => $failedTask->type,
-            'post_type' => SeoProjectTask::isNewArticleType($failedTask->type)
-                ? SeoProjectTask::normalizePostType($failedTask->post_type)
-                : null,
-            'loai_san_pham' => $failedTask->loai_san_pham,
-            'source_content' => $failedTask->source_content,
-            'description' => $failedTask->description,
-            'target_date' => $failedTask->target_date,
-            'article_id' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
-                ? $failedTask->article_id
-                : null,
-            'rewrite_mode' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
-                ? SeoProjectTask::normalizeRewriteMode($failedTask->rewrite_mode)
-                : SeoProjectTask::REWRITE_MODE_KEYWORD,
-            'rewrite_notes' => $failedTask->type === SeoProjectTask::TYPE_REWRITE
-                ? $failedTask->rewrite_notes
-                : null,
-            'status' => SeoProjectTask::STATUS_PENDING,
-        ]);
-
-        return (int) $retryTask->id;
+        return (int) $failedTask->id;
     }
 
     /**
+     * @deprecated Phase 3A — không reconstruct task từ JSON.
+     *
      * @param  array<string, mixed>  $item
      */
     private function createRetryTaskFromItem(SeoProject $project, array $item): SeoProjectTask
     {
-        $type = (string) ($item['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
-        $articleId = (int) ($item['article_id'] ?? 0);
+        $taskId = (int) ($item['task_id'] ?? 0);
+        $task = $taskId > 0
+            ? SeoProjectTask::query()
+                ->where('project_id', (int) $project->id)
+                ->whereKey($taskId)
+                ->first()
+            : null;
 
-        return $project->tasks()->create([
-            'site_id' => (int) $project->site_id,
-            'type' => $type,
-            'post_type' => SeoProjectTask::isNewArticleType($type)
-                ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
-                : null,
-            'loai_san_pham' => trim((string) ($item['loai_san_pham'] ?? '')) ?: null,
-            'source_content' => trim((string) ($item['source_content'] ?? '')),
-            'description' => trim((string) ($item['gallery_description'] ?? $item['description'] ?? '')) ?: null,
-            'target_date' => $item['target_date'] ?? null,
-            'article_id' => $articleId > 0 ? $articleId : null,
-            'rewrite_mode' => $type === SeoProjectTask::TYPE_REWRITE
-                ? SeoProjectTask::normalizeRewriteMode($item['rewrite_mode'] ?? null)
-                : SeoProjectTask::REWRITE_MODE_KEYWORD,
-            'rewrite_notes' => $type === SeoProjectTask::TYPE_REWRITE
-                ? (trim((string) ($item['rewrite_notes'] ?? '')) ?: null)
-                : null,
-            'status' => SeoProjectTask::STATUS_PENDING,
-        ]);
+        if ($task instanceof SeoProjectTask) {
+            return $task;
+        }
+
+        throw new \InvalidArgumentException(
+            ContentProjectErrorCode::TaskNotFound->value.': không reconstruct task từ JSON.',
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $error
+     * @param  array<string, mixed>|null  $stepStats
+     * @return array<string, mixed>
+     */
+    private function finalizeFailedJson(
+        SeoProjectRun $run,
+        SeoProjectTask $task,
+        SeoProjectRunItem $runItem,
+        array $error,
+        ?array $stepStats = null,
+    ): array {
+        $this->runItemService->syncMirrorAndCounters($run, false);
+        $row = app(\App\Addons\SeoContentAi\Support\ProjectRunItemLegacyJsonPresenter::class)
+            ->present($runItem->fresh() ?? $runItem, $task->fresh() ?? $task);
+        $row['retry_task_id'] = (int) $task->id;
+        $row['error_detail'] = $error['error_detail'] ?? ($error['message'] ?? '');
+        if ($stepStats !== null) {
+            $row['step_stats'] = $stepStats;
+        }
+
+        return $row;
+    }
+
+    private function safeTaskEvent(
+        SeoProjectTask $task,
+        SeoProjectTaskEventType $event,
+        ?string $from,
+        ?string $to,
+        SeoProjectRun $run,
+        SeoProjectRunItem $runItem,
+    ): void {
+        try {
+            $this->eventRecorder->record(
+                task: $task,
+                event: $event,
+                fromStatus: $from,
+                toStatus: $to,
+                payload: [
+                    'run_item_id' => (int) $runItem->id,
+                    'action' => (string) $runItem->action,
+                    'attempt' => (int) $runItem->attempt,
+                    'article_id' => $runItem->article_id,
+                    'error_code' => $runItem->error_code,
+                ],
+                runId: (int) $run->id,
+                createdBy: auth()->id() !== null ? (int) auth()->id() : null,
+            );
+        } catch (\Throwable $exception) {
+            Log::warning('seo.project_run.event_failed', [
+                'task_id' => (int) $task->id,
+                'event' => $event->value,
+                'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     /**
@@ -825,59 +869,17 @@ final class SeoProjectWorkflowRunService
     }
 
     /**
+     * Dual-write: counters từ run items; JSON mirror sau (compatibility).
+     * $items chỉ còn dùng làm hint merge legacy — nguồn chuẩn là seo_project_run_items.
+     *
      * @param  list<array<string, mixed>>  $items
      */
     private function persistRunItems(SeoProjectRun $run, array $items, bool $markCompleted): SeoProjectRun
     {
-        $succeeded = collect($items)->where('status', 'success')->count();
-        $failed = collect($items)->where('status', 'failed')->count();
+        // Prefer structured table; ignore incoming JSON as source of truth.
+        unset($items);
 
-        $payload = [
-            'succeeded' => $succeeded,
-            'failed' => $failed,
-            'items' => $items,
-        ];
-
-        if ($markCompleted || (int) $run->total <= 0) {
-            $payload['total'] = max((int) $run->total, count($items));
-        }
-
-        if ($markCompleted) {
-            $payload['status'] = SeoProjectRun::STATUS_COMPLETED;
-            $payload['finished_at'] = now();
-        } else {
-            $payload['status'] = SeoProjectRun::STATUS_RUNNING;
-            $payload['finished_at'] = null;
-        }
-
-        return DB::connection('omi_seo_ai')->transaction(function () use ($run, $payload): SeoProjectRun {
-            /** @var SeoProjectRun|null $locked */
-            $locked = SeoProjectRun::query()
-                ->whereKey((int) $run->id)
-                ->lockForUpdate()
-                ->first();
-
-            if (! $locked instanceof SeoProjectRun) {
-                $run->update($payload);
-
-                return $run->fresh(['project']) ?? $run;
-            }
-
-            // Merge theo task_id với bản DB mới nhất trong lock — không để request cũ ghi đè mất hàng.
-            $dbItems = is_array($locked->items) ? $locked->items : [];
-            $incoming = is_array($payload['items'] ?? null) ? $payload['items'] : [];
-            $payload['items'] = $this->mergeRunItemsByTaskId($dbItems, $incoming);
-            $payload['succeeded'] = collect($payload['items'])->where('status', 'success')->count();
-            $payload['failed'] = collect($payload['items'])->where('status', 'failed')->count();
-
-            if (array_key_exists('total', $payload)) {
-                $payload['total'] = max((int) $locked->total, (int) $payload['total'], count($payload['items']));
-            }
-
-            $locked->update($payload);
-
-            return $locked->fresh(['project']) ?? $locked;
-        });
+        return $this->runItemService->syncMirrorAndCounters($run, $markCompleted);
     }
 
     /**

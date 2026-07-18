@@ -175,6 +175,13 @@ final class SeoIssueProjectTaskAssignmentService
                         $payload['rewrite_notes'] = $normalizedRewriteNotes;
                     }
 
+                    $payload['source_key'] = app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(
+                        (int) $project->id,
+                        $normalizedTaskType,
+                        isset($payload['post_type']) ? (string) $payload['post_type'] : null,
+                        $sourceContent,
+                    );
+
                     SeoProjectTask::query()->create($payload);
                 }
 

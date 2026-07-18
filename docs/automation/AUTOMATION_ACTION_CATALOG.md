@@ -63,7 +63,8 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 | `project.task.mark_failed` | CATALOG_ONLY | — | — | n/a | no | |
 | `project.task.mark_completed` | IMPLEMENT | selectable | `MarkProjectTaskCompletedAction` | Automation PASS | no | + `SeoProjectArticleOwnerSyncService`. |
 | `project.task.prepare_retry` | CATALOG_ONLY | — | — | n/a | no | |
-| `project.prompt_result.attach` | CATALOG_ONLY | — | — | n/a | no | |
+| `project.prompt_result.attach` | SUPERSEDED | — | use `prompt_result.attach` | n/a | — | Canonical key moved out of project module. |
+| `prompt_result.attach` | IMPLEMENT | selectable | `AttachPromptResultAction` → `PromptResultAttachService` | Phase5C unit | no | Idempotent; allowlist article\|project_task\|project; no WP. |
 | `project.pending_internal_link.create` | CATALOG_ONLY | — | — | n/a | no | overlap keyword pending link. |
 | `project.run_everything` / `process` / `handle` | NOT_NEEDED | — | — | n/a | — | Orchestration — cấm. |
 | Workflow run orchestration | INTERNAL_SERVICE_ONLY | — | — | n/a | no | `SeoProjectWorkflowRunService` — composition sau. |

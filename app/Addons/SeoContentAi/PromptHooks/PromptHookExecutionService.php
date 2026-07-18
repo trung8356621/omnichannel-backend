@@ -12,7 +12,7 @@ use App\Addons\SeoContentAi\PromptHooks\Data\PromptHookExecutionResult;
 use App\Addons\SeoContentAi\PromptHooks\Entities\ArticlePromptHookEntityResolver;
 use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookException;
 use App\Addons\SeoContentAi\PromptHooks\Support\PromptHookErrorCode;
-use App\Addons\SeoContentAi\Services\PromptResultLinkService;
+use App\Addons\SeoContentAi\Services\PromptResultAttachService;
 use App\Addons\SeoContentAi\Services\PromptRunnerService;
 use App\Addons\SeoContentAi\Services\SeoCreateArticleSettingsService;
 use App\Addons\SeoContentAi\Support\ImageToolType;
@@ -27,7 +27,7 @@ final class PromptHookExecutionService
         private readonly PromptHookPromptAssembler $promptAssembler,
         private readonly PromptHookOutputNormalizer $outputNormalizer,
         private readonly PromptRunnerService $promptRunner,
-        private readonly PromptResultLinkService $promptResultLinks,
+        private readonly PromptResultAttachService $promptResultAttach,
         private readonly SeoCreateArticleSettingsService $workflowSettings,
     ) {}
 
@@ -82,7 +82,9 @@ final class PromptHookExecutionService
             );
         }
 
-        $this->attachPromptResultToArticle($articleId, $definition, $prompt, $result);
+        // Orchestrator attach via domain service (same boundary as Action prompt_result.attach).
+        // Hook Runtime Engine must never call this path.
+        $this->attachPromptResultAfterExecution($article, $definition, $prompt, $result);
 
         $raw = trim((string) ($result->output_text ?? ''));
         $output = $this->outputNormalizer->normalize($definition, $raw);
@@ -94,38 +96,35 @@ final class PromptHookExecutionService
         );
     }
 
-    private function attachPromptResultToArticle(
-        int $articleId,
+    private function attachPromptResultAfterExecution(
+        \App\Addons\SeoContentAi\Models\SeoArticle $article,
         PromptHookDefinition $definition,
         SeoPrompt $prompt,
         PromptResult $result,
     ): void {
         $resultId = (int) $result->getKey();
+        $articleId = (int) $article->getKey();
         if ($resultId <= 0 || $articleId <= 0) {
             return;
         }
-
-        // article_id không vào biến prompt AI — ghi snapshot để history/backfill tìm được.
-        $snapshot = is_array($result->input_snapshot) ? $result->input_snapshot : [];
-        $snapshot['article_id'] = $articleId;
-        $snapshot['hook_key'] = $definition->key;
-        $result->update(['input_snapshot' => $snapshot]);
 
         $stepTitle = trim((string) ($prompt->name ?? ''));
         if ($stepTitle === '') {
             $stepTitle = 'Prompt Hook: '.$definition->key;
         }
 
-        $this->promptResultLinks->linkPromptResult(
+        $this->promptResultAttach->attach(
             promptResultId: $resultId,
-            articleId: $articleId,
-            source: 'prompt_hook',
-            workflowStepTitle: $stepTitle,
+            targetType: PromptResultAttachService::TARGET_ARTICLE,
+            targetId: $articleId,
+            siteId: (int) ($article->site_id ?? 0),
+            purpose: 'prompt_hook',
             meta: [
                 'hook_key' => $definition->key,
                 'prompt_id' => (int) $prompt->id,
                 'prompt_name' => (string) ($prompt->name ?? ''),
                 'status' => (string) ($result->status ?? ''),
+                'workflow_step_title' => $stepTitle,
             ],
         );
     }

@@ -1,0 +1,37 @@
+{
+  "spec_version": "0.1",
+  "key": "article.vocabulary.extract",
+  "version": "1.0",
+  "name": "Extract semantic vocabulary",
+  "description": "Legacy: prompt → filter parse_keywords → action save_vocabulary_research.",
+  "enabled": true,
+  "classification": "NORMALIZE_NOW",
+  "legacy_binding": "publish/rewrite workflow filter parse_keywords + save_vocabulary_research",
+  "model": { "provider": "prompt_connection", "name": "configured", "settings": {} },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "focus_keyword": { "type": "string", "required": true, "max_length": 500 },
+    "content_excerpt": { "type": "string", "required": false, "nullable": true, "max_length": 50000, "allowed_source": ["previous_outputs"] }
+  },
+  "output_schema": {
+    "type": "structured_object",
+    "fields": { "groups": "list", "phrases": "list" },
+    "validation": { "not_empty": true },
+    "normalize": ["trim", "strip_markdown_fence"]
+  },
+  "template": {
+    "system": "Extract semantic keyword groups as structured markdown/JSON.",
+    "user": "Focus: {{focus_keyword}}\nContent:\n{{content_excerpt}}"
+  },
+  "validation": { "parser": "MarkdownSemanticKeywordsParser | WorkflowParserService::parseKeywords" },
+  "retry": { "max": 0 },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "permissions": { "capability": "text" },
+  "metadata": {
+    "prompt_concern": "vocabulary text/json",
+    "workflow_concern": "parse_keywords + previous step wiring",
+    "domain_action_concern": "save_vocabulary_research / KeywordProjectAssignment (NOT hook)",
+    "ui_concern": "project task / editor meta"
+  },
+  "side_effects": []
+}

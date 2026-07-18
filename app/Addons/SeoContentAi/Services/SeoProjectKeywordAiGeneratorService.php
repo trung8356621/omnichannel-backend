@@ -6,6 +6,8 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExecutionInput;
 use Carbon\Carbon;
 
 final class SeoProjectKeywordAiGeneratorService
@@ -14,6 +16,7 @@ final class SeoProjectKeywordAiGeneratorService
         private readonly PromptRunnerService $promptRunner,
         private readonly SeoCreateArticleSettingsService $workflowSettings,
         private readonly SeoProjectKeywordListParser $keywordParser,
+        private readonly PromptHookCallerBridge $promptHookBridge,
     ) {}
 
     /**
@@ -49,21 +52,65 @@ final class SeoProjectKeywordAiGeneratorService
             'user_brief' => trim($brief) !== '' ? trim($brief) : '(không có)',
         ];
 
-        try {
-            $result = $this->promptRunner->run($prompt, $variables);
-        } catch (PromptRunException $exception) {
-            throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
+        $seed = trim($brief) !== '' ? trim($brief) : trim($description);
+        if ($seed === '') {
+            $seed = (string) $variables['project_month_label'];
         }
 
-        $keywords = $this->extractKeywordsFromAiOutput((string) ($result->output_text ?? ''));
+        $envelope = PromptHookExecutionInput::fromArray([
+            'context' => [],
+            'input' => [
+                'seed_topic' => $seed,
+                'count' => $count,
+                'brief' => trim($brief) !== '' ? trim($brief) : null,
+            ],
+            'previous_outputs' => [],
+            'settings' => [],
+        ]);
 
-        if ($keywords === []) {
-            throw new \InvalidArgumentException(
-                'AI không trả về từ khóa hợp lệ. Prompt nên yêu cầu mỗi từ khóa một dòng (hoặc JSON mảng chuỗi).',
-            );
-        }
+        /** @var list<string> $keywords */
+        $keywords = $this->promptHookBridge->run(
+            hookKey: 'keyword.discovery.structured',
+            version: '0.1.0',
+            envelope: $envelope,
+            legacyExecute: function () use ($prompt, $variables, $count): array {
+                try {
+                    $result = $this->promptRunner->run($prompt, $variables);
+                } catch (PromptRunException $exception) {
+                    throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
+                }
 
-        return array_slice($keywords, 0, $count);
+                $parsed = $this->extractKeywordsFromAiOutput((string) ($result->output_text ?? ''));
+                if ($parsed === []) {
+                    throw new \InvalidArgumentException(
+                        'AI không trả về từ khóa hợp lệ. Prompt nên yêu cầu mỗi từ khóa một dòng (hoặc JSON mảng chuỗi).',
+                    );
+                }
+
+                return array_slice($parsed, 0, $count);
+            },
+            mapHookResult: function ($runtimeResult) use ($count): array {
+                $value = $runtimeResult->output['value'] ?? [];
+                if (is_string($value)) {
+                    return array_slice($this->extractKeywordsFromAiOutput($value), 0, $count);
+                }
+                if (! is_array($value)) {
+                    return [];
+                }
+                $list = [];
+                foreach ($value as $item) {
+                    if (is_string($item) && trim($item) !== '') {
+                        $list[] = trim($item);
+                    } elseif (is_array($item) && isset($item['keyword'])) {
+                        $list[] = trim((string) $item['keyword']);
+                    }
+                }
+
+                return array_slice($list, 0, $count);
+            },
+        );
+
+        return $keywords;
     }
 
     /**

@@ -176,16 +176,19 @@
                         @forelse ($this->getAllItems() as $index => $item)
                             @php
                                 $taskId = (int) ($item['task_id'] ?? 0);
+                                $runItemId = (int) ($item['run_item_id'] ?? 0);
+                                $rowKey = (string) ($item['id'] ?? ($runItemId > 0 ? 'run-item-'.$runItemId : 'run-row-'.($taskId > 0 ? $taskId : $index)));
                                 $itemStatus = (string) ($item['status'] ?? '');
                                 $articleId = (int) ($item['article_id'] ?? 0);
                                 $retryCount = (int) ($item['retry_count'] ?? 0);
                                 $isReviewed = (bool) ($item['article_is_reviewed'] ?? false);
-                                $canRetry = \App\Addons\SeoContentAi\Support\SeoAccessControl::canRetryProjectRunItem($this->projectRun?->project);
+                                $taskExists = (bool) ($item['task_exists'] ?? true);
+                                $canRetry = $this->canRetryRunItem($item);
                             @endphp
                             <tr
                                 class="align-top {{ in_array($itemStatus, ['pending', 'manual'], true) ? 'bg-warning-50/40 dark:bg-warning-500/5' : '' }}"
-                                wire:key="run-row-{{ $taskId > 0 ? $taskId : $index }}"
-                                @if ($taskId > 0)
+                                wire:key="{{ $rowKey }}"
+                                @if ($taskId > 0 && $taskExists)
                                     data-run-task-id="{{ $taskId }}"
                                     x-show="isRowVisible({{ $taskId }})"
                                     x-cloak
@@ -199,6 +202,17 @@
                                 <td class="px-3 py-3">{{ $this->postTypeLabel($item['post_type'] ?? null) }}</td>
                                 <td class="px-3 py-3 font-medium text-gray-950 dark:text-white">
                                     <div class="min-w-0 wrap-break-word">
+                                        @if (! $taskExists)
+                                            <div class="mb-1 text-xs font-normal text-warning-600 dark:text-warning-400">
+                                                Task gốc không còn tồn tại — chỉ xem lịch sử.
+                                            </div>
+                                        @elseif (! empty($item['duplicate_identity_detected']))
+                                            <div class="mb-1 text-xs font-normal text-warning-600 dark:text-warning-400">
+                                                Trùng identity với task khác (ID khác).
+                                            </div>
+                                        @elseif (! empty($item['is_legacy']))
+                                            <div class="mb-1 text-xs font-normal text-gray-500">Legacy run</div>
+                                        @endif
                                         @if ($editUrl = $this->itemKeywordEditUrl($item))
                                             <a
                                                 href="{{ $editUrl }}"
@@ -301,19 +315,19 @@
                                 </td>
                                 <td class="relative w-24 px-2 py-3 text-right seo-run-row-actions" data-run-actions>
                                     @php
-                                        $canArchiveItem = $taskId > 0 && $this->canArchiveRunItem($item);
+                                        $canArchiveItem = $this->canArchiveRunItem($item);
                                         $stepsUrl = $this->itemStepsUrl($item);
                                         $showRetrySuccess = $canRetry && ! $isReviewed && $itemStatus === 'success'
                                             && ! $this->itemIsImproveType($item);
                                         $showRetryOther = $canRetry && ! $isReviewed
                                             && in_array($itemStatus, ['failed', 'pending'], true)
                                             && ! $this->itemIsImproveType($item);
-                                        $showMarkFixed = $itemStatus === 'failed' && $articleId > 0
+                                        $showMarkFixed = $itemStatus === 'failed' && $articleId > 0 && $taskExists
                                             && ! $this->itemIsImproveType($item);
                                         $hasRowActions = $canArchiveItem || filled($stepsUrl) || $showRetrySuccess || $showRetryOther || $showMarkFixed;
                                     @endphp
 
-                                    @if ($taskId > 0 && $hasRowActions)
+                                    @if (($taskId > 0 || filled($stepsUrl)) && $hasRowActions)
                                         <div
                                             class="seo-run-actions-menu relative inline-block text-left"
                                             x-data="{ open: false }"

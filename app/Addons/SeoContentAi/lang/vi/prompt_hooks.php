@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 return [
     'none' => 'Không sử dụng Hook',
+    'experimental_badge' => 'Thử nghiệm',
+    'experimental_warning' => 'Hook đang ở phiên bản thử nghiệm :version.',
+    'execution_failed_title' => 'Prompt Hook thất bại',
+    'hook_template_owns_prompt' => 'Khi chọn Hook, template + output contract do Hook Definition quản lý. Nội dung Markdown bên phải chỉ dùng khi không gắn Hook.',
+    'hook_legacy_prompt_template_note' => 'Hook quản lý contract input/output và runtime. Nội dung Prompt hiện tại vẫn là template gửi đến AI.',
+    'input_mapping_hint' => 'Map biến workflow → input Hook (cùng tên {{field}} trừ khi ghi chú khác).',
 
     'article_title_suggestion' => [
         'label' => 'Gợi ý tiêu đề bài viết',
@@ -43,5 +49,30 @@ PROMPT,
             'min_length' => 'Độ dài tối thiểu',
             'max_length' => 'Độ dài tối đa',
         ],
+    ],
+
+    'article_outline_generate' => [
+        'label' => 'Tạo dàn ý bài viết',
+        'description' => 'Sinh dàn ý / cấu trúc heading SEO từ từ khóa và ngữ cảnh (thử nghiệm 0.1.0).',
+    ],
+
+    'article_content_generate' => [
+        'label' => 'Viết bài viết',
+        'description' => 'Tạo bài viết mới từ outline, vocabulary, keyword và ngữ cảnh site (thử nghiệm 0.1.0).',
+    ],
+
+    'article_content_rewrite' => [
+        'label' => 'Viết lại bài viết',
+        'description' => 'Viết lại / cải thiện bài hiện có theo yêu cầu, giữ search intent và dữ kiện nguồn (thử nghiệm 0.1.0).',
+    ],
+
+    'article_faq_generate' => [
+        'label' => 'Tạo FAQ bài viết',
+        'description' => 'Sinh FAQ có cấu trúc (thử nghiệm — chưa hoàn thiện vertical slice).',
+    ],
+
+    'keyword_discovery_structured' => [
+        'label' => 'Khám phá từ khóa (JSON)',
+        'description' => 'Sinh danh sách từ khóa có cấu trúc (thử nghiệm — chưa hoàn thiện vertical slice).',
     ],
 ];

@@ -1,0 +1,37 @@
+{
+  "spec_version": "0.1",
+  "key": "article.seo_meta.generate",
+  "version": "1.0",
+  "name": "Generate SEO meta description",
+  "description": "Aligns with experimental PromptHook article.meta_description_suggestion + publish meta extract.",
+  "enabled": true,
+  "classification": "EXPERIMENTAL",
+  "legacy_binding": "article_meta_description_suggestion_prompt_id | PromptTestPublish meta from markdown import",
+  "model": { "provider": "prompt_connection", "name": "configured", "settings": {} },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "title": { "type": "string", "required": true, "max_length": 300 },
+    "old_description": { "type": ["string", "null"], "required": false, "nullable": true, "max_length": 1000 },
+    "keyword": { "type": "string", "required": false, "nullable": true, "sensitive": false }
+  },
+  "output_schema": {
+    "type": "text",
+    "validation": { "not_empty": true, "min_length": 50, "max_length": 320 },
+    "normalize": ["trim", "strip_markdown_fence", "strip_wrapping_quotes", "first_non_empty_line"]
+  },
+  "template": {
+    "template_key": "prompt_hooks.article_meta_description_suggestion.template",
+    "position": "after_prompt"
+  },
+  "validation": { "not_empty": true },
+  "retry": { "max": 0 },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "permissions": { "capability": "text" },
+  "metadata": {
+    "prompt_concern": "meta text",
+    "workflow_concern": "optional single-step hook",
+    "domain_action_concern": "article.seo_meta.update Action (caller)",
+    "ui_concern": "ArticleGoogleSerpPreview"
+  },
+  "side_effects": []
+}

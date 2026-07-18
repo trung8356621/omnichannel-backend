@@ -28,7 +28,7 @@ class Prompt extends Model
         'settings' => 'array',
         'variables' => 'json',
         'hook_settings' => 'array',
-        'hook_version' => 'integer',
+        'hook_version' => 'string',
         'is_active' => 'boolean',
     ];
 

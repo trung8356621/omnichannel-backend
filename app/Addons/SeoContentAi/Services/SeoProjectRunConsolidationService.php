@@ -11,15 +11,32 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Legacy multi-run consolidator.
+ *
+ * @deprecated Phase 3B — không dùng cho write path run mới. Input phải qua
+ * SeoProjectRunItemsReader (DB XOR legacy JSON, không merge). Output chỉ mirror
+ * JSON trên keeper; không tạo/duplicate seo_project_run_items.
+ */
 final class SeoProjectRunConsolidationService
 {
+    public function __construct(
+        private readonly SeoProjectRunItemsReader $runItemsReader,
+    ) {}
+
     public function hasRunnablePendingTasks(SeoProject $project): bool
     {
         $this->syncObsoleteTaskStatuses($project);
 
         $successfulKeys = $this->successfulIdentityKeysFromRuns($project);
 
-        foreach ($project->tasks()->where('status', SeoProjectTask::STATUS_PENDING)->get() as $task) {
+        foreach (
+            $project->tasks()
+                ->where('status', SeoProjectTask::STATUS_PENDING)
+                ->whereNull('archived_at')
+                ->whereNull('deleted_at')
+                ->get() as $task
+        ) {
             if (! $task instanceof SeoProjectTask) {
                 continue;
             }
@@ -126,19 +143,37 @@ final class SeoProjectRunConsolidationService
             SeoProjectTask::STATUS_REVIEWING,
         ];
 
+        $successfulArticleIds = $this->successfulArticleIdsByIdentity($project);
+
         foreach ($project->tasks()->whereIn('status', $obsoleteStatuses)->get() as $task) {
             if (! $task instanceof SeoProjectTask) {
                 continue;
             }
 
-            if (! isset($successfulKeys[$this->taskIdentityKeyFromTask($task)])) {
+            $identityKey = $this->taskIdentityKeyFromTask($task);
+            if (! isset($successfulKeys[$identityKey])) {
                 continue;
             }
 
-            $task->update([
+            $payload = [
                 'status' => SeoProjectTask::STATUS_COMPLETED,
                 'completed_at' => $task->completed_at ?? now(),
-            ]);
+            ];
+
+            $resolvedArticleId = (int) ($successfulArticleIds[$identityKey] ?? 0);
+            if ($resolvedArticleId > 0 && (int) ($task->article_id ?? 0) !== $resolvedArticleId) {
+                SeoProjectTask::query()
+                    ->where('article_id', $resolvedArticleId)
+                    ->whereKeyNot((int) $task->id)
+                    ->update(['article_id' => null]);
+
+                $payload['article_id'] = $resolvedArticleId;
+                if ($task->connected_at === null) {
+                    $payload['connected_at'] = now();
+                }
+            }
+
+            $task->update($payload);
         }
     }
 
@@ -163,14 +198,53 @@ final class SeoProjectRunConsolidationService
     }
 
     /**
+     * @return array<string, int> identity key => article_id
+     */
+    private function successfulArticleIdsByIdentity(SeoProject $project): array
+    {
+        $runs = $project->relationLoaded('runs')
+            ? $project->runs
+            : $project->runs()->orderBy('id')->get();
+
+        /** @var array<string, int> $map */
+        $map = [];
+
+        foreach ($this->collectMergedItems($runs) as $item) {
+            if ((string) ($item['status'] ?? '') !== 'success') {
+                continue;
+            }
+
+            $key = $this->itemIdentityKey($item);
+            $articleId = (int) ($item['article_id'] ?? 0);
+            if ($key === '' || $articleId <= 0) {
+                continue;
+            }
+
+            if (! isset($map[$key])) {
+                $map[$key] = $articleId;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
      * @return list<string>
      */
     private function uniqueTaskIdentityKeys(SeoProject $project): array
     {
         $keys = [];
 
-        foreach ($project->tasks as $task) {
+        $tasks = $project->relationLoaded('tasks')
+            ? $project->tasks
+            : $project->tasks()->whereNull('archived_at')->whereNull('deleted_at')->get();
+
+        foreach ($tasks as $task) {
             if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            if ($task->archived_at !== null || $task->deleted_at !== null) {
                 continue;
             }
 
@@ -199,14 +273,20 @@ final class SeoProjectRunConsolidationService
         $bucket = [];
 
         foreach ($runs as $run) {
-            $items = is_array($run->items) ? $run->items : [];
+            if (! $run instanceof SeoProjectRun) {
+                continue;
+            }
+
+            // XOR theo run: DB items nếu có, không thì legacy JSON — không bao giờ union.
+            $items = $this->runItemsReader->forRunAsArrays($run);
 
             foreach ($items as $item) {
                 if (! is_array($item)) {
                     continue;
                 }
 
-                $key = $this->itemIdentityKey($item);
+                $item['source_run_id'] = (int) $run->id;
+                $key = $this->mergeBucketKey($item);
                 $priority = $this->itemPriority($item, (int) $run->id);
 
                 if (! isset($bucket[$key]) || $priority >= $bucket[$key]['priority']) {
@@ -222,6 +302,35 @@ final class SeoProjectRunConsolidationService
             static fn (array $entry): array => $entry['item'],
             $bucket,
         ));
+    }
+
+    /**
+     * Bucket key: ưu tiên task_id (không collapse hai task khác ID cùng source).
+     *
+     * @param  array<string, mixed>  $item
+     */
+    private function mergeBucketKey(array $item): string
+    {
+        $runItemId = (int) ($item['run_item_id'] ?? 0);
+        if ($runItemId > 0) {
+            // Giữ identity theo run_item khi gộp nhiều run; ưu tiên bản mới hơn qua priority.
+            $taskId = (int) ($item['task_id'] ?? 0);
+            $action = trim((string) ($item['action'] ?? ''));
+            if ($taskId > 0) {
+                return 'task:'.$taskId.($action !== '' ? '|'.$action : '');
+            }
+
+            return 'ri:'.$runItemId;
+        }
+
+        $taskId = (int) ($item['task_id'] ?? 0);
+        if ($taskId > 0) {
+            $action = trim((string) ($item['action'] ?? ''));
+
+            return 'task:'.$taskId.($action !== '' ? '|'.$action : '');
+        }
+
+        return 'legacy:'.$this->itemIdentityKey($item);
     }
 
     /**

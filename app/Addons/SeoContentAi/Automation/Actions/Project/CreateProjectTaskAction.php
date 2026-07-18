@@ -106,6 +106,13 @@ final class CreateProjectTaskAction implements BusinessAction
                 );
             }
 
+            $payload['source_key'] = app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(
+                (int) $project->id,
+                $type,
+                isset($payload['post_type']) ? (string) $payload['post_type'] : null,
+                $sourceContent,
+            );
+
             $task = SeoProjectTask::query()->create($payload);
             $project->syncTotalTasksCounter();
 

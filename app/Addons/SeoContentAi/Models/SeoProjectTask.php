@@ -8,10 +8,16 @@ use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SeoProjectTask extends Model
 {
     use BelongsToOnDefaultConnection;
+
+    /**
+     * SoftDeletes trait trì hoãn sang Phase 3.
+     * deleted_at column có sẵn; $task->delete() vẫn hard delete như hiện tại.
+     */
 
     public const TYPE_REWRITE = 'rewrite';
 
@@ -56,6 +62,8 @@ class SeoProjectTask extends Model
         'target_date' => 'date',
         'connected_at' => 'datetime',
         'completed_at' => 'datetime',
+        'archived_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 
     public function site(): BelongsTo
@@ -71,6 +79,16 @@ class SeoProjectTask extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+
+    public function runItems(): HasMany
+    {
+        return $this->hasMany(SeoProjectRunItem::class, 'task_id');
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(SeoProjectTaskEvent::class, 'task_id');
     }
 
     /**

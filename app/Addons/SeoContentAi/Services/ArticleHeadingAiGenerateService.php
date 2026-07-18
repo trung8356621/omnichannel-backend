@@ -9,6 +9,8 @@ use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoArticleHeading;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExecutionInput;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
@@ -27,6 +29,7 @@ final class ArticleHeadingAiGenerateService
         private readonly SiteDomainPromptContextService $sitePromptContext,
         private readonly ArticleFaqPromptVariablesService $articlePromptVariables,
         private readonly PromptResultLinkService $promptResultLinks,
+        private readonly PromptHookCallerBridge $promptHookBridge,
     ) {
     }
 
@@ -64,15 +67,51 @@ final class ArticleHeadingAiGenerateService
             $promptVars['tone'] ?? '',
         );
 
-        try {
-            $result = $this->promptRunner->run($prompt, $variables);
-        } catch (PromptRunException $exception) {
-            throw new RuntimeException($exception->getMessage(), 0, $exception);
-        }
+        $envelope = PromptHookExecutionInput::fromArray([
+            'context' => [
+                'site_id' => (int) ($article->site_id ?? 0),
+                'article_id' => (int) $article->id,
+                'locale' => (string) ($article->language ?? ''),
+            ],
+            'input' => [
+                'keyword' => $focusKeyword !== '' ? $focusKeyword : null,
+                'heading_context' => trim((string) ($variables['heading_text'] ?? '')),
+                'language' => (string) ($variables['language'] ?? ''),
+            ],
+            'previous_outputs' => [],
+            'settings' => [],
+        ]);
 
-        $this->linkPromptResultToArticle($article, $prompt, $result, $heading);
+        /** @var string $text */
+        $text = $this->promptHookBridge->run(
+            hookKey: 'article.outline.generate',
+            version: '0.1.0',
+            envelope: $envelope,
+            legacyExecute: function () use ($prompt, $variables, $article, $heading): string {
+                try {
+                    $result = $this->promptRunner->run($prompt, $variables);
+                } catch (PromptRunException $exception) {
+                    throw new RuntimeException($exception->getMessage(), 0, $exception);
+                }
 
-        $text = $this->parseHeadingOutput((string) ($result->output_text ?? ''));
+                $this->linkPromptResultToArticle($article, $prompt, $result, $heading);
+
+                $parsed = $this->parseHeadingOutput((string) ($result->output_text ?? ''));
+                if ($parsed === '') {
+                    throw new RuntimeException(
+                        'AI không trả về heading hợp lệ. Kiểm tra prompt — đầu ra nên là một dòng tiêu đề (plain text hoặc Markdown H2–H4).',
+                    );
+                }
+
+                return $parsed;
+            },
+            mapHookResult: static function ($runtimeResult): string {
+                $value = $runtimeResult->output['value'] ?? '';
+
+                return is_string($value) ? trim($value) : trim((string) json_encode($value));
+            },
+        );
+
         if ($text === '') {
             throw new RuntimeException(
                 'AI không trả về heading hợp lệ. Kiểm tra prompt — đầu ra nên là một dòng tiêu đề (plain text hoặc Markdown H2–H4).',

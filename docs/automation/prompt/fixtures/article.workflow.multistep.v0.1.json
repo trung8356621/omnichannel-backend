@@ -1,0 +1,33 @@
+{
+  "spec_version": "0.1",
+  "key": "article.workflow.multistep",
+  "version": "1.0",
+  "name": "Multi-step article workflow (orchestration contract)",
+  "description": "Workflow concern — not a single AI hook. Documents previous_outputs handoff.",
+  "enabled": true,
+  "classification": "KEEP_AS_IS",
+  "legacy_binding": "SeoTask workflow_json via TaskWorkflowTestRunner",
+  "model": { "provider": "per_step", "name": "configured", "settings": {} },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "task_id": { "type": "integer", "required": true },
+    "context": { "type": "object", "required": true, "pass_eloquent": false },
+    "previous_outputs": { "type": "object", "required": false, "nullable": true }
+  },
+  "output_schema": {
+    "type": "structured_object",
+    "fields": { "steps": "list", "status": "string" }
+  },
+  "template": { "system": "n/a — orchestrator", "user": "n/a" },
+  "validation": {},
+  "retry": { "max": 0, "owner": "workflow_runtime" },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "permissions": { "capability": "orchestration" },
+  "metadata": {
+    "prompt_concern": "delegated to child hooks/prompts",
+    "workflow_concern": "node order, edges, ports, filters, actions",
+    "domain_action_concern": "action nodes only",
+    "ui_concern": "TaskWorkflowBuilder / ArticleFlowBuilder"
+  },
+  "side_effects": []
+}

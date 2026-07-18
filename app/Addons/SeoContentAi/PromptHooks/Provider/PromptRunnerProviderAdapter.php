@@ -1,0 +1,161 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\PromptHooks\Provider;
+
+use App\Addons\SeoContentAi\Exceptions\PromptRunException;
+use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderFailed;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderRefused;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\ProviderTimeout;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\UnsupportedProviderCapability;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\RenderedPromptRequest;
+use App\Addons\SeoContentAi\Services\PromptRunnerService;
+use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
+
+/**
+ * Thin production adapter — wraps PromptRunner (retry/failover owned by PromptRunner/AiModelRouter).
+ * Credentials stay on SeoPrompt → ApiConnection; never logged.
+ */
+final class PromptRunnerProviderAdapter implements PromptProviderAdapter
+{
+    public function __construct(
+        private readonly PromptRunnerService $promptRunner,
+        private readonly PromptProviderUsageNormalizer $usageNormalizer = new PromptProviderUsageNormalizer,
+    ) {}
+
+    public function capabilities(): PromptProviderCapabilities
+    {
+        return new PromptProviderCapabilities(
+            textGeneration: true,
+            jsonMode: true,
+            nativeStructuredOutput: false,
+            systemMessage: true,
+            temperature: true,
+            maxTokens: true,
+        );
+    }
+
+    public function generate(RenderedPromptRequest $request, PromptStructuredStrategy $strategy): PromptProviderResponse
+    {
+        if ($strategy === PromptStructuredStrategy::NativeSchema) {
+            throw new UnsupportedProviderCapability(
+                'Native structured output not available on current PromptRunner path; use json_mode or prompt_enforced_json.',
+            );
+        }
+
+        $promptId = (int) ($request->metadata['prompt_id'] ?? 0);
+        if ($promptId <= 0) {
+            throw new ProviderFailed('RenderedPromptRequest.metadata.prompt_id is required for production adapter.');
+        }
+
+        $prompt = SeoPrompt::query()->with('aiConnection')->find($promptId);
+        if (! $prompt instanceof SeoPrompt) {
+            throw new ProviderFailed("SeoPrompt [{$promptId}] not found.");
+        }
+
+        $connection = $prompt->aiConnection;
+        if ($connection === null || blank($connection->api_key)) {
+            throw new ProviderFailed('AI connection missing or has no credential (resolved outside hook JSON).');
+        }
+
+        $compiled = $this->compileRequest($request, $strategy);
+        $variables = is_array($request->metadata['variables'] ?? null)
+            ? $request->metadata['variables']
+            : [];
+
+        try {
+            $result = $this->promptRunner->runWithCompiledPrompt(
+                $prompt,
+                $compiled,
+                $variables,
+            );
+        } catch (PromptRunException $exception) {
+            $message = $exception->getMessage();
+            if ($this->looksLikeTimeout($message)) {
+                throw new ProviderTimeout($message, $exception);
+            }
+            if ($this->looksLikeRefusal($message)) {
+                throw new ProviderRefused($message);
+            }
+            throw new ProviderFailed($message, $exception);
+        } catch (ConnectionException|RequestException $exception) {
+            throw new ProviderTimeout($exception->getMessage(), $exception);
+        } catch (\Throwable $exception) {
+            throw new ProviderFailed('PromptRunner failed: '.$exception->getMessage(), $exception);
+        }
+
+        $text = trim((string) ($result->output_text ?? ''));
+        $usage = is_array($result->token_usage ?? null) ? $result->token_usage : [];
+        $provider = (string) ($connection->provider ?? 'unknown');
+        $model = (string) ($result->model_used ?? $request->model->name);
+
+        return $this->usageNormalizer->normalize(
+            text: $text,
+            usage: $usage,
+            provider: $provider,
+            model: $model,
+            attempts: 1, // failover retries owned by AiModelRouter inside PromptRunner
+            meta: [
+                'prompt_result_id' => $result->id !== null ? (int) $result->id : null,
+                'retry_owner' => 'PromptRunner/AiModelRouter',
+            ],
+        );
+    }
+
+    private function compileRequest(RenderedPromptRequest $request, PromptStructuredStrategy $strategy): string
+    {
+        $legacy = trim((string) ($request->metadata['legacy_compiled_prompt'] ?? ''));
+        if ($legacy !== '') {
+            $compiled = $legacy;
+            if ($strategy === PromptStructuredStrategy::PromptEnforcedJson
+                || $strategy === PromptStructuredStrategy::JsonMode) {
+                $compiled .= "\n\nReturn valid JSON only. Do not wrap in markdown fences.";
+            }
+
+            return $compiled;
+        }
+
+        $parts = [];
+        if (trim($request->system) !== '') {
+            $parts[] = trim($request->system);
+        }
+        foreach ($request->messages as $message) {
+            $role = (string) ($message['role'] ?? 'user');
+            $content = trim((string) ($message['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+            $parts[] = strtoupper($role).":\n".$content;
+        }
+
+        $compiled = trim(implode("\n\n", $parts));
+        if ($strategy === PromptStructuredStrategy::PromptEnforcedJson
+            || $strategy === PromptStructuredStrategy::JsonMode) {
+            $compiled .= "\n\nReturn valid JSON only. Do not wrap in markdown fences.";
+        }
+
+        if ($compiled === '') {
+            throw new ProviderFailed('Compiled prompt is empty.');
+        }
+
+        return $compiled;
+    }
+
+    private function looksLikeTimeout(string $message): bool
+    {
+        $lower = strtolower($message);
+
+        return str_contains($lower, 'timeout') || str_contains($lower, 'timed out');
+    }
+
+    private function looksLikeRefusal(string $message): bool
+    {
+        $lower = strtolower($message);
+
+        return str_contains($lower, 'refus') || str_contains($lower, 'safety') || str_contains($lower, 'blocked');
+    }
+
+}

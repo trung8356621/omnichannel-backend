@@ -139,12 +139,39 @@ class PromptResource extends SeoPanelResource
                         Forms\Components\Group::make()
                             ->columnSpan(8)
                             ->schema([
-                                Forms\Components\Section::make(__('seo-content-ai::filament.prompt.content_markdown'))
-                                    ->description('Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
+                                Forms\Components\Section::make(
+                                    fn (Get $get): string => filled($get('hook_key'))
+                                        && ! \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                            (string) ($get('hook_key') ?? ''),
+                                            (string) ($get('hook_version') ?? ''),
+                                        )
+                                        ? (string) __('seo-content-ai::filament.prompt.content_when_hook')
+                                        : (string) __('seo-content-ai::filament.prompt.content_markdown')
+                                )
+                                    ->description(fn (Get $get): string => filled($get('hook_key'))
+                                        ? (
+                                            \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                (string) ($get('hook_key') ?? ''),
+                                                (string) ($get('hook_version') ?? ''),
+                                            )
+                                                ? (string) __('seo-content-ai::prompt_hooks.hook_legacy_prompt_template_note')
+                                                : (string) __('seo-content-ai::prompt_hooks.hook_template_owns_prompt')
+                                        )
+                                        : 'Use H1 (#) to split blocks: # Role, # Context, # Task: ..., # Sub-task: ...')
                                     ->schema([
                                         Forms\Components\MarkdownEditor::make('markdown_content')
                                             ->label('')
-                                            ->required()
+                                            ->required(fn (Get $get): bool => blank($get('hook_key'))
+                                                || \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                    (string) ($get('hook_key') ?? ''),
+                                                    (string) ($get('hook_version') ?? ''),
+                                                ))
+                                            ->disabled(fn (Get $get): bool => filled($get('hook_key'))
+                                                && ! \App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema::usesLegacyPromptTemplate(
+                                                    (string) ($get('hook_key') ?? ''),
+                                                    (string) ($get('hook_version') ?? ''),
+                                                ))
+                                            ->dehydrated()
                                             ->columnSpanFull()
                                             ->minHeight('440px')
                                             ->toolbarButtons([

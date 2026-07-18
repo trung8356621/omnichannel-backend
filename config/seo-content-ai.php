@@ -76,4 +76,56 @@ return [
         'project_article_attach',
         'project_task_complete',
     ],
+
+    /**
+     * Phase 5B — Prompt Hook runtime modes. Default legacy. Live AI shadow OFF.
+     */
+    'prompt_hooks' => [
+        'live_shadow_enabled' => (bool) env('PROMPT_HOOK_LIVE_SHADOW_ENABLED', false),
+        'live_shadow_environments' => ['local', 'staging'],
+        'live_shadow_hook_allowlist' => [],
+        'live_shadow_sample_rate' => (float) env('PROMPT_HOOK_LIVE_SHADOW_SAMPLE_RATE', 0),
+        'live_shadow_allow_memory_budget' => (bool) env('PROMPT_HOOK_LIVE_SHADOW_ALLOW_MEMORY_BUDGET', false),
+        'budget_store' => env('PROMPT_HOOK_BUDGET_STORE', 'memory'),
+        // Fallback when per-hook map missing. Prefer promotion_thresholds.hooks.
+        'promotion_min_samples' => (int) env('PROMPT_HOOK_PROMOTION_MIN_SAMPLES', 20),
+        'promotion_thresholds' => [
+            'default' => (int) env('PROMPT_HOOK_PROMOTION_MIN_SAMPLES', 20),
+            'hooks' => [
+                'article.outline.generate' => (int) env('PROMPT_HOOK_PROMOTION_SAMPLES_OUTLINE', 20),
+                'article.faq.generate' => (int) env('PROMPT_HOOK_PROMOTION_SAMPLES_FAQ', 20),
+                'keyword.discovery.structured' => (int) env('PROMPT_HOOK_PROMOTION_SAMPLES_KEYWORD', 20),
+                'article.title_suggestion' => (int) env('PROMPT_HOOK_PROMOTION_SAMPLES_TITLE', 30),
+                'article.meta_description_suggestion' => (int) env('PROMPT_HOOK_PROMOTION_SAMPLES_META', 30),
+            ],
+        ],
+        'cost_rates' => [
+            // Optional catalog — empty = no estimated_cost. Example:
+            // 'gemini' => ['*' => ['input_per_1m' => 0.1, 'output_per_1m' => 0.4]],
+        ],
+        'experimental_allowed' => (bool) env('PROMPT_HOOK_EXPERIMENTAL_ALLOWED', true),
+        'experimental_allowlist' => [
+            'article.title_suggestion',
+            'article.meta_description_suggestion',
+            'article.outline.generate',
+            'article.content.generate',
+            'article.content.rewrite',
+            'article.faq.generate',
+            'keyword.discovery.structured',
+        ],
+        'migration' => [
+            'article.title_suggestion' => env('PROMPT_HOOK_MIGRATION_ARTICLE_TITLE_SUGGESTION', 'legacy'),
+            'article.meta_description_suggestion' => env('PROMPT_HOOK_MIGRATION_ARTICLE_META_DESCRIPTION_SUGGESTION', 'legacy'),
+            'article.outline.generate' => env('PROMPT_HOOK_MIGRATION_ARTICLE_OUTLINE_GENERATE', 'legacy'),
+            'article.content.generate' => env('PROMPT_HOOK_MIGRATION_ARTICLE_CONTENT_GENERATE', 'legacy'),
+            'article.content.rewrite' => env('PROMPT_HOOK_MIGRATION_ARTICLE_CONTENT_REWRITE', 'legacy'),
+            'article.faq.generate' => env('PROMPT_HOOK_MIGRATION_ARTICLE_FAQ_GENERATE', 'legacy'),
+            'keyword.discovery.structured' => env('PROMPT_HOOK_MIGRATION_KEYWORD_DISCOVERY_STRUCTURED', 'legacy'),
+        ],
+    ],
+
+    'content_project' => [
+        /** Run item status=processing older than this (minutes) may be reclaimed. */
+        'run_item_stale_minutes' => (int) env('SEO_CONTENT_PROJECT_RUN_ITEM_STALE_MINUTES', 30),
+    ],
 ];

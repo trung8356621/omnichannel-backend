@@ -10,6 +10,10 @@ use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
 use App\Addons\SeoContentAi\Models\SeoTask;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBinding;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExplicitBindingExecutor;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\PromptMediaPersistContext;
@@ -35,6 +39,8 @@ final class TaskWorkflowTestRunner
         private readonly SeoMediaStorageService $mediaStorage,
         private readonly SeoCreateArticleSettingsService $createArticleSettings,
         private readonly ArticleMediaLocalService $articleMediaLocal,
+        private readonly PromptHookExplicitBindingExecutor $hookBindingExecutor,
+        private readonly PromptHookUiFailureMapper $hookFailureMapper = new PromptHookUiFailureMapper,
     ) {}
 
     /**
@@ -424,6 +430,102 @@ final class TaskWorkflowTestRunner
                 $model = trim((string) ($node['data']['aiModel'] ?? ''));
                 $imageTool = \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($prompt->tools ?? 'default');
                 $isImagePipeline = $imageTool->isImagePipeline();
+
+                $hookBinding = null;
+                try {
+                    $hookBinding = PromptHookBinding::tryFromPrompt($prompt);
+                } catch (\InvalidArgumentException $exception) {
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => $type,
+                        'title' => $title,
+                        'status' => 'failed',
+                        'prompt_id' => $prompt->id,
+                        'prompt_name' => (string) $prompt->name,
+                        'message' => $exception->getMessage(),
+                    ];
+                }
+
+                if ($hookBinding !== null && ! $isImagePipeline) {
+                    try {
+                        $hookResult = $this->hookBindingExecutor->execute(
+                            $prompt,
+                            $variables,
+                            [
+                                'site_id' => $this->resolveMediaContextSiteId($context, $state),
+                                'article_id' => $state->article?->id ?? $context->article?->id,
+                                'node_id' => $nodeId,
+                                'task_id' => null,
+                                'locale' => $variables['language'] ?? $variables['locale'] ?? null,
+                            ],
+                        );
+                    } catch (PromptHookFailure $exception) {
+                        $mapped = $this->hookFailureMapper->map(
+                            $exception,
+                            $hookBinding->hookKey,
+                            $hookBinding->hookVersion,
+                            null,
+                        );
+
+                        return [
+                            'node_id' => $nodeId,
+                            'type' => $type,
+                            'title' => $title,
+                            'status' => 'failed',
+                            'prompt_id' => $prompt->id,
+                            'prompt_name' => (string) $prompt->name,
+                            'hook_key' => $hookBinding->hookKey,
+                            'hook_version' => $hookBinding->hookVersion,
+                            'execution_source' => 'explicit_hook_binding',
+                            'message' => $mapped['body'],
+                            'failure_category' => $mapped['category'],
+                        ];
+                    }
+
+                    $output = trim((string) ($hookResult['output'] ?? ''));
+                    if ($output !== '') {
+                        $output = $this->applyPromptPostProcessing($prompt, $output);
+                        $state->lastPromptOutput = $output;
+                        $state->nodeOutputs[$nodeId] = $this->buildPromptNodeOutputsFromHook(
+                            $prompt,
+                            $output,
+                            is_array($hookResult['ports'] ?? null) ? $hookResult['ports'] : [],
+                            is_array($hookResult['sections'] ?? null) ? $hookResult['sections'] : [],
+                            $state,
+                        );
+                        $this->refreshWorkflowSeoScore($state, $output);
+                    }
+
+                    if ($this->shouldMergeOutlineToSave($node) && trim($output) !== '') {
+                        $state->meta['direct_publish_article_markdown'] = trim($output);
+                        $outlineSource = $this->cleanWorkflowOutlineMarkdown($input);
+                        if ($outlineSource !== '') {
+                            $state->meta['direct_publish_outline_markdown'] = $outlineSource;
+                        }
+                    }
+
+                    return [
+                        'node_id' => $nodeId,
+                        'type' => $type,
+                        'title' => $title,
+                        'status' => 'completed',
+                        'prompt_id' => $prompt->id,
+                        'prompt_name' => (string) $prompt->name,
+                        'hook_key' => $hookResult['hook_key'],
+                        'hook_version' => $hookResult['hook_version'],
+                        'execution_source' => $hookResult['execution_source'],
+                        'correlation_id' => $hookResult['correlation_id'],
+                        'ai_model' => $hookResult['model'],
+                        'raw_model_used' => $hookResult['model'],
+                        'tools' => $imageTool->value,
+                        'input_used' => $input !== '' ? mb_substr($input, 0, 120).(mb_strlen($input) > 120 ? '…' : '') : null,
+                        'output' => $output,
+                        'outputs' => $state->nodeOutputs[$nodeId] ?? [],
+                        'result_id' => $hookResult['prompt_result_id'],
+                        'duration_ms' => $hookResult['duration_ms'],
+                        'message' => 'Prompt Hook completed ('.$hookResult['hook_key'].'@'.$hookResult['hook_version'].').',
+                    ];
+                }
 
                 // Khớp Test Prompt (image): compile full + ImageRoutingStrategy.
                 // Không chạy chain planner (Flash text) — đó là nguyên nhân task hiện gemini-3-flash-preview
@@ -2029,6 +2131,54 @@ final class TaskWorkflowTestRunner
             $segment = trim((string) ($extract['content'] ?? ''));
             $outputs['out_'.$tagId] = $segment;
             $state->meta['extracted_segments'][$tagKey] = $segment;
+        }
+
+        return $outputs;
+    }
+
+    /**
+     * Map markdown_sections ports onto existing workflow nodeOutputs without new engine.
+     *
+     * @param  array<string, string>  $ports
+     * @param  array<string, string>  $sections
+     * @return array<string, string>
+     */
+    private function buildPromptNodeOutputsFromHook(
+        SeoPrompt $prompt,
+        string $output,
+        array $ports,
+        array $sections,
+        WorkflowExecutionState $state,
+    ): array {
+        $outputs = $this->buildPromptNodeOutputs($prompt, $output, $state);
+
+        if ($ports === []) {
+            return $outputs;
+        }
+
+        $total = trim((string) ($ports['total'] ?? $output));
+        if ($total !== '') {
+            $outputs['out_main'] = $total;
+            $outputs['total'] = $total;
+        }
+
+        foreach ($ports as $port => $content) {
+            $port = trim((string) $port);
+            $content = trim((string) $content);
+            if ($port === '' || $port === 'total') {
+                continue;
+            }
+            $outputs[$port] = $content;
+            $outputs['out_'.$port] = $content;
+
+            // BC alias: task_1_outline → out_task_1 when downstream still uses Task 1 port id.
+            if (preg_match('/^task_(\d+)_/', $port, $matches) === 1) {
+                $outputs['out_task_'.$matches[1]] = $content;
+            }
+        }
+
+        foreach ($sections as $sectionKey => $content) {
+            $state->meta['extracted_segments'][(string) $sectionKey] = trim((string) $content);
         }
 
         return $outputs;

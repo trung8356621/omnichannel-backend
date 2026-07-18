@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\Site;
 use Carbon\Carbon;
@@ -74,13 +75,28 @@ final class SeoProjectTaskSyncService
             $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
         }
 
-        $existing = $project->tasks()
-            ->get()
-            ->keyBy(static fn (SeoProjectTask $task): string => self::taskMatchKey(
+        /** @var array<string, SeoProjectTask> $existing */
+        $existing = [];
+        foreach ($project->tasks()->orderBy('id')->get() as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $key = self::taskMatchKey(
                 (int) $task->site_id,
                 (string) $task->type,
                 (string) $task->source_content,
-            ));
+            );
+
+            if (! isset($existing[$key])) {
+                $existing[$key] = $task;
+                continue;
+            }
+
+            $existing[$key] = self::preferTaskForSyncPreserve($existing[$key], $task);
+        }
+
+        $existing = collect($existing);
 
         $newTaskCount = collect($sanitized)
             ->filter(function (array $task) use ($existing): bool {
@@ -108,7 +124,14 @@ final class SeoProjectTaskSyncService
                 $previous = $existing->get($key);
                 $articleId = self::resolveArticleIdForRecreate($previous?->article_id, $usedArticleIds);
 
-                if ($articleId === null && in_array((string) $task['type'], SeoProjectTask::articlePickerTypes(), true)) {
+                $taskType = (string) $task['type'];
+                if (
+                    $articleId === null
+                    && (
+                        in_array($taskType, SeoProjectTask::articlePickerTypes(), true)
+                        || SeoProjectTask::isNewArticleType($taskType)
+                    )
+                ) {
                     $articleId = self::resolveArticleIdByTitle(
                         (string) $task['source_content'],
                         (int) $task['site_id'],
@@ -127,6 +150,13 @@ final class SeoProjectTaskSyncService
                     $completedAt = $previous?->updated_at ?? now();
                 }
 
+                $sourceKey = app(ProjectTaskSourceKeyGenerator::class)->generate(
+                    (int) $project->id,
+                    (string) $task['type'],
+                    isset($task['post_type']) ? (string) $task['post_type'] : null,
+                    (string) $task['source_content'],
+                );
+
                 $project->tasks()->create([
                     'site_id' => $task['site_id'],
                     'article_id' => $articleId,
@@ -134,6 +164,7 @@ final class SeoProjectTaskSyncService
                     'post_type' => $task['post_type'] ?? null,
                     'loai_san_pham' => $task['loai_san_pham'] ?? null,
                     'source_content' => $task['source_content'],
+                    'source_key' => $sourceKey,
                     'description' => $task['description'] ?? null,
                     'rewrite_mode' => $task['rewrite_mode'] ?? $previous?->rewrite_mode ?? SeoProjectTask::REWRITE_MODE_KEYWORD,
                     'rewrite_notes' => $task['rewrite_notes'] ?? $previous?->rewrite_notes,
@@ -262,6 +293,21 @@ final class SeoProjectTaskSyncService
     }
 
     /**
+     * Khi trùng identity (vd. task gốc + retry tạo mới), giữ bản còn article_id.
+     */
+    private static function preferTaskForSyncPreserve(SeoProjectTask $current, SeoProjectTask $candidate): SeoProjectTask
+    {
+        $currentHasArticle = (int) ($current->article_id ?? 0) > 0;
+        $candidateHasArticle = (int) ($candidate->article_id ?? 0) > 0;
+
+        if ($currentHasArticle !== $candidateHasArticle) {
+            return $candidateHasArticle ? $candidate : $current;
+        }
+
+        return (int) $candidate->id >= (int) $current->id ? $candidate : $current;
+    }
+
+    /**
      * @param  array<int, true>  $usedArticleIds
      */
     private static function resolveArticleIdForRecreate(?int $articleId, array &$usedArticleIds): ?int
@@ -321,6 +367,8 @@ final class SeoProjectTaskSyncService
     public function tasksDataFromProject(SeoProject $project): array
     {
         return $project->tasks()
+            ->whereNull('archived_at')
+            ->whereNull('deleted_at')
             ->orderBy('target_date')
             ->orderBy('id')
             ->get()

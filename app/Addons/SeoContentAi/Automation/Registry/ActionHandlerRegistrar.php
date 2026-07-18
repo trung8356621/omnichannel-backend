@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Automation\Actions\Keyword\SyncKeywordTopicClusterAc
 use App\Addons\SeoContentAi\Automation\Actions\Project\AttachArticleToProjectTaskAction;
 use App\Addons\SeoContentAi\Automation\Actions\Project\CreateProjectTaskAction;
 use App\Addons\SeoContentAi\Automation\Actions\Project\MarkProjectTaskCompletedAction;
+use App\Addons\SeoContentAi\Automation\Actions\PromptResult\AttachPromptResultAction;
 use App\Addons\SeoContentAi\Automation\Actions\Seo\CreateProjectTaskFromSeoIssueAction;
 use App\Addons\SeoContentAi\Automation\Actions\Seo\RunSeoAuditAction;
 use App\Addons\SeoContentAi\Automation\Contracts\BusinessAction;
@@ -38,6 +39,7 @@ final class ActionHandlerRegistrar
             AssignKeywordToProjectAction::class,
             SaveKeywordVocabularyAction::class,
             SyncKeywordTopicClusterAction::class,
+            AttachPromptResultAction::class,
         ];
     }
 

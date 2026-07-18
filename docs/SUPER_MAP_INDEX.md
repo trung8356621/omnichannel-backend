@@ -16,7 +16,13 @@
 | [Cơ chế Đồng bộ & Cầu nối WordPress](MAP_SEO_WP.md) | WP bridge inbound, sync outbound, plugin `omi-seo-ai-bridge` |
 | [Content Projects & Workflow](MAP_SEO_PROJECTS.md) | SeoProject, SeoProjectRun, SeoProjectTask, workflow execution |
 | [Settings, Prompts & AI Connections](MAP_SEO_SETTINGS.md) | Settings, PromptResource, PromptRunnerService, API Connections |
-| [Prompt Hooks](prompt-hooks/README.md) | Contract từng Hook (title / meta description) — Phase 1 |
+| [Prompt Hooks](prompt-hooks/README.md) | Contract từng Hook (title / meta description) — Phase 1 (**EXPERIMENTAL** tới khi Spec khóa) |
+| [Prompt Hook / Workflow Audit (5A)](automation/prompt/PROMPT_WORKFLOW_INVENTORY.md) | Inventory + Spec v0.1 |
+| [Prompt Hook Runtime (5B)](automation/prompt/PROMPT_HOOK_RUNTIME.md) | Loader/Registry/Engine/Bridge; [registry](automation/prompt/PROMPT_HOOK_REGISTRY.md), [capabilities](automation/prompt/PROMPT_HOOK_PROVIDER_CAPABILITIES.md), [output](automation/prompt/PROMPT_HOOK_OUTPUT_VALIDATION.md), [rollout](automation/prompt/PROMPT_HOOK_ROLLOUT.md), [PromptResult boundary](automation/prompt/PROMPT_RESULT_BOUNDARY.md), [versioning](automation/prompt/PROMPT_HOOK_VERSIONING.md) |
+| [Prompt Hook Phase 5C](automation/prompt/PROMPT_HOOK_PROVIDER_ADAPTER_PRODUCTION.md) | Production adapter, [usage metering](automation/prompt/PROMPT_HOOK_USAGE_METERING.md), [hosting validation](automation/prompt/PROMPT_HOOK_PHASE5C_HOSTING_VALIDATION.md), [migration plan](automation/prompt/PROMPT_HOOK_MIGRATION_PLAN.md) |
+| [Prompt Hook Phase 5D1](automation/prompt/PROMPT_HOOK_PHASE5D1_ROLLOUT_REPORT.md) | Hosting rollout report template + [runbook](automation/prompt/PROMPT_HOOK_PHASE5C_HOSTING_VALIDATION.md) |
+| [Outline Hook Vertical Slice](automation/prompt/OUTLINE_HOOK_VERTICAL_SLICE_TEST.md) | `article.outline.generate@0.1.0` — `markdown_sections` + legacy Prompt template; editor binding + explicit execution |
+| [Article Generate/Rewrite Hooks](automation/prompt/ARTICLE_GENERATE_REWRITE_HOOK_TEST.md) | `article.content.generate` + `article.content.rewrite` @0.1.0 — legacy Prompt template, markdown output |
 | [CHANGELOG Prompt Hooks Phase 1](CHANGELOG_PROMPT_HOOKS_PHASE1.md) | Migration, API, UI, BC, tests |
 | **[Google Search Console — API Connections](MAP_SEO_GSC_API_CONNECTIONS.md)** | **OAuth GSC riêng, route `{id}`, master/mapping, gap multi-connection, checklist debug** |
 | [Team & Phân quyền](MAP_SEO_TEAM.md) | SeoAccessControl, RBAC, SEO roles, Team management |

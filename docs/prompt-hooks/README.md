@@ -4,8 +4,8 @@ Prompt Hook là contract gắn vào Prompt: khai báo input (sources + entity), 
 
 | Hook key | Tài liệu | Manifest | Version | Trạng thái |
 |---|---|---|---:|---|
-| `article.title_suggestion` | [Gợi ý tiêu đề](article-title-suggestion.md) | `app/Addons/SeoContentAi/resources/prompt-hooks/article-title-suggestion.json` | 1 | Active — backend + form + API + **UI title** |
-| `article.meta_description_suggestion` | [Gợi ý thẻ mô tả](article-meta-description-suggestion.md) | `app/Addons/SeoContentAi/resources/prompt-hooks/article-meta-description-suggestion.json` | 1 | Active — backend + form + API + **UI modal SEO** |
+| `article.title_suggestion` | [Gợi ý tiêu đề](article-title-suggestion.md) | `app/Addons/SeoContentAi/resources/prompt-hooks/article-title-suggestion.json` | 1 | **EXPERIMENTAL** (UI Active) — Spec engine chưa khóa; xem `docs/automation/prompt/` |
+| `article.meta_description_suggestion` | [Gợi ý thẻ mô tả](article-meta-description-suggestion.md) | `app/Addons/SeoContentAi/resources/prompt-hooks/article-meta-description-suggestion.json` | 1 | **EXPERIMENTAL** (UI Active) — Spec engine chưa khóa |
 
 ## Quy tắc nguồn sự thật
 

@@ -1,0 +1,39 @@
+{
+  "spec_version": "0.1",
+  "key": "article.step.with_previous",
+  "version": "1.0",
+  "name": "Step consuming previous outputs",
+  "description": "Contract for ports out_main / tagged segments between prompt nodes.",
+  "enabled": true,
+  "classification": "KEEP_AS_IS",
+  "legacy_binding": "TaskWorkflowTestRunner nodeOutputs + edge sourcePort",
+  "model": { "provider": "prompt_connection", "name": "configured", "settings": {} },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "previous_outputs": {
+      "type": "object",
+      "required": true,
+      "pass_eloquent": false,
+      "allowed_source": ["workflow_state"],
+      "max_size_bytes": 1000000
+    },
+    "parent_result": { "type": "string", "required": false, "nullable": true, "allowed_source": ["PARENT_RESULT"] }
+  },
+  "output_schema": { "type": "text", "validation": { "not_empty": true }, "normalize": ["trim"] },
+  "template": {
+    "system": "Continue from previous task output. Do not echo markers.",
+    "user": "Previous:\n{{parent_result}}"
+  },
+  "validation": { "reject_echoed_markers": ["[START", "[END", "PARENT_RESULT"] },
+  "retry": { "max": 0 },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "permissions": { "capability": "text" },
+  "metadata": {
+    "prompt_concern": "consume previous text",
+    "workflow_concern": "edge ports + extract_segment",
+    "domain_action_concern": "none",
+    "ui_concern": "workflow builder tags"
+  },
+  "side_effects": [],
+  "known_failures": ["Previous-step markers leaked into model output"]
+}

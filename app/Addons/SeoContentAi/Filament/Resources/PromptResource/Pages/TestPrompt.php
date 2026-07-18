@@ -466,6 +466,63 @@ class TestPrompt extends Page implements HasForms
         $this->resetChainProgress();
 
         $normalized = $this->normalizedVariableValues();
+        $prompt = $this->getPrompt();
+
+        try {
+            $hookBinding = \App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookBinding::tryFromPrompt($prompt);
+        } catch (\InvalidArgumentException $exception) {
+            $this->isRunning = false;
+            $this->errorMessage = $exception->getMessage();
+            Notification::make()
+                ->title(__('seo-content-ai::prompt_hooks.execution_failed_title'))
+                ->body($exception->getMessage())
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        if ($hookBinding !== null && ! $this->isImageToolPrompt()) {
+            try {
+                $persistContext = $this->resolvePromptMediaPersistContext($normalized);
+                $hookResult = app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExplicitBindingExecutor::class)
+                    ->execute(
+                        $prompt,
+                        $normalized,
+                        [
+                            'site_id' => $persistContext['site_id'] ?? null,
+                            'article_id' => $persistContext['article_id'] ?? null,
+                            'locale' => $normalized['language'] ?? $normalized['locale'] ?? null,
+                        ],
+                    );
+                $this->outputText = (string) ($hookResult['output'] ?? '');
+                $this->isRunning = false;
+                Notification::make()
+                    ->title('Test Hook successful')
+                    ->body(
+                        $hookResult['hook_key'].'@'.$hookResult['hook_version']
+                        .' · '.$hookResult['duration_ms'].'ms'
+                        .' · correlation_id='.$hookResult['correlation_id']
+                        .($hookResult['model'] ? ' · model='.$hookResult['model'] : '')
+                    )
+                    ->success()
+                    ->send();
+
+                return;
+            } catch (\App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookFailure $exception) {
+                $this->isRunning = false;
+                $mapped = app(\App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookUiFailureMapper::class)
+                    ->map($exception, $hookBinding->hookKey, $hookBinding->hookVersion, null);
+                $this->errorMessage = $mapped['body'];
+                Notification::make()
+                    ->title($mapped['title'])
+                    ->body($mapped['body'])
+                    ->danger()
+                    ->send();
+
+                return;
+            }
+        }
 
         if (trim($this->editablePrompt) === '') {
             $this->isRunning = false;

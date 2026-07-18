@@ -26,7 +26,7 @@ class SeoPrompt extends Prompt
         'settings' => 'array',
         'variables' => 'json',
         'hook_settings' => 'array',
-        'hook_version' => 'integer',
+        'hook_version' => 'string',
         'is_active' => 'boolean',
         'markdown_content' => 'string',
     ];

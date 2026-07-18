@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema;
-use App\Addons\SeoContentAi\PromptHooks\PromptHookManifestLoader;
-use App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookDefinitionLoader;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeRegistry;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use Illuminate\Validation\ValidationException;
-use PHPUnit\Framework\TestCase;
+use Tests\TestCase;
 
 final class PromptHookFormSchemaTest extends TestCase
 {
@@ -17,27 +18,22 @@ final class PromptHookFormSchemaTest extends TestCase
     {
         parent::setUp();
 
-        if (! function_exists('app')) {
-            self::markTestSkipped('Laravel app() helper required.');
-        }
-
-        try {
-            app()->instance(
-                PromptHookRegistry::class,
-                new PromptHookRegistry(
-                    new PromptHookManifestLoader(PromptHookManifestLoader::defaultDirectory(), true),
-                ),
-            );
-        } catch (\Throwable) {
-            self::markTestSkipped('Laravel container not available.');
-        }
+        $loader = new PromptHookDefinitionLoader(
+            PromptHookDefinitionLoader::defaultV01Directory(),
+            PromptHookDefinitionLoader::defaultPhase1Directory(),
+        );
+        $loader->clearCache();
+        app()->instance(
+            PromptHookEditorCatalog::class,
+            new PromptHookEditorCatalog(new PromptHookRuntimeRegistry($loader)),
+        );
     }
 
     public function test_normalize_clears_hook_when_empty(): void
     {
         $data = PromptHookFormSchema::normalizeForSave([
             'hook_key' => '',
-            'hook_version' => 1,
+            'hook_version' => '0.1.0',
             'hook_settings' => ['max_length' => 65],
             'tools' => 'default',
         ]);
@@ -56,7 +52,7 @@ final class PromptHookFormSchemaTest extends TestCase
         ]);
 
         self::assertSame('article.title_suggestion', $data['hook_key']);
-        self::assertSame(1, $data['hook_version']);
+        self::assertSame('0.1.0', $data['hook_version']);
         self::assertSame(70, $data['hook_settings']['max_length']);
         self::assertTrue($data['hook_settings']['preserve_meaning']);
         self::assertArrayNotHasKey('garbage', $data['hook_settings']);
@@ -71,5 +67,16 @@ final class PromptHookFormSchemaTest extends TestCase
             'tools' => ImageToolType::Image->value,
             'hook_settings' => [],
         ]);
+    }
+
+    public function test_outline_normalize_saves_semver(): void
+    {
+        $data = PromptHookFormSchema::normalizeForSave([
+            'hook_key' => 'article.outline.generate',
+            'tools' => 'default',
+            'hook_settings' => [],
+        ]);
+        self::assertSame('article.outline.generate', $data['hook_key']);
+        self::assertSame('0.1.0', $data['hook_version']);
     }
 }

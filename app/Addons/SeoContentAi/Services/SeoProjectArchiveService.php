@@ -48,18 +48,26 @@ final class SeoProjectArchiveService
                     ->lockForUpdate()
                     ->get();
 
-                $tasksWithArticles = $activeTasks
-                    ->filter(static fn (SeoProjectTask $task): bool => (int) ($task->article_id ?? 0) > 0)
-                    ->values();
-
-                if ($tasksWithArticles->isEmpty()) {
-                    throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
-                }
+                // UI run items có thể còn article_id trong khi task.article_id đã mất
+                // (tạo mới + retry/sync). Heal trước khi archive.
+                $resolvedFromRuns = $this->resolveArticleIdsFromProjectRuns($lockedProject);
+                $tasksWithArticles = $this->hydrateTasksWithResolvedArticles(
+                    $activeTasks,
+                    $resolvedFromRuns['by_task_id'],
+                    $resolvedFromRuns['by_identity'],
+                );
 
                 $now = now();
                 $archived = 0;
+                /** @var array<int, true> $archivedArticleIds */
+                $archivedArticleIds = [];
 
                 foreach ($tasksWithArticles as $task) {
+                    $articleId = (int) ($task->article_id ?? 0);
+                    if ($articleId <= 0 || isset($archivedArticleIds[$articleId])) {
+                        continue;
+                    }
+
                     $this->persistArchiveItemFromTask(
                         $task,
                         $lockedProject,
@@ -68,7 +76,40 @@ final class SeoProjectArchiveService
                         $note,
                         $now,
                     );
+                    $archivedArticleIds[$articleId] = true;
                     $archived++;
+                }
+
+                // Bài OK trên run nhưng task đã mất / không match — vẫn đưa vào kho.
+                // Bỏ qua nếu article đang gắn task project khác (unique toàn bảng).
+                foreach ($resolvedFromRuns['article_ids'] as $orphanArticleId) {
+                    if (isset($archivedArticleIds[$orphanArticleId])) {
+                        continue;
+                    }
+
+                    $linkedElsewhere = SeoProjectTask::query()
+                        ->where('article_id', $orphanArticleId)
+                        ->where('project_id', '!=', (int) $lockedProject->getKey())
+                        ->exists();
+
+                    if ($linkedElsewhere) {
+                        continue;
+                    }
+
+                    $this->persistArchiveItemFromArticle(
+                        $siteId,
+                        $orphanArticleId,
+                        (int) $lockedProject->getKey(),
+                        $archivedByUserId,
+                        $note,
+                        $now,
+                    );
+                    $archivedArticleIds[$orphanArticleId] = true;
+                    $archived++;
+                }
+
+                if ($archived === 0) {
+                    throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
                 }
 
                 $tasksRemoved = (int) $lockedProject->tasks()->delete();
@@ -446,6 +487,152 @@ final class SeoProjectArchiveService
         }
 
         return $lockedProject;
+    }
+
+    /**
+     * @return array{
+     *     by_task_id: array<int, int>,
+     *     by_identity: array<string, int>,
+     *     article_ids: list<int>
+     * }
+     */
+    private function resolveArticleIdsFromProjectRuns(SeoProject $project): array
+    {
+        /** @var array<int, int> $byTaskId */
+        $byTaskId = [];
+        /** @var array<string, int> $byIdentity */
+        $byIdentity = [];
+        /** @var array<int, true> $articleIds */
+        $articleIds = [];
+
+        $runs = $project->runs()
+            ->orderByDesc('id')
+            ->get(['id', 'items']);
+
+        foreach ($runs as $run) {
+            $items = is_array($run->items) ? $run->items : [];
+            foreach ($items as $item) {
+                if (! is_array($item)) {
+                    continue;
+                }
+
+                if ((string) ($item['status'] ?? '') !== 'success') {
+                    continue;
+                }
+
+                $articleId = (int) ($item['article_id'] ?? 0);
+                if ($articleId <= 0) {
+                    continue;
+                }
+
+                $articleIds[$articleId] = true;
+
+                $taskId = (int) ($item['task_id'] ?? 0);
+                if ($taskId > 0 && ! isset($byTaskId[$taskId])) {
+                    $byTaskId[$taskId] = $articleId;
+                }
+
+                $retryTaskId = (int) ($item['retry_task_id'] ?? 0);
+                if ($retryTaskId > 0 && ! isset($byTaskId[$retryTaskId])) {
+                    $byTaskId[$retryTaskId] = $articleId;
+                }
+
+                $identity = $this->taskIdentityKeyFromItem($item);
+                if ($identity !== '' && ! isset($byIdentity[$identity])) {
+                    $byIdentity[$identity] = $articleId;
+                }
+            }
+        }
+
+        return [
+            'by_task_id' => $byTaskId,
+            'by_identity' => $byIdentity,
+            'article_ids' => array_keys($articleIds),
+        ];
+    }
+
+    /**
+     * @param  Collection<int, SeoProjectTask>  $tasks
+     * @param  array<int, int>  $articleIdByTaskId
+     * @param  array<string, int>  $articleIdByIdentity
+     * @return Collection<int, SeoProjectTask>
+     */
+    private function hydrateTasksWithResolvedArticles(
+        Collection $tasks,
+        array $articleIdByTaskId,
+        array $articleIdByIdentity,
+    ): Collection {
+        /** @var array<int, true> $usedArticleIds */
+        $usedArticleIds = [];
+        $hydrated = collect();
+
+        foreach ($tasks as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $articleId = (int) ($task->article_id ?? 0);
+            if ($articleId <= 0) {
+                $articleId = (int) ($articleIdByTaskId[(int) $task->id] ?? 0);
+            }
+            if ($articleId <= 0) {
+                $articleId = (int) ($articleIdByIdentity[$this->taskIdentityKeyFromTask($task)] ?? 0);
+            }
+
+            if ($articleId <= 0 || isset($usedArticleIds[$articleId])) {
+                continue;
+            }
+
+            if ((int) ($task->article_id ?? 0) !== $articleId) {
+                SeoProjectTask::query()
+                    ->where('article_id', $articleId)
+                    ->whereKeyNot((int) $task->id)
+                    ->update(['article_id' => null]);
+
+                $payload = ['article_id' => $articleId];
+                if ($task->connected_at === null) {
+                    $payload['connected_at'] = now();
+                }
+
+                SeoProjectTask::query()->whereKey((int) $task->id)->update($payload);
+                $task->article_id = $articleId;
+                if ($task->connected_at === null) {
+                    $task->connected_at = $payload['connected_at'] ?? now();
+                }
+            }
+
+            $usedArticleIds[$articleId] = true;
+            $hydrated->push($task);
+        }
+
+        return $hydrated->values();
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     */
+    private function taskIdentityKeyFromItem(array $item): string
+    {
+        $type = trim((string) ($item['type'] ?? ''));
+        $source = mb_strtolower(trim((string) ($item['source_content'] ?? '')));
+        if ($type === '' || $source === '') {
+            return '';
+        }
+
+        $postType = SeoProjectTask::isNewArticleType($type)
+            ? SeoProjectTask::normalizePostType($item['post_type'] ?? null)
+            : '';
+
+        return implode('|', [$type, $postType, $source]);
+    }
+
+    private function taskIdentityKeyFromTask(SeoProjectTask $task): string
+    {
+        return $this->taskIdentityKeyFromItem([
+            'type' => $task->type,
+            'post_type' => $task->post_type,
+            'source_content' => $task->source_content,
+        ]);
     }
 
     private function persistArchiveItemFromTask(

@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SeoProjectRun extends Model
 {
@@ -48,6 +49,11 @@ class SeoProjectRun extends Model
     public function user(): BelongsTo
     {
         return $this->belongsToOnDefaultConnection(User::class, 'user_id');
+    }
+
+    public function runItems(): HasMany
+    {
+        return $this->hasMany(SeoProjectRunItem::class, 'run_id');
     }
 
     public function isTestMode(): bool

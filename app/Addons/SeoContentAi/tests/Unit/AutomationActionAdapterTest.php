@@ -48,6 +48,7 @@ final class AutomationActionAdapterTest extends TestCase
             'keyword.assign_to_project',
             'keyword.vocabulary.save',
             'keyword.topic_cluster.sync',
+            'prompt_result.attach',
         ] as $key) {
             self::assertTrue($registry->has($key), "Missing catalog key [{$key}]");
         }
@@ -124,6 +125,7 @@ final class AutomationActionAdapterTest extends TestCase
         self::assertContains('article.content.update', $keys);
         self::assertContains('seo.project_task.create_from_issue', $keys);
         self::assertContains('keyword.topic_cluster.sync', $keys);
+        self::assertContains('prompt_result.attach', $keys);
         self::assertNotContains('article.review.request', $keys);
         self::assertNotContains('wordpress.article.publish', $keys);
     }

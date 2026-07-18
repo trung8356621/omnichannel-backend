@@ -1,0 +1,43 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+class SeoProjectRunItem extends Model
+{
+    protected $connection = 'omi_seo_ai';
+
+    protected $table = 'seo_project_run_items';
+
+    protected $guarded = [];
+
+    protected $casts = [
+        'run_id' => 'integer',
+        'task_id' => 'integer',
+        'article_id' => 'integer',
+        'attempt' => 'integer',
+        'input_snapshot' => 'array',
+        'output_snapshot' => 'array',
+        'started_at' => 'datetime',
+        'finished_at' => 'datetime',
+    ];
+
+    public function run(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectRun::class, 'run_id');
+    }
+
+    public function task(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectTask::class, 'task_id');
+    }
+
+    public function article(): BelongsTo
+    {
+        return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+}

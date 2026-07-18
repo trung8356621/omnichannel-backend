@@ -8,9 +8,12 @@ use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Filament\Resources\SeoProjectResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
+use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Services\ArticleEditorReadinessService;
 use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
+use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
+use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
@@ -105,6 +108,14 @@ class ViewSeoProjectRun extends Page
                 continue;
             }
 
+            if (! (bool) ($item['task_exists'] ?? true)) {
+                continue;
+            }
+
+            if (! $this->canRetryRunItem($item)) {
+                continue;
+            }
+
             $status = (string) ($item['status'] ?? '');
             if (! in_array($status, ['success', 'failed', 'pending'], true)) {
                 continue;
@@ -164,6 +175,14 @@ class ViewSeoProjectRun extends Page
                 continue;
             }
 
+            if (! (bool) ($item['task_exists'] ?? true)) {
+                continue;
+            }
+
+            if (! (bool) ($item['can_retry'] ?? true)) {
+                continue;
+            }
+
             $taskIds[] = $taskId;
 
             if (count($taskIds) >= $remainingSlots) {
@@ -210,18 +229,24 @@ class ViewSeoProjectRun extends Page
      */
     public function getRunStatsPayload(): array
     {
-        $allItems = $this->getAllItems();
-        $succeeded = collect($allItems)->where('status', 'success')->count();
-        $failed = collect($allItems)->where('status', 'failed')->count();
-        $pending = collect($allItems)->where('status', 'pending')->count();
-        $total = max((int) ($this->projectRun?->total ?? 0), count($allItems));
+        if ($this->projectRun === null) {
+            return [
+                'total' => 0,
+                'succeeded' => 0,
+                'failed' => 0,
+                'pending' => 0,
+                'status' => '',
+            ];
+        }
+
+        $counters = app(SeoProjectRunItemsReader::class)->aggregateCounters($this->projectRun);
 
         return [
-            'total' => $total,
-            'succeeded' => $succeeded,
-            'failed' => $failed,
-            'pending' => $pending,
-            'status' => (string) ($this->projectRun?->status ?? ''),
+            'total' => $counters['total'],
+            'succeeded' => $counters['succeeded'],
+            'failed' => $counters['failed'],
+            'pending' => $counters['pending'],
+            'status' => (string) ($this->projectRun->status ?? ''),
         ];
     }
 
@@ -230,12 +255,16 @@ class ViewSeoProjectRun extends Page
      */
     public function getResultItems(): array
     {
-        $items = is_array($this->projectRun?->items) ? $this->projectRun->items : [];
+        if ($this->projectRun === null) {
+            return [];
+        }
 
-        return array_values($items);
+        return app(SeoProjectRunItemsReader::class)->forRunAsArrays($this->projectRun);
     }
 
     /**
+     * Pending tasks của project (section riêng) — không merge vào run result.
+     *
      * @return list<array<string, mixed>>
      */
     public function getPendingItems(): array
@@ -247,6 +276,8 @@ class ViewSeoProjectRun extends Page
 
         return $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
+            ->whereNull('archived_at')
+            ->whereNull('deleted_at')
             ->orderBy('target_date')
             ->orderBy('id')
             ->get()
@@ -276,29 +307,23 @@ class ViewSeoProjectRun extends Page
                 'article_id' => null,
                 'article_edit_url' => null,
                 'message' => '',
+                'task_exists' => true,
+                'can_retry' => true,
+                'can_archive' => false,
+                'source' => 'project_pending',
+                'is_legacy' => false,
             ])
             ->all();
     }
 
     /**
+     * Run execution items only — không union pending project tasks.
+     *
      * @return list<array<string, mixed>>
      */
     public function getAllItems(): array
     {
-        $results = $this->getResultItems();
-        $resultTaskIds = collect($results)
-            ->pluck('task_id')
-            ->filter(fn (mixed $taskId): bool => (int) $taskId > 0)
-            ->map(fn (mixed $taskId): int => (int) $taskId)
-            ->all();
-
-        $pending = collect($this->getPendingItems())
-            ->reject(fn (array $item): bool => in_array((int) ($item['task_id'] ?? 0), $resultTaskIds, true))
-            ->values()
-            ->all();
-
-        $items = array_merge($results, $pending);
-        $items = app(SeoProjectRunItemsDisplayPresenter::class)->consolidate($items);
+        $items = app(SeoProjectRunItemsDisplayPresenter::class)->consolidate($this->getResultItems());
 
         $enriched = array_map(
             fn (array $item): array => $this->enrichItemRewriteMeta($this->enrichItemArticleLink($item)),
@@ -959,6 +984,18 @@ class ViewSeoProjectRun extends Page
 
         abort_unless(SeoAccessControl::canArchiveContentProjects(), 403);
 
+        $taskExists = $project->tasks()->whereKey($taskId)->exists();
+        if (! $taskExists) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.projects.archive_failed'))
+                ->body('Task gốc không còn tồn tại. Không thể archive từ lịch sử run.')
+                ->danger()
+                ->send();
+            $this->skipRender();
+
+            return;
+        }
+
         $articleId = $this->resolveArticleIdForRunTask($taskId);
         if ($articleId <= 0) {
             Notification::make()
@@ -980,7 +1017,12 @@ class ViewSeoProjectRun extends Page
                 [$taskId => $articleId],
             );
 
-            $this->removeTaskFromCurrentRunItems($taskId);
+            // Giữ run item history — chỉ sửa JSON nếu legacy run; DB run giữ audit row.
+            if (app(SeoProjectRunItemsReader::class)->usesLegacyFallback($this->projectRun)) {
+                $this->removeTaskFromCurrentRunItems($taskId);
+            } else {
+                $this->projectRun->refresh();
+            }
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_item_completed'))
@@ -1003,6 +1045,11 @@ class ViewSeoProjectRun extends Page
     private function removeTaskFromCurrentRunItems(int $taskId): void
     {
         if ($this->projectRun === null || $taskId <= 0) {
+            return;
+        }
+
+        // Chỉ áp dụng legacy JSON run — không xóa DB run item history.
+        if (! app(SeoProjectRunItemsReader::class)->usesLegacyFallback($this->projectRun)) {
             return;
         }
 
@@ -1036,6 +1083,34 @@ class ViewSeoProjectRun extends Page
         }
 
         $this->projectRun->refresh()->loadMissing(['project.tasks']);
+
+        $task = $this->projectRun->project?->tasks?->firstWhere('id', $taskId);
+        if ($task instanceof SeoProjectTask && (int) ($task->article_id ?? 0) !== $articleId) {
+            $task->article_id = $articleId;
+            $task->save();
+            $this->projectRun->project?->unsetRelation('tasks');
+            $this->projectRun->loadMissing('project.tasks');
+        }
+
+        $reader = app(SeoProjectRunItemsReader::class);
+        if (! $reader->usesLegacyFallback($this->projectRun)) {
+            $updated = SeoProjectRunItem::query()
+                ->where('run_id', (int) $this->projectRun->id)
+                ->where('task_id', $taskId)
+                ->where(function ($query) use ($articleId): void {
+                    $query->whereNull('article_id')
+                        ->orWhere('article_id', '!=', $articleId);
+                })
+                ->update(['article_id' => $articleId]);
+
+            if ($updated > 0) {
+                app(SeoProjectRunItemService::class)->mirrorJsonSafely($this->projectRun);
+                $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
+            }
+
+            return $articleId;
+        }
+
         $items = is_array($this->projectRun->items) ? $this->projectRun->items : [];
         $changed = false;
 
@@ -1050,14 +1125,6 @@ class ViewSeoProjectRun extends Page
             }
 
             break;
-        }
-
-        $task = $this->projectRun->project?->tasks?->firstWhere('id', $taskId);
-        if ($task instanceof SeoProjectTask && (int) ($task->article_id ?? 0) !== $articleId) {
-            $task->article_id = $articleId;
-            $task->save();
-            $this->projectRun->project?->unsetRelation('tasks');
-            $this->projectRun->loadMissing('project.tasks');
         }
 
         if ($changed) {
@@ -1102,10 +1169,29 @@ class ViewSeoProjectRun extends Page
             return false;
         }
 
+        if (array_key_exists('can_archive', $item)) {
+            return (bool) $item['can_archive'];
+        }
+
         $taskId = (int) ($item['task_id'] ?? 0);
         $articleId = (int) ($item['article_id'] ?? 0);
+        $taskExists = (bool) ($item['task_exists'] ?? true);
 
-        return $taskId > 0 && $articleId > 0;
+        return $taskExists && $taskId > 0 && $articleId > 0;
+    }
+
+    public function canRetryRunItem(array $item): bool
+    {
+        if (! SeoAccessControl::canRetryProjectRunItem($this->projectRun?->project)) {
+            return false;
+        }
+
+        if (array_key_exists('can_retry', $item)) {
+            return (bool) $item['can_retry'];
+        }
+
+        return (bool) ($item['task_exists'] ?? true)
+            && (int) ($item['task_id'] ?? 0) > 0;
     }
 
     protected function getHeaderActions(): array

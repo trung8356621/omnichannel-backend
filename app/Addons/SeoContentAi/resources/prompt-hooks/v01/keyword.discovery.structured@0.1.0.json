@@ -1,0 +1,34 @@
+{
+  "spec_version": "0.1",
+  "key": "keyword.discovery.structured",
+  "version": "0.1.0",
+  "name": "Structured keyword discovery",
+  "description": "NORMALIZE_NOW — JSON keywords. No domain write in hook.",
+  "enabled": true,
+  "status": "experimental",
+  "model": {
+    "provider": "prompt_connection",
+    "name": "configured",
+    "structured_output": true,
+    "settings": { "temperature": 0.2 }
+  },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "seed_topic": { "type": "string", "required": true, "max_length": 1000 },
+    "count": { "type": "integer", "required": false, "default": 10 },
+    "brief": { "type": "string", "required": false, "nullable": true, "max_length": 5000 }
+  },
+  "output_schema": {
+    "type": "json",
+    "normalize": ["trim", "strip_markdown_fence"],
+    "validation": { "not_empty": true, "json_object": true }
+  },
+  "template": {
+    "system": "Return JSON only. No markdown fences.",
+    "user": "Topic: {{seed_topic}}\nCount: {{count}}\nBrief: {{brief}}"
+  },
+  "retry": { "max": 0 },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "side_effects": [],
+  "strict_template_variables": false
+}

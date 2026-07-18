@@ -8,6 +8,8 @@ use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Models\PromptResult;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookCallerBridge;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookExecutionInput;
 
 /**
  * Sinh FAQ bằng prompt (renew_faq_prompt_id), bóc tách Markdown và đẩy vào panel FAQ.
@@ -23,6 +25,7 @@ final class ArticleFaqGeneratorService
         private readonly ArticleFaqExtractDebugService $extractDebug,
         private readonly ArticleFaqPromptVariablesService $faqPromptVariables,
         private readonly PromptResultLinkService $promptResultLinks,
+        private readonly PromptHookCallerBridge $promptHookBridge,
     ) {
     }
 
@@ -44,28 +47,75 @@ final class ArticleFaqGeneratorService
             'existing_faqs' => $this->summarizeExistingFaqs($article),
         ]);
 
-        try {
-            $result = $this->promptRunner->run($prompt, $variables);
-        } catch (PromptRunException $exception) {
-            throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
-        }
+        $envelope = PromptHookExecutionInput::fromArray([
+            'context' => [
+                'site_id' => (int) ($article->site_id ?? 0),
+                'article_id' => (int) $article->id,
+                'locale' => (string) ($article->language ?? ''),
+            ],
+            'input' => [
+                'title' => (string) ($article->title ?? ''),
+                'content_excerpt' => mb_substr(trim($editorHtml), 0, 50000),
+                'language' => (string) ($variables['language'] ?? ''),
+            ],
+            'previous_outputs' => [],
+            'settings' => [],
+        ]);
 
-        $this->linkPromptResultToArticle($article, $prompt, $result);
+        /** @var list<array<string, mixed>> $faqs */
+        $faqs = $this->promptHookBridge->run(
+            hookKey: 'article.faq.generate',
+            version: '0.1.0',
+            envelope: $envelope,
+            legacyExecute: function () use ($prompt, $variables, $article): array {
+                try {
+                    $result = $this->promptRunner->run($prompt, $variables);
+                } catch (PromptRunException $exception) {
+                    throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
+                }
 
-        $output = trim((string) ($result->output_text ?? ''));
-        if ($output === '') {
-            throw new \InvalidArgumentException(
-                'AI không trả về nội dung FAQ. Kết quả prompt đã lưu — xem tại trang Prompts của bài.',
-            );
-        }
+                $this->linkPromptResultToArticle($article, $prompt, $result);
 
-        $faqs = $this->parseFaqsFromAiOutput($output);
+                $output = trim((string) ($result->output_text ?? ''));
+                if ($output === '') {
+                    throw new \InvalidArgumentException(
+                        'AI không trả về nội dung FAQ. Kết quả prompt đã lưu — xem tại trang Prompts của bài.',
+                    );
+                }
+
+                $parsed = $this->parseFaqsFromAiOutput($output);
+                if ($parsed === []) {
+                    throw new \InvalidArgumentException(
+                        'Không bóc tách được FAQ từ kết quả AI. Kết quả prompt đã lưu — xem tại trang Prompts của bài, hoặc dùng «Import markdown FAQ (debug)».',
+                    );
+                }
+
+                return $parsed;
+            },
+            mapHookResult: function ($runtimeResult): array {
+                $value = $runtimeResult->output['value'] ?? null;
+                if (is_string($value)) {
+                    return $this->parseFaqsFromAiOutput($value);
+                }
+                if (! is_array($value)) {
+                    return [];
+                }
+                // Accept list of FAQ objects or {faqs:[...]}
+                if (isset($value['faqs']) && is_array($value['faqs'])) {
+                    return array_values($value['faqs']);
+                }
+
+                return array_values($value);
+            },
+        );
+
         if ($faqs === []) {
             throw new \InvalidArgumentException(
                 'Không bóc tách được FAQ từ kết quả AI. Kết quả prompt đã lưu — xem tại trang Prompts của bài, hoặc dùng «Import markdown FAQ (debug)».',
             );
         }
 
+        // Domain persist — ngoài Hook runtime (caller responsibility).
         $this->faqEditor->saveFromEditor($article, $faqs);
         $this->extractDebug->clear($article);
 

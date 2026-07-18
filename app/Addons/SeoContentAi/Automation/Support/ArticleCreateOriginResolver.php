@@ -36,31 +36,42 @@ final class ArticleCreateOriginResolver
 
         if ($originType === self::ORIGIN_SEO_PROJECT_TASK) {
             $task = SeoProjectTask::query()->find($originId);
-            if (! $task instanceof SeoProjectTask) {
-                return null;
+            if ($task instanceof SeoProjectTask) {
+                $articleId = (int) ($task->article_id ?? 0);
+                if ($articleId > 0) {
+                    $article = SeoArticle::query()->find($articleId);
+                    if ($article instanceof SeoArticle && (int) ($article->site_id ?? 0) === $siteId) {
+                        return [
+                            'article_id' => $articleId,
+                            'site_id' => $siteId,
+                            'post_type' => $postType !== '' ? $postType : (string) ($article->type ?? 'article'),
+                            'status' => (string) ($article->status ?? 'draft'),
+                            'deduplicated' => true,
+                        ];
+                    }
+                }
             }
 
-            $articleId = (int) ($task->article_id ?? 0);
-            if ($articleId <= 0) {
-                return null;
+            // Crash recovery: task.article_id trống nhưng origin meta đã ghi.
+            $metaArticleId = $this->findByOriginMeta($originType, $originId, $siteId);
+            if ($metaArticleId !== null) {
+                $article = SeoArticle::query()->find($metaArticleId);
+                if ($article instanceof SeoArticle) {
+                    if ($task instanceof SeoProjectTask && (int) ($task->article_id ?? 0) <= 0) {
+                        $this->attachToProjectTaskIfNeeded($originId, $metaArticleId);
+                    }
+
+                    return [
+                        'article_id' => $metaArticleId,
+                        'site_id' => $siteId,
+                        'post_type' => $postType !== '' ? $postType : (string) ($article->type ?? 'article'),
+                        'status' => (string) ($article->status ?? 'draft'),
+                        'deduplicated' => true,
+                    ];
+                }
             }
 
-            $article = SeoArticle::query()->find($articleId);
-            if (! $article instanceof SeoArticle) {
-                return null;
-            }
-
-            if ((int) ($article->site_id ?? 0) !== $siteId) {
-                return null;
-            }
-
-            return [
-                'article_id' => $articleId,
-                'site_id' => $siteId,
-                'post_type' => $postType !== '' ? $postType : (string) ($article->type ?? 'article'),
-                'status' => (string) ($article->status ?? 'draft'),
-                'deduplicated' => true,
-            ];
+            return null;
         }
 
         $articleId = $this->findByOriginMeta($originType, $originId, $siteId);

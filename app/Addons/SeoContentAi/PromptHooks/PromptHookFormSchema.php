@@ -4,7 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\PromptHooks;
 
-use App\Addons\SeoContentAi\PromptHooks\Exceptions\PromptHookException;
+use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookDefinition;
+use App\Addons\SeoContentAi\PromptHooks\Canonical\PromptHookStatus;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\DefinitionNotFound;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\VersionNotFound;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeSettingsResolver;
 use App\Addons\SeoContentAi\Support\ImageToolType;
 use Filament\Forms;
 use Filament\Forms\Get;
@@ -13,7 +18,7 @@ use Illuminate\Support\HtmlString;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Filament form blocks cho chọn Hook + settings động từ manifest.
+ * Filament form: Hook select from canonical RuntimeRegistry catalog.
  */
 final class PromptHookFormSchema
 {
@@ -28,7 +33,10 @@ final class PromptHookFormSchema
                 ->schema([
                     Forms\Components\Select::make('hook_key')
                         ->label(__('seo-content-ai::filament.prompt.hook'))
-                        ->options(fn (PromptHookRegistry $registry): array => self::hookOptions($registry))
+                        ->options(fn (PromptHookEditorCatalog $catalog): array => array_merge(
+                            ['' => (string) __('seo-content-ai::prompt_hooks.none')],
+                            $catalog->selectOptions(),
+                        ))
                         ->placeholder(__('seo-content-ai::prompt_hooks.none'))
                         ->nullable()
                         ->searchable()
@@ -40,20 +48,65 @@ final class PromptHookFormSchema
 
                     Forms\Components\Hidden::make('hook_version'),
 
+                    Forms\Components\Placeholder::make('hook_experimental_warning')
+                        ->label('')
+                        ->content(fn (Get $get): string => self::experimentalWarning((string) ($get('hook_key') ?? ''), (string) ($get('hook_version') ?? '')))
+                        ->visible(fn (Get $get): bool => self::isExperimentalSelected((string) ($get('hook_key') ?? ''), (string) ($get('hook_version') ?? ''))),
+
+                    Forms\Components\Placeholder::make('hook_template_owns_prompt')
+                        ->label('')
+                        ->content(fn (Get $get): string => self::templateSourceNote(
+                            (string) ($get('hook_key') ?? ''),
+                            (string) ($get('hook_version') ?? ''),
+                        ))
+                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
+
                     Forms\Components\Placeholder::make('hook_description_display')
                         ->label(__('seo-content-ai::filament.prompt.hook_description'))
-                        ->content(fn (Get $get): string => self::hookDescription((string) ($get('hook_key') ?? '')))
+                        ->content(fn (Get $get): string => self::hookDescription(
+                            (string) ($get('hook_key') ?? ''),
+                            (string) ($get('hook_version') ?? ''),
+                        ))
                         ->visible(fn (Get $get): bool => filled($get('hook_key'))),
 
                     Forms\Components\Placeholder::make('hook_contract_display')
                         ->label(__('seo-content-ai::filament.prompt.hook_contract'))
                         ->content(fn (Get $get): HtmlString => new HtmlString(
-                            nl2br(e(self::hookContractSummary((string) ($get('hook_key') ?? '')))),
+                            nl2br(e(self::hookContractSummary(
+                                (string) ($get('hook_key') ?? ''),
+                                (string) ($get('hook_version') ?? ''),
+                            ))),
+                        ))
+                        ->visible(fn (Get $get): bool => filled($get('hook_key'))),
+
+                    Forms\Components\Placeholder::make('hook_markdown_sections_contract')
+                        ->label(__('seo-content-ai::filament.prompt.hook_sections_contract'))
+                        ->content(fn (Get $get): HtmlString => new HtmlString(
+                            nl2br(e(self::markdownSectionsContract(
+                                (string) ($get('hook_key') ?? ''),
+                                (string) ($get('hook_version') ?? ''),
+                            ))),
+                        ))
+                        ->visible(fn (Get $get): bool => self::isMarkdownSectionsHook(
+                            (string) ($get('hook_key') ?? ''),
+                            (string) ($get('hook_version') ?? ''),
+                        )),
+
+                    Forms\Components\Placeholder::make('hook_input_mapping')
+                        ->label(__('seo-content-ai::filament.prompt.hook_input_mapping'))
+                        ->content(fn (Get $get): HtmlString => new HtmlString(
+                            nl2br(e(self::inputMappingHelp(
+                                (string) ($get('hook_key') ?? ''),
+                                (string) ($get('hook_version') ?? ''),
+                            ))),
                         ))
                         ->visible(fn (Get $get): bool => filled($get('hook_key'))),
 
                     Forms\Components\Group::make()
-                        ->schema(fn (Get $get): array => self::settingsFields((string) ($get('hook_key') ?? '')))
+                        ->schema(fn (Get $get): array => self::settingsFields(
+                            (string) ($get('hook_key') ?? ''),
+                            (string) ($get('hook_version') ?? ''),
+                        ))
                         ->visible(fn (Get $get): bool => filled($get('hook_key'))),
                 ]),
         ];
@@ -74,16 +127,19 @@ final class PromptHookFormSchema
             return $data;
         }
 
-        $registry = app(PromptHookRegistry::class);
+        $catalog = app(PromptHookEditorCatalog::class);
+        $version = trim((string) ($data['hook_version'] ?? ''));
         try {
-            $definition = $registry->get($hookKey);
-        } catch (PromptHookException $exception) {
+            $definition = $version !== ''
+                ? $catalog->find($hookKey, $version)
+                : $catalog->latestPinnedOrFail($hookKey);
+        } catch (DefinitionNotFound|VersionNotFound|\InvalidArgumentException $exception) {
             throw ValidationException::withMessages([
                 'hook_key' => $exception->getMessage(),
             ]);
         }
 
-        if ($definition->capability() === 'text'
+        if (($definition->model->capability ?? 'text') === 'text'
             && ImageToolType::fromMixed($data['tools'] ?? 'default')->isImagePipeline()
         ) {
             throw ValidationException::withMessages([
@@ -91,33 +147,19 @@ final class PromptHookFormSchema
             ]);
         }
 
-        $stored = is_array($data['hook_settings'] ?? null) ? $data['hook_settings'] : null;
-
-        try {
-            $data['hook_settings'] = app(PromptHookSettingsResolver::class)->resolve($definition, $stored);
-        } catch (PromptHookException $exception) {
-            throw ValidationException::withMessages([
-                'hook_settings' => $exception->getMessage(),
-            ]);
+        $stored = is_array($data['hook_settings'] ?? null) ? $data['hook_settings'] : [];
+        $allowedKeys = array_map('strval', array_keys($definition->settingsSchema));
+        if ($allowedKeys !== []) {
+            $stored = array_intersect_key($stored, array_flip($allowedKeys));
+        } else {
+            $stored = [];
         }
-
-        $data['hook_key'] = $definition->key;
-        $data['hook_version'] = $definition->version;
+        $resolved = app(PromptHookRuntimeSettingsResolver::class)->resolve($definition, $stored, []);
+        $data['hook_settings'] = $resolved['hook'] !== [] ? $resolved['hook'] : null;
+        $data['hook_key'] = $definition->key->value;
+        $data['hook_version'] = $definition->version->toString();
 
         return $data;
-    }
-
-    /**
-     * @return array<string, string>
-     */
-    private static function hookOptions(PromptHookRegistry $registry): array
-    {
-        $options = [];
-        foreach ($registry->all() as $definition) {
-            $options[$definition->key] = $definition->label();
-        }
-
-        return $options;
     }
 
     private static function onHookChanged(?string $state, Set $set, Get $get): void
@@ -132,8 +174,8 @@ final class PromptHookFormSchema
         }
 
         try {
-            $definition = app(PromptHookRegistry::class)->get($hookKey);
-        } catch (PromptHookException) {
+            $definition = app(PromptHookEditorCatalog::class)->latestPinnedOrFail($hookKey);
+        } catch (\Throwable) {
             $set('hook_key', null);
             $set('hook_version', null);
             $set('hook_settings', null);
@@ -141,49 +183,84 @@ final class PromptHookFormSchema
             return;
         }
 
-        $set('hook_version', $definition->version);
+        $set('hook_version', $definition->version->toString());
 
-        $current = is_array($get('hook_settings')) ? $get('hook_settings') : null;
-        $normalized = app(PromptHookSettingsResolver::class)->normalizeForDefinition($definition, $current);
-        $set('hook_settings', $normalized);
+        $current = is_array($get('hook_settings')) ? $get('hook_settings') : [];
+        $allowedKeys = array_map('strval', array_keys($definition->settingsSchema));
+        if ($allowedKeys !== []) {
+            $current = array_intersect_key($current, array_flip($allowedKeys));
+        } else {
+            $current = [];
+        }
+        $resolved = app(PromptHookRuntimeSettingsResolver::class)->resolve($definition, $current, []);
+        $set('hook_settings', $resolved['hook']);
 
-        if ($definition->capability() === 'text'
+        if (($definition->model->capability ?? 'text') === 'text'
             && ImageToolType::fromMixed($get('tools'))->isImagePipeline()
         ) {
             $set('tools', ImageToolType::Default->value);
         }
     }
 
-    private static function hookDescription(string $hookKey): string
+    private static function resolveDefinition(string $hookKey, string $version): ?PromptHookDefinition
     {
         $hookKey = trim($hookKey);
         if ($hookKey === '') {
-            return '—';
+            return null;
         }
 
         try {
-            return app(PromptHookRegistry::class)->get($hookKey)->description();
-        } catch (PromptHookException) {
-            return '—';
+            $catalog = app(PromptHookEditorCatalog::class);
+
+            return $version !== ''
+                ? $catalog->find($hookKey, $version)
+                : $catalog->latestPinnedOrFail($hookKey);
+        } catch (\Throwable) {
+            return null;
         }
     }
 
-    private static function hookContractSummary(string $hookKey): string
+    private static function isExperimentalSelected(string $hookKey, string $version): bool
     {
-        $hookKey = trim($hookKey);
-        if ($hookKey === '') {
+        $definition = self::resolveDefinition($hookKey, $version);
+
+        return $definition !== null && $definition->status === PromptHookStatus::Experimental;
+    }
+
+    private static function experimentalWarning(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        $ver = $definition?->version->toString() ?? ($version !== '' ? $version : '0.1.0');
+
+        return (string) __('seo-content-ai::prompt_hooks.experimental_warning', ['version' => $ver]);
+    }
+
+    private static function hookDescription(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null) {
             return '—';
         }
 
-        try {
-            $definition = app(PromptHookRegistry::class)->get($hookKey);
-        } catch (PromptHookException) {
+        foreach (app(PromptHookEditorCatalog::class)->optionsForTextPromptBlock() as $row) {
+            if ($row['hook_key'] === $definition->key->value && $row['version'] === $definition->version->toString()) {
+                return $row['description'] !== '' ? $row['description'] : '—';
+            }
+        }
+
+        return $definition->description !== '' ? $definition->description : '—';
+    }
+
+    private static function hookContractSummary(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null) {
             return '—';
         }
 
         $required = [];
         $optional = [];
-        foreach ($definition->inputFields as $field => $schema) {
+        foreach ($definition->inputSchema->fields as $field => $schema) {
             if (! is_array($schema)) {
                 continue;
             }
@@ -194,14 +271,90 @@ final class PromptHookFormSchema
             }
         }
 
-        $lines = [
+        return implode("\n", [
             __('seo-content-ai::filament.prompt.hook_contract_required').': '
                 .($required !== [] ? implode(', ', $required) : '—'),
             __('seo-content-ai::filament.prompt.hook_contract_optional').': '
                 .($optional !== [] ? implode(', ', $optional) : '—'),
-            __('seo-content-ai::filament.prompt.hook_contract_output').': '.$definition->outputFormat(),
-            __('seo-content-ai::filament.prompt.hook_contract_capability').': '.$definition->capability(),
-        ];
+            __('seo-content-ai::filament.prompt.hook_contract_output').': '.$definition->outputSchema->type,
+            __('seo-content-ai::filament.prompt.hook_contract_capability').': '.($definition->model->capability ?? 'text'),
+            'version: '.$definition->version->toString(),
+            'status: '.$definition->status->value,
+            'template.source: '.(string) ($definition->template['source'] ?? 'inline'),
+        ]);
+    }
+
+    private static function templateSourceNote(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition !== null && ($definition->template['source'] ?? '') === 'legacy_prompt_content') {
+            return (string) __('seo-content-ai::prompt_hooks.hook_legacy_prompt_template_note');
+        }
+
+        return (string) __('seo-content-ai::prompt_hooks.hook_template_owns_prompt');
+    }
+
+    public static function usesLegacyPromptTemplate(string $hookKey, string $version): bool
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+
+        return $definition !== null
+            && ($definition->template['source'] ?? '') === 'legacy_prompt_content';
+    }
+
+    private static function isMarkdownSectionsHook(string $hookKey, string $version): bool
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+
+        return $definition !== null && $definition->outputSchema->isMarkdownSections();
+    }
+
+    private static function markdownSectionsContract(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null || ! $definition->outputSchema->isMarkdownSections()) {
+            return '—';
+        }
+
+        $lines = [];
+        foreach ($definition->outputSchema->sections as $section) {
+            if (! is_array($section)) {
+                continue;
+            }
+            $task = $section['task'] ?? null;
+            $label = trim((string) ($section['label'] ?? $section['key'] ?? ''));
+            $start = (string) ($section['start_marker'] ?? '');
+            $end = (string) ($section['end_marker'] ?? '');
+            $port = (string) ($section['output_port'] ?? '');
+            $taskPrefix = $task !== null && $task !== '' ? 'Task '.$task.' — ' : '';
+            $lines[] = $taskPrefix.$label;
+            $lines[] = $start.' ... '.$end;
+            if ($port !== '') {
+                $lines[] = 'output_port: '.$port;
+            }
+            $lines[] = '';
+        }
+
+        $totalPort = $definition->outputSchema->totalPort !== ''
+            ? $definition->outputSchema->totalPort
+            : 'total';
+        $lines[] = 'Total (AI) → '.$totalPort.' / out_main';
+
+        return trim(implode("\n", $lines));
+    }
+
+    private static function inputMappingHelp(string $hookKey, string $version): string
+    {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null) {
+            return '—';
+        }
+
+        $lines = [(string) __('seo-content-ai::prompt_hooks.input_mapping_hint')];
+        foreach ($definition->inputSchema->fields as $field => $schema) {
+            $req = is_array($schema) && ($schema['required'] ?? false) === true ? ' *' : '';
+            $lines[] = "{$field}{$req} ← {{".$field.'}}';
+        }
 
         return implode("\n", $lines);
     }
@@ -209,26 +362,19 @@ final class PromptHookFormSchema
     /**
      * @return list<Forms\Components\Component>
      */
-    private static function settingsFields(string $hookKey): array
+    private static function settingsFields(string $hookKey, string $version): array
     {
-        $hookKey = trim($hookKey);
-        if ($hookKey === '') {
-            return [];
-        }
-
-        try {
-            $definition = app(PromptHookRegistry::class)->get($hookKey);
-        } catch (PromptHookException) {
+        $definition = self::resolveDefinition($hookKey, $version);
+        if ($definition === null) {
             return [];
         }
 
         $fields = [];
-        foreach ($definition->settings as $key => $schema) {
+        foreach ($definition->settingsSchema as $key => $schema) {
             if (! is_array($schema)) {
                 continue;
             }
-
-            $fields[] = self::settingField($key, $schema);
+            $fields[] = self::settingField((string) $key, $schema);
         }
 
         return $fields;

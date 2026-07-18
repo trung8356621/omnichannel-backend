@@ -1,0 +1,37 @@
+{
+  "spec_version": "0.1",
+  "key": "keyword.discovery.structured",
+  "version": "1.0",
+  "name": "Keyword discovery structured JSON",
+  "description": "Legacy AiKeywordDiscoveryService / project keywords — JSON-only, fence strip.",
+  "enabled": true,
+  "classification": "NORMALIZE_NOW",
+  "legacy_binding": "project_keywords_prompt_id | AiKeywordDiscoveryService hardcoded system",
+  "model": { "provider": "prompt_connection_or_direct", "name": "configured", "settings": { "temperature": 0.2 } },
+  "locale": { "mode": "site", "fallback": "en" },
+  "input_schema": {
+    "seed_topic": { "type": "string", "required": true, "max_length": 1000 },
+    "site_id": { "type": "integer", "required": true }
+  },
+  "output_schema": {
+    "type": "json",
+    "validation": { "not_empty": true, "json_decode": true, "reject_markdown_fence_after_strip": false },
+    "normalize": ["trim", "strip_markdown_fence"]
+  },
+  "template": {
+    "system": "Return JSON only. No markdown fences.",
+    "user": "Topic: {{seed_topic}}"
+  },
+  "validation": { "json_object": true },
+  "retry": { "max": 1, "on": ["invalid_json"] },
+  "logging": { "store_full_prompt": false, "redact_sensitive": true },
+  "permissions": { "capability": "text", "structured_output": true },
+  "metadata": {
+    "prompt_concern": "JSON keywords",
+    "workflow_concern": "single call or short chain",
+    "domain_action_concern": "keyword.assign_to_project Action",
+    "ui_concern": "SeoProject / KeywordWorkspace"
+  },
+  "side_effects": [],
+  "known_failures": ["JSON wrapped in ```json fence", "truncated array", "unexpected language labels"]
+}

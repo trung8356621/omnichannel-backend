@@ -4,6 +4,12 @@ declare(strict_types=1);
 
 return [
     'none' => 'No Hook',
+    'experimental_badge' => 'Experimental',
+    'experimental_warning' => 'This Hook is experimental version :version.',
+    'execution_failed_title' => 'Prompt Hook failed',
+    'hook_template_owns_prompt' => 'When a Hook is selected, template and output contract come from the Hook Definition. Markdown on the right is used only when no Hook is attached.',
+    'hook_legacy_prompt_template_note' => 'This Hook manages the input/output contract and runtime. The current Prompt content remains the template sent to the AI.',
+    'input_mapping_hint' => 'Map workflow variables → Hook inputs (same {{field}} name unless noted).',
 
     'article_title_suggestion' => [
         'label' => 'Article title suggestion',
@@ -43,5 +49,30 @@ PROMPT,
             'min_length' => 'Minimum length',
             'max_length' => 'Maximum length',
         ],
+    ],
+
+    'article_outline_generate' => [
+        'label' => 'Generate article outline',
+        'description' => 'Generate an SEO outline / heading structure from keyword and context (experimental 0.1.0).',
+    ],
+
+    'article_content_generate' => [
+        'label' => 'Write article',
+        'description' => 'Generate a new article from outline, vocabulary, keyword and site context (experimental 0.1.0).',
+    ],
+
+    'article_content_rewrite' => [
+        'label' => 'Rewrite article',
+        'description' => 'Rewrite or improve existing content per instructions while preserving search intent and source facts (experimental 0.1.0).',
+    ],
+
+    'article_faq_generate' => [
+        'label' => 'Generate article FAQ',
+        'description' => 'Structured FAQ generation (experimental — vertical slice not completed).',
+    ],
+
+    'keyword_discovery_structured' => [
+        'label' => 'Keyword discovery (JSON)',
+        'description' => 'Structured keyword discovery (experimental — vertical slice not completed).',
     ],
 ];
