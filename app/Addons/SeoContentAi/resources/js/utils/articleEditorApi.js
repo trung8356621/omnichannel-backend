@@ -114,6 +114,38 @@ export async function saveSeoMetaViaApi(articleId, payload) {
     return data;
 }
 
+/**
+ * Chạy Prompt Hook (không lưu article / SEO / WP).
+ *
+ * @param {string} hookKey vd. article.title_suggestion
+ * @param {number} articleId
+ * @param {Record<string, unknown>} [input] runtime overrides
+ * @returns {Promise<{ success: true, data: { hook: string, output: { format: string, raw: string, value: string } } }>}
+ */
+export async function executePromptHookViaApi(hookKey, articleId, input = {}) {
+    const encodedKey = encodeURIComponent(String(hookKey ?? '').trim());
+    const { response, data } = await seoArticleApiFetch(`/api/seo/prompt-hooks/${encodedKey}/execute`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+        },
+        body: JSON.stringify({
+            article_id: Number(articleId),
+            input: input && typeof input === 'object' ? input : {},
+        }),
+    });
+
+    if (!response.ok || data.success === false) {
+        const err = new Error(data.message ?? 'Prompt Hook thất bại.');
+        err.code = data.error ?? 'HOOK_EXECUTION_FAILED';
+        err.status = response.status;
+        throw err;
+    }
+
+    return data;
+}
+
 function resolveEditArticleLivewireComponent() {
     if (typeof Livewire === 'undefined') {
         return null;

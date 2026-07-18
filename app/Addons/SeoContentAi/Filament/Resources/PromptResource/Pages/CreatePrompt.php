@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoCreateRecord;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
+use App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 
 class CreatePrompt extends SeoCreateRecord
@@ -48,6 +49,6 @@ class CreatePrompt extends SeoCreateRecord
             is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [],
         );
 
-        return $data;
+        return PromptHookFormSchema::normalizeForSave($data);
     }
 }

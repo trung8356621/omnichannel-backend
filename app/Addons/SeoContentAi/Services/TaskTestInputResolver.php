@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
+use App\Addons\SeoContentAi\Support\ProjectTaskOriginVariables;
 use App\Addons\SeoContentAi\Support\TaskTestContext;
 use App\Models\Site;
 use Illuminate\Database\Eloquent\Builder;
@@ -83,10 +84,13 @@ final class TaskTestInputResolver
             $rewriteMode = SeoProjectTask::normalizeRewriteMode($task->rewrite_mode ?? null);
 
             if ($rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT) {
-                return $this->withProductPromptVariables(
-                    $this->resolveRewriteByContent($task, $scopeArticles),
-                    $galleryDescription,
-                    $loaiSanPham,
+                return $this->stampProjectTaskOrigin(
+                    $this->withProductPromptVariables(
+                        $this->resolveRewriteByContent($task, $scopeArticles),
+                        $galleryDescription,
+                        $loaiSanPham,
+                    ),
+                    $task,
                 );
             }
 
@@ -126,20 +130,36 @@ final class TaskTestInputResolver
                 );
             }
 
-            return $this->withProductPromptVariables($rewriteContext, $galleryDescription, $loaiSanPham);
+            return $this->stampProjectTaskOrigin(
+                $this->withProductPromptVariables($rewriteContext, $galleryDescription, $loaiSanPham),
+                $task,
+            );
         }
 
         $siteId = (int) ($task->site_id ?? 0);
         $postType = SeoProjectTask::normalizePostType($task->post_type);
 
-        return $this->withProductPromptVariables(
-            $this->applyProjectPostType(
-                $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
-                    ->withProjectTaskType($task->type),
-                $postType,
+        return $this->stampProjectTaskOrigin(
+            $this->withProductPromptVariables(
+                $this->applyProjectPostType(
+                    $this->contextForNewArticleOnSite($keyword, $keyword, $siteId, $postType, $scopeArticles)
+                        ->withProjectTaskType($task->type),
+                    $postType,
+                ),
+                $galleryDescription,
+                $loaiSanPham,
             ),
-            $galleryDescription,
-            $loaiSanPham,
+            $task,
+        );
+    }
+
+    private function stampProjectTaskOrigin(TaskTestContext $context, SeoProjectTask $task): TaskTestContext
+    {
+        return $context->withVariables(
+            ProjectTaskOriginVariables::stamp(
+                $context->variables,
+                (int) $task->id,
+            ),
         );
     }
 

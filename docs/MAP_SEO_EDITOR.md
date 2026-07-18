@@ -170,6 +170,7 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 | `__seoExecuteHeavyArticleAction` | `executeHeavyArticleAction`                                                                                          |
 | Sync shortcut                    | `syncArticleToWordPress`                                                                                             |
 | SEO modal                        | `POST /api/seo/articles/{id}/seo-meta` → `ArticleEditorSeoMetaService` (không Livewire; chấm điểm queue)            |
+| Prompt Hooks (title / meta desc) | API `POST /api/seo/prompt-hooks/{hookKey}/execute`; UI: nút AI title (`articleTitlePromptHook.js`) + nút AI meta (`ArticleGoogleSerpPreview`); docs [prompt-hooks/README.md](prompt-hooks/README.md) |
 | FAQ                              | `saveArticleFaqs`, `generateArticleFaqs`, `renewArticleFaq`, `checkFaqQuestionDuplicate`, `extractFaqsFromSelection` |
 | AI image / snippet               | `generateArticleImageFromEditor`, `generateFeaturedSnippetFromEditor`                                                |
 | AI video                         | `generateArticleVideoFromEditor`                                                                                     |

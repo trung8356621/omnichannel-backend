@@ -42,6 +42,7 @@ import {
     syncProductAlbumToServer,
 } from './utils/articleProductAlbumStorage';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
+import { mountArticleTitlePromptHook } from './utils/articleTitlePromptHook';
 import './utils/seoAssistantNavigator';
 import {
     applyFetchedWpCategories,
@@ -736,5 +737,26 @@ function mountArticleEditorPage() {
 }
 
 mountArticleEditorPage();
+mountArticleTitlePromptHook();
 registerFilamentHeaderActionsPersistence();
-document.addEventListener('livewire:navigated', mountArticleEditorPage);
+document.addEventListener('livewire:navigated', () => {
+    mountArticleEditorPage();
+    mountArticleTitlePromptHook();
+});
+
+if (typeof window !== 'undefined') {
+    document.addEventListener('livewire:init', () => {
+        if (typeof Livewire === 'undefined' || typeof Livewire.hook !== 'function') {
+            return;
+        }
+        Livewire.hook('morph.updated', () => {
+            mountArticleTitlePromptHook();
+        });
+    });
+    // Livewire đã boot trước bundle
+    if (typeof Livewire !== 'undefined' && typeof Livewire.hook === 'function') {
+        Livewire.hook('morph.updated', () => {
+            mountArticleTitlePromptHook();
+        });
+    }
+}

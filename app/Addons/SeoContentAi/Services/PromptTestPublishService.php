@@ -4,6 +4,14 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Automation\Data\ActionContext;
+use App\Addons\SeoContentAi\Automation\Data\ActionResult;
+use App\Addons\SeoContentAi\Automation\Migration\AutomationMigrationFlags;
+use App\Addons\SeoContentAi\Automation\Migration\AutomationMigrationWriteException;
+use App\Addons\SeoContentAi\Automation\Migration\ProjectArticleContentCallerBridge;
+use App\Addons\SeoContentAi\Automation\Migration\ProjectArticleSeoMetaCallerBridge;
+use App\Addons\SeoContentAi\Automation\Runtime\ActionRunner;
+use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\MarkdownOutlineParser;
@@ -16,6 +24,11 @@ final class PromptTestPublishService
         private readonly MarkdownOutlineParser $outlineParser,
         private readonly MarkdownSemanticKeywordsParser $keywordsParser,
         private readonly ArticleMarkdownToHtmlService $markdownHtml,
+        private readonly ProjectArticleContentCallerBridge $contentBridge,
+        private readonly ProjectArticleSeoMetaCallerBridge $seoMetaBridge,
+        private readonly ActionRunner $actionRunner,
+        private readonly AutomationMigrationFlags $migrationFlags,
+        private readonly ArticleContentConflictGuard $contentConflictGuard,
     ) {}
 
     /**
@@ -69,6 +82,7 @@ final class PromptTestPublishService
         $title = $h1Title !== ''
             ? $h1Title
             : $this->resolveTitle($variables, $markdown, $article);
+
         $this->persistMetaDescription($article, $import['meta_description']);
 
         $update = [
@@ -82,13 +96,92 @@ final class PromptTestPublishService
             $update['slug'] = $slug;
         }
 
-        $article->update($update);
+        $articleId = (int) $article->id;
+        $siteId = (int) ($article->site_id ?? 0);
+        $expectedHash = $this->contentConflictGuard->contentHash((string) ($article->body ?? ''));
+        $expectedUpdatedAt = $article->updated_at?->toIso8601String();
+        $correlationId = Str::uuid()->toString();
 
-        app(ArticlePostImagesService::class)->syncFromHtml($article->fresh(), $html);
-        app(SeoAnalyzerService::class)->analyze($article->fresh());
+        $contentInput = [
+            'article_id' => $articleId,
+            'content' => $html,
+            'title' => $title,
+            'expected_content_hash' => $expectedHash,
+            'expected_updated_at' => $expectedUpdatedAt,
+        ];
+        if ($slug !== null) {
+            $contentInput['slug'] = $slug;
+        }
+
+        $articleState = [
+            'article_id' => $articleId,
+            'status' => (string) ($article->status ?? 'draft'),
+            'body' => (string) ($article->body ?? ''),
+            'title' => (string) ($article->title ?? ''),
+            'updated_at' => $expectedUpdatedAt,
+        ];
+
+        try {
+            $this->contentBridge->run(
+                input: $contentInput,
+                articleState: $articleState,
+                legacyWrite: function () use ($article, $update, $html, $title, $expectedHash): array {
+                    $currentHash = $this->contentConflictGuard->contentHash((string) ($article->body ?? ''));
+                    $currentTitle = trim((string) ($article->title ?? ''));
+                    $noop = $currentHash === $this->contentConflictGuard->contentHash($html)
+                        && trim($title) === $currentTitle
+                        && ! array_key_exists('slug', $update);
+
+                    if (! $noop) {
+                        $article->update($update);
+                    }
+
+                    $fresh = $article->fresh() ?? $article;
+
+                    return [
+                        'article_id' => (int) $fresh->id,
+                        'status' => (string) ($fresh->status ?? 'draft'),
+                        'noop' => $noop,
+                        'changed_fields' => $noop ? [] : array_values(array_filter([
+                            $currentHash !== $this->contentConflictGuard->contentHash($html) ? 'content' : null,
+                            trim($title) !== $currentTitle ? 'title' : null,
+                            array_key_exists('slug', $update) ? 'slug' : null,
+                        ])),
+                        'content_hash' => $this->contentConflictGuard->contentHash((string) ($fresh->body ?? $html)),
+                        'updated_at' => $fresh->updated_at?->toIso8601String(),
+                        'expected_content_hash' => $expectedHash,
+                    ];
+                },
+                actionWrite: fn (): ActionResult => $this->actionRunner->run(
+                    'article.content.update',
+                    ActionContext::fromArray([
+                        'origin' => 'migration.project_article_content_update',
+                        'actor_id' => auth()->id() !== null ? (int) auth()->id() : null,
+                        'site_id' => $siteId > 0 ? $siteId : null,
+                        'correlation_id' => $correlationId,
+                    ]),
+                    $contentInput,
+                ),
+                correlationId: $correlationId,
+            );
+        } catch (AutomationMigrationWriteException $exception) {
+            return [
+                'success' => false,
+                'message' => $exception->getMessage(),
+            ];
+        }
+
+        $wroteViaAction = $this->migrationFlags
+            ->mode(AutomationMigrationFlags::PROJECT_ARTICLE_CONTENT_UPDATE)
+            ->writesViaAction();
+
+        if (! $wroteViaAction) {
+            app(ArticlePostImagesService::class)->syncFromHtml($article->fresh(), $html);
+            app(SeoAnalyzerService::class)->analyze($article->fresh());
+            app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($article->fresh());
+        }
 
         app(ArticleEditorReadinessService::class)->syncWpPostContentFromBody($article->fresh());
-        app(ArticleWordPressSyncFlagService::class)->markLocalEditPending($article->fresh());
 
         return [
             'success' => true,
@@ -106,11 +199,71 @@ final class PromptTestPublishService
             return;
         }
 
+        $articleId = (int) $article->id;
+        $siteId = (int) ($article->site_id ?? 0);
+        $correlationId = Str::uuid()->toString();
+
+        $currentMeta = '';
         foreach (['seo_meta_description', 'meta_description'] as $key) {
-            $article->articleMetas()->updateOrCreate(
-                ['meta_key' => $key],
-                ['meta_value' => $metaDescription],
+            $value = trim((string) ($article->articleMetas()
+                ->where('meta_key', $key)
+                ->value('meta_value') ?? ''));
+            if ($value !== '') {
+                $currentMeta = $value;
+                break;
+            }
+        }
+
+        $input = [
+            'article_id' => $articleId,
+            'meta_description' => $metaDescription,
+            'dispatch_scoring' => false,
+        ];
+
+        $metaState = [
+            'article_id' => $articleId,
+            'status' => (string) ($article->status ?? 'draft'),
+            'slug' => (string) ($article->slug ?? ''),
+            'focus_keyword' => '',
+            'meta_description' => $currentMeta,
+            'updated_at' => $article->updated_at?->toIso8601String(),
+        ];
+
+        try {
+            $this->seoMetaBridge->run(
+                input: $input,
+                metaState: $metaState,
+                legacyWrite: function () use ($article, $metaDescription, $articleId): array {
+                    foreach (['seo_meta_description', 'meta_description'] as $key) {
+                        $article->articleMetas()->updateOrCreate(
+                            ['meta_key' => $key],
+                            ['meta_value' => $metaDescription],
+                        );
+                    }
+
+                    return [
+                        'article_id' => $articleId,
+                        'meta_description' => $metaDescription,
+                        'focus_keyword' => '',
+                        'slug' => (string) ($article->slug ?? ''),
+                        'seo_analysis_pending' => false,
+                        'changed_fields' => ['meta_description'],
+                    ];
+                },
+                actionWrite: fn (): ActionResult => $this->actionRunner->run(
+                    'article.seo_meta.update',
+                    ActionContext::fromArray([
+                        'origin' => 'migration.project_article_seo_meta_update',
+                        'actor_id' => auth()->id() !== null ? (int) auth()->id() : null,
+                        'site_id' => $siteId > 0 ? $siteId : null,
+                        'correlation_id' => $correlationId,
+                    ]),
+                    $input,
+                ),
+                correlationId: $correlationId,
             );
+        } catch (AutomationMigrationWriteException $exception) {
+            throw new \InvalidArgumentException($exception->getMessage(), 0, $exception);
         }
     }
 

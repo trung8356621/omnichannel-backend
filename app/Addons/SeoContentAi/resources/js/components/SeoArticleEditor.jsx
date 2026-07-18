@@ -8944,6 +8944,8 @@ export default function SeoArticleEditor({
                         initialSlug={String(initialSeo?.article_slug ?? '')}
                         permalinkBase={String(initialSeo?.permalink_base ?? '')}
                         permalinkSuffix={String(initialSeo?.permalink_suffix ?? '')}
+                        promptHooks={editorSettings?.prompt_hooks ?? null}
+                        articleTitle={articleTitle}
                     />
 
                     <aside

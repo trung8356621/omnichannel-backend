@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Models\SeoPrompt;
+use App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\AiModelCategory;
 use App\Addons\SeoContentAi\Support\PromptLoaiSanPhamVariable;
@@ -112,6 +113,7 @@ class PromptResource extends SeoPanelResource
                                             ->label(__('seo-content-ai::filament.prompt.active'))
                                             ->default(true),
                                     ]),
+                                ...PromptHookFormSchema::section(),
                                 Forms\Components\Section::make(__('seo-content-ai::filament.prompt.variables'))
                                     ->description('Auto-sync from {{variable_name}} in Markdown. Runtime mặc định: {{input}}, {{loai_san_pham}}, {{tone}}, {{site_cta}}, {{keyword_density}}, {{article_length}}, ... — không cần khai báo.')
                                     ->schema([
@@ -466,6 +468,21 @@ class PromptResource extends SeoPanelResource
                     ->label(__('seo-content-ai::filament.prompt.name'))
                     ->searchable()
                     ->sortable(),
+                Tables\Columns\TextColumn::make('hook_key')
+                    ->label(__('seo-content-ai::filament.prompt.hook'))
+                    ->formatStateUsing(function (?string $state): string {
+                        if ($state === null || trim($state) === '') {
+                            return '—';
+                        }
+                        try {
+                            return app(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class)
+                                ->get($state)
+                                ->label();
+                        } catch (\Throwable) {
+                            return $state;
+                        }
+                    })
+                    ->toggleable(),
                 Tables\Columns\TextColumn::make('aiConnection.name')
                     ->label(__('seo-content-ai::filament.prompt.ai_connection'))
                     ->placeholder('—'),

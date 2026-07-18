@@ -17,6 +17,7 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleWpEditRedirectController;
 use App\Addons\SeoContentAi\Http\Controllers\GlobalAiChatController;
 use App\Addons\SeoContentAi\Http\Controllers\GoogleSearchConsoleOAuthController;
 use App\Addons\SeoContentAi\Http\Controllers\KeywordReviewController;
+use App\Addons\SeoContentAi\Http\Controllers\PromptHookExecuteController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoArticleRevisionController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoMediaController;
 use App\Addons\SeoContentAi\Http\Controllers\SeoPanelLogoutController;
@@ -303,6 +304,14 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{media}/save-edited', [SeoMediaController::class, 'saveEditedImage'])
                     ->whereNumber('media')
                     ->name('seo.media.save-edited');
+            });
+
+        Route::middleware($seoWebApiMiddleware)
+            ->prefix('api/seo/prompt-hooks')
+            ->group(function (): void {
+                Route::post('/{hookKey}/execute', PromptHookExecuteController::class)
+                    ->where('hookKey', '[A-Za-z0-9_.-]+')
+                    ->name('seo.prompt-hooks.execute');
             });
 
         Route::middleware($seoWebApiMiddleware)

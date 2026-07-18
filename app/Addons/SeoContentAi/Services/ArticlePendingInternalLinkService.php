@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
-use App\Addons\SeoContentAi\Filament\Resources\KeywordResource;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoPendingInternalLink;
@@ -21,6 +19,8 @@ final class ArticlePendingInternalLinkService
         private readonly WordPressArticleContentService $wordPressContent,
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
         private readonly ArticleKeywordLinkReconcileService $articleReconcile,
+        private readonly KeywordProjectAssignmentService $keywordProjectAssignment,
+        private readonly SeoIssueProjectTaskAssignmentService $seoIssueAssignment,
     ) {}
 
     /**
@@ -87,14 +87,14 @@ final class ArticlePendingInternalLinkService
             $keyword->refresh();
             $keyword->loadCount('mainArticles');
 
-            $existingProjectForSite = KeywordResource::keywordAssignedContentProjectIdForSite($keyword, $siteId);
+            $existingProjectForSite = $this->keywordProjectAssignment->keywordAssignedContentProjectIdForSite($keyword, $siteId);
             if ($existingProjectForSite === $projectId) {
                 $assignedToProject = true;
                 $message = __('seo-content-ai::filament.article_edit.pending_link_assigned');
             } elseif ($existingProjectForSite !== null) {
                 return [
                     'success' => false,
-                    'message' => ArticleResource::buildAssignContentProjectBody([
+                    'message' => $this->seoIssueAssignment->buildSummaryMessage([
                         'added' => 0,
                         'duplicate' => 0,
                         'overflow' => 0,
@@ -102,13 +102,13 @@ final class ArticlePendingInternalLinkService
                         'already_in_project' => 1,
                     ]),
                 ];
-            } elseif (! KeywordResource::canAssignKeywordToContentProject($keyword)) {
+            } elseif (! $this->keywordProjectAssignment->canAssignKeyword($keyword)) {
                 return [
                     'success' => false,
                     'message' => __('seo-content-ai::filament.keyword.workspace_assign_denied'),
                 ];
             } else {
-                $summary = KeywordResource::assignKeywordsToContentProject(
+                $summary = $this->keywordProjectAssignment->assignKeywords(
                     collect([$keyword]),
                     $projectId,
                     $siteId,
@@ -122,7 +122,7 @@ final class ArticlePendingInternalLinkService
                 } else {
                     return [
                         'success' => false,
-                        'message' => ArticleResource::buildAssignContentProjectBody($summary),
+                        'message' => $this->seoIssueAssignment->buildSummaryMessage($summary),
                     ];
                 }
             }

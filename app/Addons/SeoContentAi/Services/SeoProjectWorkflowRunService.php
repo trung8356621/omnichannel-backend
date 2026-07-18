@@ -27,6 +27,7 @@ final class SeoProjectWorkflowRunService
         private readonly PromptResultLinkService $promptResultLinks,
         private readonly SeoProjectArticleOwnerSyncService $articleOwnerSync,
         private readonly ArticleEditorReadinessService $editorReadiness,
+        private readonly \App\Addons\SeoContentAi\Automation\Migration\ProjectTaskCallerBridge $taskCallerBridge,
     ) {}
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
@@ -411,8 +412,12 @@ final class SeoProjectWorkflowRunService
                 ->exists();
 
             if ($articleExists) {
-                $task->article_id = $linkedArticleId;
-                $task->save();
+                $this->taskCallerBridge->attachArticle(
+                    $task,
+                    $linkedArticleId,
+                    auth()->id() !== null ? (int) auth()->id() : null,
+                    (int) ($project->site_id ?? 0),
+                );
 
                 Log::info('seo.project_run.retry.relink_article', [
                     'run_id' => (int) $run->id,
@@ -1195,24 +1200,13 @@ final class SeoProjectWorkflowRunService
 
     private function markTaskCompleted(SeoProjectTask $task, int $articleId): void
     {
-        if ($articleId > 0) {
-            $this->releaseArticleLinkFromOtherTasks($articleId, (int) $task->id);
-        }
-
-        $this->persistTaskState(
-            $task,
-            SeoProjectTask::STATUS_COMPLETED,
-            $articleId > 0 ? $articleId : null,
-        );
-
-        if ($articleId <= 0) {
-            return;
-        }
-
         $task->loadMissing('project');
-        if ($task->project instanceof SeoProject) {
-            $this->articleOwnerSync->assignWriterToArticle($task->project, $articleId);
-        }
+        $this->taskCallerBridge->markCompleted(
+            $task,
+            $articleId,
+            auth()->id() !== null ? (int) auth()->id() : null,
+            (int) ($task->site_id ?? $task->project?->site_id ?? 0),
+        );
     }
 
     private function persistTaskState(SeoProjectTask $task, string $status, ?int $articleId): void

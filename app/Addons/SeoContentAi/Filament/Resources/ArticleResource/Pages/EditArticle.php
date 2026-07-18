@@ -3652,6 +3652,31 @@ class EditArticle extends SeoEditRecord
             'can_generate_outline_heading' => $this->canGenerateOutlineHeading(),
             'can_generate_image' => $this->canGenerateEditorImage(),
             'can_generate_video' => $this->canGenerateEditorVideo(),
+            'prompt_hooks' => $this->getPromptHooksEditorPayload(),
+        ];
+    }
+
+    /**
+     * Flags cấu hình Prompt Hook cho Article Editor (Step 4+).
+     *
+     * @return array{
+     *     title_suggestion: array{configured: bool, hook_key: string},
+     *     meta_description_suggestion: array{configured: bool, hook_key: string}
+     * }
+     */
+    private function getPromptHooksEditorPayload(): array
+    {
+        $settings = app(SeoCreateArticleSettingsService::class);
+
+        return [
+            'title_suggestion' => [
+                'configured' => $settings->getArticleTitleSuggestionPromptId() !== null,
+                'hook_key' => 'article.title_suggestion',
+            ],
+            'meta_description_suggestion' => [
+                'configured' => $settings->getArticleMetaDescriptionSuggestionPromptId() !== null,
+                'hook_key' => 'article.meta_description_suggestion',
+            ],
         ];
     }
 

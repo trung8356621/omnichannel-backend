@@ -43,6 +43,26 @@ final class SeoPromptSettingsOptionsService
     }
 
     /**
+     * Prompt đang gắn đúng hook_key (Prompt Hook Phase 1).
+     *
+     * @return array<int, string>
+     */
+    public function activePromptOptionsForHook(string $hookKey): array
+    {
+        $hookKey = trim($hookKey);
+        if ($hookKey === '') {
+            return [];
+        }
+
+        return SeoPrompt::query()
+            ->where('is_active', true)
+            ->where('hook_key', $hookKey)
+            ->orderBy('name')
+            ->pluck('name', 'id')
+            ->all();
+    }
+
+    /**
      * @return array<int, string>
      */
     public function activeVideoPromptOptions(): array

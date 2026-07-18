@@ -63,6 +63,12 @@ final class SeoCreateArticleSettingsService
     /** Prompt dịch bài viết (nút Dịch nhanh trên bản dịch liên kết). */
     public const KEY_TRANSLATE_ARTICLE_PROMPT_ID = 'translate_article_prompt_id';
 
+    /** Prompt Hook: gợi ý tiêu đề bài viết (article.title_suggestion). */
+    public const KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID = 'article_title_suggestion_prompt_id';
+
+    /** Prompt Hook: gợi ý thẻ mô tả SEO (article.meta_description_suggestion). */
+    public const KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID = 'article_meta_description_suggestion_prompt_id';
+
     /** Thứ tự ưu tiên model sinh ảnh thường (General Image) — AI Advanced. */
     public const KEY_IMAGE_MODEL_PRIORITY = 'image_model_priority';
 
@@ -176,6 +182,12 @@ final class SeoCreateArticleSettingsService
             ),
             self::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $this->positiveIntOrNull(
                 $data[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
+            ),
+            self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID => $this->positiveIntOrNull(
+                $data[self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID] ?? null,
+            ),
+            self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID => $this->positiveIntOrNull(
+                $data[self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID] ?? null,
             ),
             self::KEY_IMAGE_MODEL_PRIORITY => $this->normalizeImageModelPriorityForForm(
                 $data[self::KEY_IMAGE_MODEL_PRIORITY] ?? null,
@@ -634,6 +646,16 @@ final class SeoCreateArticleSettingsService
         return $this->getSettings()[self::KEY_TRANSLATE_ARTICLE_PROMPT_ID];
     }
 
+    public function getArticleTitleSuggestionPromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID];
+    }
+
+    public function getArticleMetaDescriptionSuggestionPromptId(): ?int
+    {
+        return $this->getSettings()[self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID];
+    }
+
     /**
      * @deprecated Dùng getCreateVideoPromptId()
      */
@@ -687,6 +709,8 @@ final class SeoCreateArticleSettingsService
             self::KEY_FEATURED_SNIPPET_PROMPT_ID,
             self::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID,
             self::KEY_TRANSLATE_ARTICLE_PROMPT_ID,
+            self::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID,
+            self::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID,
         ] as $intKey) {
             if (array_key_exists($intKey, $settings)) {
                 $patch[$intKey] = $this->positiveIntOrNull($settings[$intKey] ?? null);

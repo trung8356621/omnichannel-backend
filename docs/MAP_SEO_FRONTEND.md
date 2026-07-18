@@ -188,7 +188,8 @@ flowchart TB
 
 | Lớp | Component | Vai trò |
 |-----|-----------|---------|
-| Left rail | `ArticleGoogleSerpPreview` | SERP preview, focus keyword |
+| Left rail | `ArticleGoogleSerpPreview` | SERP preview, focus keyword; modal SEO + nút AI Prompt Hook meta description |
+| Title toolbar | `articleTitlePromptHook.js` (mount từ `article-editor.jsx`) | Nút AI gợi ý tiêu đề cạnh `.wp-title-input` |
 | Left rail | `ArticleOutlineTab` | Outline tree, REST outline API |
 | Left rail | `article-editor-shortcuts-rail.blade.php` → host `[data-seo-outline-shortcuts-host]` | Keyboard shortcuts dưới Outline; Prev/Next đổi nhóm; `mountShortcutsBelowOutline` trong `articleEditorHeaderActions.js` |
 | Top bar | `article-editor-page-actions.blade.php` | Primary: **Save → Sync WP → Preview (split WP/nội bộ) → Approve**; More: History, Prompts, Assign/Open project, Restore, Debug MD (icon+chữ), Delete. `EditArticle::getHeaderActions()` trống — UI More Blade |

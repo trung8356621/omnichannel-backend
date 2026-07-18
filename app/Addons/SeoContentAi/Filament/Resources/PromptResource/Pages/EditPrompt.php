@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
+use App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Filament\Actions;
@@ -53,6 +54,22 @@ class EditPrompt extends SeoEditRecord
             is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [],
         );
 
+        $hookKey = trim((string) ($data['hook_key'] ?? ''));
+        if ($hookKey !== '') {
+            try {
+                $definition = app(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class)->get($hookKey);
+                $data['hook_version'] = $definition->version;
+                $data['hook_settings'] = app(\App\Addons\SeoContentAi\PromptHooks\PromptHookSettingsResolver::class)
+                    ->resolve($definition, is_array($data['hook_settings'] ?? null) ? $data['hook_settings'] : null);
+            } catch (\Throwable) {
+                // Hook manifest thiếu / đổi key — giữ raw state.
+            }
+        } else {
+            $data['hook_key'] = null;
+            $data['hook_version'] = null;
+            $data['hook_settings'] = null;
+        }
+
         return $data;
     }
 
@@ -85,6 +102,6 @@ class EditPrompt extends SeoEditRecord
 
         $data['settings'] = PromptPostProcessing::mergeIntoSettings($settings, $postProcessing);
 
-        return $data;
+        return PromptHookFormSchema::normalizeForSave($data);
     }
 }

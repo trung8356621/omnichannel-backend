@@ -1,0 +1,55 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Automation\Actions\Keyword\AssignKeywordToProjectAction;
+use App\Addons\SeoContentAi\Automation\Actions\Seo\CreateProjectTaskFromSeoIssueAction;
+use App\Addons\SeoContentAi\Services\KeywordProjectAssignmentService;
+use App\Addons\SeoContentAi\Services\SeoIssueProjectTaskAssignmentService;
+use PHPUnit\Framework\TestCase;
+use ReflectionClass;
+
+/**
+ * Regression: assign actions must use domain services, not Filament Resources.
+ */
+final class AutomationDomainAssignmentServiceTest extends TestCase
+{
+    public function test_seo_issue_assignment_service_has_no_filament_dependency(): void
+    {
+        $path = (new ReflectionClass(SeoIssueProjectTaskAssignmentService::class))->getFileName();
+        self::assertNotFalse($path);
+        $contents = (string) file_get_contents($path);
+
+        self::assertStringNotContainsString('Filament\\', $contents);
+        self::assertStringNotContainsString('ArticleResource', $contents);
+        self::assertStringNotContainsString('Notification::', $contents);
+    }
+
+    public function test_keyword_assignment_service_has_no_filament_dependency(): void
+    {
+        $path = (new ReflectionClass(KeywordProjectAssignmentService::class))->getFileName();
+        self::assertNotFalse($path);
+        $contents = (string) file_get_contents($path);
+
+        self::assertStringNotContainsString('Filament\\', $contents);
+        self::assertStringNotContainsString('KeywordResource', $contents);
+        self::assertStringNotContainsString('Notification::', $contents);
+    }
+
+    public function test_assign_actions_typehint_domain_services(): void
+    {
+        $seoCtor = (new ReflectionClass(CreateProjectTaskFromSeoIssueAction::class))->getConstructor();
+        self::assertNotNull($seoCtor);
+        $seoParams = $seoCtor->getParameters();
+        self::assertCount(1, $seoParams);
+        self::assertSame(SeoIssueProjectTaskAssignmentService::class, $seoParams[0]->getType()?->getName());
+
+        $kwCtor = (new ReflectionClass(AssignKeywordToProjectAction::class))->getConstructor();
+        self::assertNotNull($kwCtor);
+        $kwParams = $kwCtor->getParameters();
+        self::assertCount(1, $kwParams);
+        self::assertSame(KeywordProjectAssignmentService::class, $kwParams[0]->getType()?->getName());
+    }
+}

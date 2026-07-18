@@ -147,6 +147,29 @@ class SeoSettingsWorkflows extends Page implements HasForms
                             ->native(false)
                             ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
                     ]),
+
+                Forms\Components\Section::make(__('seo-content-ai::filament.settings_workflows.prompt_hooks_section'))
+                    ->description(__('seo-content-ai::filament.settings_workflows.prompt_hooks_description'))
+                    ->schema([
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID)
+                            ->label(__('seo-content-ai::filament.settings_workflows.article_title_suggestion_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.article_title_suggestion_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptionsForHook(
+                                'article.title_suggestion',
+                            ))
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
+                        Forms\Components\Select::make(SeoCreateArticleSettingsService::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID)
+                            ->label(__('seo-content-ai::filament.settings_workflows.article_meta_description_suggestion_prompt'))
+                            ->helperText(__('seo-content-ai::filament.settings_workflows.article_meta_description_suggestion_prompt_hint'))
+                            ->options(fn (SeoPromptSettingsOptionsService $options): array => $options->activePromptOptionsForHook(
+                                'article.meta_description_suggestion',
+                            ))
+                            ->searchable()
+                            ->native(false)
+                            ->placeholder(__('seo-content-ai::filament.settings_workflows.choose_prompt')),
+                    ]),
             ])
             ->statePath('settingsData');
     }
@@ -235,6 +258,8 @@ class SeoSettingsWorkflows extends Page implements HasForms
             SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_FEATURED_SNIPPET_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_OUTLINE_HEADING_REGENERATOR_PROMPT_ID] ?? null,
             SeoCreateArticleSettingsService::KEY_TRANSLATE_ARTICLE_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_TRANSLATE_ARTICLE_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_ARTICLE_TITLE_SUGGESTION_PROMPT_ID] ?? null,
+            SeoCreateArticleSettingsService::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID => $data[SeoCreateArticleSettingsService::KEY_ARTICLE_META_DESCRIPTION_SUGGESTION_PROMPT_ID] ?? null,
         ]);
 
         Notification::make()

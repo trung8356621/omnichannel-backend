@@ -27,6 +27,8 @@ class Prompt extends Model
     protected $casts = [
         'settings' => 'array',
         'variables' => 'json',
+        'hook_settings' => 'array',
+        'hook_version' => 'integer',
         'is_active' => 'boolean',
     ];
 

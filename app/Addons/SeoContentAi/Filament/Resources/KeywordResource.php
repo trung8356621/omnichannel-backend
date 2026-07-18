@@ -19,6 +19,7 @@ use App\Addons\SeoContentAi\Services\DomainOverviewService;
 use App\Addons\SeoContentAi\Services\KeywordDebugRescrapeService;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
 use App\Addons\SeoContentAi\Services\KeywordMetaRepository;
+use App\Addons\SeoContentAi\Services\KeywordProjectAssignmentService;
 use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use App\Addons\SeoContentAi\Services\SeoRankKeywordGroupService;
 use App\Addons\SeoContentAi\Services\TagPersistenceService;
@@ -2145,10 +2146,7 @@ class KeywordResource extends SeoPanelResource
 
     public static function canAssignKeywordToContentProject(Keyword $keyword): bool
     {
-        return SeoAccessControl::canMutateInSeoPanel()
-            && in_array($keyword->type, [Keyword::TYPE_NORMAL, Keyword::TYPE_SUGGEST], true)
-            && (int) ($keyword->main_articles_count ?? 0) < 1
-            && ! static::keywordIsInContentProject($keyword);
+        return app(KeywordProjectAssignmentService::class)->canAssignKeyword($keyword);
     }
 
     public static function resolveKeywordSiteId(Keyword $keyword): ?int
@@ -2416,125 +2414,13 @@ class KeywordResource extends SeoPanelResource
      */
     public static function assignKeywordsToContentProject(Collection $records, int $projectId, int $targetSiteId): array
     {
-        if ($targetSiteId <= 0) {
-            return [
-                'added' => 0,
-                'duplicate' => 0,
-                'overflow' => $records->count(),
-                'domain_mismatch' => 0,
-                'already_in_project' => 0,
-            ];
-        }
-
-        $project = SeoProject::query()->find($projectId);
-        if (! $project instanceof SeoProject) {
-            return [
-                'added' => 0,
-                'duplicate' => 0,
-                'overflow' => $records->count(),
-                'domain_mismatch' => 0,
-                'already_in_project' => 0,
-            ];
-        }
-
-        if (! $project->isExecutionMonthOpen()) {
-            return [
-                'added' => 0,
-                'duplicate' => 0,
-                'overflow' => $records->count(),
-                'domain_mismatch' => 0,
-                'already_in_project' => 0,
-            ];
-        }
-
-        $records = $records
-            ->filter(fn (mixed $record): bool => $record instanceof Keyword && static::canAssignKeywordToContentProject($record))
-            ->values();
-
-        $added = 0;
-        $duplicate = 0;
-        $overflow = 0;
-        $domainMismatch = 0;
-        $alreadyInProject = 0;
-        $projectSiteId = (int) ($project->site_id ?? 0);
-        $targetProjectId = (int) $project->id;
-
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $records, $projectSiteId, $targetProjectId, $targetSiteId, &$added, &$duplicate, &$overflow, &$domainMismatch, &$alreadyInProject): void {
-            $project->refresh();
-            $max = $project->maxTasksAllowed();
-            $currentTotal = $project->registeredTaskCount();
-
-            $existingKeys = SeoProjectTask::query()
-                ->where('project_id', (int) $project->id)
-                ->get(['site_id', 'type', 'source_content'])
-                ->map(static fn (SeoProjectTask $task): string => (int) $task->site_id.'|'.SeoProjectTask::TYPE_NEW_KEYWORD.'|'.mb_strtolower(trim((string) $task->source_content)))
-                ->all();
-            $existingMap = array_fill_keys($existingKeys, true);
-
-            foreach ($records as $record) {
-                if ($currentTotal >= $max) {
-                    $overflow++;
-
-                    continue;
-                }
-
-                $assignedProjectId = static::keywordAssignedContentProjectIdForSite($record, $targetSiteId);
-                if ($assignedProjectId !== null) {
-                    if ($assignedProjectId === $targetProjectId) {
-                        $duplicate++;
-                    } else {
-                        $alreadyInProject++;
-                    }
-
-                    continue;
-                }
-
-                if ($projectSiteId > 0 && $targetSiteId !== $projectSiteId) {
-                    $domainMismatch++;
-
-                    continue;
-                }
-
-                $sourceContent = trim((string) $record->phrase);
-                $siteId = $targetSiteId;
-                $key = $siteId.'|'.SeoProjectTask::TYPE_NEW_KEYWORD.'|'.mb_strtolower($sourceContent);
-                if (isset($existingMap[$key])) {
-                    $duplicate++;
-
-                    continue;
-                }
-
-                SeoProjectTask::query()->create([
-                    'project_id' => (int) $project->id,
-                    'site_id' => $siteId > 0 ? $siteId : null,
-                    'article_id' => null,
-                    'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
-                    'source_content' => $sourceContent,
-                    'description' => null,
-                    'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
-                    'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
-                    'status' => SeoProjectTask::STATUS_PENDING,
-                ]);
-
-                $existingMap[$key] = true;
-                $currentTotal++;
-                $added++;
-            }
-
-            $project->syncTotalTasksCounter();
-        });
-
-        if ($added > 0) {
-            app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($project->fresh(), $added);
-        }
-
-        return [
-            'added' => $added,
-            'duplicate' => $duplicate,
-            'overflow' => $overflow,
-            'domain_mismatch' => $domainMismatch,
-            'already_in_project' => $alreadyInProject,
-        ];
+        return app(\App\Addons\SeoContentAi\Automation\Migration\AssignmentCallerBridge::class)
+            ->assignKeywordsToContentProject(
+                $records,
+                $projectId,
+                $targetSiteId,
+                auth()->id() !== null ? (int) auth()->id() : null,
+            );
     }
 
     /**

@@ -143,6 +143,14 @@ Dùng trong:
 
 ## 3. Prompt Management (`PromptResource`)
 
+### Prompt Hook documentation
+
+Danh sách và contract từng Hook: [Prompt Hooks Index](prompt-hooks/README.md)
+
+- Form chọn Hook: `PromptHooks/PromptHookFormSchema.php`
+- Settings slots (title / meta description): `SeoSettingsWorkflows` + `SeoCreateArticleSettingsService`
+- Execute API: `POST /api/seo/prompt-hooks/{hookKey}/execute` (`PromptHookExecuteController`) — không save article / SEO / WP
+
 ### 3.1 Tổng quan
 
 - **Resource:** `Filament/Resources/PromptResource.php`

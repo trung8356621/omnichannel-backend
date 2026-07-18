@@ -47,4 +47,33 @@ return [
 
     /** Múi giờ hiển thị lên lịch publish & queue sync trong panel SEO. */
     'display_timezone' => env('SEO_CONTENT_AI_DISPLAY_TIMEZONE', 'Asia/Ho_Chi_Minh'),
+
+    /**
+     * Phase 4A — per-caller migration mode: legacy | shadow | action.
+     * Không dùng một global boolean.
+     */
+    'automation_migration' => [
+        'seo_issue_assignment' => env('AUTOMATION_MIGRATION_SEO_ISSUE_ASSIGNMENT', 'legacy'),
+        'keyword_project_assignment' => env('AUTOMATION_MIGRATION_KEYWORD_PROJECT_ASSIGNMENT', 'legacy'),
+        'project_article_attach' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_ATTACH', 'legacy'),
+        'project_task_complete' => env('AUTOMATION_MIGRATION_PROJECT_TASK_COMPLETE', 'legacy'),
+        'project_article_create' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_CREATE', 'legacy'),
+        'project_article_content_update' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_CONTENT_UPDATE', 'legacy'),
+        'project_article_seo_meta_update' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_SEO_META_UPDATE', 'legacy'),
+    ],
+
+    /** Số sample parity tối thiểu trước khi promote caller sang action. */
+    'automation_migration_min_parity_samples' => (int) env('AUTOMATION_MIGRATION_MIN_PARITY_SAMPLES', 20),
+
+    /**
+     * Thứ tự bật shadow staging (Group 1). Không auto-apply — ops set env từng bước.
+     *
+     * @var list<string>
+     */
+    'automation_migration_shadow_order' => [
+        'seo_issue_assignment',
+        'keyword_project_assignment',
+        'project_article_attach',
+        'project_task_complete',
+    ],
 ];

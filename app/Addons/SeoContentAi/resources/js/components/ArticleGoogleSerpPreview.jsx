@@ -1,7 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Monitor, Smartphone, X } from 'lucide-react';
-import { applyArticleSeoMetaSaveResult, saveSeoMetaViaApi } from '../utils/articleEditorApi';
+import { Loader2, Monitor, Smartphone, Sparkles, X } from 'lucide-react';
+import {
+    applyArticleSeoMetaSaveResult,
+    executePromptHookViaApi,
+    readArticleMetaFromDom,
+    saveSeoMetaViaApi,
+} from '../utils/articleEditorApi';
 import { normalizeArticleSlug } from '../utils/articleSlugUtils';
 import {
     SLUG_LENGTH_MAX,
@@ -93,6 +98,8 @@ export default function ArticleGoogleSerpPreview({
     initialSlug = '',
     permalinkBase = '',
     permalinkSuffix = '',
+    promptHooks = null,
+    articleTitle = '',
 }) {
     const [device, setDevice] = useState('desktop');
     const [preview, setPreview] = useState(initialPreview ?? {});
@@ -105,6 +112,18 @@ export default function ArticleGoogleSerpPreview({
     const [slugPrefix, setSlugPrefix] = useState(String(permalinkBase ?? '').trim());
     const [slugSuffix, setSlugSuffix] = useState(String(permalinkSuffix ?? '').trim());
     const [saving, setSaving] = useState(false);
+    const [metaAiLoading, setMetaAiLoading] = useState(false);
+    const metaAiRequestRef = useRef(0);
+    const draftDescriptionRef = useRef('');
+
+    const metaHookCfg = promptHooks?.meta_description_suggestion ?? {};
+    const metaHookConfigured = metaHookCfg.configured === true;
+    const metaHookKey = String(metaHookCfg.hook_key || 'article.meta_description_suggestion').trim()
+        || 'article.meta_description_suggestion';
+
+    useEffect(() => {
+        draftDescriptionRef.current = draftDescription;
+    }, [draftDescription]);
 
     const applyPreview = useCallback((nextPreview) => {
         if (!nextPreview || typeof nextPreview !== 'object') {
@@ -231,12 +250,132 @@ export default function ArticleGoogleSerpPreview({
     };
 
     const closeModal = () => {
-        if (saving) {
+        if (saving || metaAiLoading) {
             return;
         }
 
         setModalOpen(false);
     };
+
+    const resolveLatestTitle = useCallback(() => {
+        const fromProp = String(articleTitle ?? '').trim();
+        if (fromProp !== '') {
+            return fromProp;
+        }
+        const fromDom = String(readArticleMetaFromDom()?.title ?? '').trim();
+        if (fromDom !== '') {
+            return fromDom;
+        }
+
+        return String(preview?.title ?? '').trim();
+    }, [articleTitle, preview?.title]);
+
+    const suggestMetaDescription = useCallback(async () => {
+        const resolvedArticleId = Number(articleId ?? 0);
+        const title = resolveLatestTitle();
+        const oldDescriptionRaw = String(draftDescriptionRef.current ?? '').trim();
+        const descriptionSnapshot = oldDescriptionRaw;
+
+        if (!metaHookConfigured) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('prompt_hook_meta_failed'),
+                        body: t('prompt_hook_meta_no_prompt'),
+                        status: 'danger',
+                    },
+                }),
+            );
+
+            return;
+        }
+
+        if (title === '') {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('prompt_hook_meta_failed'),
+                        body: t('prompt_hook_meta_no_title'),
+                        status: 'danger',
+                    },
+                }),
+            );
+
+            return;
+        }
+
+        if (resolvedArticleId <= 0 || metaAiLoading) {
+            return;
+        }
+
+        const seq = ++metaAiRequestRef.current;
+        setMetaAiLoading(true);
+
+        try {
+            const result = await executePromptHookViaApi(metaHookKey, resolvedArticleId, {
+                title,
+                old_description: oldDescriptionRaw === '' ? null : oldDescriptionRaw,
+            });
+
+            if (seq !== metaAiRequestRef.current) {
+                return;
+            }
+
+            const value = String(result?.data?.output?.value ?? '').trim();
+            if (value === '') {
+                throw new Error(t('prompt_hook_meta_empty'));
+            }
+
+            const current = String(draftDescriptionRef.current ?? '').trim();
+            if (current !== descriptionSnapshot) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('prompt_hook_meta_stale'),
+                            body: t('prompt_hook_meta_stale_body', { text: value }),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
+                return;
+            }
+
+            setDraftDescription(value);
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('prompt_hook_meta_success'),
+                        body: t('prompt_hook_meta_success_body'),
+                        status: 'success',
+                    },
+                }),
+            );
+        } catch (error) {
+            if (seq !== metaAiRequestRef.current) {
+                return;
+            }
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('prompt_hook_meta_failed'),
+                        body: error?.message ?? t('prompt_hook_try_again'),
+                        status: 'danger',
+                    },
+                }),
+            );
+        } finally {
+            if (seq === metaAiRequestRef.current) {
+                setMetaAiLoading(false);
+            }
+        }
+    }, [
+        articleId,
+        metaAiLoading,
+        metaHookConfigured,
+        metaHookKey,
+        resolveLatestTitle,
+    ]);
 
     const saveSeoMeta = async () => {
         const resolvedArticleId = Number(articleId ?? 0);
@@ -329,7 +468,36 @@ export default function ArticleGoogleSerpPreview({
 
                     <div className="seo-google-preview-modal__field">
                         <div className="seo-google-preview-modal__label-row">
-                            <label htmlFor="seo-google-preview-description">{t('google_serp_meta_description')}</label>
+                            <div className="seo-google-preview-modal__label-with-ai">
+                                <label htmlFor="seo-google-preview-description">{t('google_serp_meta_description')}</label>
+                                <button
+                                    type="button"
+                                    className="seo-prompt-hook-ai-btn"
+                                    onClick={suggestMetaDescription}
+                                    disabled={
+                                        metaAiLoading
+                                        || saving
+                                        || !metaHookConfigured
+                                        || resolveLatestTitle() === ''
+                                    }
+                                    title={
+                                        !metaHookConfigured
+                                            ? t('prompt_hook_meta_no_prompt')
+                                            : resolveLatestTitle() === ''
+                                              ? t('prompt_hook_meta_no_title')
+                                              : metaAiLoading
+                                                ? t('prompt_hook_meta_running')
+                                                : t('prompt_hook_meta_tooltip')
+                                    }
+                                    aria-label={t('prompt_hook_meta_tooltip')}
+                                >
+                                    {metaAiLoading ? (
+                                        <Loader2 size={16} strokeWidth={1.75} className="seo-prompt-hook-ai-btn__spinner" aria-hidden />
+                                    ) : (
+                                        <Sparkles size={16} strokeWidth={1.75} aria-hidden />
+                                    )}
+                                </button>
+                            </div>
                             <span>{descriptionLength} / 160</span>
                         </div>
                         <textarea
@@ -339,6 +507,7 @@ export default function ArticleGoogleSerpPreview({
                             rows={5}
                             className="seo-google-preview-modal__textarea"
                             placeholder={t('google_serp_meta_description_placeholder')}
+                            disabled={saving}
                         />
                         <div className="seo-google-preview-modal__meter" aria-hidden="true">
                             <div
@@ -384,14 +553,14 @@ export default function ArticleGoogleSerpPreview({
                     </div>
                 </div>
                 <div className="seo-google-preview-modal__footer">
-                    <button type="button" className="seo-google-preview-modal__btn" onClick={closeModal} disabled={saving}>
+                    <button type="button" className="seo-google-preview-modal__btn" onClick={closeModal} disabled={saving || metaAiLoading}>
                         {t('cancel')}
                     </button>
                     <button
                         type="button"
                         className="seo-google-preview-modal__btn is-primary"
                         onClick={saveSeoMeta}
-                        disabled={saving}
+                        disabled={saving || metaAiLoading}
                     >
                         {saving ? t('google_serp_saving') : t('google_serp_save')}
                     </button>
