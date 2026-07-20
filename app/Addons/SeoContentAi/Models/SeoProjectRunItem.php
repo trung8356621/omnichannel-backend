@@ -36,6 +36,14 @@ class SeoProjectRunItem extends Model
         return $this->belongsTo(SeoProjectTask::class, 'task_id');
     }
 
+    /**
+     * Run history audit — gồm soft-deleted task.
+     */
+    public function taskIncludingDeleted(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectTask::class, 'task_id')->withTrashed();
+    }
+
     public function article(): BelongsTo
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');

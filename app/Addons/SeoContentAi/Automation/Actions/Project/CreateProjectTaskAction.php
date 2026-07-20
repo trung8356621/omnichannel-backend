@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Services\SeoProjectTaskUniqueWriter;
 use Illuminate\Support\Facades\DB;
 
 final class CreateProjectTaskAction implements BusinessAction
@@ -113,14 +114,17 @@ final class CreateProjectTaskAction implements BusinessAction
                 $sourceContent,
             );
 
-            $task = SeoProjectTask::query()->create($payload);
-            $project->syncTotalTasksCounter();
+            $task = app(SeoProjectTaskUniqueWriter::class)->createOrReturnExisting($payload);
+            if ($task->wasRecentlyCreated) {
+                $project->syncTotalTasksCounter();
+            }
 
             return [
                 'task_id' => (int) $task->id,
                 'project_id' => (int) $project->id,
                 'type' => $type,
-                'article_id' => $payload['article_id'],
+                'article_id' => $payload['article_id'] ?? $task->article_id,
+                'created' => $task->wasRecentlyCreated,
             ];
         });
 

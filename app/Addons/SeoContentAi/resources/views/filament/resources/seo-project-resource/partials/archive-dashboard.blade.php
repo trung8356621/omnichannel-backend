@@ -316,7 +316,7 @@
                                                         if (! confirm(@js(__('seo-content-ai::filament.projects.unarchive_item_confirm')))) {
                                                             return;
                                                         }
-                                                        $wire.unarchiveItem(article.task_id);
+                                                        $wire.unarchiveItem(article.archive_item_id ?? article.task_id);
                                                     "
                                                     wire:loading.attr="disabled"
                                                     wire:target="unarchiveItem"

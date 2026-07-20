@@ -12,6 +12,11 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__.'/../routes/console.php',
         health: '/up',
     )
+    ->withCommands([
+        // Phase 3C3: luôn discover — không phụ thuộc AddonServiceProvider boot order.
+        \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
+        \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+    ])
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->redirectGuestsTo(static function (): string {
             if (Route::has('filament.admin.auth.login')) {

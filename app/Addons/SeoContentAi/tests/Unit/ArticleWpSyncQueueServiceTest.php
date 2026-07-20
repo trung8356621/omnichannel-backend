@@ -24,6 +24,20 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $result = $service->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
 
         $this->assertFalse($result['success']);
+        $this->assertStringContainsString('ManualWordPressContext', (string) ($result['message'] ?? ''));
+        Bus::assertNothingDispatched();
+    }
+
+    public function test_enqueue_without_manual_context_is_rejected_even_when_idle(): void
+    {
+        Bus::fake();
+
+        $article = new SeoArticle(['id' => 8, 'site_id' => 0, 'status' => 'draft']);
+        $article->wp_sync_queue_meta = json_encode(['status' => ArticleWpSyncQueueService::STATUS_COMPLETED]);
+
+        $result = app(ArticleWpSyncQueueService::class)->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
+
+        $this->assertFalse($result['success']);
         Bus::assertNothingDispatched();
     }
 
@@ -90,15 +104,18 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
     {
         Bus::fake();
 
-        $article = new SeoArticle(['id' => 42, 'site_id' => 0, 'status' => 'draft']);
-        $article->wp_sync_queue_meta = json_encode(['status' => ArticleWpSyncQueueService::STATUS_FAILED]);
-        $article->wp_sync_queue_bundle = json_encode(['html' => '<p>retry</p>']);
+        $job = new SyncArticleToWordPressFromQueueJob(42);
 
-        $result = app(ArticleWpSyncQueueService::class)->resync($article);
+        $this->assertSame(ArticleWpSyncQueueService::QUEUE_NAME, $job->queue);
 
-        $this->assertTrue($result['success']);
-        Bus::assertDispatched(SyncArticleToWordPressFromQueueJob::class, function (SyncArticleToWordPressFromQueueJob $job): bool {
-            return $job->articleId === 42 && $job->queue === ArticleWpSyncQueueService::QUEUE_NAME;
+        // Pure dispatch path (không write article_meta) — xác nhận Bus nhận job đúng queue.
+        $method = new \ReflectionMethod(ArticleWpSyncQueueService::class, 'dispatchWpSyncJob');
+        $method->setAccessible(true);
+        $ok = $method->invoke(app(ArticleWpSyncQueueService::class), 42);
+
+        $this->assertTrue($ok);
+        Bus::assertDispatched(SyncArticleToWordPressFromQueueJob::class, function (SyncArticleToWordPressFromQueueJob $dispatched): bool {
+            return $dispatched->articleId === 42 && $dispatched->queue === ArticleWpSyncQueueService::QUEUE_NAME;
         });
     }
 

@@ -11,6 +11,8 @@ export default defineConfig({
                 'resources/css/app.css',
                 'resources/js/app.js',
                 'app/Addons/SeoContentAi/resources/js/task-builder.jsx',
+                'app/Addons/SeoContentAi/resources/js/automation-workflow-builder.jsx',
+                'app/Addons/SeoContentAi/resources/css/automation-workflow-builder.css',
                 'app/Addons/SeoContentAi/resources/js/article-editor.jsx',
                 'app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js',
                 'app/Addons/SeoContentAi/resources/css/article-edit-page.css',

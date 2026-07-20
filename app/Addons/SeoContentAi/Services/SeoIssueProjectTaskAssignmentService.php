@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Domain assignment: SEO audit / article → Content Project task.
@@ -21,6 +22,7 @@ final class SeoIssueProjectTaskAssignmentService
     public function __construct(
         private readonly SeoAnalyzerService $analyzer,
         private readonly SeoProjectArticleOwnerSyncService $articleOwnerSync,
+        private readonly SeoProjectTaskUniqueWriter $uniqueWriter,
     ) {}
 
     /**
@@ -175,14 +177,21 @@ final class SeoIssueProjectTaskAssignmentService
                         $payload['rewrite_notes'] = $normalizedRewriteNotes;
                     }
 
-                    $payload['source_key'] = app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(
-                        (int) $project->id,
-                        $normalizedTaskType,
-                        isset($payload['post_type']) ? (string) $payload['post_type'] : null,
-                        $sourceContent,
-                    );
+                    try {
+                        $task = $this->uniqueWriter->createOrReturnExisting($payload);
+                    } catch (ValidationException) {
+                        $duplicate++;
+                        $existingMap[$key] = true;
 
-                    SeoProjectTask::query()->create($payload);
+                        continue;
+                    }
+
+                    if (! $task->wasRecentlyCreated) {
+                        $duplicate++;
+                        $existingMap[$key] = true;
+
+                        continue;
+                    }
                 }
 
                 $existingMap[$key] = true;

@@ -112,6 +112,37 @@ final class SeoAccessControl
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_PLANNER);
     }
 
+    public static function canViewAutomationRules(): bool
+    {
+        return self::canAccessPlannerFeatures() || self::canMutateInSeoPanel();
+    }
+
+    public static function canManageAutomationRules(): bool
+    {
+        return self::canMutateInSeoPanel()
+            && (self::canAccessPlannerFeatures() || self::canAccessManagerFeatures());
+    }
+
+    public static function canPublishAutomationRules(): bool
+    {
+        return self::canManageAutomationRules();
+    }
+
+    public static function canExportAutomationRules(): bool
+    {
+        return self::canViewAutomationRules();
+    }
+
+    public static function canImportAutomationRules(): bool
+    {
+        return self::canManageAutomationRules();
+    }
+
+    public static function canRunAutomationTests(): bool
+    {
+        return self::canManageAutomationRules();
+    }
+
     public static function canAccessContentFeatures(): bool
     {
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_CONTENT_MANAGER);
@@ -608,5 +639,66 @@ final class SeoAccessControl
         }
 
         return $project->canRegisterMoreTasks();
+    }
+
+    public static function canViewAutomation(): bool
+    {
+        return self::canAccessPlannerFeatures() || self::canMutateInSeoPanel();
+    }
+
+    public static function canEditAutomation(): bool
+    {
+        return self::canMutateInSeoPanel()
+            && (self::canAccessPlannerFeatures() || self::canMutateInSeoPanel());
+    }
+
+    public static function canPublishAutomation(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessManagerFeatures();
+    }
+
+    public static function canEnableAutomation(): bool
+    {
+        return self::canPublishAutomation();
+    }
+
+    public static function canExecuteAutomationTest(): bool
+    {
+        return self::canMutateInSeoPanel() && self::canAccessPlannerFeatures();
+    }
+
+    public static function canRetryAutomationExecution(): bool
+    {
+        return self::canExecuteAutomationTest();
+    }
+
+    public static function canCancelAutomationExecution(): bool
+    {
+        return self::canExecuteAutomationTest();
+    }
+
+    public static function guardAutomationEdit(): void
+    {
+        abort_unless(self::canEditAutomation(), 403);
+    }
+
+    public static function guardAutomationPublish(): void
+    {
+        abort_unless(self::canPublishAutomation(), 403);
+    }
+
+    public static function guardAutomationExecuteTest(): void
+    {
+        abort_unless(self::canExecuteAutomationTest(), 403);
+    }
+
+    public static function guardAutomationRetry(): void
+    {
+        abort_unless(self::canRetryAutomationExecution(), 403);
+    }
+
+    public static function guardAutomationCancel(): void
+    {
+        abort_unless(self::canCancelAutomationExecution(), 403);
     }
 }

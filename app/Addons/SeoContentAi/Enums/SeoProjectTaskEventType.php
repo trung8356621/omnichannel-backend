@@ -18,10 +18,14 @@ enum SeoProjectTaskEventType: string
     case TaskRestored = 'task.restored';
     case TaskDeleted = 'task.deleted';
     case TaskMerged = 'task.merged';
+    case TaskCancelled = 'task.cancelled';
+    case TaskReactivated = 'task.reactivated';
 
     case ArticleCreated = 'article.created';
     case ArticleLinked = 'article.linked';
     case ArticleRelationMissing = 'article.relation_missing';
+    case ArticleArchive = 'article.archive';
+    case ArticleRestore = 'article.restore';
 
     /**
      * @return list<string>

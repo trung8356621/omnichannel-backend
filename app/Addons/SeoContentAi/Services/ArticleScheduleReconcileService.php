@@ -6,16 +6,17 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Log;
 
+/**
+ * Editor-load reconcile: Laravel status only.
+ * Never calls WordPress — automatic WP side effects require Automation Engine.
+ */
 final class ArticleScheduleReconcileService
 {
-    public function __construct(
-        private readonly WordPressArticleSyncService $wordPressSync,
-    ) {}
-
     /**
-     * Đồng bộ trạng thái lên lịch khi mở editor: đăng bài quá hạn hoặc cập nhật Laravel nếu chưa có WP post.
+     * Đồng bộ trạng thái lên lịch khi mở editor (Laravel only).
+     * Quá hạn scheduled + chưa có WP post → mark published local.
+     * Có WP post → không auto-publish WP; user/manual hoặc automation rule phụ trách.
      */
     public function reconcileForEditor(SeoArticle $article): bool
     {
@@ -31,17 +32,9 @@ final class ArticleScheduleReconcileService
 
         $wpPostId = (int) ($article->wp_post_id ?? 0);
         if ($wpPostId > 0) {
-            $result = $this->wordPressSync->publishScheduledArticle($article->fresh());
-            $article->refresh();
-
-            if (! ($result['success'] ?? false)) {
-                Log::info('Article schedule reconcile on editor load: WP publish pending retry.', [
-                    'article_id' => (int) $article->id,
-                    'message' => (string) ($result['message'] ?? ''),
-                ]);
-            }
-
-            return (bool) ($result['success'] ?? false);
+            // Local clock already due; WP flip left to ScheduledArticlePublishRunner (system cron)
+            // or explicit manual/automation — never silent outbound from editor open.
+            return false;
         }
 
         $article->update(['status' => 'published']);

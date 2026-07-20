@@ -1,0 +1,4 @@
+  php artisan test app/Addons/SeoContentAi/tests/Unit/SeoProjectTaskStatusEnumTest.php
+  php artisan test app/Addons/SeoContentAi/tests/Unit/ProjectTaskSourceKeyGeneratorTest.php
+  php artisan test app/Addons/SeoContentAi/tests/Unit/ProjectRunIdempotencyKeyGeneratorTest.php
+  php artisan test app/Addons/SeoContentAi/tests/Unit/LegacyProjectRunItemMapperTest.php

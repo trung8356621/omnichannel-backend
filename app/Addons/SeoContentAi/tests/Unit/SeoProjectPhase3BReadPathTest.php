@@ -239,11 +239,11 @@ final class SeoProjectPhase3BReadPathTest extends TestCase
         $this->assertTrue($definition->hasOption('force-inconsistent'));
     }
 
-    public function test_soft_deletes_still_disabled_on_task_model(): void
+    public function test_soft_deletes_enabled_on_task_model_phase_3c1(): void
     {
         $traits = class_uses_recursive(\App\Addons\SeoContentAi\Models\SeoProjectTask::class);
 
         $this->assertIsArray($traits);
-        $this->assertArrayNotHasKey(\Illuminate\Database\Eloquent\SoftDeletes::class, $traits);
+        $this->assertArrayHasKey(\Illuminate\Database\Eloquent\SoftDeletes::class, $traits);
     }
 }

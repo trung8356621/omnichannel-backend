@@ -68,12 +68,14 @@ SeoProject (kế hoạch tháng)
 - `type` → ENUM: `rewrite`, `new_keyword`, `new_title`, `improve`
 - `post_type` → nullable: `article`, `product`, `category`, `product_category`
 - `source_content` → keyword hoặc title của bài cần xử lý
+- `source_key` → SHA-256 identity (`project_id`+`type`+`post_type`+normalized source); **UNIQUE(`project_id`,`source_key`)** sau Phase 3C3
 - `rewrite_mode` → `keyword` | `content` (chỉ khi type=rewrite)
 - `rewrite_notes` → ghi chú khi rewrite theo content
 - `description` → mô tả / gợi ý nội dung
 - `loai_san_pham` → loại sản phẩm thủ công cho prompt ảnh
 - `target_date` → ngày KPI
-- `status` → `pending`, `writing`, `reviewing`, `completed`, `failed`
+- `status` → `pending`, `writing`, `reviewing`, `completed`, `failed`, `cancelled` (+ SoftDeletes `deleted_at`)
+- `archived_at` / `status_before_archive` → lifecycle archive trên cùng task row (không hard-delete)
 - `connected_at` → thời điểm gắn bài / vào project (nullable datetime)
 - `completed_at` → thời điểm hoàn thành xử lý (nullable datetime)
 - `archived_from_project_id` → project tháng nguồn khi chuyển sang archive (nullable)
@@ -258,6 +260,20 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 
 ## 4. Services Layer
 
+### 4.0 Business Hook (WP không gọi trực tiếp từ workflow)
+
+| Symbol | Vai trò |
+|--------|---------|
+| `MarkProjectTaskCompletedAction` / bridge | Emit `project.task_completed` → bridge map `content_project.task.completed` + `article.completed` nếu có `article_id` |
+| `BusinessHookEmitter` | `taskFailed`, `runCompleted`, `taskArchived`, `articleArchived` / `articleRestored` |
+| Rule `sync-article-to-wordpress` | Seed **disabled** — bật mới queue `wordpress.article.sync` trên `automation-external` |
+| `WordPressManualSyncService` | Manual only (`manual=true`); không giả automation |
+| `automation:audit-wordpress-coupling` | Audit automatic/manual callers + conflict rules |
+
+Invariant: `SeoProjectWorkflowRunService` / `CreateArticlesFromTaskService` / `ArticleScheduleReconcileService` **không** import WP outbound hub. Completion → business event only. Disabled rule = no automatic WP job. Chi tiết: [AUTOMATION_SERVICE_INVENTORY.md §10](automation/AUTOMATION_SERVICE_INVENTORY.md).
+
+**Release freeze (2026-07-20):** Task = business identity; run item = CP execution; Automation execution = workflow (immutable published version). Draft never executes. External WP side effect chỉ khi rule **enabled + published**. `ExecuteAutomationRuleJob` queue = `automation-critical` (không `default`).
+
 ### 4.1 Core process (diagram)
 
 ```mermaid
@@ -332,13 +348,21 @@ flowchart TB
 
 | Service | File | Mô tả |
 |---------|------|-------|
-| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` | Điều phối run: `startRun()` → `prepareRunQueue()` (seed toàn bộ pending vào `run.items`) → autorun `retryTask()` → `completeRunQueue()`. `retryTask(...)`: task stale → `retry_task_id` / `createRetryTaskFromItem` (copy `article_id` + `post_type`); relink `article_id` (forced > task > item). **Giữ `article_id`:** `markTaskWriting` / `markTaskFailed` không xóa link; side-effect sau success (meta/links/readiness) bọc try/catch — không làm fail hạng mục đã tạo bài. Content Project **chỉ** Laravel article (không WP sync). `persistRunItems()` lock + merge theo `task_id`. |
+| **SeoProjectWorkflowRunService** | `SeoProjectWorkflowRunService.php` | Điều phối run: `startRun()` (`items=null`) → `prepareRunQueue()` seed `seo_project_run_items` → autorun `retryTask()` (cùng task, không copy). Runtime SoT = run items; JSON `runs.items` chỉ legacy/debug. |
 | **SeoProjectRunPreflightService** | `SeoProjectRunPreflightService.php` | Kiểm tra preflight trước khi chạy: tìm conflict keyword/title giữa các pending task. formatWarningsForModal() sinh HTML cảnh báo. |
-| **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Hợp nhất sau run (nhiều `SeoProjectRun` → 1 keeper khi project fully completed). Các method: hasRunnablePendingTasks(), isProjectFullyCompleted(), syncObsoleteTaskStatuses(), maybeConsolidate(). |
+| **SeoProjectRunConsolidationService** | `SeoProjectRunConsolidationService.php` | Phase 3C3: mark `consolidated_into_run_id`/`consolidated_at`, relink run items sang keeper — **không** hard-delete run. UI list `notConsolidated()`. |
+| **SeoProjectRunItemService** | `SeoProjectRunItemService.php` | Claim/retry/counters trên `seo_project_run_items`; `mirrorJsonSafely()` no-op (Phase 3C3). |
+| **SeoProjectRunItemsReader** | `SeoProjectRunItemsReader.php` | Đọc run: DB XOR legacy JSON — không merge dual-source. |
+| **SeoProjectRunItemMergeService** | `SeoProjectRunItemMergeService.php` | Relink/merge khi collapse duplicate task hoặc consolidate run (`relinkTask` / `relinkRun`). |
 | **SeoProjectRunItemsDisplayPresenter** | `Support/SeoProjectRunItemsDisplayPresenter.php` | Gom hàng bảng ViewSeoProjectRun: `consolidate()` — 1 task/article = 1 row (view layer); giữ raw history; badge/note `retry_count`. Test: `SeoProjectRunItemsDisplayPresenterTest`. |
-| **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` | Đồng bộ task: sync(), sanitizeTasksData(), tasksDataFromProject() (kèm `id`/`connected_at`/`completed_at`). assertWithinMonthlyLimit() bỏ qua khi project archive. |
+| **SeoProjectTaskSyncService** | `SeoProjectTaskSyncService.php` | Diff/upsert theo `task_id` → `source_key`; không delete-all/recreate; create qua `SeoProjectTaskUniqueWriter::createStrict()`. |
+| **SeoProjectTaskLifecycleService** | `SeoProjectTaskLifecycleService.php` | Archive/restore/softDelete trên task row; mirror `seo_content_archive_items`. |
+| **SeoProjectTaskRepairService** | `SeoProjectTaskRepairService.php` | Phase 3C3 repair: backfill `source_key`, merge duplicate groups, archive mirrors, purge sync orphans. |
+| **SeoProjectTaskUniqueWriter** | `SeoProjectTaskUniqueWriter.php` | Create race-safe dưới UNIQUE(`project_id`,`source_key`); map conflict → `CONTENT_PROJECT_TASK_SOURCE_KEY_CONFLICT`. |
+| **SeoProjectTaskCanonicalResolver** | `Support/SeoProjectTaskCanonicalResolver.php` | Repair-time pick canonical trong duplicate `source_key` group (class A–F). |
+| **ProjectTaskSourceKeyGenerator** | `Support/ProjectTaskSourceKeyGenerator.php` | Generator chuẩn `source_key` (NFC + lowercase + collapse whitespace). |
 | **SeoProjectApprovalService** | `SeoProjectApprovalService.php` | approveLinkedProject() → đánh dấu project là "approved", yêu cầu user là Content Manager. |
-| **SeoProjectArchiveService** | `SeoProjectArchiveService.php` | `findOrCreateArchiveProject()` (1 archive / site); `archiveProject()` / `archiveTasks()` chuyển task sang archive (không giới hạn tháng); `buildGroupedDashboard()` group theo `completed_at`. Legacy `batchesForProject()` giữ đọc batch cũ. |
+| **SeoProjectArchiveService** | `SeoProjectArchiveService.php` | Archive qua lifecycle; resolve article từ run items reader (không đọc JSON business). |
 | **SeoProjectTaskMoveService** | `SeoProjectTaskMoveService.php` | `deleteProjectRollingBackToPreviousMonth()` — xóa project tháng, chuyển mọi task về tháng −1 (tạo nếu thiếu, chặn nếu đầy); `moveTasksToProject()` di chuyển item sang tháng/archive khác. |
 | **SeoProjectKeywordListParser** | `SeoProjectKeywordListParser.php` | parse() → phân tích raw text (bullet, numbered, plain lines) thành mảng keyword. appendKeywordsToTasks() → gộp vào tasks_data hiện tại. |
 | **SeoProjectKeywordAiGeneratorService** | `SeoProjectKeywordAiGeneratorService.php` | generate() → gọi AI sinh danh sách keyword cho tháng, dựa trên brief + description. |
@@ -511,15 +535,19 @@ Edit repeater: `extraItemActions` **Di chuyển** item sang project tháng/archi
 Filament Resource: Filament/Resources/SeoProjectResource.php
 Pages: ListSeoProjects, CreateSeoProject, EditSeoProject, ViewSeoProject,
        ListSeoProjectRuns, ViewSeoProjectRun, ViewSeoProjectRunStep
-Models: SeoProject, SeoProjectTask, SeoProjectRun
+Models: SeoProject, SeoProjectTask, SeoProjectRun, SeoProjectRunItem, SeoProjectTaskEvent
 Core Service: SeoProjectWorkflowRunService
+Run items SoT: SeoProjectRunItemService + SeoProjectRunItemsReader (DB XOR JSON)
 Task Execution: CreateArticlesFromTaskService → TaskWorkflowTestRunner
 Preflight: SeoProjectRunPreflightService
-Consolidation: SeoProjectRunConsolidationService
+Consolidation: SeoProjectRunConsolidationService (mark consolidated, không hard-delete)
 Run table display: SeoProjectRunItemsDisplayPresenter (1 task = 1 row)
-Task Sync: SeoProjectTaskSyncService
+Task Sync: SeoProjectTaskSyncService + SeoProjectTaskUniqueWriter
+Lifecycle: SeoProjectTaskLifecycleService
+Repair/Diagnose: content-project:repair, content-project:diagnose, content-project:backfill-run-items
+Identity: ProjectTaskSourceKeyGenerator + UNIQUE(project_id, source_key)
 Move/Delete rollback: SeoProjectTaskMoveService
-Archive: SeoProjectArchiveService (kind=archive project + archive-dashboard) ; legacy SeoProjectArchive/Item
+Archive: SeoProjectArchiveService (mirror seo_content_archive_items.task_id)
 Keyword Parser: SeoProjectKeywordListParser
 Keyword AI Gen: SeoProjectKeywordAiGeneratorService
 Approval: SeoProjectApprovalService

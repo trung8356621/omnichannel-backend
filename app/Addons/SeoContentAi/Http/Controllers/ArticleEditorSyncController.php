@@ -11,7 +11,7 @@ use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
-use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
+use App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
@@ -21,7 +21,7 @@ use Illuminate\Http\JsonResponse;
  * REST lưu / đồng bộ bài viết từ React Editor (thay Livewire payload HTML lớn).
  *
  * - POST /api/seo/articles/{article}/save
- * - POST /api/seo/articles/{article}/sync-wp
+ * - POST /api/seo/articles/{article}/sync-wp  (manual only — bypasses Automation Rules)
  * - POST /api/seo/articles/{article}/seo-meta
  */
 final class ArticleEditorSyncController extends Controller
@@ -31,7 +31,7 @@ final class ArticleEditorSyncController extends Controller
         private readonly ArticleEditorPersistService $persist,
         private readonly ArticleEditorSavePatchService $savePatch,
         private readonly ArticleEditorSeoMetaService $seoMeta,
-        private readonly ArticleWpSyncQueueService $syncQueue,
+        private readonly WordPressManualSyncService $manualSync,
     ) {}
 
     public function save(ArticleEditorActionRequest $request, SeoArticle $article): JsonResponse
@@ -86,12 +86,14 @@ final class ArticleEditorSyncController extends Controller
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        $result = $this->syncQueue->enqueueFromEditorBundle($article, $request->editorBundle());
+        $context = WordPressManualSyncService::contextFromAuth($article, 'editor_sync_wp_button');
+        $result = $this->manualSync->enqueueFromEditorBundle($article, $request->editorBundle(), $context);
         $status = ($result['success'] ?? false) ? 200 : 422;
 
         if ($result['success'] ?? false) {
             $result['queued'] = true;
             $result['reload'] = false;
+            $result['manual'] = true;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.article_list.sync_queued_title'),
                 'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.article_list.sync_queued_body')),

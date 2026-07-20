@@ -259,7 +259,13 @@ class ViewSeoProjectRun extends Page
             return [];
         }
 
-        return app(SeoProjectRunItemsReader::class)->forRunAsArrays($this->projectRun);
+        $items = app(SeoProjectRunItemsReader::class)->forRunAsArrays($this->projectRun);
+
+        // Task đã archive → loại khỏi UI project (audit row DB vẫn giữ).
+        return array_values(array_filter(
+            $items,
+            static fn (array $item): bool => ! (bool) ($item['task_archived'] ?? false),
+        ));
     }
 
     /**
@@ -276,8 +282,7 @@ class ViewSeoProjectRun extends Page
 
         return $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->whereNull('archived_at')
-            ->whereNull('deleted_at')
+            ->planned()
             ->orderBy('target_date')
             ->orderBy('id')
             ->get()
@@ -1020,9 +1025,12 @@ class ViewSeoProjectRun extends Page
             // Giữ run item history — chỉ sửa JSON nếu legacy run; DB run giữ audit row.
             if (app(SeoProjectRunItemsReader::class)->usesLegacyFallback($this->projectRun)) {
                 $this->removeTaskFromCurrentRunItems($taskId);
-            } else {
-                $this->projectRun->refresh();
             }
+
+            app(SeoProjectRunItemsReader::class)->forgetRun((int) $this->projectRun->id);
+            $this->projectRun->refresh();
+            $this->projectRun->loadMissing('project');
+            $this->projectRun->project?->refresh();
 
             Notification::make()
                 ->title(__('seo-content-ai::filament.projects.archive_item_completed'))
@@ -1128,6 +1136,7 @@ class ViewSeoProjectRun extends Page
         }
 
         if ($changed) {
+            // Legacy-only compatibility path — không dùng cho DB run items.
             $this->projectRun->update(['items' => array_values($items)]);
             $this->projectRun->refresh()->loadMissing(['project.site', 'user', 'project.tasks']);
         }

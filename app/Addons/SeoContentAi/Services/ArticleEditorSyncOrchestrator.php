@@ -6,6 +6,8 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Jobs\SyncArticleBodyMediaToWordPressJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -41,8 +43,12 @@ final class ArticleEditorSyncOrchestrator
      *     notification?: array{title: string, body: string, status: string}
      * }
      */
-    public function syncFromEditorBundle(SeoArticle $article, array $bundle, bool $fromQueue = false): array
-    {
+    public function syncFromEditorBundle(
+        SeoArticle $article,
+        array $bundle,
+        ManualWordPressContext $sideEffect,
+        bool $fromQueue = false,
+    ): array {
         if (! $fromQueue) {
             abort_if(SeoAccessControl::isContentManager(), 403);
 
@@ -60,7 +66,9 @@ final class ArticleEditorSyncOrchestrator
         }
 
         try {
-            return $this->runSyncPipeline($article, $bundle);
+            return $this->runSyncPipeline($article, $bundle, $sideEffect);
+        } catch (UnauthorizedWordPressSideEffectException $e) {
+            return $this->failureResponse($e->getMessage());
         } finally {
             $lock->release();
         }
@@ -70,7 +78,7 @@ final class ArticleEditorSyncOrchestrator
      * @param  array<string, mixed>  $bundle
      * @return array<string, mixed>
      */
-    private function runSyncPipeline(SeoArticle $article, array $bundle): array
+    private function runSyncPipeline(SeoArticle $article, array $bundle, ManualWordPressContext $sideEffect): array
     {
         $steps = [];
         $warnings = [];
@@ -96,7 +104,7 @@ final class ArticleEditorSyncOrchestrator
 
         $article = $article->fresh() ?? $article;
         $syncOptions = $this->resolveEditorSyncOptions($article);
-        $ensure = $this->syncService->ensureWordPressPostForArticle($article, $seoOverride, $syncOptions);
+        $ensure = $this->syncService->ensureWordPressPostForArticle($article, $sideEffect, $seoOverride, $syncOptions);
         if (! ($ensure['success'] ?? false)) {
             $steps[] = $this->step('prepare_payload', 'error', (string) ($ensure['message'] ?? 'Không liên kết được WordPress.'));
 
@@ -138,7 +146,7 @@ final class ArticleEditorSyncOrchestrator
             $prepareDetail !== '' ? $prepareDetail : 'Đã chuẩn bị payload (ảnh nội dung xử lý nền).',
         );
 
-        $syncResult = $this->syncService->executeEditorSyncRequest($article->fresh(), $wpContext, $prepared);
+        $syncResult = $this->syncService->executeEditorSyncRequest($article->fresh(), $sideEffect, $wpContext, $prepared);
         if (! ($syncResult['success'] ?? false)) {
             $steps[] = $this->step(
                 'editor_sync',
@@ -172,7 +180,14 @@ final class ArticleEditorSyncOrchestrator
 
         $deferInlineMedia = (bool) ($syncOptions['defer_inline_media_sync'] ?? false);
         if ($deferInlineMedia) {
-            SyncArticleBodyMediaToWordPressJob::dispatch((int) $article->id, $seoOverride);
+            SyncArticleBodyMediaToWordPressJob::dispatch(
+                (int) $article->id,
+                $seoOverride,
+                $sideEffect->userId,
+                $sideEffect->requestId,
+                $sideEffect->reason,
+                $sideEffect->correlationId,
+            );
         }
 
         $remoteIdentity = $this->wpContent->refreshSlugAndPermalinkFromWordPress($article->fresh());

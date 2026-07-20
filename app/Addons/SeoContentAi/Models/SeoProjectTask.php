@@ -6,18 +6,16 @@ namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
 use App\Models\Site;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 class SeoProjectTask extends Model
 {
     use BelongsToOnDefaultConnection;
-
-    /**
-     * SoftDeletes trait trì hoãn sang Phase 3.
-     * deleted_at column có sẵn; $task->delete() vẫn hard delete như hiện tại.
-     */
+    use SoftDeletes;
 
     public const TYPE_REWRITE = 'rewrite';
 
@@ -49,6 +47,10 @@ class SeoProjectTask extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    public const STATUS_ARCHIVED = 'archived';
+
+    public const STATUS_CANCELLED = 'cancelled';
+
     protected $connection = 'omi_seo_ai';
 
     protected $table = 'seo_project_tasks';
@@ -65,6 +67,41 @@ class SeoProjectTask extends Model
         'archived_at' => 'datetime',
         'deleted_at' => 'datetime',
     ];
+
+    /**
+     * Active = chưa archive. SoftDeletes tự loại deleted_at.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->whereNull('archived_at');
+    }
+
+    /**
+     * Archived = đã archive, chưa soft-delete.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopeArchived(Builder $query): Builder
+    {
+        return $query->whereNotNull('archived_at');
+    }
+
+    /**
+     * Project plan UI — active lifecycle và chưa cancelled.
+     *
+     * @param  Builder<SeoProjectTask>  $query
+     * @return Builder<SeoProjectTask>
+     */
+    public function scopePlanned(Builder $query): Builder
+    {
+        return $query
+            ->whereNull('archived_at')
+            ->where('status', '!=', self::STATUS_CANCELLED);
+    }
 
     public function site(): BelongsTo
     {

@@ -9,6 +9,9 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Models\SeoPromptResultLink;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressExecutionContext;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressGateway;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
@@ -17,7 +20,6 @@ use App\Models\Site;
 use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
@@ -31,6 +33,7 @@ final class WordPressArticleSyncService
 
     public function __construct(
         private readonly WordPressArticleTimestampService $timestampService,
+        private readonly WordPressGateway $gateway,
     ) {}
 
     /**
@@ -39,8 +42,13 @@ final class WordPressArticleSyncService
      * @param  array<string, mixed>|null  $editorPayload  post_content, faqs, seo, category_ids (plugin ≥ 1.0.49)
      * @return array{success: bool, message: string, wp_post_id?: int, permalink?: string}
      */
-    public function createForArticle(SeoArticle $article, ?array $editorPayload = null): array
-    {
+    public function createForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?array $editorPayload = null,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -111,10 +119,16 @@ final class WordPressArticleSyncService
                 }
             }
 
-            $response = Http::timeout(self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS)
-                ->acceptJson()
-                ->withToken($writeToken)
-                ->post($base.'/wp-json/omi-seo-ai/v1/posts', $requestBody);
+            $response = $this->gateway->postJson(
+                $sideEffect,
+                'article.create_post',
+                $base.'/wp-json/omi-seo-ai/v1/posts',
+                $writeToken,
+                $requestBody,
+                self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
 
             if (! $response->successful()) {
                 return [
@@ -186,8 +200,13 @@ final class WordPressArticleSyncService
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
      * @return array<string, mixed>
      */
-    public function publishForArticle(SeoArticle $article, ?array $seoOverride = null): array
-    {
+    public function publishForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?array $seoOverride = null,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -208,7 +227,7 @@ final class WordPressArticleSyncService
 
             if ((int) ($article->wp_post_id ?? 0) <= 0) {
                 $prepared = $this->buildEditorSyncPayload($article, $seoOverride);
-                $created = $this->createForArticle($article, $prepared['request_payload']);
+                $created = $this->createForArticle($article, $sideEffect, $prepared['request_payload']);
                 if (! ($created['success'] ?? false)) {
                     return $created;
                 }
@@ -216,7 +235,7 @@ final class WordPressArticleSyncService
                 $article = $article->fresh() ?? $article;
             }
 
-            return $this->syncForArticle($article, $seoOverride);
+            return $this->syncForArticle($article, $sideEffect, $seoOverride);
         } finally {
             $lock->release();
         }
@@ -227,8 +246,13 @@ final class WordPressArticleSyncService
      *
      * @return array{success: bool, message: string}
      */
-    public function syncSlugForArticle(SeoArticle $article, string $slug): array
-    {
+    public function syncSlugForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        string $slug,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -250,12 +274,16 @@ final class WordPressArticleSyncService
         }
 
         try {
-            $response = Http::timeout(30)
-                ->acceptJson()
-                ->withToken((string) $context['write_token'])
-                ->post((string) $context['url'], [
-                    'slug' => $slug,
-                ]);
+            $response = $this->gateway->postJson(
+                $sideEffect,
+                'article.sync_slug',
+                (string) $context['url'],
+                (string) $context['write_token'],
+                ['slug' => $slug],
+                30,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
 
             if (! $response->successful()) {
                 $message = WordPressRestResponseParser::formatHttpErrorMessage(
@@ -308,8 +336,13 @@ final class WordPressArticleSyncService
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}  $seoOverride
      * @return array{success: bool, message: string, seo_applied?: bool}
      */
-    public function syncSeoMetaForArticle(SeoArticle $article, array $seoOverride): array
-    {
+    public function syncSeoMetaForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        array $seoOverride,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -342,12 +375,16 @@ final class WordPressArticleSyncService
         }
 
         try {
-            $response = Http::timeout(30)
-                ->acceptJson()
-                ->withToken((string) $context['write_token'])
-                ->post((string) $context['url'], [
-                    'seo' => $seo,
-                ]);
+            $response = $this->gateway->postJson(
+                $sideEffect,
+                'article.sync_seo_meta',
+                (string) $context['url'],
+                (string) $context['write_token'],
+                ['seo' => $seo],
+                30,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
 
             if (! $response->successful()) {
                 $message = WordPressRestResponseParser::formatHttpErrorMessage(
@@ -422,8 +459,13 @@ final class WordPressArticleSyncService
      *     post_type_changed?: bool
      * }
      */
-    public function syncForArticle(SeoArticle $article, ?array $seoOverride = null): array
-    {
+    public function syncForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?array $seoOverride = null,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -444,7 +486,7 @@ final class WordPressArticleSyncService
             ];
         }
 
-        $httpResult = $this->executeEditorSyncRequest($article, $context, $prepared);
+        $httpResult = $this->executeEditorSyncRequest($article, $sideEffect, $context, $prepared);
         if (! ($httpResult['success'] ?? false)) {
             return $httpResult;
         }
@@ -486,8 +528,14 @@ final class WordPressArticleSyncService
      * }  $prepared
      * @return array{success: bool, message: string, decoded?: array<string, mixed>, step_detail?: string}
      */
-    public function executeEditorSyncRequest(SeoArticle $article, array $context, array $prepared): array
-    {
+    public function executeEditorSyncRequest(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        array $context,
+        array $prepared,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($prepared['skip_editor_sync'] ?? false) {
             return [
                 'success' => true,
@@ -504,10 +552,16 @@ final class WordPressArticleSyncService
         $payload = $prepared['request_payload'];
 
         try {
-            $response = Http::timeout(self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS)
-                ->acceptJson()
-                ->withToken($writeToken)
-                ->post($url, $payload);
+            $response = $this->gateway->postJson(
+                $sideEffect,
+                'article.editor_sync',
+                $url,
+                $writeToken,
+                $payload,
+                self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
 
             if (! $response->successful()) {
                 $message = WordPressRestResponseParser::formatHttpErrorMessage(
@@ -797,8 +851,14 @@ final class WordPressArticleSyncService
      * @param  array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null  $seoOverride
      * @return array{success: bool, message: string, step_detail?: string, created?: bool}
      */
-    public function ensureWordPressPostForArticle(SeoArticle $article, ?array $seoOverride = null, array $syncOptions = []): array
-    {
+    public function ensureWordPressPostForArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        ?array $seoOverride = null,
+        array $syncOptions = [],
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ((int) ($article->wp_post_id ?? 0) > 0) {
             return [
                 'success' => true,
@@ -809,7 +869,7 @@ final class WordPressArticleSyncService
         }
 
         $prepared = $this->prepareEditorSyncPayload($article, $seoOverride, $syncOptions);
-        $created = $this->createForArticle($article, $prepared['request_payload']);
+        $created = $this->createForArticle($article, $sideEffect, $prepared['request_payload']);
         if (! ($created['success'] ?? false)) {
             return [
                 'success' => false,
@@ -1256,8 +1316,12 @@ final class WordPressArticleSyncService
      *
      * @return array{success: bool, message: string}
      */
-    public function publishScheduledArticle(SeoArticle $article): array
-    {
+    public function publishScheduledArticle(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+    ): array {
+        $this->assertSideEffectArticle($sideEffect, $article);
+
         if ($blocked = $this->blockContentManagerWordPressSync()) {
             return $blocked;
         }
@@ -1290,13 +1354,19 @@ final class WordPressArticleSyncService
         ];
 
         try {
-            $response = Http::timeout(30)
-                ->acceptJson()
-                ->withToken((string) $context['write_token'])
-                ->post((string) $context['url'], array_filter(
+            $response = $this->gateway->postJson(
+                $sideEffect,
+                'article.publish_scheduled',
+                (string) $context['url'],
+                (string) $context['write_token'],
+                array_filter(
                     $payload,
                     static fn (mixed $value): bool => $value !== null && $value !== '',
-                ));
+                ),
+                30,
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
 
             if (! $response->successful()) {
                 return [
@@ -1647,6 +1717,17 @@ final class WordPressArticleSyncService
     /**
      * @return array{success: bool, message: string}|null
      */
+    private function assertSideEffectArticle(WordPressExecutionContext $sideEffect, SeoArticle $article): void
+    {
+        $ctxId = $sideEffect->articleId();
+        if ($ctxId !== null && $ctxId > 0 && $ctxId !== (int) $article->id) {
+            throw new UnauthorizedWordPressSideEffectException(
+                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
+                "Context article_id [{$ctxId}] does not match article [{$article->id}].",
+            );
+        }
+    }
+
     private function blockContentManagerWordPressSync(): ?array
     {
         if (SeoQueueContext::isWpSyncFromQueue()) {

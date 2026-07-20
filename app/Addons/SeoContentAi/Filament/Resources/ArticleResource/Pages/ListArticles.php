@@ -262,9 +262,14 @@ class ListArticles extends ListRecords
             return;
         }
 
-        $wpResult = app(WordPressArticleSyncService::class)->syncSeoMetaForArticle($article, [
-            'focus_keyword' => $phrase,
-        ]);
+        $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
+            $article,
+            'list_articles_sync_seo_meta',
+        );
+        $wpResult = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
+            ->syncSeoMeta($article, $manual, [
+                'focus_keyword' => $phrase,
+            ]);
 
         if (! ($wpResult['success'] ?? false)) {
             Notification::make()
@@ -308,7 +313,12 @@ class ListArticles extends ListRecords
             return;
         }
 
-        $result = app(ArticleWpSyncQueueService::class)->resync($article);
+        $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
+            $article,
+            'list_articles_resync_queue',
+        );
+        $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
+            ->resyncQueued($article, $manual);
 
         if (! ($result['success'] ?? false)) {
             Notification::make()

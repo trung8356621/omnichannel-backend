@@ -85,6 +85,11 @@ final class SeoProjectRunItemsReader
         return $this->requestCache[$runId] = $collection->values();
     }
 
+    public function forgetRun(int $runId): void
+    {
+        unset($this->requestCache[$runId]);
+    }
+
     /**
      * @return list<array<string, mixed>>
      */
@@ -186,7 +191,7 @@ final class SeoProjectRunItemsReader
     {
         $items = SeoProjectRunItem::query()
             ->where('run_id', (int) $run->id)
-            ->with(['task', 'article'])
+            ->with(['taskIncludingDeleted', 'article'])
             ->orderBy('id')
             ->get();
 
@@ -195,17 +200,20 @@ final class SeoProjectRunItemsReader
 
     private function fromRunItemModel(SeoProjectRunItem $item): SeoProjectRunItemViewData
     {
-        $task = $item->relationLoaded('task') ? $item->task : null;
-        $taskExists = $task instanceof SeoProjectTask;
+        $task = $item->relationLoaded('taskIncludingDeleted')
+            ? $item->taskIncludingDeleted
+            : ($item->relationLoaded('task') ? $item->task : null);
+        $taskSoftDeleted = $task instanceof SeoProjectTask && $task->trashed();
+        $taskExists = $task instanceof SeoProjectTask && ! $taskSoftDeleted;
         $snapshot = is_array($item->input_snapshot) ? $item->input_snapshot : [];
 
-        $type = $taskExists
+        $type = $task instanceof SeoProjectTask
             ? (string) $task->type
             : (string) ($snapshot['type'] ?? '');
-        $sourceContent = $taskExists
+        $sourceContent = $task instanceof SeoProjectTask
             ? (string) $task->source_content
             : (string) ($snapshot['source_content'] ?? '');
-        $postType = $taskExists
+        $postType = $task instanceof SeoProjectTask
             ? ($task->post_type !== null ? (string) $task->post_type : null)
             : (isset($snapshot['post_type']) ? (string) $snapshot['post_type'] : null);
 
@@ -216,7 +224,7 @@ final class SeoProjectRunItemsReader
             $legacyStatus = SeoProjectRunItemStatus::Manual->value;
         }
 
-        $articleId = (int) ($item->article_id ?? ($taskExists ? ($task->article_id ?? 0) : 0));
+        $articleId = (int) ($item->article_id ?? ($task instanceof SeoProjectTask ? ($task->article_id ?? 0) : 0));
         $articleId = $articleId > 0 ? $articleId : null;
 
         $editUrl = null;
@@ -236,6 +244,20 @@ final class SeoProjectRunItemsReader
             && $articleId !== null
             && $task->archived_at === null;
 
+        $taskArchived = $taskExists
+            && ($task->archived_at !== null || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED);
+
+        $missingErrorCode = null;
+        $missingErrorMessage = null;
+        if (! $taskExists) {
+            $missingErrorCode = $taskSoftDeleted
+                ? ContentProjectErrorCode::TaskDeleted->value
+                : ContentProjectErrorCode::TaskNotFound->value;
+            $missingErrorMessage = $taskSoftDeleted
+                ? 'Task đã bị xóa. Chỉ xem lịch sử chạy.'
+                : 'Task gốc không còn tồn tại.';
+        }
+
         return new SeoProjectRunItemViewData(
             runItemId: (int) $item->id,
             taskId: $item->task_id !== null ? (int) $item->task_id : null,
@@ -247,15 +269,15 @@ final class SeoProjectRunItemsReader
             status: $legacyStatus,
             attempt: max(1, (int) $item->attempt),
             message: (string) ($item->message ?? ''),
-            errorCode: $item->error_code !== null ? (string) $item->error_code : ($taskExists ? null : ContentProjectErrorCode::TaskNotFound->value),
+            errorCode: $item->error_code !== null ? (string) $item->error_code : $missingErrorCode,
             errorMessage: $item->error_message !== null
                 ? (string) $item->error_message
-                : ($taskExists ? null : 'Task gốc không còn tồn tại.'),
+                : $missingErrorMessage,
             articleEditUrl: $editUrl,
-            targetDate: $taskExists
+            targetDate: $task instanceof SeoProjectTask
                 ? $task->target_date?->format('Y-m-d')
                 : (isset($snapshot['target_date']) ? (string) $snapshot['target_date'] : null),
-            description: $taskExists
+            description: $task instanceof SeoProjectTask
                 ? ($task->description !== null ? (string) $task->description : null)
                 : (isset($snapshot['description']) ? (string) $snapshot['description'] : null),
             isLegacy: false,
@@ -263,14 +285,15 @@ final class SeoProjectRunItemsReader
             taskExists: $taskExists,
             canRetry: $canRetry,
             canArchive: $canArchive,
+            taskArchived: $taskArchived,
             steps: is_array($item->output_snapshot['steps'] ?? null) ? $item->output_snapshot['steps'] : [],
             lastRunAt: $item->finished_at?->format('Y-m-d H:i:s'),
-            loaiSanPham: $taskExists ? ($task->loai_san_pham !== null ? (string) $task->loai_san_pham : null) : null,
-            galleryDescription: $taskExists ? ($task->description !== null ? (string) $task->description : null) : null,
-            rewriteMode: $taskExists && $task->type === SeoProjectTask::TYPE_REWRITE
+            loaiSanPham: $task instanceof SeoProjectTask ? ($task->loai_san_pham !== null ? (string) $task->loai_san_pham : null) : null,
+            galleryDescription: $task instanceof SeoProjectTask ? ($task->description !== null ? (string) $task->description : null) : null,
+            rewriteMode: $task instanceof SeoProjectTask && $task->type === SeoProjectTask::TYPE_REWRITE
                 ? SeoProjectTask::normalizeRewriteMode($task->rewrite_mode)
                 : null,
-            rewriteNotes: $taskExists && $task->type === SeoProjectTask::TYPE_REWRITE
+            rewriteNotes: $task instanceof SeoProjectTask && $task->type === SeoProjectTask::TYPE_REWRITE
                 ? ($task->rewrite_notes !== null ? (string) $task->rewrite_notes : null)
                 : null,
         );
@@ -316,15 +339,18 @@ final class SeoProjectRunItemsReader
             $taskId = $mapped['task_id'];
             $task = $taskId !== null ? $tasks->get($taskId) : null;
             $taskExists = $task instanceof SeoProjectTask;
+            $taskArchived = $taskExists
+                && ($task->archived_at !== null || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED);
 
             $status = (string) ($mapped['status'] ?? 'pending');
             $type = (string) ($item['type'] ?? ($mapped['input_snapshot']['type'] ?? ''));
             $articleId = $mapped['article_id'];
 
             $canRetry = $taskExists
+                && ! $taskArchived
                 && $status !== 'manual'
                 && $type !== SeoProjectTask::TYPE_IMPROVE;
-            $canArchive = $taskExists && $articleId !== null && $articleId > 0;
+            $canArchive = $taskExists && ! $taskArchived && $articleId !== null && $articleId > 0;
 
             $editUrl = null;
             if ($articleId !== null && $articleId > 0) {
@@ -357,6 +383,7 @@ final class SeoProjectRunItemsReader
                 taskExists: $taskExists,
                 canRetry: $canRetry,
                 canArchive: $canArchive,
+                taskArchived: $taskArchived,
                 steps: is_array($mapped['output_snapshot']['steps'] ?? null) ? $mapped['output_snapshot']['steps'] : [],
                 lastRunAt: $mapped['finished_at'] ?? (isset($item['last_run_at']) ? (string) $item['last_run_at'] : null),
                 loaiSanPham: isset($item['loai_san_pham']) ? (string) $item['loai_san_pham'] : null,
@@ -435,6 +462,7 @@ final class SeoProjectRunItemsReader
                 taskExists: $row->taskExists,
                 canRetry: $row->canRetry,
                 canArchive: $row->canArchive,
+                taskArchived: $row->taskArchived,
                 duplicateIdentityDetected: true,
                 steps: $row->steps,
                 lastRunAt: $row->lastRunAt,

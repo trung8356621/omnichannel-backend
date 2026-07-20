@@ -14,14 +14,16 @@ use Illuminate\Support\Facades\DB;
 /**
  * Legacy multi-run consolidator.
  *
- * @deprecated Phase 3B — không dùng cho write path run mới. Input phải qua
- * SeoProjectRunItemsReader (DB XOR legacy JSON, không merge). Output chỉ mirror
- * JSON trên keeper; không tạo/duplicate seo_project_run_items.
+ * @deprecated Phase 3B+ — không dùng cho write path run mới.
+ * Phase 3C3: mark consolidated_into_run_id — không hard-delete run.
+ * Relink run items sang keeper qua SeoProjectRunItemMergeService; UI list notConsolidatedRuns().
+ * Input qua SeoProjectRunItemsReader (DB XOR legacy JSON).
  */
 final class SeoProjectRunConsolidationService
 {
     public function __construct(
         private readonly SeoProjectRunItemsReader $runItemsReader,
+        private readonly SeoProjectRunItemMergeService $runItemMerger,
     ) {}
 
     public function hasRunnablePendingTasks(SeoProject $project): bool
@@ -33,8 +35,7 @@ final class SeoProjectRunConsolidationService
         foreach (
             $project->tasks()
                 ->where('status', SeoProjectTask::STATUS_PENDING)
-                ->whereNull('archived_at')
-                ->whereNull('deleted_at')
+                ->planned()
                 ->get() as $task
         ) {
             if (! $task instanceof SeoProjectTask) {
@@ -85,7 +86,7 @@ final class SeoProjectRunConsolidationService
             return null;
         }
 
-        $runs = $project->runs()->orderBy('id')->get();
+        $runs = $project->notConsolidatedRuns()->orderBy('id')->get();
         if ($runs->count() <= 1) {
             $single = $runs->first();
             if ($single instanceof SeoProjectRun) {
@@ -119,7 +120,18 @@ final class SeoProjectRunConsolidationService
                     ->whereIn('project_run_id', $removedIds)
                     ->update(['project_run_id' => (int) $keeper->id]);
 
-                SeoProjectRun::query()->whereIn('id', $removedIds)->delete();
+                foreach ($removedIds as $fromRunId) {
+                    $this->runItemMerger->relinkRun((int) $fromRunId, (int) $keeper->id);
+                }
+
+                // Phase 3C3: không hard-delete run (CASCADE sẽ mất run items).
+                // Mark consolidated; items đã relink sang keeper.
+                SeoProjectRun::query()
+                    ->whereIn('id', $removedIds)
+                    ->update([
+                        'consolidated_into_run_id' => (int) $keeper->id,
+                        'consolidated_at' => now(),
+                    ]);
             }
 
             $this->syncArticleRunMeta($keeper, $mergedItems);
@@ -237,14 +249,14 @@ final class SeoProjectRunConsolidationService
 
         $tasks = $project->relationLoaded('tasks')
             ? $project->tasks
-            : $project->tasks()->whereNull('archived_at')->whereNull('deleted_at')->get();
+            : $project->tasks()->active()->get();
 
         foreach ($tasks as $task) {
             if (! $task instanceof SeoProjectTask) {
                 continue;
             }
 
-            if ($task->archived_at !== null || $task->deleted_at !== null) {
+            if ($task->archived_at !== null) {
                 continue;
             }
 
@@ -341,15 +353,17 @@ final class SeoProjectRunConsolidationService
         $succeeded = collect($items)->where('status', 'success')->count();
         $failed = collect($items)->where('status', 'failed')->count();
 
+        // Phase 3C3: không ghi full JSON item list — chỉ counters + meta.
         $keeper->update([
             'mode' => SeoProjectRun::MODE_FULL,
             'status' => SeoProjectRun::STATUS_COMPLETED,
             'total' => count($items),
             'succeeded' => $succeeded,
             'failed' => $failed,
-            'items' => array_values($items),
             'started_at' => $startedAt ?? $keeper->started_at,
             'finished_at' => $keeper->finished_at ?? now(),
+            'consolidated_into_run_id' => null,
+            'consolidated_at' => null,
         ]);
     }
 

@@ -8,6 +8,8 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorSyncOrchestrator;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -15,6 +17,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 use Throwable;
 
 final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
@@ -60,6 +63,35 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
             return;
         }
 
+        // Firewall: queue job without explicit manual audit meta is blocked.
+        if (($queueMeta['manual'] ?? false) !== true
+            || (int) ($queueMeta['user_id'] ?? $queueMeta['initiated_by'] ?? 0) <= 0
+            || trim((string) ($queueMeta['request_id'] ?? '')) === ''
+        ) {
+            $message = '['.UnauthorizedWordPressSideEffectException::ORIGIN_MISSING
+                .'] SyncArticleToWordPressFromQueueJob missing ManualWordPressContext audit meta.';
+            Log::channel('wordpress-side-effect')->error('wordpress.side_effect.blocked', [
+                'operation' => 'queue.sync_article',
+                'article_id' => $this->articleId,
+                'queue_job_class' => self::class,
+                'queue_name' => ArticleWpSyncQueueService::QUEUE_NAME,
+                'queue_meta_keys' => array_keys($queueMeta),
+                'message' => $message,
+            ]);
+            $queueService->markFailed($article, $message);
+
+            return;
+        }
+
+        $sideEffect = new ManualWordPressContext(
+            userId: (int) ($queueMeta['user_id'] ?? $queueMeta['initiated_by']),
+            requestId: (string) $queueMeta['request_id'],
+            articleId: (int) $article->id,
+            siteId: (int) ($article->site_id ?? 0),
+            reason: (string) ($queueMeta['reason'] ?? 'queued_manual_sync'),
+            correlationId: (string) ($queueMeta['correlation_id'] ?? Str::uuid()),
+        );
+
         $bundle = $queueService->readQueueBundle($article);
         if ($bundle === []) {
             $queueService->markFailed($article, 'Thiếu dữ liệu đồng bộ trong article_meta.');
@@ -67,7 +99,7 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
             return;
         }
 
-        SeoQueueContext::runWpSyncFromQueue(function () use ($queueService, $syncOrchestrator, $article, $bundle): void {
+        SeoQueueContext::runWpSyncFromQueue(function () use ($queueService, $syncOrchestrator, $article, $bundle, $sideEffect): void {
             $queueService->markProcessing($article);
 
             try {
@@ -78,7 +110,12 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
                     $bundle['publish_box'] = $publishBox;
                 }
 
-                $result = $syncOrchestrator->syncFromEditorBundle($article->fresh() ?? $article, $bundle, fromQueue: true);
+                $result = $syncOrchestrator->syncFromEditorBundle(
+                    $article->fresh() ?? $article,
+                    $bundle,
+                    $sideEffect,
+                    fromQueue: true,
+                );
 
                 if (! ($result['success'] ?? false)) {
                     $message = (string) ($result['message'] ?? 'Đồng bộ WordPress thất bại.');
@@ -97,16 +134,15 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
                 }
 
                 $queueService->markCompleted($article->fresh() ?? $article, $result);
+            } catch (UnauthorizedWordPressSideEffectException $exception) {
+                Log::channel('wordpress-side-effect')->error('wordpress.side_effect.blocked', $exception->traceContext);
+                $queueService->markFailed($article->fresh() ?? $article, $exception->getMessage());
             } catch (Throwable $exception) {
                 Log::warning('SyncArticleToWordPressFromQueueJob failed', [
                     'article_id' => $this->articleId,
                     'error' => $exception->getMessage(),
                 ]);
-
-                $fresh = SeoArticle::query()->find($this->articleId);
-                if ($fresh instanceof SeoArticle) {
-                    $queueService->markFailed($fresh, $exception->getMessage());
-                }
+                $queueService->markFailed($article->fresh() ?? $article, $exception->getMessage());
             }
         });
     }

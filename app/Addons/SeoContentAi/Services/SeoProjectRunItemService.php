@@ -175,7 +175,7 @@ final class SeoProjectRunItemService
     {
         return DB::connection('omi_seo_ai')->transaction(function () use ($run, $taskId, $action): array {
             /** @var SeoProjectTask|null $task */
-            $task = SeoProjectTask::query()
+            $task = SeoProjectTask::withTrashed()
                 ->whereKey($taskId)
                 ->lockForUpdate()
                 ->first();
@@ -201,13 +201,36 @@ final class SeoProjectRunItemService
                 ];
             }
 
+            if ($task->trashed() || $task->deleted_at !== null) {
+                $runItem = $this->findByLogicalOperation((int) $run->id, $taskId, $action->value);
+                if ($runItem instanceof SeoProjectRunItem) {
+                    $this->markFailed(
+                        $runItem,
+                        ContentProjectErrorCode::TaskDeleted,
+                        'Task đã bị xóa (soft-delete).',
+                        lock: false,
+                    );
+                }
+
+                return [
+                    'outcome' => 'failed',
+                    'run_item' => $runItem?->fresh(),
+                    'task' => $task,
+                    'error_code' => ContentProjectErrorCode::TaskDeleted->value,
+                    'message' => 'Task đã bị xóa (soft-delete).',
+                    'article_id' => null,
+                ];
+            }
+
             if ($task->archived_at !== null
                 || (string) $task->status === 'archived'
             ) {
                 return $this->failClaim($run, $task, $action, ContentProjectErrorCode::TaskArchived, 'Task đã archive.');
             }
 
-            if ((string) $task->status === 'cancelled') {
+            if ((string) $task->status === 'cancelled'
+                || (string) $task->status === SeoProjectTask::STATUS_CANCELLED
+            ) {
                 return $this->failClaim($run, $task, $action, ContentProjectErrorCode::TaskCancelled, 'Task đã cancelled.');
             }
 
@@ -731,24 +754,13 @@ final class SeoProjectRunItemService
 
     public function mirrorJsonSafely(SeoProjectRun $run): void
     {
-        try {
-            $items = $this->buildLegacyJsonMirror($run);
-            $run->update(['items' => $items]);
-        } catch (\Throwable $exception) {
-            Log::error('seo.project_run.json_mirror_failed', [
-                'run_id' => (int) $run->id,
-                'error' => $exception->getMessage(),
-                'class' => $exception::class,
-            ]);
-        }
+        // Phase 3C3: ngừng ghi full JSON business mirror.
+        // Column items giữ historical/rollback; runtime dùng seo_project_run_items.
     }
 
     public function syncMirrorAndCounters(SeoProjectRun $run, bool $markCompleted = false): SeoProjectRun
     {
-        $run = $this->recomputeRunCounters($run, $markCompleted);
-        $this->mirrorJsonSafely($run);
-
-        return $run->fresh(['project']) ?? $run;
+        return $this->recomputeRunCounters($run, $markCompleted);
     }
 
     /**

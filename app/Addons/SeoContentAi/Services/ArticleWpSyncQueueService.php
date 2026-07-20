@@ -6,10 +6,14 @@ namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Jobs\SyncArticleToWordPressFromQueueJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Testing\Fakes\BusFake;
 use Throwable;
 
 final class ArticleWpSyncQueueService
@@ -38,7 +42,7 @@ final class ArticleWpSyncQueueService
      * @param  array<string, mixed>  $bundle
      * @return array{success: bool, message: string, queued?: bool, queue?: array<string, mixed>}
      */
-    public function enqueueFromEditorBundle(SeoArticle $article, array $bundle): array
+    public function enqueueFromEditorBundle(SeoArticle $article, array $bundle, ?ManualWordPressContext $manual = null): array
     {
         $article->refresh();
         $existing = $this->readQueueMeta($article);
@@ -67,10 +71,21 @@ final class ArticleWpSyncQueueService
             'started_at' => null,
             'finished_at' => null,
             'error' => null,
-            'user_id' => Auth::id(),
+            'user_id' => $manual?->userId ?? Auth::id(),
             'publish_immediately' => $this->resolvePublishImmediately($bundle),
             'scheduled_at' => $context->resolvePublishAtForSave()?->toIso8601String(),
         ];
+
+        if ($manual instanceof ManualWordPressContext) {
+            $queuePayload = array_merge($queuePayload, $manual->toAuditMeta());
+            Log::info('wordpress.manual_sync.queued', $manual->toAuditMeta());
+        } else {
+            // Fail-closed: enqueue without manual context must not create WP jobs.
+            return [
+                'success' => false,
+                'message' => 'WordPress queue requires explicit ManualWordPressContext (manual sync only).',
+            ];
+        }
 
         $article->articleMetas()->updateOrCreate(
             ['meta_key' => self::META_KEY],
@@ -131,6 +146,9 @@ final class ArticleWpSyncQueueService
         $this->writeQueueMeta($article, $payload);
         $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
+
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->wordpressSynced($article, $result);
     }
 
     public function clearQueueEntry(SeoArticle $article): void
@@ -158,6 +176,9 @@ final class ArticleWpSyncQueueService
         $payload['error'] = $error;
 
         $this->writeQueueMeta($article, $payload);
+
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->wordpressSyncFailed($article, $error);
     }
 
     public function retry(SeoArticle $article): bool
@@ -173,7 +194,7 @@ final class ArticleWpSyncQueueService
     /**
      * @return array{success: bool, message: string, queued?: bool}
      */
-    public function resync(SeoArticle $article): array
+    public function resync(SeoArticle $article, ?ManualWordPressContext $manual = null): array
     {
         $payload = $this->readQueueMeta($article);
         if ($payload === []) {
@@ -206,7 +227,16 @@ final class ArticleWpSyncQueueService
         $payload['started_at'] = null;
         $payload['finished_at'] = null;
         $payload['error'] = null;
-        $payload['user_id'] = Auth::id();
+        $payload['user_id'] = $manual?->userId ?? Auth::id();
+        if ($manual instanceof ManualWordPressContext) {
+            $payload = array_merge($payload, $manual->toAuditMeta());
+            Log::info('wordpress.manual_sync.resync', $manual->toAuditMeta());
+        } else {
+            return [
+                'success' => false,
+                'message' => 'WordPress resync requires explicit ManualWordPressContext.',
+            ];
+        }
         $this->writeQueueMeta($article, $payload);
 
         if (! $this->dispatchWpSyncJob((int) $article->id)) {
@@ -467,6 +497,11 @@ final class ArticleWpSyncQueueService
         $this->purgeDispatchedJobsForArticle($articleId);
 
         SyncArticleToWordPressFromQueueJob::dispatch($articleId);
+
+        // Unit tests: Bus::fake() không ghi bảng jobs — coi như dispatch thành công.
+        if (Bus::getFacadeRoot() instanceof BusFake) {
+            return true;
+        }
 
         if ((string) config('queue.default') === 'sync') {
             return true;

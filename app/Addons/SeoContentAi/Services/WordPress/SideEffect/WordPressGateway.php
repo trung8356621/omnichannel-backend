@@ -1,0 +1,66 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Services\WordPress\SideEffect;
+
+use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Http;
+
+/**
+ * Sole WordPress mutating HTTP boundary for article/post side effects.
+ * Every POST/PUT/PATCH/DELETE to WP must pass through here with an explicit context.
+ */
+final class WordPressGateway
+{
+    public function __construct(
+        private readonly WordPressSideEffectGuard $guard,
+        private readonly WordPressSideEffectLedger $ledger,
+    ) {}
+
+    /**
+     * @param  array<string, mixed>  $body
+     * @param  array<string, string>  $headers
+     */
+    public function postJson(
+        ?WordPressExecutionContext $context,
+        string $operation,
+        string $url,
+        string $bearerToken,
+        array $body,
+        int $timeoutSeconds,
+        ?int $articleId = null,
+        ?int $siteId = null,
+    ): Response {
+        $this->guard->assertAllowed($context, $operation, [
+            'article_id' => $articleId ?? $context?->articleId(),
+            'site_id' => $siteId ?? $context?->siteId(),
+            'url_host' => parse_url($url, PHP_URL_HOST),
+            'url_path' => parse_url($url, PHP_URL_PATH),
+        ]);
+
+        assert($context instanceof WordPressExecutionContext);
+
+        $attemptId = $this->ledger->begin($operation, $context);
+
+        try {
+            $response = Http::timeout($timeoutSeconds)
+                ->acceptJson()
+                ->withToken($bearerToken)
+                ->post($url, $body);
+
+            if ($response->successful()) {
+                $decoded = $response->json();
+                $remoteId = is_array($decoded) ? (int) ($decoded['wp_post_id'] ?? 0) : 0;
+                $this->ledger->complete($attemptId, $remoteId > 0 ? $remoteId : null);
+            } else {
+                $this->ledger->fail($attemptId, 'HTTP '.$response->status());
+            }
+
+            return $response;
+        } catch (\Throwable $e) {
+            $this->ledger->fail($attemptId, $e->getMessage());
+            throw $e;
+        }
+    }
+}

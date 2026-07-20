@@ -205,3 +205,86 @@ Rejected: wordpress.article.update.
 ## 9. Phase 2
 
 Foundation: app/Addons/SeoContentAi/Automation/ — không migrate production callers.
+
+## 10. Business Hook / Rule Engine (core)
+
+Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. Không lưu PHP class trong DB.
+
+| Symbol | Vai trò | Path |
+|--------|---------|------|
+| `BusinessEventDispatcher` | Persist `business_events`, afterCommit match rules | `Automation/BusinessHook/Services/BusinessEventDispatcher.php` |
+| `AutomationRuleMatcher` | Enabled rules + condition engine | `.../Services/AutomationRuleMatcher.php` |
+| `AutomationExecutionService` | Claim/run actions, idempotency, delay continuation | `.../Services/AutomationExecutionService.php` |
+| `ExecuteAutomationRuleJob` | Queue worker theo `automation_execution_id` | `.../Jobs/ExecuteAutomationRuleJob.php` |
+| `BridgingAutomationEventDispatcher` | ActionRunner envelopes → business events | `.../Events/BridgingAutomationEventDispatcher.php` |
+| `BusinessHookEmitter` | Emit từ archive / WP queue / run complete / task fail | `.../Support/BusinessHookEmitter.php` |
+| `SyncArticleToWordPressHookAction` | `wordpress.article.sync` wrap `WordPressArticleSyncService` | `.../Actions/SyncArticleToWordPressHookAction.php` |
+
+**Tables (`omi_seo_ai`):** `business_events`, `automation_rules` (+`version`), `automation_rule_actions`, `automation_executions`, `automation_action_executions`.
+
+**CLI:** `automation:migrate [--only-business-hook]`, `automation:seed-rules`, `automation:list-events|list-actions|dispatch|run-rule|retry|diagnose`, `automation:audit-wordpress-coupling [--strict]`.
+
+**Seed rules (default disabled):** `sync-article-to-wordpress`, `notify-workflow-failure`, `dispatch-publish-request`, graph sample `article-complete-pipeline-graph`.
+
+**Invariant:** Content Project không sync WP trực tiếp; WP outbound automation chỉ khi rule enabled. Task completed + `article_id` → emit `content_project.task.completed` và `article.completed`.
+
+**Cutover (2026-07-20) — WordPress coupling:**
+
+- Automatic WordPress side effects require an enabled published Automation Rule.
+- Disabled rule blocks future automatic executions; pending/processing get `cancellation_requested_at` and cancel at run/bootstrap (no WP side effect).
+- Explicit manual sync (`WordPressManualSyncService`) is allowed while rules disabled (`manual=true`, `initiated_by` user) — does not create automation execution.
+- Content Project / Article completion never dispatch `SyncArticleToWordPressFromQueueJob` / `WordPressArticleSyncService` directly.
+- `ExecuteAutomationRuleJob` → queue `automation-critical`. WP action nodes → `automation-external`. Legacy manual job → `seo` (not `default`).
+- `ArticleScheduleReconcileService` must not call WordPress.
+- Duplicate enabled WP rules for same event: `AutomationRuleService::findConflictingWordpressRules` + audit command warn.
+
+**UI:** Filament `AutomationRuleResource`, `AutomationExecutionResource` (group Automation).
+
+**Migrate:** `php artisan automation:migrate --only-business-hook` (tránh full-folder migrate đụng bảng cũ).
+
+**Invariants (hardening):**
+
+- Automatic WordPress sync must go through Automation Engine.
+- Manual sync is an explicit user action.
+- Business events are emitted after commit.
+- Rules store action codes, never PHP classes/methods.
+- Run items remain Content Project execution source.
+- Automation executions are separate from Content Project run items.
+- Enable/disable does not bump rule version; config/action changes do.
+
+## 11. Release freeze — Automation V2/V3 (2026-07-20)
+
+| Layer | Contract |
+|-------|----------|
+| Task | Business identity (`source_key` + stable task ID) |
+| Run item | Content Project execution attempt history |
+| Automation execution | Workflow run; binds **immutable published version** |
+| Draft nodes | Editor only — **never** execute |
+| External side effect | Requires **enabled + published** rule |
+| Scheduled occurrence | Idempotent (`rule_id` + version + scheduled_at) |
+| Graph engine | Node jobs independent; delay = queue delay (no worker sleep) |
+
+**V3 schema:** `automation_rule_versions` / `_nodes` / `_edges`, `automation_scheduler_heartbeats`; execution.`automation_rule_version_id`.
+
+**CLI add:** `automation:migrate --only-v2|--only-v3`, `automation:migrate-rule-versions`, `automation:dispatch-scheduled`, `automation:recover-stale`, `automation:health`, `automation:export|import`.
+
+**Release freeze (2026-07-20):** Executions never auto-publish. Graph/versioned rule without `published_version_id` → skip. `ensurePublishedVersion` chỉ cho migrate/admin CLI, không trên execution path.
+**Seed rules remain disabled by default** (incl. graph sample `article-complete-pipeline-graph`).
+
+**UI:** Visual builder `/seo/automation/workflow-builder`, Ops `/seo/automation/operations`.
+
+## 12. Module SDK (2026-07-20)
+
+Registry platform hóa — domain (WP, Content, SEO, Media) qua `Automation/Modules/*` providers. Core chỉ engine + `CoreAutomationModuleProvider`. Chi tiết: [MODULE_SDK.md](MODULE_SDK.md).
+
+| Symbol | Vai trò | Path |
+|--------|---------|------|
+| `AutomationModuleProvider` | Contract đăng ký events/actions/conditions/menu/permissions/health/settings | `Automation/Platform/Contracts/` |
+| `AutomationPlatformKernel` | Boot một lần module registry → wire singleton event/action registries | `Automation/Platform/` |
+| `AutomationModuleRegistry` | Load modules từ `config/automation-modules.php` (không phụ thuộc config cache) | `Automation/Platform/` |
+| `CoreAutomationModuleProvider` | delay, webhook, notification, dispatch_event | `Automation/Modules/Core/` |
+| `WordPressAutomationModuleProvider` | WP events + `wordpress.article.sync` | `Automation/Modules/WordPress/` |
+| `ContentAutomationModuleProvider` | article + content_project events + generate_content | `Automation/Modules/Content/` |
+| `SeoAutomationModuleProvider` / `MediaAutomationModuleProvider` | SEO / media events + actions | `Automation/Modules/Seo|Media/` |
+| `SampleAutomationModuleProvider` | Ví dụ SDK — disabled mặc định | `Automation/Modules/Sample/` |
+

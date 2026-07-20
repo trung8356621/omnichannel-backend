@@ -47,7 +47,7 @@ final class SeoProjectWorkflowRunService
             'total' => 0,
             'succeeded' => 0,
             'failed' => 0,
-            'items' => [],
+            'items' => null,
             'started_at' => now(),
         ]);
     }
@@ -56,8 +56,7 @@ final class SeoProjectWorkflowRunService
     {
         $pendingCount = (int) $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->whereNull('archived_at')
-            ->whereNull('deleted_at')
+            ->planned()
             ->count();
 
         if ($pendingCount <= 0) {
@@ -68,8 +67,7 @@ final class SeoProjectWorkflowRunService
 
         $query = $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->whereNull('archived_at')
-            ->whereNull('deleted_at')
+            ->planned()
             ->orderBy('target_date')
             ->orderBy('id');
 
@@ -100,8 +98,7 @@ final class SeoProjectWorkflowRunService
     {
         $query = $project->tasks()
             ->where('status', SeoProjectTask::STATUS_PENDING)
-            ->whereNull('archived_at')
-            ->whereNull('deleted_at')
+            ->planned()
             ->where('type', '!=', SeoProjectTask::TYPE_IMPROVE)
             ->orderBy('target_date')
             ->orderBy('id');
@@ -193,10 +190,17 @@ final class SeoProjectWorkflowRunService
 
         $project = $run->project;
         if (! $project instanceof SeoProject) {
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->runCompleted($run);
+
             return $run;
         }
 
-        return app(SeoProjectRunConsolidationService::class)->maybeConsolidate($project) ?? $run;
+        $result = app(SeoProjectRunConsolidationService::class)->maybeConsolidate($project) ?? $run;
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->runCompleted($result);
+
+        return $result;
     }
 
     /**
@@ -398,23 +402,20 @@ final class SeoProjectWorkflowRunService
             throw new \InvalidArgumentException('Không tìm thấy dự án của lần run này.');
         }
 
-        $items = is_array($run->items) ? $run->items : [];
-        $existingIndex = null;
-        $existingItem = null;
+        $task = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereKey($taskId)
+            ->first();
 
-        foreach ($items as $index => $item) {
-            if (is_array($item) && (int) ($item['task_id'] ?? 0) === $taskId) {
-                $existingIndex = $index;
-                $existingItem = $item;
-                break;
-            }
-        }
-
-        if (! is_array($existingItem)) {
+        if (! $task instanceof SeoProjectTask) {
             throw new \InvalidArgumentException('Không tìm thấy hạng mục #'.$taskId.' trong kết quả run.');
         }
 
-        $resolvedArticleId = $articleId ?: (int) ($existingItem['article_id'] ?? 0);
+        $action = $this->runItemService->resolveAction($task);
+        $runItem = $this->runItemService->findByLogicalOperation((int) $run->id, $taskId, $action->value)
+            ?? $this->runItemService->prepareOperation($run, $project, $task);
+
+        $resolvedArticleId = $articleId ?: (int) ($runItem->article_id ?? 0) ?: (int) ($task->article_id ?? 0);
         $articleExists = $resolvedArticleId > 0
             && SeoArticle::query()
                 ->whereKey($resolvedArticleId)
@@ -425,71 +426,28 @@ final class SeoProjectWorkflowRunService
             throw new \InvalidArgumentException('Không tìm thấy bài viết đã sửa để đánh dấu hoàn thành.');
         }
 
-        $taskIds = array_values(array_filter([
-            (int) ($existingItem['task_id'] ?? 0),
-            (int) ($existingItem['retry_task_id'] ?? 0),
-        ]));
-        $currentTasks = $project->tasks()
-            ->whereIn('id', $taskIds)
-            ->get();
+        $this->markTaskCompleted($task, $resolvedArticleId);
+        $this->storeArticleRunMeta($resolvedArticleId, $run, $task);
 
-        if ($currentTasks->isEmpty()) {
-            $currentTasks = $this->matchingTaskQuery($project, $existingItem)
-                ->whereIn('status', [SeoProjectTask::STATUS_PENDING, SeoProjectTask::STATUS_FAILED])
-                ->get();
-        }
+        $this->runItemService->markSuccess(
+            $runItem,
+            $resolvedArticleId,
+            'Đã sửa lỗi thủ công.',
+        );
 
-        foreach ($currentTasks as $index => $currentTask) {
-            if ($index === 0) {
-                $this->markTaskCompleted($currentTask, $resolvedArticleId);
+        $this->runItemService->syncMirrorAndCounters($run, false);
 
-                continue;
-            }
-
-            $this->persistTaskState($currentTask, SeoProjectTask::STATUS_COMPLETED, null);
-        }
-
-        $metaTask = $currentTasks->first();
-        if ($metaTask instanceof SeoProjectTask) {
-            $this->storeArticleRunMeta($resolvedArticleId, $run, $metaTask);
-        }
-
-        $itemRow = array_merge($existingItem, [
+        return [
+            'task_id' => $taskId,
+            'retry_task_id' => $taskId,
+            'action' => $action->value,
             'status' => 'success',
             'article_id' => $resolvedArticleId,
             'article_edit_url' => ArticleResource::getUrl('edit', ['record' => $resolvedArticleId], isAbsolute: false),
             'message' => 'Đã sửa lỗi thủ công.',
-        ]);
-        $itemRow['manual_fixed'] = true;
-        unset(
-            $itemRow['error_detail'],
-            $itemRow['error_class'],
-            $itemRow['error_trace'],
-            $itemRow['failed_step'],
-            $itemRow['retry_task_id'],
-        );
-
-        if ($existingIndex === null) {
-            $items[] = $itemRow;
-        } else {
-            $items[$existingIndex] = $itemRow;
-        }
-
-        $primary = $currentTasks->first();
-        if ($primary instanceof SeoProjectTask) {
-            $action = $this->runItemService->resolveAction($primary);
-            $runItem = $this->runItemService->findByLogicalOperation((int) $run->id, (int) $primary->id, $action->value)
-                ?? $this->runItemService->prepareOperation($run, $project, $primary);
-            $this->runItemService->markSuccess(
-                $runItem,
-                $resolvedArticleId,
-                'Đã sửa lỗi thủ công.',
-            );
-        }
-
-        $this->runItemService->syncMirrorAndCounters($run, false);
-
-        return $itemRow;
+            'manual_fixed' => true,
+            'run_item_id' => (int) $runItem->id,
+        ];
     }
 
     /**
@@ -1198,6 +1156,8 @@ final class SeoProjectWorkflowRunService
             : (((int) ($task->article_id ?? 0) > 0) ? (int) $task->article_id : null);
 
         $this->persistTaskState($task, SeoProjectTask::STATUS_FAILED, $resolvedArticleId);
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->taskFailed($task->fresh() ?? $task);
     }
 
     private function markTaskCompleted(SeoProjectTask $task, int $articleId): void

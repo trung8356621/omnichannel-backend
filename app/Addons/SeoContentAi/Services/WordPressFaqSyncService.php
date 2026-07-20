@@ -5,16 +5,28 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressExecutionContext;
 
+/**
+ * FAQ sync wrapper — requires explicit WordPressExecutionContext (manual or automation).
+ */
 final class WordPressFaqSyncService
 {
-    /**
-     * Đẩy bài viết lên WordPress (FAQ + nội dung). Dùng cho workflow tự động.
-     */
-    public function syncForArticle(SeoArticle $article): bool
+    public function syncForArticle(SeoArticle $article, WordPressExecutionContext $sideEffect): bool
     {
-        $result = app(WordPressArticleSyncService::class)->syncForArticle($article);
+        if (! $sideEffect instanceof ManualWordPressContext
+            && $sideEffect->origin() !== 'automation'
+        ) {
+            throw new UnauthorizedWordPressSideEffectException(
+                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
+                'FAQ sync requires automation|manual context.',
+            );
+        }
 
-        return $result['success'];
+        $result = app(WordPressArticleSyncService::class)->syncForArticle($article, $sideEffect);
+
+        return (bool) ($result['success'] ?? false);
     }
 }

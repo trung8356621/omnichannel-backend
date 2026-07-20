@@ -19,6 +19,7 @@ final class BackfillContentProjectRunItemsCommand extends Command
 {
     protected $signature = 'content-project:backfill-run-items
         {--dry-run : Chỉ thống kê, không ghi DB}
+        {--apply : Ghi DB (mặc định khi không có --dry-run; alias tương thích)}
         {--run-id= : Chỉ một seo_project_runs.id}
         {--project-id= : Chỉ runs của project}
         {--chunk=100 : Số run mỗi chunk}
@@ -31,6 +32,9 @@ final class BackfillContentProjectRunItemsCommand extends Command
         ProjectRunIdempotencyKeyGenerator $idempotencyKeys,
     ): int {
         $dryRun = (bool) $this->option('dry-run');
+        if ($dryRun && (bool) $this->option('apply')) {
+            $this->warn('--dry-run thắng --apply: không ghi DB.');
+        }
         $runId = (int) ($this->option('run-id') ?? 0);
         $projectId = (int) ($this->option('project-id') ?? 0);
         $chunk = max(1, (int) ($this->option('chunk') ?? 100));

@@ -42,6 +42,14 @@ final class ProjectTaskSourceKeyGenerator
             $collapsed = $trimmed;
         }
 
+        // Luôn NFC khi intl có — Café (NFD) và Café (NFC) cùng key.
+        if (class_exists(\Normalizer::class)) {
+            $normalized = \Normalizer::normalize($collapsed, \Normalizer::FORM_C);
+            if (is_string($normalized) && $normalized !== '') {
+                $collapsed = $normalized;
+            }
+        }
+
         return mb_strtolower($collapsed, 'UTF-8');
     }
 

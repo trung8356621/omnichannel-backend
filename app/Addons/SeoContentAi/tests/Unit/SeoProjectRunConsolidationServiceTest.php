@@ -84,11 +84,16 @@ final class SeoProjectRunConsolidationServiceTest extends TestCase
         $keeper = $service->maybeConsolidate($project->fresh());
 
         $this->assertInstanceOf(SeoProjectRun::class, $keeper);
-        $this->assertSame(1, $project->runs()->count());
+        $this->assertSame(2, $project->runs()->count());
+        $this->assertSame(1, $project->notConsolidatedRuns()->count());
+        $this->assertNull($keeper->consolidated_into_run_id);
         $this->assertSame(SeoProjectRun::MODE_FULL, $keeper->mode);
         $this->assertSame(2, (int) $keeper->total);
         $this->assertSame(2, (int) $keeper->succeeded);
-        $this->assertCount(2, is_array($keeper->items) ? $keeper->items : []);
+        $this->assertSame(
+            1,
+            $project->runs()->whereNotNull('consolidated_into_run_id')->count(),
+        );
     }
 
     public function test_it_does_not_consolidate_when_pending_tasks_remain(): void
@@ -212,7 +217,8 @@ final class SeoProjectRunConsolidationServiceTest extends TestCase
         $keeper = $service->maybeConsolidate($project->fresh());
 
         $this->assertInstanceOf(SeoProjectRun::class, $keeper);
-        $this->assertSame(1, $project->runs()->count());
+        $this->assertSame(2, $project->runs()->count());
+        $this->assertSame(1, $project->notConsolidatedRuns()->count());
         $this->assertSame(2, (int) $keeper->total);
         $this->assertSame(2, (int) $keeper->succeeded);
         $this->assertFalse($service->hasRunnablePendingTasks($project->fresh()));

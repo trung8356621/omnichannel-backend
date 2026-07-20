@@ -64,6 +64,15 @@ class SeoProject extends Model
         return $this->hasMany(SeoProjectRun::class, 'project_id');
     }
 
+    /**
+     * Runs chưa bị consolidate (ẩn khỏi list UI sau Phase 3C3).
+     */
+    public function notConsolidatedRuns(): HasMany
+    {
+        return $this->hasMany(SeoProjectRun::class, 'project_id')
+            ->whereNull('consolidated_into_run_id');
+    }
+
     public function archives(): HasMany
     {
         return $this->hasMany(SeoProjectArchive::class, 'project_id');
@@ -78,11 +87,13 @@ class SeoProject extends Model
     {
         if ($this->relationLoaded('tasks')) {
             return $this->tasks
-                ->filter(static fn (SeoProjectTask $task): bool => (int) ($task->article_id ?? 0) > 0)
+                ->filter(static fn (SeoProjectTask $task): bool => $task->archived_at === null
+                    && (int) ($task->article_id ?? 0) > 0)
                 ->count();
         }
 
         return (int) $this->tasks()
+            ->active()
             ->whereNotNull('article_id')
             ->where('article_id', '>', 0)
             ->count();
@@ -91,6 +102,7 @@ class SeoProject extends Model
     public function activeCompletedCount(): int
     {
         return (int) $this->tasks()
+            ->active()
             ->where('status', SeoProjectTask::STATUS_COMPLETED)
             ->count();
     }
@@ -121,10 +133,13 @@ class SeoProject extends Model
     public function registeredTaskCount(): int
     {
         if ($this->relationLoaded('tasks')) {
-            return $this->tasks->count();
+            return $this->tasks
+                ->filter(static fn (SeoProjectTask $task): bool => $task->archived_at === null
+                    && (string) $task->status !== SeoProjectTask::STATUS_CANCELLED)
+                ->count();
         }
 
-        return (int) $this->tasks()->count();
+        return (int) $this->tasks()->planned()->count();
     }
 
     public function remainingTaskCapacity(): int
@@ -147,7 +162,7 @@ class SeoProject extends Model
 
     public function syncTotalTasksCounter(): void
     {
-        $count = (int) $this->tasks()->count();
+        $count = (int) $this->tasks()->planned()->count();
 
         if ((int) ($this->total_tasks ?? 0) === $count) {
             return;

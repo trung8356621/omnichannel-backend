@@ -852,10 +852,12 @@ class SeoProjectResource extends SeoPanelResource
             parent::getEloquentQuery()
                 ->with(['user', 'site'])
                 ->withCount([
-                    'tasks as active_tasks_count',
+                    'tasks as active_tasks_count' => static fn (Builder $sub): Builder => $sub->active(),
                     'tasks as active_completed_count' => static fn (Builder $sub): Builder => $sub
+                        ->active()
                         ->where('status', SeoProjectTask::STATUS_COMPLETED),
                     'tasks as active_articles_count' => static fn (Builder $sub): Builder => $sub
+                        ->active()
                         ->whereNotNull('article_id')
                         ->where('article_id', '>', 0),
                 ]),

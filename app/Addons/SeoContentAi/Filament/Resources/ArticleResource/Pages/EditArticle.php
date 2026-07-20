@@ -364,7 +364,15 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
-        $result = app(WordPressArticleSyncService::class)->syncSlugForArticle($this->record->fresh(), $slug);
+        $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
+            ->syncSlug(
+                $this->record->fresh(),
+                \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
+                    $this->record,
+                    'edit_article_sync_slug',
+                ),
+                $slug,
+            );
         if ($result['success']) {
             $this->refreshArticleSlugFromWordPressAfterSync();
 
@@ -3027,7 +3035,14 @@ class EditArticle extends SeoEditRecord
         $article = $this->record->fresh();
         $seoOverride = $this->resolveLivewireSeoPayloadForWordPress();
 
-        $ensure = $syncService->ensureWordPressPostForArticle($article, $seoOverride);
+        $ensure = $syncService->ensureWordPressPostForArticle(
+            $article,
+            \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
+                $article,
+                'edit_article_phased_ensure',
+            ),
+            $seoOverride,
+        );
         if (! ($ensure['success'] ?? false)) {
             return [
                 'success' => false,
@@ -3106,7 +3121,15 @@ class EditArticle extends SeoEditRecord
 
         $syncService = app(WordPressArticleSyncService::class);
         $article = $this->record->fresh();
-        $result = $syncService->executeEditorSyncRequest($article, $this->wpSyncContext, $this->wpSyncPrepared);
+        $result = $syncService->executeEditorSyncRequest(
+            $article,
+            \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
+                $article,
+                'edit_article_phased_editor_sync',
+            ),
+            $this->wpSyncContext,
+            $this->wpSyncPrepared,
+        );
 
         if (! ($result['success'] ?? false)) {
             return [
@@ -3238,13 +3261,13 @@ class EditArticle extends SeoEditRecord
                 );
             }
 
-            $syncService = app(WordPressArticleSyncService::class);
             $article = $this->record->fresh();
-
-            $result = $syncService->publishForArticle(
+            $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
                 $article,
-                $this->resolveLivewireSeoPayloadForWordPress(),
+                'edit_article_sync_button',
             );
+            $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
+                ->publishNow($article, $manual, $this->resolveLivewireSeoPayloadForWordPress());
 
             $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
 

@@ -24,11 +24,11 @@ final class SeoProjectRunItemSchemaPhase2Test extends TestCase
 
     protected $connectionsToTransact = ['omi_seo_ai'];
 
-    public function test_soft_deletes_trait_is_not_enabled_on_task_model(): void
+    public function test_soft_deletes_trait_is_enabled_on_task_model_phase_3c1(): void
     {
         $uses = class_uses_recursive(SeoProjectTask::class);
 
-        $this->assertNotContains(SoftDeletes::class, $uses);
+        $this->assertContains(SoftDeletes::class, $uses);
         $this->assertTrue(Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'deleted_at'));
         $this->assertTrue(Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'source_key'));
         $this->assertTrue(Schema::connection('omi_seo_ai')->hasColumn('seo_project_tasks', 'archived_at'));

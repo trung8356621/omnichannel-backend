@@ -23,6 +23,7 @@ class SeoContentArchiveItem extends Model
     protected $casts = [
         'site_id' => 'integer',
         'article_id' => 'integer',
+        'task_id' => 'integer',
         'from_project_id' => 'integer',
         'archived_by' => 'integer',
         'connected_at' => 'datetime',
@@ -38,6 +39,11 @@ class SeoContentArchiveItem extends Model
     public function article(): BelongsTo
     {
         return $this->belongsTo(SeoArticle::class, 'article_id');
+    }
+
+    public function task(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectTask::class, 'task_id');
     }
 
     public function fromProject(): BelongsTo

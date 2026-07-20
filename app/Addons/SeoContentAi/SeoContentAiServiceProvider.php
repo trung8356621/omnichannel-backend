@@ -86,8 +86,81 @@ class SeoContentAiServiceProvider extends ServiceProvider
         $this->app->singleton(\App\Addons\SeoContentAi\Services\PromptResultAttachService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\PromptHooks\PromptHookExecutionService::class);
 
-        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Contracts\AutomationEventDispatcher::class, \App\Addons\SeoContentAi\Automation\Events\LoggingAutomationEventDispatcher::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Contracts\AutomationEventDispatcher::class, \App\Addons\SeoContentAi\Automation\BusinessHook\Events\BridgingAutomationEventDispatcher::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Support\SensitivePayloadRedactor::class);
+
+        // Business Hook / Automation Rule Engine
+        $this->mergeConfigFrom(__DIR__.'/config/automation-modules.php', 'seo-content-ai.automation_modules');
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationInputMapper::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationConditionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationHealthCheckRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationMenuRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationPermissionRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationSettingsRegistry::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\AutomationModuleRegistry::class, function ($app): \App\Addons\SeoContentAi\Automation\Platform\AutomationModuleRegistry {
+            return \App\Addons\SeoContentAi\Automation\Platform\AutomationModuleRegistry::fromConfig($app);
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\Platform\AutomationPlatformKernel::class, function ($app): \App\Addons\SeoContentAi\Automation\Platform\AutomationPlatformKernel {
+            return \App\Addons\SeoContentAi\Automation\Platform\AutomationPlatformKernel::bootOnce($app);
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventRegistry::class, function ($app): \App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventRegistry {
+            return $app->make(\App\Addons\SeoContentAi\Automation\Platform\AutomationPlatformKernel::class)->context->events;
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Registry\AutomationActionRegistry::class, function ($app): \App\Addons\SeoContentAi\Automation\BusinessHook\Registry\AutomationActionRegistry {
+            return $app->make(\App\Addons\SeoContentAi\Automation\Platform\AutomationPlatformKernel::class)->context->actions;
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationConditionEngine::class, function ($app): \App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationConditionEngine {
+            return new \App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationConditionEngine(
+                $app->make(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationInputMapper::class),
+                $app->make(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationConditionRegistry::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventBootstrap::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Registry\AutomationActionBootstrap::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationLoopGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationSnapshotSanitizer::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationSnapshotRedactor::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationSubjectLoader::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressSideEffectGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressSideEffectLedger::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressGateway::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class);
+
+        config([
+            'logging.channels.wordpress-side-effect' => [
+                'driver' => 'single',
+                'path' => storage_path('logs/wordpress-side-effect.log'),
+                'level' => 'info',
+                'replace_placeholders' => true,
+            ],
+        ]);
+
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleMatcher::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationExecutionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\BusinessEventDispatcher::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationGraphValidator::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationGraphEdgeResolver::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationConcurrencyGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationRateLimitGuard::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\LinearRuleGraphAdapter::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationGraphRuleService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationGraphExecutionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationVersionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationWorkflowTestService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationImportExportService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationHealthService::class, function ($app): \App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationHealthService {
+            return new \App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationHealthService(
+                $app->make(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationSchedulerHeartbeatService::class),
+                $app->make(\App\Addons\SeoContentAi\Automation\Platform\Registry\AutomationHealthCheckRegistry::class),
+            );
+        });
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationSchedulerHeartbeatService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleVersionMigrationService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationSchedulerService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationStaleRecoveryService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Seed\AutomationDefaultRulesSeeder::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Runtime\ActionExecutionLogger::class);
         $this->app->bind(
             \App\Addons\SeoContentAi\Automation\Contracts\ActionExecutionLoggerContract::class,
@@ -121,6 +194,41 @@ class SeoContentAiServiceProvider extends ServiceProvider
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Migration\ProjectArticleSeoMetaCallerBridge::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Support\ArticleCreateOriginResolver::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard::class);
+
+        // Đăng ký console ở register() — không phụ thuộc $booted guard trong boot().
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                BackfillPromptResultLinksCommand::class,
+                CleanCtaKeywordsCommand::class,
+                ExtractOldArticleTocsCommand::class,
+                PublishScheduledArticlesCommand::class,
+                \App\Addons\SeoContentAi\Console\ClearPromptHookDefinitionCacheCommand::class,
+                \App\Addons\SeoContentAi\Console\PromptHookStatusCommand::class,
+                \App\Addons\SeoContentAi\Console\PromptHookParityReportCommand::class,
+                \App\Addons\SeoContentAi\Console\BackfillContentProjectRunItemsCommand::class,
+                \App\Addons\SeoContentAi\Console\DiagnoseContentProjectArchiveCommand::class,
+                \App\Addons\SeoContentAi\Console\DiagnoseContentProjectSyncCommand::class,
+                \App\Addons\SeoContentAi\Console\DiagnoseContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\RepairContentProjectCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationListEventsCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationListActionsCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationDispatchCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationRunRuleCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationRetryCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationDiagnoseCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationAuditWordpressCouplingCommand::class,
+                \App\Addons\SeoContentAi\Console\QueueInspectWordpressCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationSeedRulesCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationMigrateCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationDispatchScheduledCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationRecoverStaleCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationMigrateLinearToGraphCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationMigrateRuleVersionsCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationExportCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationImportCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationHealthCommand::class,
+            ]);
+        }
     }
 
     public function boot(): void
@@ -139,19 +247,6 @@ class SeoContentAiServiceProvider extends ServiceProvider
         );
         SeoProject::observe(SeoProjectObserver::class);
         SeoArticle::observe(SeoArticleObserver::class);
-
-        if ($this->app->runningInConsole()) {
-            $this->commands([
-                BackfillPromptResultLinksCommand::class,
-                CleanCtaKeywordsCommand::class,
-                ExtractOldArticleTocsCommand::class,
-                PublishScheduledArticlesCommand::class,
-                \App\Addons\SeoContentAi\Console\ClearPromptHookDefinitionCacheCommand::class,
-                \App\Addons\SeoContentAi\Console\PromptHookStatusCommand::class,
-                \App\Addons\SeoContentAi\Console\PromptHookParityReportCommand::class,
-                \App\Addons\SeoContentAi\Console\BackfillContentProjectRunItemsCommand::class,
-            ]);
-        }
 
         $this->app->booted(function (): void {
             /** @var Router $router */
@@ -182,6 +277,28 @@ class SeoContentAiServiceProvider extends ServiceProvider
                     ->command(PublishScheduledArticlesCommand::class)
                     ->everyMinute()
                     ->name($publishScheduledName)
+                    ->withoutOverlapping();
+            }
+
+            $automationScheduleName = 'seo-content-ai:automation-dispatch-scheduled';
+            $automationScheduleRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $automationScheduleName);
+            if (! $automationScheduleRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\AutomationDispatchScheduledCommand::class)
+                    ->everyMinute()
+                    ->name($automationScheduleName)
+                    ->withoutOverlapping();
+            }
+
+            $automationRecoverName = 'seo-content-ai:automation-recover-stale';
+            $automationRecoverRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $automationRecoverName);
+            if (! $automationRecoverRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\AutomationRecoverStaleCommand::class)
+                    ->everyFiveMinutes()
+                    ->name($automationRecoverName)
                     ->withoutOverlapping();
             }
         });

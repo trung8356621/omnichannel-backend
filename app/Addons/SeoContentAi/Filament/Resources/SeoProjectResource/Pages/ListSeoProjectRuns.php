@@ -49,7 +49,7 @@ final class ListSeoProjectRuns extends Page
 
     public function getRuns()
     {
-        return $this->project?->runs()
+        return $this->project?->notConsolidatedRuns()
             ->with('user')
             ->latest('id')
             ->get() ?? collect();

@@ -51,6 +51,7 @@ flowchart TB
         LIST["ListArticles actions"]
         QUEUE["ArticleWpSyncQueueService / scheduled publish"]
         APPROVE["SeoProjectApprovalService.approveLinkedProject"]
+        HOOK["Business Hook rule enabled<br/>wordpress.article.sync"]
     end
 
     Note1["Content Project workflow + PromptTestPublishService.publishArticle<br/>chỉ lưu Laravel — không gọi sync outbound"]
@@ -87,7 +88,7 @@ flowchart TB
         RELEASE["WpPluginReleaseWidget"]
     end
 
-    EDIT & LIST & QUEUE & APPROVE --> SYNC
+    EDIT & LIST & QUEUE & APPROVE & HOOK --> SYNC
     SYNC --> CTX --> CONTENT
     SYNC --> SANITIZE --> FAQ
     SYNC --> LOCAL_MEDIA --> MEDIA_LOCAL
@@ -101,9 +102,20 @@ flowchart TB
     REG -.->|"manifest version, download URL"| CONTENT
 ```
 
-**Trace MCP (`syncForArticle` outbound):** 30+ callees — `ArticleEditorHtmlSanitizeService`, `WorkflowParserService`, `WordPressLocalMediaSyncService`, `ArticleMediaLocalService`, `SeoMediaBuilder`, `ExternalPluginRegistry`.
+**Business Hook:** `article.completed` (từ task completed) chỉ gọi `wordpress.article.sync` khi rule **enabled + published** (seed mặc định disabled). Action: `SyncArticleToWordPressHookAction` via `WordPressAutomationModuleProvider` — queue `automation-external`. Rule disabled → event vẫn ghi, **0** execution side effect (pending job cancel khi disable).
 
-**Trace MCP (inbound callers):** `EditArticle.syncArticleToWordPress`, ListArticles sync actions, `ArticleWpSyncQueueService` / scheduled publish, `SeoProjectApprovalService.approveLinkedProject`. **Không** từ Content Project run / `PromptTestPublishService.publishArticle` (local-only).
+**Invariant (cutover 2026-07-20):**
+- Automatic WordPress side effects require an enabled published Automation Rule.
+- A disabled rule blocks future automatic executions, not an explicit manual user sync and not necessarily an execution already mid-flight before disable (pending/processing get `cancellation_requested_at`).
+- Content Project and Article completion never dispatch WordPress jobs directly.
+- WordPress automation jobs use `automation-external` (action) / `automation-critical` (rule bootstrap). Legacy manual queue job uses `seo` — not `default`.
+- Manual entry: `WordPressManualSyncService` + `ManualSyncContext` (`manual=true`, `initiated_by` user). Controller `POST .../sync-wp`, EditArticle sync button, List queue resync.
+- `ArticleScheduleReconcileService` = Laravel status only — **no** WordPress API.
+- System cron `ScheduledArticlePublishRunner` = due scheduled posts already linked (`wp_post_id>0`); not `article.completed`.
+
+**Trace MCP (inbound callers):** `WordPressManualSyncService` (editor/list), `ScheduledArticlePublishRunner`, Business Hook `wordpress.article.sync`. **Không** từ Content Project run / `PromptTestPublishService.publishArticle` / `ArticleScheduleReconcileService`.
+
+Audit: `php artisan automation:audit-wordpress-coupling [--strict]`
 
 ### Đăng bài mới — tránh bài trùng / `post_content` trắng
 

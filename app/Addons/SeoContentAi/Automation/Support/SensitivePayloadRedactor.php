@@ -16,6 +16,10 @@ final class SensitivePayloadRedactor
         'authorization',
         'access_key',
         'private_key',
+        'cookie',
+        'credential',
+        'application_password',
+        'webhook_secret',
     ];
 
     /**

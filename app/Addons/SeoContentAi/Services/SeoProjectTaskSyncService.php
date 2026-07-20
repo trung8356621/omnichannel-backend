@@ -4,18 +4,49 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectErrorCode;
+use App\Addons\SeoContentAi\Enums\SeoProjectTaskEventType;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use App\Models\Site;
+use App\Addons\SeoContentAi\Support\SeoProjectTaskCanonicalCandidateResolver;
+use App\Addons\SeoContentAi\Support\SeoProjectTaskSyncData;
+use App\Addons\SeoContentAi\Support\SeoProjectTaskSyncDataNormalizer;
+use App\Addons\SeoContentAi\Support\SeoProjectTaskSyncResult;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
+/**
+ * Diff/upsert sync — giữ stable task ID (Phase 3C2).
+ * Không delete-all/recreate.
+ */
 final class SeoProjectTaskSyncService
 {
+    /** @var list<string> */
+    private const EDITABLE_FIELDS = [
+        'site_id',
+        'type',
+        'post_type',
+        'source_content',
+        'source_key',
+        'rewrite_mode',
+        'rewrite_notes',
+        'description',
+        'loai_san_pham',
+        'target_date',
+    ];
+
+    public function __construct(
+        private readonly SeoProjectTaskSyncDataNormalizer $normalizer,
+        private readonly SeoProjectTaskCanonicalCandidateResolver $canonicalResolver,
+        private readonly ProjectTaskSourceKeyGenerator $sourceKeys,
+        private readonly SeoProjectTaskEventRecorder $eventRecorder,
+        private readonly SeoProjectTaskUniqueWriter $uniqueWriter,
+    ) {}
+
     public function maxTasksForMonth(Carbon|string $month): int
     {
         return $this->normalizeMonth($month)->daysInMonth;
@@ -62,211 +93,617 @@ final class SeoProjectTaskSyncService
     }
 
     /**
-     * Đồng bộ danh sách task: xóa cũ, tạo mới, gán target_date tuần tự (ngày 1..n trong tháng).
+     * Đồng bộ danh sách task: match task_id/source_key → update/create → cancel removals.
      *
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
+     * @param  list<array<string, mixed>>  $tasksData
      */
     public function sync(SeoProject $project, array $tasksData): void
     {
-        $sanitized = $this->sanitizeTasksData($tasksData, $project->site_id !== null ? (int) $project->site_id : null);
+        $this->syncWithResult($project, $tasksData);
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $tasksData
+     */
+    public function syncWithResult(SeoProject $project, array $tasksData): SeoProjectTaskSyncResult
+    {
+        $rows = $this->normalizer->normalize(
+            $project,
+            $tasksData,
+            $project->site_id !== null ? (int) $project->site_id : null,
+        );
+
         $carbonMonth = $project->monthCarbon();
-
         if (! $project->isArchive()) {
-            $this->assertWithinMonthlyLimit($carbonMonth, $sanitized);
-        }
-
-        /** @var array<string, SeoProjectTask> $existing */
-        $existing = [];
-        foreach ($project->tasks()->orderBy('id')->get() as $task) {
-            if (! $task instanceof SeoProjectTask) {
-                continue;
-            }
-
-            $key = self::taskMatchKey(
-                (int) $task->site_id,
-                (string) $task->type,
-                (string) $task->source_content,
+            $this->assertWithinMonthlyLimit(
+                $carbonMonth,
+                array_map(static fn (SeoProjectTaskSyncData $row): array => $row->toSanitizedArray(), $rows),
             );
+        }
 
-            if (! isset($existing[$key])) {
-                $existing[$key] = $task;
+        $this->assertNoDuplicateInput($rows);
+
+        $created = [];
+        $updated = [];
+        $reactivated = [];
+        $cancelled = [];
+        $unchanged = [];
+        $warnings = [];
+        $duplicateCandidates = [];
+        $newTaskCount = 0;
+
+        $result = DB::connection($project->getConnectionName())->transaction(
+            function () use (
+                $project,
+                $rows,
+                $carbonMonth,
+                &$created,
+                &$updated,
+                &$reactivated,
+                &$cancelled,
+                &$unchanged,
+                &$warnings,
+                &$duplicateCandidates,
+                &$newTaskCount,
+            ): SeoProjectTaskSyncResult {
+                /** @var SeoProject|null $locked */
+                $locked = SeoProject::query()
+                    ->whereKey((int) $project->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $locked instanceof SeoProject) {
+                    throw ValidationException::withMessages([
+                        'tasks_data' => ContentProjectErrorCode::SyncTaskNotFound->value,
+                    ]);
+                }
+
+                /** @var array<int, true> $keptIds */
+                $keptIds = [];
+
+                foreach ($rows as $index => $row) {
+                    $match = $this->resolveMatch($locked, $row);
+                    if ($match['error'] !== null) {
+                        throw ValidationException::withMessages([
+                            'tasks_data' => $match['error'],
+                            'tasks_data.'.$row->inputIndex => $match['error'],
+                        ]);
+                    }
+
+                    if ($match['warning'] !== null) {
+                        $warnings[] = $match['warning'];
+                    }
+                    if ($match['duplicate_candidates'] !== []) {
+                        $duplicateCandidates[] = $match['duplicate_candidates'];
+                    }
+
+                    $targetDate = $locked->isArchive()
+                        ? Carbon::parse(SeoProject::archiveSentinelMonth())->addDays(min($index, 36000))->format('Y-m-d')
+                        : $carbonMonth->copy()->addDays($index)->format('Y-m-d');
+
+                    if ($match['task'] instanceof SeoProjectTask) {
+                        $task = $match['task'];
+                        if ($match['reactivated']) {
+                            $reactivated[] = (int) $task->id;
+                        }
+
+                        $changed = $this->applyEditableUpdate($task, $row, $targetDate);
+                        if ($changed) {
+                            $updated[] = (int) $task->id;
+                        } elseif (! $match['reactivated']) {
+                            $unchanged[] = (int) $task->id;
+                        }
+
+                        $keptIds[(int) $task->id] = true;
+                        continue;
+                    }
+
+                    $createdTask = $this->createTask($locked, $row, $targetDate);
+                    $created[] = (int) $createdTask->id;
+                    $keptIds[(int) $createdTask->id] = true;
+                    $newTaskCount++;
+                }
+
+                $removal = $this->handleRemovals($locked, $keptIds);
+                $cancelled = array_merge($cancelled, $removal['cancelled']);
+                $warnings = array_merge($warnings, $removal['warnings']);
+
+                $locked->syncTotalTasksCounter();
+
+                return new SeoProjectTaskSyncResult(
+                    createdTaskIds: $created,
+                    updatedTaskIds: $updated,
+                    reactivatedTaskIds: $reactivated,
+                    cancelledTaskIds: $cancelled,
+                    unchangedTaskIds: $unchanged,
+                    warnings: $warnings,
+                    duplicateCandidates: $duplicateCandidates,
+                );
+            },
+        );
+
+        $fresh = $project->fresh();
+        if ($fresh instanceof SeoProject) {
+            app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($fresh);
+            if ($newTaskCount > 0) {
+                app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($fresh, $newTaskCount);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  list<SeoProjectTaskSyncData>  $rows
+     */
+    private function assertNoDuplicateInput(array $rows): void
+    {
+        /** @var array<string, SeoProjectTaskSyncData> $seen */
+        $seen = [];
+
+        foreach ($rows as $row) {
+            $key = $row->sourceKey;
+            if (! isset($seen[$key])) {
+                $seen[$key] = $row;
                 continue;
             }
 
-            $existing[$key] = self::preferTaskForSyncPreserve($existing[$key], $task);
-        }
+            $prev = $seen[$key];
+            $sameTask = $prev->taskId !== null
+                && $row->taskId !== null
+                && $prev->taskId === $row->taskId;
 
-        $existing = collect($existing);
-
-        $newTaskCount = collect($sanitized)
-            ->filter(function (array $task) use ($existing): bool {
-                $key = self::taskMatchKey(
-                    (int) $task['site_id'],
-                    (string) $task['type'],
-                    (string) $task['source_content'],
-                );
-
-                return ! $existing->has($key);
-            })
-            ->count();
-
-        DB::connection($project->getConnectionName())->transaction(function () use ($project, $sanitized, $carbonMonth, $existing): void {
-            $project->tasks()->delete();
-
-            $usedArticleIds = [];
-
-            foreach ($sanitized as $index => $task) {
-                $key = self::taskMatchKey(
-                    (int) $task['site_id'],
-                    (string) $task['type'],
-                    (string) $task['source_content'],
-                );
-                $previous = $existing->get($key);
-                $articleId = self::resolveArticleIdForRecreate($previous?->article_id, $usedArticleIds);
-
-                $taskType = (string) $task['type'];
-                if (
-                    $articleId === null
-                    && (
-                        in_array($taskType, SeoProjectTask::articlePickerTypes(), true)
-                        || SeoProjectTask::isNewArticleType($taskType)
-                    )
-                ) {
-                    $articleId = self::resolveArticleIdByTitle(
-                        (string) $task['source_content'],
-                        (int) $task['site_id'],
-                        $usedArticleIds,
-                    );
-                }
-
-                $connectedAt = $previous?->connected_at;
-                if ($connectedAt === null && $articleId !== null) {
-                    $connectedAt = now();
-                }
-
-                $completedAt = $previous?->completed_at;
-                $status = $previous?->status ?? SeoProjectTask::STATUS_PENDING;
-                if ($completedAt === null && $status === SeoProjectTask::STATUS_COMPLETED) {
-                    $completedAt = $previous?->updated_at ?? now();
-                }
-
-                $sourceKey = app(ProjectTaskSourceKeyGenerator::class)->generate(
-                    (int) $project->id,
-                    (string) $task['type'],
-                    isset($task['post_type']) ? (string) $task['post_type'] : null,
-                    (string) $task['source_content'],
-                );
-
-                $project->tasks()->create([
-                    'site_id' => $task['site_id'],
-                    'article_id' => $articleId,
-                    'type' => $task['type'],
-                    'post_type' => $task['post_type'] ?? null,
-                    'loai_san_pham' => $task['loai_san_pham'] ?? null,
-                    'source_content' => $task['source_content'],
-                    'source_key' => $sourceKey,
-                    'description' => $task['description'] ?? null,
-                    'rewrite_mode' => $task['rewrite_mode'] ?? $previous?->rewrite_mode ?? SeoProjectTask::REWRITE_MODE_KEYWORD,
-                    'rewrite_notes' => $task['rewrite_notes'] ?? $previous?->rewrite_notes,
-                    'target_date' => $project->isArchive()
-                        ? Carbon::parse(SeoProject::archiveSentinelMonth())->addDays(min($index, 36000))->format('Y-m-d')
-                        : $carbonMonth->copy()->addDays($index)->format('Y-m-d'),
-                    'status' => $status,
-                    'connected_at' => $connectedAt,
-                    'completed_at' => $completedAt,
-                    'archived_from_project_id' => $previous?->archived_from_project_id,
-                ]);
+            if ($sameTask) {
+                // Collapse identical task_id duplicates — keep first.
+                continue;
             }
 
-            $project->update([
-                'total_tasks' => count($sanitized),
+            throw ValidationException::withMessages([
+                'tasks_data' => ContentProjectErrorCode::SyncDuplicateInput->value,
+                'tasks_data.'.$prev->inputIndex => ContentProjectErrorCode::SyncDuplicateInput->value,
+                'tasks_data.'.$row->inputIndex => ContentProjectErrorCode::SyncDuplicateInput->value,
             ]);
-        });
-
-        $project = $project->fresh();
-        app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($project);
-
-        if ($newTaskCount > 0) {
-            app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($project, $newTaskCount);
         }
     }
 
     /**
-     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string|null, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
-     * @return list<array{type: string, site_id: int, source_content: string, loai_san_pham: ?string, description: ?string, post_type: ?string}>
+     * @return array{
+     *     task: SeoProjectTask|null,
+     *     reactivated: bool,
+     *     error: string|null,
+     *     warning: string|null,
+     *     duplicate_candidates: array<string, mixed>
+     * }
      */
-    public function sanitizeTasksData(array $tasksData, ?int $defaultSiteId = null): array
+    private function resolveMatch(SeoProject $project, SeoProjectTaskSyncData $row): array
     {
-        $out = [];
-        $seen = [];
-        $allowedSiteIds = $this->allowedSiteIds();
+        $empty = [
+            'task' => null,
+            'reactivated' => false,
+            'error' => null,
+            'warning' => null,
+            'duplicate_candidates' => [],
+        ];
 
-        foreach ($tasksData as $row) {
-            if (! is_array($row)) {
+        if ($row->taskId !== null) {
+            /** @var SeoProjectTask|null $task */
+            $task = SeoProjectTask::withTrashed()
+                ->whereKey($row->taskId)
+                ->lockForUpdate()
+                ->first();
+
+            if (! $task instanceof SeoProjectTask) {
+                return [...$empty, 'error' => ContentProjectErrorCode::SyncTaskNotFound->value];
+            }
+
+            if ((int) $task->project_id !== (int) $project->id) {
+                return [...$empty, 'error' => ContentProjectErrorCode::SyncTaskProjectMismatch->value];
+            }
+
+            if ($task->trashed() || $task->deleted_at !== null) {
+                return [...$empty, 'error' => ContentProjectErrorCode::SyncTaskDeleted->value];
+            }
+
+            if ($task->archived_at !== null
+                || (string) $task->status === SeoProjectTask::STATUS_ARCHIVED
+            ) {
+                return [...$empty, 'error' => ContentProjectErrorCode::SyncTaskArchived->value];
+            }
+
+            return [...$empty, 'task' => $task];
+        }
+
+        $byKey = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->where('source_key', $row->sourceKey)
+            ->whereNull('archived_at')
+            ->lockForUpdate()
+            ->get();
+
+        // Reactivate cancelled with same source_key (no article).
+        $cancelled = $byKey->filter(
+            static fn (SeoProjectTask $task): bool => (string) $task->status === SeoProjectTask::STATUS_CANCELLED,
+        );
+        $activePeers = $byKey->filter(
+            static fn (SeoProjectTask $task): bool => (string) $task->status !== SeoProjectTask::STATUS_CANCELLED,
+        );
+
+        if ($activePeers->isEmpty() && $cancelled->count() === 1) {
+            /** @var SeoProjectTask $only */
+            $only = $cancelled->first();
+            if ((int) ($only->article_id ?? 0) <= 0) {
+                $only->forceFill(['status' => SeoProjectTask::STATUS_PENDING])->save();
+                $this->eventRecorder->record(
+                    $only,
+                    SeoProjectTaskEventType::TaskReactivated,
+                    SeoProjectTask::STATUS_CANCELLED,
+                    SeoProjectTask::STATUS_PENDING,
+                    [
+                        'task_id' => (int) $only->id,
+                        'sync_source' => 'project_editor',
+                        'source_key' => $row->sourceKey,
+                    ],
+                );
+
+                return [...$empty, 'task' => $only->fresh() ?? $only, 'reactivated' => true];
+            }
+        }
+
+        $candidates = $activePeers->isNotEmpty() ? $activePeers : $byKey;
+        if ($candidates->isEmpty()) {
+            // Legacy: unique null source_key match by raw identity.
+            $legacy = $this->findUniqueLegacyNullSourceKey($project, $row);
+            if ($legacy instanceof SeoProjectTask) {
+                return [...$empty, 'task' => $legacy];
+            }
+
+            return $empty;
+        }
+
+        $resolved = $this->canonicalResolver->resolve($candidates);
+        if ($resolved['status'] === 'ambiguous') {
+            return [
+                ...$empty,
+                'error' => ContentProjectErrorCode::SyncDuplicateIdentity->value,
+                'duplicate_candidates' => [
+                    'source_key' => $row->sourceKey,
+                    'candidate_task_ids' => $resolved['candidate_task_ids'],
+                    'input_index' => $row->inputIndex,
+                    'reason' => $resolved['reason'],
+                ],
+            ];
+        }
+
+        if ($resolved['status'] === 'resolved' && $resolved['task'] instanceof SeoProjectTask) {
+            $warning = null;
+            $dupPayload = [];
+            if (count($resolved['candidate_task_ids']) > 1) {
+                $warning = 'SYNC_DUPLICATE_AUTO_RESOLVED:'.$resolved['reason'];
+                $dupPayload = [
+                    'source_key' => $row->sourceKey,
+                    'candidate_task_ids' => $resolved['candidate_task_ids'],
+                    'chosen_task_id' => (int) $resolved['task']->id,
+                    'reason' => $resolved['reason'],
+                    'input_index' => $row->inputIndex,
+                ];
+                Log::warning('seo.project_task.sync_duplicate_auto_resolved', $dupPayload);
+            }
+
+            return [
+                ...$empty,
+                'task' => $resolved['task'],
+                'warning' => $warning,
+                'duplicate_candidates' => $dupPayload,
+            ];
+        }
+
+        return $empty;
+    }
+
+    private function findUniqueLegacyNullSourceKey(
+        SeoProject $project,
+        SeoProjectTaskSyncData $row,
+    ): ?SeoProjectTask {
+        $normalizedSource = $this->sourceKeys->normalizeSourceContent($row->sourceContent);
+
+        $candidates = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereNull('source_key')
+            ->whereNull('archived_at')
+            ->where('type', $row->type)
+            ->where('status', '!=', SeoProjectTask::STATUS_CANCELLED)
+            ->lockForUpdate()
+            ->get()
+            ->filter(function (SeoProjectTask $task) use ($row, $normalizedSource): bool {
+                $taskPost = SeoProjectTask::isNewArticleType((string) $task->type)
+                    ? SeoProjectTask::normalizePostType($task->post_type)
+                    : null;
+                $rowPost = $row->postType;
+                if ((string) ($taskPost ?? '') !== (string) ($rowPost ?? '')) {
+                    return false;
+                }
+
+                return $this->sourceKeys->normalizeSourceContent((string) $task->source_content) === $normalizedSource;
+            })
+            ->values();
+
+        if ($candidates->count() !== 1) {
+            return null;
+        }
+
+        /** @var SeoProjectTask $task */
+        $task = $candidates->first();
+        $task->forceFill(['source_key' => $row->sourceKey])->save();
+
+        return $task->fresh() ?? $task;
+    }
+
+    private function applyEditableUpdate(
+        SeoProjectTask $task,
+        SeoProjectTaskSyncData $row,
+        string $targetDate,
+    ): bool {
+        $payload = [
+            'site_id' => $row->siteId,
+            'type' => $row->type,
+            'post_type' => $row->postType,
+            'source_content' => $row->sourceContent,
+            'source_key' => $row->sourceKey,
+            'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
+                ? ($row->rewriteMode ?? SeoProjectTask::REWRITE_MODE_KEYWORD)
+                : null,
+            'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
+            'description' => $row->description,
+            'loai_san_pham' => $row->loaiSanPham,
+            'target_date' => $targetDate,
+        ];
+
+        $changedFields = [];
+        foreach (self::EDITABLE_FIELDS as $field) {
+            $new = $payload[$field] ?? null;
+            $old = $task->{$field};
+            if ($field === 'target_date') {
+                $old = $task->target_date?->format('Y-m-d');
+            }
+            if ($this->scalarEquals($old, $new)) {
                 continue;
             }
+            $changedFields[] = $field;
+            $task->{$field} = $new;
+        }
 
-            $content = trim((string) ($row['source_content'] ?? ''));
-            if ($content === '') {
-                continue;
-            }
+        if ($changedFields === []) {
+            return false;
+        }
 
-            $siteId = (int) ($row['site_id'] ?? 0);
-            if ($siteId <= 0) {
-                $siteId = (int) ($defaultSiteId ?? 0);
-            }
+        // Conflict: identity change onto another active task's source_key.
+        if (in_array('source_key', $changedFields, true)) {
+            $conflict = SeoProjectTask::query()
+                ->where('project_id', (int) $task->project_id)
+                ->where('source_key', $row->sourceKey)
+                ->whereKeyNot((int) $task->id)
+                ->whereNull('archived_at')
+                ->where('status', '!=', SeoProjectTask::STATUS_CANCELLED)
+                ->exists();
 
-            if ($siteId <= 0 || ! in_array($siteId, $allowedSiteIds, true)) {
+            if ($conflict) {
                 throw ValidationException::withMessages([
-                    'site_id' => __('seo-content-ai::filament.projects.domain_required'),
-                    'tasks_data' => __('seo-content-ai::filament.projects.domain_required'),
+                    'tasks_data' => ContentProjectErrorCode::SyncDuplicateIdentity->value,
                 ]);
             }
 
-            $type = (string) ($row['type'] ?? SeoProjectTask::TYPE_NEW_KEYWORD);
-            if (! in_array($type, SeoProjectTask::typeKeys(), true)) {
-                $type = SeoProjectTask::TYPE_NEW_KEYWORD;
+            $articleConflict = SeoProjectTask::query()
+                ->where('project_id', (int) $task->project_id)
+                ->where('source_key', $row->sourceKey)
+                ->whereKeyNot((int) $task->id)
+                ->whereNotNull('article_id')
+                ->whereNull('archived_at')
+                ->exists();
+
+            if ($articleConflict && (int) ($task->article_id ?? 0) > 0) {
+                throw ValidationException::withMessages([
+                    'tasks_data' => ContentProjectErrorCode::SyncArticleIdentityConflict->value,
+                ]);
             }
+        }
 
-            $item = [
-                'site_id' => $siteId,
-                'type' => $type,
-                'source_content' => $content,
-                'loai_san_pham' => null,
-                'description' => null,
-                'post_type' => null,
-            ];
+        $fromStatus = (string) $task->status;
+        $task->save();
 
-            if (SeoProjectTask::isNewArticleType($type)) {
-                $postType = SeoProjectTask::normalizePostType($row['post_type'] ?? null);
-                $item['post_type'] = $postType;
+        $this->eventRecorder->record(
+            $task,
+            SeoProjectTaskEventType::TaskUpdated,
+            $fromStatus,
+            (string) $task->status,
+            [
+                'changed_fields' => $changedFields,
+                'sync_source' => 'project_editor',
+                'task_id' => (int) $task->id,
+            ],
+        );
 
-                if ($postType === SeoProjectTask::POST_TYPE_PRODUCT) {
-                    $loaiSanPham = trim((string) ($row['loai_san_pham'] ?? ''));
-                    $item['loai_san_pham'] = $loaiSanPham !== '' ? $loaiSanPham : null;
+        return true;
+    }
 
-                    $galleryDescription = trim((string) ($row['gallery_description'] ?? $row['description'] ?? ''));
-                    $item['description'] = $galleryDescription !== '' ? $galleryDescription : null;
-                }
-            }
+    private function createTask(
+        SeoProject $project,
+        SeoProjectTaskSyncData $row,
+        string $targetDate,
+    ): SeoProjectTask {
+        $articleId = null;
+        if (in_array($row->type, SeoProjectTask::articlePickerTypes(), true)
+            || SeoProjectTask::isNewArticleType($row->type)
+        ) {
+            // Chỉ resolve article có sẵn theo title cho create rewrite/improve — không create article.
+            $articleId = $this->resolveArticleIdByTitle($row->sourceContent, $row->siteId);
+        }
 
-            if ($type === SeoProjectTask::TYPE_REWRITE) {
-                $rewriteMode = SeoProjectTask::normalizeRewriteMode($row['rewrite_mode'] ?? null);
-                $item['rewrite_mode'] = $rewriteMode;
+        $task = $this->uniqueWriter->createStrict([
+            'project_id' => (int) $project->id,
+            'site_id' => $row->siteId,
+            'article_id' => $articleId,
+            'type' => $row->type,
+            'post_type' => $row->postType,
+            'loai_san_pham' => $row->loaiSanPham,
+            'source_content' => $row->sourceContent,
+            'source_key' => $row->sourceKey,
+            'description' => $row->description,
+            'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
+                ? ($row->rewriteMode ?? SeoProjectTask::REWRITE_MODE_KEYWORD)
+                : null,
+            'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
+            'target_date' => $targetDate,
+            'status' => SeoProjectTask::STATUS_PENDING,
+            'connected_at' => $articleId !== null ? now() : null,
+            'completed_at' => null,
+        ]);
 
-                $rewriteNotes = trim((string) ($row['rewrite_notes'] ?? ''));
-                $item['rewrite_notes'] = $rewriteMode === SeoProjectTask::REWRITE_MODE_CONTENT && $rewriteNotes !== ''
-                    ? $rewriteNotes
-                    : null;
-            }
+        $this->eventRecorder->record(
+            $task,
+            SeoProjectTaskEventType::TaskCreated,
+            null,
+            SeoProjectTask::STATUS_PENDING,
+            [
+                'task_id' => (int) $task->id,
+                'sync_source' => 'project_editor',
+                'source_key' => $row->sourceKey,
+            ],
+        );
 
-            $dedupeKey = self::taskMatchKey($siteId, $type, $content);
-            if (isset($seen[$dedupeKey])) {
+        return $task;
+    }
+
+    /**
+     * @param  array<int, true>  $keptIds
+     * @return array{cancelled: list<int>, warnings: list<string>}
+     */
+    private function handleRemovals(SeoProject $project, array $keptIds): array
+    {
+        $cancelled = [];
+        $warnings = [];
+
+        $existing = SeoProjectTask::query()
+            ->where('project_id', (int) $project->id)
+            ->whereNull('archived_at')
+            ->where('status', '!=', SeoProjectTask::STATUS_CANCELLED)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($existing as $task) {
+            if (! $task instanceof SeoProjectTask) {
                 continue;
             }
 
-            $seen[$dedupeKey] = true;
-            $out[] = $item;
+            $id = (int) $task->id;
+            if (isset($keptIds[$id])) {
+                continue;
+            }
+
+            $status = (string) $task->status;
+            $hasArticle = (int) ($task->article_id ?? 0) > 0;
+
+            if (in_array($status, [
+                SeoProjectTask::STATUS_WRITING,
+                'processing',
+                SeoProjectTask::STATUS_REVIEWING,
+            ], true)) {
+                $warnings[] = 'SYNC_REMOVAL_BLOCKED_PROCESSING:'.$id;
+                continue;
+            }
+
+            if ($hasArticle || $status === SeoProjectTask::STATUS_COMPLETED) {
+                $warnings[] = 'SYNC_REMOVAL_BLOCKED_COMPLETED_OR_ARTICLE:'.$id;
+                continue;
+            }
+
+            if (in_array($status, [
+                SeoProjectTask::STATUS_PENDING,
+                SeoProjectTask::STATUS_FAILED,
+                'draft',
+            ], true) && ! $hasArticle) {
+                $from = $status;
+                $task->forceFill(['status' => SeoProjectTask::STATUS_CANCELLED])->save();
+                $this->eventRecorder->record(
+                    $task,
+                    SeoProjectTaskEventType::TaskCancelled,
+                    $from,
+                    SeoProjectTask::STATUS_CANCELLED,
+                    [
+                        'task_id' => $id,
+                        'sync_source' => 'project_editor',
+                    ],
+                );
+                $cancelled[] = $id;
+            }
+        }
+
+        return [
+            'cancelled' => $cancelled,
+            'warnings' => $warnings,
+        ];
+    }
+
+    private function scalarEquals(mixed $old, mixed $new): bool
+    {
+        if ($old === null && $new === null) {
+            return true;
+        }
+
+        return (string) ($old ?? '') === (string) ($new ?? '');
+    }
+
+    private function resolveArticleIdByTitle(string $title, int $siteId): ?int
+    {
+        $normalized = mb_strtolower(trim($title));
+        if ($normalized === '' || $siteId <= 0) {
+            return null;
+        }
+
+        $article = SeoArticle::query()
+            ->where('site_id', $siteId)
+            ->whereRaw('LOWER(TRIM(title)) = ?', [$normalized])
+            ->orderBy('id')
+            ->first();
+
+        if (! $article instanceof SeoArticle) {
+            return null;
+        }
+
+        $articleId = (int) $article->id;
+        $taken = SeoProjectTask::query()
+            ->where('article_id', $articleId)
+            ->whereNull('archived_at')
+            ->exists();
+
+        return $taken ? null : $articleId;
+    }
+
+    /**
+     * @param  list<array{type?: string, site_id?: int|string|null, source_content?: string|null, loai_san_pham?: string|null, gallery_description?: string|null, description?: string|null, post_type?: string|null}>  $tasksData
+     * @return list<array<string, mixed>>
+     */
+    public function sanitizeTasksData(array $tasksData, ?int $defaultSiteId = null): array
+    {
+        // Compatibility wrapper — dùng project stub chỉ để normalize khi chưa có project.
+        // Callers create/edit luôn có site; sync dùng normalizer trực tiếp.
+        $project = new SeoProject;
+        $project->id = 0;
+        $project->site_id = $defaultSiteId;
+
+        // Khi project_id=0, source_key vẫn deterministic theo input; id được giữ.
+        $rows = $this->normalizer->normalize($project, $tasksData, $defaultSiteId);
+
+        /** @var array<string, true> $seen */
+        $seen = [];
+        $out = [];
+        foreach ($rows as $row) {
+            // Dedupe by source_key for signature/limit helpers (giữ first).
+            if (isset($seen[$row->sourceKey])) {
+                continue;
+            }
+            $seen[$row->sourceKey] = true;
+            $out[] = $row->toSanitizedArray();
         }
 
         return $out;
@@ -283,92 +720,21 @@ final class SeoProjectTaskSyncService
         );
     }
 
-    private static function taskMatchKey(int $siteId, string $type, string $sourceContent): string
-    {
-        return implode('|', [
-            $siteId,
-            $type,
-            mb_strtolower(trim($sourceContent)),
-        ]);
-    }
-
     /**
-     * Khi trùng identity (vd. task gốc + retry tạo mới), giữ bản còn article_id.
+     * @deprecated Phase 3C2 — dùng SeoProjectTaskCanonicalCandidateResolver.
      */
     private static function preferTaskForSyncPreserve(SeoProjectTask $current, SeoProjectTask $candidate): SeoProjectTask
     {
-        $currentHasArticle = (int) ($current->article_id ?? 0) > 0;
-        $candidateHasArticle = (int) ($candidate->article_id ?? 0) > 0;
-
-        if ($currentHasArticle !== $candidateHasArticle) {
-            return $candidateHasArticle ? $candidate : $current;
-        }
-
-        return (int) $candidate->id >= (int) $current->id ? $candidate : $current;
+        return app(SeoProjectTaskCanonicalCandidateResolver::class)->preferLegacy($current, $candidate);
     }
 
     /**
-     * @param  array<int, true>  $usedArticleIds
-     */
-    private static function resolveArticleIdForRecreate(?int $articleId, array &$usedArticleIds): ?int
-    {
-        $normalized = (int) ($articleId ?? 0);
-        if ($normalized <= 0) {
-            return null;
-        }
-
-        if (isset($usedArticleIds[$normalized])) {
-            return null;
-        }
-
-        SeoProjectTask::query()
-            ->where('article_id', $normalized)
-            ->update(['article_id' => null]);
-
-        $usedArticleIds[$normalized] = true;
-
-        return $normalized;
-    }
-
-    /**
-     * @param  array<int, true>  $usedArticleIds
-     */
-    private static function resolveArticleIdByTitle(string $title, int $siteId, array &$usedArticleIds): ?int
-    {
-        $title = trim($title);
-        if ($title === '') {
-            return null;
-        }
-
-        $query = SeoArticle::query()
-            ->where('title', $title);
-
-        if ($siteId > 0) {
-            $query->where('site_id', $siteId);
-        }
-
-        $articleId = (int) ($query->orderByDesc('id')->value('id') ?? 0);
-        if ($articleId <= 0 || isset($usedArticleIds[$articleId])) {
-            return null;
-        }
-
-        SeoProjectTask::query()
-            ->where('article_id', $articleId)
-            ->update(['article_id' => null]);
-
-        $usedArticleIds[$articleId] = true;
-
-        return $articleId;
-    }
-
-    /**
-     * @return list<array{type: string, site_id: int|null, source_content: string, loai_san_pham: ?string, description: ?string, post_type: ?string}>
+     * @return list<array<string, mixed>>
      */
     public function tasksDataFromProject(SeoProject $project): array
     {
         return $project->tasks()
-            ->whereNull('archived_at')
-            ->whereNull('deleted_at')
+            ->planned()
             ->orderBy('target_date')
             ->orderBy('id')
             ->get()
@@ -397,22 +763,6 @@ final class SeoProjectTaskSyncService
                 'connected_at' => $task->connected_at?->format('Y-m-d H:i:s'),
                 'completed_at' => $task->completed_at?->format('Y-m-d H:i:s'),
             ])
-            ->all();
-    }
-
-    /**
-     * @return list<int>
-     */
-    private function allowedSiteIds(): array
-    {
-        $query = Site::query();
-
-        if (SeoAccessControl::shouldScopeToAccountOwner()) {
-            $query->where('user_id', SeoAccessControl::accountOwnerId() ?? (int) auth()->id());
-        }
-
-        return $query->pluck('id')
-            ->map(fn (mixed $id): int => (int) $id)
             ->all();
     }
 }

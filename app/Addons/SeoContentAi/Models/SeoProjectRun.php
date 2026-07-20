@@ -37,13 +37,25 @@ class SeoProjectRun extends Model
         'succeeded' => 'integer',
         'failed' => 'integer',
         'items' => 'array',
+        'consolidated_into_run_id' => 'integer',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
+        'consolidated_at' => 'datetime',
     ];
 
     public function project(): BelongsTo
     {
         return $this->belongsTo(SeoProject::class, 'project_id');
+    }
+
+    public function consolidatedInto(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'consolidated_into_run_id');
+    }
+
+    public function scopeNotConsolidated($query)
+    {
+        return $query->whereNull($query->getModel()->getTable().'.consolidated_into_run_id');
     }
 
     public function user(): BelongsTo

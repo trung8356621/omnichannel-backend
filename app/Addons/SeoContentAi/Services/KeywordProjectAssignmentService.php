@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 /**
  * Domain assignment: Keyword → Content Project task (TYPE_NEW_KEYWORD).
@@ -17,6 +18,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class KeywordProjectAssignmentService
 {
+    public function __construct(
+        private readonly SeoProjectTaskUniqueWriter $uniqueWriter,
+    ) {}
+
     /**
      * @param  Collection<int, mixed>  $records
      * @return array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}
@@ -114,23 +119,31 @@ final class KeywordProjectAssignmentService
                 }
 
                 if (! $dryRun) {
-                    SeoProjectTask::query()->create([
-                        'project_id' => (int) $project->id,
-                        'site_id' => $siteId > 0 ? $siteId : null,
-                        'article_id' => null,
-                        'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
-                        'source_content' => $sourceContent,
-                        'source_key' => app(\App\Addons\SeoContentAi\Support\ProjectTaskSourceKeyGenerator::class)->generate(
-                            (int) $project->id,
-                            SeoProjectTask::TYPE_NEW_KEYWORD,
-                            SeoProjectTask::POST_TYPE_ARTICLE,
-                            $sourceContent,
-                        ),
-                        'description' => null,
-                        'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
-                        'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
-                        'status' => SeoProjectTask::STATUS_PENDING,
-                    ]);
+                    try {
+                        $task = $this->uniqueWriter->createOrReturnExisting([
+                            'project_id' => (int) $project->id,
+                            'site_id' => $siteId > 0 ? $siteId : null,
+                            'article_id' => null,
+                            'type' => SeoProjectTask::TYPE_NEW_KEYWORD,
+                            'source_content' => $sourceContent,
+                            'description' => null,
+                            'post_type' => SeoProjectTask::POST_TYPE_ARTICLE,
+                            'target_date' => $project->monthCarbon()->copy()->addDays($currentTotal)->format('Y-m-d'),
+                            'status' => SeoProjectTask::STATUS_PENDING,
+                        ]);
+                    } catch (ValidationException) {
+                        $duplicate++;
+                        $existingMap[$key] = true;
+
+                        continue;
+                    }
+
+                    if (! $task->wasRecentlyCreated) {
+                        $duplicate++;
+                        $existingMap[$key] = true;
+
+                        continue;
+                    }
                 }
 
                 $existingMap[$key] = true;

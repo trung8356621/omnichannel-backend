@@ -34,6 +34,11 @@ class SeoProjectTaskEvent extends Model
         return $this->belongsTo(SeoProjectTask::class, 'task_id');
     }
 
+    public function taskIncludingDeleted(): BelongsTo
+    {
+        return $this->belongsTo(SeoProjectTask::class, 'task_id')->withTrashed();
+    }
+
     public function run(): BelongsTo
     {
         return $this->belongsTo(SeoProjectRun::class, 'run_id');

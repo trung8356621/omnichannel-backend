@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\ContentProjectErrorCode;
+use App\Addons\SeoContentAi\Enums\SeoProjectTaskEventType;
 use App\Addons\SeoContentAi\Filament\Resources\ArticleResource;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoContentArchiveItem;
@@ -14,12 +16,24 @@ use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
 
+/**
+ * Archive orchestration — task lifecycle là source of truth;
+ * seo_content_archive_items chỉ còn compatibility / article mirror.
+ */
 final class SeoProjectArchiveService
 {
+    public function __construct(
+        private readonly SeoProjectTaskLifecycleService $lifecycle,
+        private readonly SeoProjectTaskEventRecorder $eventRecorder,
+        private readonly SeoProjectRunItemsReader $runItemsReader,
+    ) {}
+
     /**
-     * Archive toàn bộ bài có article_id: ghi kho lưu trữ + set flag + xóa task khỏi project tháng.
+     * Archive toàn bộ active task của project tháng.
+     * Prefer recoverable/idempotent per-task hơn all-or-nothing toàn project.
      *
      * @return array{archived: int, tasks_removed: int}
      */
@@ -34,101 +48,105 @@ final class SeoProjectArchiveService
         }
 
         $note = $this->normalizeNote($note);
+        $lockedProject = $this->lockMonthlyProject($project);
+        $siteId = (int) ($lockedProject->site_id ?? 0);
+        if ($siteId <= 0) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.domain_required'));
+        }
 
-        return DB::connection($project->getConnectionName())->transaction(
-            function () use ($project, $archivedByUserId, $note): array {
-                $lockedProject = $this->lockMonthlyProject($project);
-                $siteId = (int) ($lockedProject->site_id ?? 0);
-                if ($siteId <= 0) {
-                    throw new RuntimeException(__('seo-content-ai::filament.projects.domain_required'));
-                }
+        $activeTasks = $lockedProject->tasks()
+            ->active()
+            ->orderBy('id')
+            ->get();
 
-                $activeTasks = $lockedProject->tasks()
-                    ->orderBy('id')
-                    ->lockForUpdate()
-                    ->get();
-
-                // UI run items có thể còn article_id trong khi task.article_id đã mất
-                // (tạo mới + retry/sync). Heal trước khi archive.
-                $resolvedFromRuns = $this->resolveArticleIdsFromProjectRuns($lockedProject);
-                $tasksWithArticles = $this->hydrateTasksWithResolvedArticles(
-                    $activeTasks,
-                    $resolvedFromRuns['by_task_id'],
-                    $resolvedFromRuns['by_identity'],
-                );
-
-                $now = now();
-                $archived = 0;
-                /** @var array<int, true> $archivedArticleIds */
-                $archivedArticleIds = [];
-
-                foreach ($tasksWithArticles as $task) {
-                    $articleId = (int) ($task->article_id ?? 0);
-                    if ($articleId <= 0 || isset($archivedArticleIds[$articleId])) {
-                        continue;
-                    }
-
-                    $this->persistArchiveItemFromTask(
-                        $task,
-                        $lockedProject,
-                        $siteId,
-                        $archivedByUserId,
-                        $note,
-                        $now,
-                    );
-                    $archivedArticleIds[$articleId] = true;
-                    $archived++;
-                }
-
-                // Bài OK trên run nhưng task đã mất / không match — vẫn đưa vào kho.
-                // Bỏ qua nếu article đang gắn task project khác (unique toàn bảng).
-                foreach ($resolvedFromRuns['article_ids'] as $orphanArticleId) {
-                    if (isset($archivedArticleIds[$orphanArticleId])) {
-                        continue;
-                    }
-
-                    $linkedElsewhere = SeoProjectTask::query()
-                        ->where('article_id', $orphanArticleId)
-                        ->where('project_id', '!=', (int) $lockedProject->getKey())
-                        ->exists();
-
-                    if ($linkedElsewhere) {
-                        continue;
-                    }
-
-                    $this->persistArchiveItemFromArticle(
-                        $siteId,
-                        $orphanArticleId,
-                        (int) $lockedProject->getKey(),
-                        $archivedByUserId,
-                        $note,
-                        $now,
-                    );
-                    $archivedArticleIds[$orphanArticleId] = true;
-                    $archived++;
-                }
-
-                if ($archived === 0) {
-                    throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
-                }
-
-                $tasksRemoved = (int) $lockedProject->tasks()->delete();
-
-                $lockedProject->update([
-                    'total_tasks' => 0,
-                    'status' => SeoProject::STATUS_MANUAL,
-                ]);
-
-                return [
-                    'archived' => $archived,
-                    'tasks_removed' => $tasksRemoved,
-                ];
-            },
+        $resolvedFromRuns = $this->resolveArticleIdsFromProjectRuns($lockedProject);
+        $tasksWithArticles = $this->hydrateTasksWithResolvedArticles(
+            $activeTasks,
+            $resolvedFromRuns['by_task_id'],
+            $resolvedFromRuns['by_identity'],
         );
+
+        $now = now();
+        $archivedArticles = 0;
+        $tasksArchived = 0;
+        /** @var array<int, true> $archivedArticleIds */
+        $archivedArticleIds = [];
+
+        foreach ($tasksWithArticles as $task) {
+            if (! $task instanceof SeoProjectTask) {
+                continue;
+            }
+
+            $this->lifecycle->archive($task, $archivedByUserId, [
+                'from_project_id' => (int) $lockedProject->getKey(),
+            ]);
+            $tasksArchived++;
+
+            $articleId = (int) ($task->article_id ?? 0);
+            if ($articleId <= 0 || isset($archivedArticleIds[$articleId])) {
+                continue;
+            }
+
+            $mirrorOk = $this->tryPersistArchiveMirrorFromTask(
+                $task->fresh() ?? $task,
+                $lockedProject,
+                $siteId,
+                $archivedByUserId,
+                $note,
+                $now,
+            );
+            if ($mirrorOk) {
+                $archivedArticleIds[$articleId] = true;
+                $archivedArticles++;
+            }
+        }
+
+        foreach ($resolvedFromRuns['article_ids'] as $orphanArticleId) {
+            if (isset($archivedArticleIds[$orphanArticleId])) {
+                continue;
+            }
+
+            $linkedElsewhere = SeoProjectTask::query()
+                ->active()
+                ->where('article_id', $orphanArticleId)
+                ->where('project_id', '!=', (int) $lockedProject->getKey())
+                ->exists();
+
+            if ($linkedElsewhere) {
+                continue;
+            }
+
+            // Mirror article-only — không chọn/xóa task khác.
+            $this->tryPersistArchiveMirrorFromArticle(
+                $siteId,
+                $orphanArticleId,
+                (int) $lockedProject->getKey(),
+                $archivedByUserId,
+                $note,
+                $now,
+                null,
+            );
+            $archivedArticleIds[$orphanArticleId] = true;
+            $archivedArticles++;
+        }
+
+        if ($tasksArchived === 0 && $archivedArticles === 0) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
+        }
+
+        $lockedProject->syncTotalTasksCounter();
+        $lockedProject->update([
+            'status' => SeoProject::STATUS_MANUAL,
+        ]);
+
+        return [
+            'archived' => max($archivedArticles, $tasksArchived),
+            'tasks_removed' => $tasksArchived,
+        ];
     }
 
     /**
-     * Archive một/nhiều task: ghi kho + flag + xóa task khỏi project tháng.
+     * Archive một/nhiều task theo exact task ID — không hard-delete.
      *
      * @param  list<int>  $taskIds
      * @param  array<int, int>  $articleIdByTaskId  Fallback khi task.article_id trống (vd. lấy từ run item).
@@ -164,104 +182,69 @@ final class SeoProjectArchiveService
         );
 
         $note = $this->normalizeNote($note);
+        $lockedProject = $this->lockMonthlyProject($project);
+        $siteId = (int) ($lockedProject->site_id ?? 0);
+        if ($siteId <= 0) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.domain_required'));
+        }
 
-        return DB::connection($project->getConnectionName())->transaction(
-            function () use ($project, $taskIds, $archivedByUserId, $note, $articleIdByTaskId): array {
-                $lockedProject = $this->lockMonthlyProject($project);
-                $siteId = (int) ($lockedProject->site_id ?? 0);
-                if ($siteId <= 0) {
-                    throw new RuntimeException(__('seo-content-ai::filament.projects.domain_required'));
-                }
+        $tasks = $lockedProject->tasks()
+            ->active()
+            ->whereIn('id', $taskIds)
+            ->orderBy('id')
+            ->get()
+            ->keyBy(static fn (SeoProjectTask $task): int => (int) $task->id);
 
-                $tasks = $lockedProject->tasks()
-                    ->whereIn('id', $taskIds)
-                    ->orderBy('id')
-                    ->lockForUpdate()
-                    ->get();
+        $now = now();
+        $archived = 0;
 
-                $now = now();
-                $archived = 0;
-                /** @var array<int, true> $handledTaskIds */
-                $handledTaskIds = [];
+        foreach ($taskIds as $taskId) {
+            $task = $tasks->get($taskId);
+            if (! $task instanceof SeoProjectTask) {
+                Log::warning('seo.project_archive.task_not_found', [
+                    'task_id' => $taskId,
+                    'project_id' => (int) $lockedProject->getKey(),
+                    'error_code' => ContentProjectErrorCode::TaskNotFound->value,
+                ]);
 
-                foreach ($tasks as $task) {
-                    $articleId = (int) ($task->article_id ?? 0);
-                    if ($articleId <= 0) {
-                        $articleId = (int) ($articleIdByTaskId[(int) $task->id] ?? 0);
-                    }
+                continue;
+            }
 
-                    if ($articleId <= 0) {
-                        continue;
-                    }
+            $articleId = (int) ($task->article_id ?? 0);
+            if ($articleId <= 0) {
+                $articleId = (int) ($articleIdByTaskId[$taskId] ?? 0);
+            }
+            if ($articleId > 0 && (int) ($task->article_id ?? 0) !== $articleId) {
+                $task->article_id = $articleId;
+                $task->save();
+            }
 
-                    $task->article_id = $articleId;
+            $this->lifecycle->archive($task, $archivedByUserId, [
+                'from_project_id' => (int) $lockedProject->getKey(),
+            ]);
+            $archived++;
 
-                    $this->persistArchiveItemFromTask(
-                        $task,
-                        $lockedProject,
-                        $siteId,
-                        $archivedByUserId,
-                        $note,
-                        $now,
-                    );
-                    $handledTaskIds[(int) $task->id] = true;
-                    $task->delete();
-                    $archived++;
-                }
+            if ($articleId > 0) {
+                $this->tryPersistArchiveMirrorFromTask(
+                    $task->fresh() ?? $task,
+                    $lockedProject,
+                    $siteId,
+                    $archivedByUserId,
+                    $note,
+                    $now,
+                );
+            }
+        }
 
-                // Task đã mất khỏi project nhưng run item vẫn còn article_id.
-                foreach ($taskIds as $taskId) {
-                    if (isset($handledTaskIds[$taskId])) {
-                        continue;
-                    }
+        if ($archived === 0) {
+            throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
+        }
 
-                    $articleId = (int) ($articleIdByTaskId[$taskId] ?? 0);
-                    if ($articleId <= 0) {
-                        continue;
-                    }
+        $lockedProject->syncTotalTasksCounter();
 
-                    $linkedTask = $lockedProject->tasks()
-                        ->where('article_id', $articleId)
-                        ->orderBy('id')
-                        ->lockForUpdate()
-                        ->first();
-
-                    if ($linkedTask instanceof SeoProjectTask) {
-                        $this->persistArchiveItemFromTask(
-                            $linkedTask,
-                            $lockedProject,
-                            $siteId,
-                            $archivedByUserId,
-                            $note,
-                            $now,
-                        );
-                        $linkedTask->delete();
-                    } else {
-                        $this->persistArchiveItemFromArticle(
-                            $siteId,
-                            $articleId,
-                            (int) $lockedProject->getKey(),
-                            $archivedByUserId,
-                            $note,
-                            $now,
-                        );
-                    }
-
-                    $handledTaskIds[$taskId] = true;
-                    $archived++;
-                }
-
-                if ($archived === 0) {
-                    throw new RuntimeException(__('seo-content-ai::filament.projects.archive_no_active_articles'));
-                }
-
-                $lockedProject->syncTotalTasksCounter();
-
-                return [
-                    'archived' => $archived,
-                ];
-            },
-        );
+        return [
+            'archived' => $archived,
+        ];
     }
 
     public function countForSite(int $siteId): int
@@ -276,9 +259,10 @@ final class SeoProjectArchiveService
     }
 
     /**
-     * Hủy archive: xóa kho + gỡ cờ bài + dọn task/content-project còn sót.
+     * Hủy archive: restore task lifecycle + clear article flag + xóa warehouse mirror.
+     * Không xóa / tạo task mới.
      *
-     * @return array{article_id: int}
+     * @return array{article_id: int, task_id: int|null}
      */
     public function unarchiveItem(int $archiveItemId, int $siteId, int $requestedByUserId): array
     {
@@ -291,7 +275,7 @@ final class SeoProjectArchiveService
         }
 
         return DB::connection((new SeoContentArchiveItem)->getConnectionName())->transaction(
-            function () use ($archiveItemId, $siteId): array {
+            function () use ($archiveItemId, $siteId, $requestedByUserId): array {
                 /** @var SeoContentArchiveItem|null $item */
                 $item = SeoContentArchiveItem::query()
                     ->whereKey($archiveItemId)
@@ -308,6 +292,12 @@ final class SeoProjectArchiveService
                     throw new RuntimeException(__('seo-content-ai::filament.projects.unarchive_item_not_found'));
                 }
 
+                $restoredTaskId = $this->resolveAndRestoreTaskForUnarchive(
+                    $item,
+                    $articleId,
+                    $requestedByUserId,
+                );
+
                 $item->delete();
 
                 SeoArticle::query()
@@ -317,9 +307,28 @@ final class SeoProjectArchiveService
                         'content_archived_by' => null,
                     ]);
 
-                SeoProjectTask::query()
-                    ->where('article_id', $articleId)
-                    ->delete();
+                $restoredArticle = SeoArticle::query()->find($articleId);
+                if ($restoredArticle instanceof SeoArticle) {
+                    app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                        ->articleRestored($restoredArticle);
+                }
+
+                if ($restoredTaskId !== null) {
+                    $this->eventRecorder->record(
+                        SeoProjectTask::query()->find($restoredTaskId),
+                        SeoProjectTaskEventType::ArticleRestore,
+                        null,
+                        null,
+                        [
+                            'task_id' => $restoredTaskId,
+                            'article_id' => $articleId,
+                            'archive_mirror_id' => $archiveItemId,
+                            'actor_id' => $requestedByUserId,
+                        ],
+                        null,
+                        $requestedByUserId,
+                    );
+                }
 
                 SeoProjectArchiveItem::query()
                     ->where('article_id', $articleId)
@@ -327,9 +336,54 @@ final class SeoProjectArchiveService
 
                 return [
                     'article_id' => $articleId,
+                    'task_id' => $restoredTaskId,
                 ];
             },
         );
+    }
+
+    /**
+     * Resolve exact archived task — không chọn đại khi ambiguous.
+     */
+    private function resolveAndRestoreTaskForUnarchive(
+        SeoContentArchiveItem $item,
+        int $articleId,
+        int $requestedByUserId,
+    ): ?int {
+        $taskId = (int) ($item->task_id ?? 0);
+        if ($taskId > 0) {
+            $task = SeoProjectTask::query()->whereKey($taskId)->first();
+            if ($task instanceof SeoProjectTask) {
+                $this->lifecycle->restore($task, $requestedByUserId, [
+                    'archive_mirror_id' => (int) $item->id,
+                ]);
+
+                return (int) $task->id;
+            }
+
+            return null;
+        }
+
+        $candidates = SeoProjectTask::query()
+            ->archived()
+            ->where('article_id', $articleId)
+            ->orderBy('id')
+            ->get();
+
+        if ($candidates->count() > 1) {
+            throw new RuntimeException(ContentProjectErrorCode::ArchiveTaskAmbiguous->value);
+        }
+
+        $task = $candidates->first();
+        if (! $task instanceof SeoProjectTask) {
+            return null;
+        }
+
+        $this->lifecycle->restore($task, $requestedByUserId, [
+            'archive_mirror_id' => (int) $item->id,
+        ]);
+
+        return (int) $task->id;
     }
 
     /**
@@ -426,7 +480,8 @@ final class SeoProjectArchiveService
 
             $grouped[$dateKey]['articles'][] = [
                 'id' => (int) ($item->article_id ?? 0),
-                'task_id' => (int) $item->id,
+                'archive_item_id' => (int) $item->id,
+                'task_id' => (int) ($item->task_id ?? 0),
                 'title' => $title,
                 'author' => $author !== '' ? $author : '—',
                 'connected_at' => $connectedAt?->toDateString() ?? '',
@@ -507,10 +562,10 @@ final class SeoProjectArchiveService
 
         $runs = $project->runs()
             ->orderByDesc('id')
-            ->get(['id', 'items']);
+            ->get();
 
         foreach ($runs as $run) {
-            $items = is_array($run->items) ? $run->items : [];
+            $items = $this->runItemsReader->forRunAsArrays($run);
             foreach ($items as $item) {
                 if (! is_array($item)) {
                     continue;
@@ -635,6 +690,70 @@ final class SeoProjectArchiveService
         ]);
     }
 
+    private function tryPersistArchiveMirrorFromTask(
+        SeoProjectTask $task,
+        SeoProject $fromProject,
+        int $siteId,
+        int $archivedByUserId,
+        ?string $note,
+        Carbon $now,
+    ): bool {
+        try {
+            $this->persistArchiveItemFromTask(
+                $task,
+                $fromProject,
+                $siteId,
+                $archivedByUserId,
+                $note,
+                $now,
+            );
+
+            return true;
+        } catch (\Throwable $exception) {
+            Log::error('seo.project_archive.mirror_failed', [
+                'task_id' => (int) $task->id,
+                'article_id' => (int) ($task->article_id ?? 0),
+                'error_code' => ContentProjectErrorCode::ArchiveMirrorFailed->value,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
+    private function tryPersistArchiveMirrorFromArticle(
+        int $siteId,
+        int $articleId,
+        int $fromProjectId,
+        int $archivedByUserId,
+        ?string $note,
+        Carbon $now,
+        ?int $taskId,
+    ): bool {
+        try {
+            $this->persistArchiveItemFromArticle(
+                $siteId,
+                $articleId,
+                $fromProjectId,
+                $archivedByUserId,
+                $note,
+                $now,
+                $taskId,
+            );
+
+            return true;
+        } catch (\Throwable $exception) {
+            Log::error('seo.project_archive.mirror_failed', [
+                'task_id' => $taskId,
+                'article_id' => $articleId,
+                'error_code' => ContentProjectErrorCode::ArchiveMirrorFailed->value,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return false;
+        }
+    }
+
     private function persistArchiveItemFromTask(
         SeoProjectTask $task,
         SeoProject $fromProject,
@@ -648,12 +767,32 @@ final class SeoProjectArchiveService
             return;
         }
 
+        $article = SeoArticle::query()->find($articleId);
+        if (! $article instanceof SeoArticle) {
+            $this->eventRecorder->record(
+                $task,
+                SeoProjectTaskEventType::ArticleRelationMissing,
+                (string) $task->status,
+                (string) $task->status,
+                [
+                    'task_id' => (int) $task->id,
+                    'article_id' => $articleId,
+                    'error_code' => ContentProjectErrorCode::ArticleRelationMissing->value,
+                    'actor_id' => $archivedByUserId,
+                ],
+                null,
+                $archivedByUserId,
+            );
+
+            return;
+        }
+
         $completedAt = $task->completed_at;
         if ($completedAt === null && (string) $task->status === SeoProjectTask::STATUS_COMPLETED) {
             $completedAt = $task->updated_at ?? $now;
         }
 
-        $this->upsertArchiveItem(
+        $mirror = $this->upsertArchiveItem(
             siteId: $siteId,
             articleId: $articleId,
             fromProjectId: (int) $fromProject->getKey(),
@@ -664,6 +803,22 @@ final class SeoProjectArchiveService
             note: $note,
             sourceContent: (string) ($task->source_content ?? ''),
             taskType: $task->type !== null ? (string) $task->type : null,
+            taskId: (int) $task->id,
+        );
+
+        $this->eventRecorder->record(
+            $task,
+            SeoProjectTaskEventType::ArticleArchive,
+            null,
+            null,
+            [
+                'task_id' => (int) $task->id,
+                'article_id' => $articleId,
+                'archive_mirror_id' => (int) $mirror->id,
+                'actor_id' => $archivedByUserId,
+            ],
+            null,
+            $archivedByUserId,
         );
     }
 
@@ -674,6 +829,7 @@ final class SeoProjectArchiveService
         int $archivedByUserId,
         ?string $note,
         Carbon $now,
+        ?int $taskId = null,
     ): void {
         if ($articleId <= 0) {
             return;
@@ -693,6 +849,7 @@ final class SeoProjectArchiveService
             note: $note,
             sourceContent: $sourceContent,
             taskType: null,
+            taskId: $taskId,
         );
     }
 
@@ -707,11 +864,14 @@ final class SeoProjectArchiveService
         ?string $note,
         string $sourceContent,
         ?string $taskType,
-    ): void {
-        SeoContentArchiveItem::query()->updateOrCreate(
+        ?int $taskId = null,
+    ): SeoContentArchiveItem {
+        /** @var SeoContentArchiveItem $item */
+        $item = SeoContentArchiveItem::query()->updateOrCreate(
             ['article_id' => $articleId],
             [
                 'site_id' => $siteId,
+                'task_id' => $taskId !== null && $taskId > 0 ? $taskId : null,
                 'from_project_id' => $fromProjectId,
                 'archived_by' => $archivedByUserId,
                 'connected_at' => $connectedAt,
@@ -731,6 +891,14 @@ final class SeoProjectArchiveService
                 'content_archived_at' => $archivedAt,
                 'content_archived_by' => $archivedByUserId,
             ]);
+
+        $article = SeoArticle::query()->find($articleId);
+        if ($article instanceof SeoArticle) {
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->articleArchived($article);
+        }
+
+        return $item;
     }
 
     private function normalizeNote(?string $note): ?string

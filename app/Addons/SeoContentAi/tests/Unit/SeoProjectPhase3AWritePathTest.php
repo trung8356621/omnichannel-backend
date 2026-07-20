@@ -98,10 +98,10 @@ final class SeoProjectPhase3AWritePathTest extends TestCase
         );
     }
 
-    public function test_soft_deletes_still_disabled_on_task_model(): void
+    public function test_soft_deletes_enabled_on_task_model_phase_3c1(): void
     {
         $uses = class_uses_recursive(SeoProjectTask::class);
-        $this->assertNotContains(\Illuminate\Database\Eloquent\SoftDeletes::class, $uses);
+        $this->assertContains(\Illuminate\Database\Eloquent\SoftDeletes::class, $uses);
     }
 
     public function test_run_item_status_processing_exists(): void
