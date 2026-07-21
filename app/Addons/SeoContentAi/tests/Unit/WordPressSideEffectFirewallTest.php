@@ -32,11 +32,9 @@ final class WordPressSideEffectFirewallTest extends TestCase
         );
     }
 
-    public function test_gateway_allows_manual_context_and_posts(): void
+    public function test_gateway_rejects_deprecated_manual_context(): void
     {
-        Http::fake([
-            'example.test/*' => Http::response(['success' => true, 'wp_post_id' => 55], 200),
-        ]);
+        Http::fake();
 
         $ctx = new ManualWordPressContext(
             userId: 7,
@@ -47,8 +45,10 @@ final class WordPressSideEffectFirewallTest extends TestCase
             correlationId: 'corr-1',
         );
 
+        $this->expectException(UnauthorizedWordPressSideEffectException::class);
+
         $gateway = app(WordPressGateway::class);
-        $response = $gateway->postJson(
+        $gateway->postJson(
             $ctx,
             'article.editor_sync',
             'https://example.test/wp-json/omi-seo-ai/v1/posts/1/editor-sync',
@@ -58,9 +58,6 @@ final class WordPressSideEffectFirewallTest extends TestCase
             99,
             1,
         );
-
-        self::assertTrue($response->successful());
-        Http::assertSentCount(1);
     }
 
     public function test_guard_rejects_non_manual_non_automation_origin_via_gateway_null(): void
@@ -91,14 +88,13 @@ final class WordPressSideEffectFirewallTest extends TestCase
         self::assertStringContainsString('WordPressExecutionContext', $source);
     }
 
-    public function test_queue_job_requires_manual_meta(): void
+    public function test_queue_job_is_deprecated_shell(): void
     {
         $source = (string) file_get_contents(
             dirname(__DIR__, 2).'/Jobs/SyncArticleToWordPressFromQueueJob.php',
         );
-        self::assertStringContainsString('manual', $source);
-        self::assertStringContainsString('ORIGIN_MISSING', $source);
-        self::assertStringContainsString('ManualWordPressContext', $source);
+        self::assertStringContainsString('DEPRECATED', $source);
+        self::assertStringNotContainsString('syncFromEditorBundle', $source);
     }
 
     public function test_scheduled_runner_does_not_call_wordpress_sync_service(): void

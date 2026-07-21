@@ -33,6 +33,8 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
             [BusinessEventName::ArticleRestored, SeoArticle::class, 'content', ['article_id' => true]],
             [BusinessEventName::ArticleDeleted, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false]],
             [BusinessEventName::ArticlePublishRequested, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false]],
+            [BusinessEventName::ArticleProductReviewsGenerated, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false, 'connection_id' => false, 'review_ids' => true, 'review_count' => false]],
+            [BusinessEventName::ArticleProductReviewPublishRequested, SeoArticle::class, 'content', ['article_id' => true, 'review_id' => true, 'site_id' => true, 'connection_id' => true, 'publish_intent' => false]],
 
             [BusinessEventName::ContentProjectTaskCreated, SeoProjectTask::class, 'project', ['task_id' => true, 'project_id' => false, 'site_id' => false]],
             [BusinessEventName::ContentProjectTaskUpdated, SeoProjectTask::class, 'project', ['task_id' => true]],
@@ -63,10 +65,10 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
             actionCode: AutomationActionCode::ArticleGenerateContent->value,
             handlerClass: ArticleGenerateContentHookAction::class,
             inputRules: [
-                'article_id' => ['type' => 'integer', 'required' => true],
+                'task_id' => ['type' => 'integer', 'required' => true],
             ],
             settingsRules: [],
-            description: 'Wrap existing content generation service when available.',
+            description: 'Generate article content for a content-project task.',
             isAsyncSafe: true,
             timeout: 180,
             module: 'content',
@@ -74,7 +76,7 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
             rateLimitKey: 'ai',
             maxAttemptsPerMinute: 20,
             fieldMeta: [
-                'article_id' => ['label' => 'Article ID', 'type' => 'integer', 'source' => 'input'],
+                'task_id' => ['label' => 'Task ID', 'type' => 'integer', 'source' => 'input'],
             ],
         ));
     }

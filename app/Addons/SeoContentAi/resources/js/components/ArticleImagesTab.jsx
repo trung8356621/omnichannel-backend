@@ -275,9 +275,18 @@ function ImageRow({
     const trustedWpUrl = hasTrustedWordPressUrl(row)
         ? (!isLocalSeoMediaSrc(rawWpSrc) ? rawWpSrc : String(row.src || '').trim())
         : '';
-    const localUrl =
-        String(row.localSrc || '').trim()
-        || (isLocalSeoMediaSrc(String(row.src || '').trim()) ? String(row.src || '').trim() : '');
+    const localUrl = (() => {
+        const src = String(row.src || '').trim();
+        const local = String(row.localSrc || '').trim();
+        // src local mới thắng localSrc stale (sau Fix slug rename file).
+        if (isLocalSeoMediaSrc(src)) {
+            return src;
+        }
+        if (isLocalSeoMediaSrc(local)) {
+            return local;
+        }
+        return '';
+    })();
     const primaryUrl = trustedWpUrl || localUrl || String(row.src || '').trim();
     const showLocalExtra = Boolean(trustedWpUrl) && distinctUrls(trustedWpUrl, localUrl);
     const seoMediaId = Number(row.seoMediaId ?? row.seo_media_id ?? 0);

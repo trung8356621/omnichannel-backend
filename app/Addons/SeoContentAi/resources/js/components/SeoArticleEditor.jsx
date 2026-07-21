@@ -5,7 +5,9 @@ import BlockFormatToolbar from './BlockFormatToolbar';
 import { BlockInsertBar, BlockInsertMenuBar } from './BlockInsertMenu';
 import BlockEditorResizeHandle, { useBlockEditorHeight } from './BlockEditorResizeHandle';
 import LinkEditBubble from './LinkEditBubble';
+import ArticleHtmlInspectorModal from './ArticleHtmlInspectorModal';
 import { resolveLinkEditorAnchorRect } from '../utils/linkEditorAnchor';
+import { normalizeInlineLinks, analyzeInlineLinks } from '../utils/inlineLinkNormalizer';
 import ImageBlockEditor from './ImageBlockEditor';
 import {
     countMatchingAnchorsInHtml,
@@ -41,6 +43,7 @@ import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
+import { reconcileProductReviewsForArticle } from '../utils/articleEditorApi';
 import { csrfToken, seoArticleApiHeaders } from '../utils/seoArticleApi';
 import {
     buildSeoAnalysisPayload,
@@ -61,7 +64,6 @@ import GenerateImageModal from './GenerateImageModal';
 import EditorBusyOverlay from './EditorBusyOverlay';
 import {
     applyImagePatchToBlocks,
-    applyLocalSlugRenameResultToBlocks,
     applyQuickFixAltTitleToBlock,
     applyQuickFixAltTitleToBlocks,
     applyQuickFixSlugToBlock,
@@ -76,12 +78,10 @@ import {
     computeQuickFixSlugSupplementalOutcome,
     executeSeoMediaSlugRenamesTwoPhase,
     enrichWpRenamedWithRequestMeta,
+    enrichBlocksWithPostImages,
     finalizeBlocksAfterWpRename,
     reconcileSupplementalImagesWithBlocks,
     resetSupplementalImagesAfterSlugRename,
-    enrichBlocksWithPostImages,
-    imagesNeedWpSyncBeforeFixSlug,
-    isImageReadyForWpSlugFix,
     resolveWpRenameOldUrl,
     resolveImageRefIds,
     shouldRenameSlugOnWordPress,
@@ -1486,6 +1486,8 @@ function ActiveBlockEditor({
     siteId,
 }) {
     const [linkAnchor, setLinkAnchor] = useState(null);
+    const [htmlInspectorOpen, setHtmlInspectorOpen] = useState(false);
+    const [htmlInspectorSnapshot, setHtmlInspectorSnapshot] = useState('');
     const editorContainerRef = useRef(null);
     const sourceHtml = displayContent ?? block.content;
     const isHydratingRef = useRef(false);
@@ -1624,7 +1626,9 @@ function ActiveBlockEditor({
             editor.chain().focus().setTextSelection({ from, to }).run();
         }
 
-        if (editor.isActive('link')) {
+        // Chỉ extend khi caret nằm trong link (selection rỗng). Selection có vùng chọn
+        // phải giữ nguyên — tránh cắt cụm text+strong thành một phần link cũ.
+        if (editor.isActive('link') && editor.state.selection.empty) {
             editor.chain().focus().extendMarkRange('link').run();
         }
 
@@ -1667,6 +1671,22 @@ function ActiveBlockEditor({
                 onDelete={onDelete}
                 canDelete={canDeleteBlock}
                 onEditLink={openLinkEditorAtSelection}
+                onViewHtml={() => {
+                    if (!editor) {
+                        return;
+                    }
+                    const current = editor.getHTML();
+                    const analysis = analyzeInlineLinks(current);
+                    if (analysis.duplicateAdjacentCount > 0 || analysis.nestedAnchorCount > 0) {
+                        // Dev-only signal — không toast khi đang gõ; chỉ khi mở inspector.
+                        if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'development') {
+                            // eslint-disable-next-line no-console
+                            console.warn('[SeoArticleEditor] split/nested anchors detected', analysis.warnings);
+                        }
+                    }
+                    setHtmlInspectorSnapshot(current);
+                    setHtmlInspectorOpen(true);
+                }}
             />
             <div className="seo-block-editor-body px-2 pb-2" style={{ minHeight }}>
                 <EditorContent editor={editor} />
@@ -1688,6 +1708,27 @@ function ActiveBlockEditor({
                     siteId={siteId}
                 />
             ) : null}
+            <ArticleHtmlInspectorModal
+                open={htmlInspectorOpen}
+                html={htmlInspectorSnapshot}
+                onClose={() => setHtmlInspectorOpen(false)}
+                onApplyHtml={(nextHtml) => {
+                    if (!editor) {
+                        return { ok: false, error: t('html_inspector_invalid_html') };
+                    }
+                    try {
+                        const normalized = normalizeInlineLinks(String(nextHtml ?? ''));
+                        editor.commands.setContent(normalized || '<p></p>', { emitUpdate: true });
+                        setHtmlInspectorSnapshot(editor.getHTML());
+                        return { ok: true };
+                    } catch (error) {
+                        return {
+                            ok: false,
+                            error: error instanceof Error ? error.message : t('html_inspector_invalid_html'),
+                        };
+                    }
+                }}
+            />
         </div>
     );
 }
@@ -2137,6 +2178,76 @@ export default function SeoArticleEditor({
 
         return () => window.removeEventListener('virtual-reviews-updated', onReviewsUpdated);
     }, []);
+
+    const productReviewsReconcileOnceRef = useRef(false);
+    useEffect(() => {
+        if (!showReviewsTab || !isProductPost || !articleId || productReviewsReconcileOnceRef.current) {
+            return undefined;
+        }
+        productReviewsReconcileOnceRef.current = true;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const result = await reconcileProductReviewsForArticle(articleId);
+                if (cancelled || !result.success) {
+                    if (!cancelled && result.success === false && result.message) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-article-editor-notify', {
+                                detail: {
+                                    title: 'Không thể lên lịch đăng review',
+                                    body: String(result.message),
+                                    status: 'danger',
+                                },
+                            }),
+                        );
+                    }
+                    return;
+                }
+
+                const data = result.data ?? {};
+                if (data.automation_disabled && Number(data.review_count ?? 0) > 0) {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: 'Automation đăng review đang tắt',
+                                body: `Có ${Number(data.review_count)} review chưa được đăng vì Automation đang tắt.`,
+                                status: 'warning',
+                            },
+                        }),
+                    );
+                } else if (Number(data.queued ?? 0) > 0) {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: 'Đã lên lịch đăng review',
+                                body: `Đã khôi phục và lên lịch tự động đăng ${Number(data.queued)} review lên WordPress.`,
+                                status: 'success',
+                            },
+                        }),
+                    );
+                }
+
+                await callEditArticleLivewire('refreshVirtualReviewsForEditor');
+            } catch (error) {
+                if (!cancelled) {
+                    window.dispatchEvent(
+                        new CustomEvent('seo-article-editor-notify', {
+                            detail: {
+                                title: 'Không thể lên lịch đăng review',
+                                body: String(error?.message ?? 'Mở Automation Operations để xem lỗi.'),
+                                status: 'danger',
+                            },
+                        }),
+                    );
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [articleId, isProductPost, showReviewsTab]);
 
     const refreshVirtualReviews = useCallback(
         () => callEditArticleLivewire('refreshVirtualReviewsForEditor'),
@@ -3561,17 +3672,8 @@ export default function SeoArticleEditor({
                                     ...pendingLocalRenameResultsRef.current,
                                     ...results,
                                 ];
-
-                                for (const result of results) {
-                                    const blockId = String(result?.block_id ?? '').trim();
-                                    if (!blockId) {
-                                        continue;
-                                    }
-
-                                    setBlocks((prev) =>
-                                        applyLocalSlugRenameResultToBlocks(prev, blockId, result),
-                                    );
-                                }
+                                // Không setBlocks từng cái ở đây — finalize một lần qua
+                                // applySlugRenameFinished để tránh race localSrc stale.
                             } catch (error) {
                                 window.dispatchEvent(
                                     new CustomEvent('seo-article-editor-notify', {
@@ -3628,6 +3730,7 @@ export default function SeoArticleEditor({
         pendingQuickFixKeywordRef.current = '';
 
         const nextBlocks = finalizeBlocksAfterWpRename(blocksRef.current, wpRenamed, localResults);
+        blocksRef.current = nextBlocks;
         setBlocks(nextBlocks);
         setSupplementalImages((prev) =>
             resetSupplementalImagesAfterSlugRename(prev, nextBlocks, wpRenamed, localResults),
@@ -3817,15 +3920,14 @@ export default function SeoArticleEditor({
                 }
             });
 
-            const preferLocalRename = imagesNeedWpSyncBeforeFixSlug(sourceRows ?? imageRows ?? []);
+            // Per-image: WP-ready → WP rename; local copy slug lệch → local rename.
+            // Không dùng all-or-nothing preferLocalRename (trước đây xóa local queue khi đã có WP URL).
             const preview = applyQuickFixSlugToBlocks(
                 blocksRef.current,
                 keyword,
                 indexByBlockId,
                 enrichmentByBlockId,
-                preferLocalRename
-                    ? { wpOnly: false, includeWordPressRenames: false }
-                    : { wpOnly: true, includeWordPressRenames: true },
+                { wpOnly: false, includeWordPressRenames: true },
             );
 
             const blockEligibleCount = collectImagesFromBlocks(blocksRef.current).filter(
@@ -3837,6 +3939,16 @@ export default function SeoArticleEditor({
             const wpRenameSeen = new Set(
                 (preview.renameQueue ?? []).map((item) => Number(item.attachment_id ?? 0)).filter((id) => id > 0),
             );
+            const localRenameSeen = new Set(
+                extraLocalRenames.map((item) => {
+                    const id = Number(item?.seo_media_id ?? 0);
+                    if (id > 0) {
+                        return `id:${id}`;
+                    }
+
+                    return `src:${normalizeImageSrcKey(item?.src)}`;
+                }).filter(Boolean),
+            );
 
             let supplementalOrdinal = blockEligibleCount;
             supplementalOnlyRows.forEach((row) => {
@@ -3847,14 +3959,14 @@ export default function SeoArticleEditor({
                 supplementalOrdinal += 1;
                 const enriched = { ...row, quickFixIndex: supplementalOrdinal };
                 const outcome = computeQuickFixSlugSupplementalOutcome(enriched, keyword, {
-                    wpOnly: !preferLocalRename,
+                    wpOnly: false,
                 });
 
                 if (Object.keys(outcome.patch ?? {}).length > 0) {
                     patchSupplementalImageRow(enriched, outcome.patch);
                 }
 
-                if (!preferLocalRename && outcome.wpRename) {
+                if (outcome.wpRename) {
                     const wpId = Number(outcome.wpRename.attachment_id ?? 0);
                     if (wpId > 0 && !wpRenameSeen.has(wpId)) {
                         wpRenameSeen.add(wpId);
@@ -3862,17 +3974,23 @@ export default function SeoArticleEditor({
                     }
                 }
 
-                if (preferLocalRename && outcome.localRename) {
-                    extraLocalRenames.push(outcome.localRename);
+                if (outcome.localRename) {
+                    const localId = Number(outcome.localRename.seo_media_id ?? 0);
+                    const localKey =
+                        localId > 0
+                            ? `id:${localId}`
+                            : `src:${normalizeImageSrcKey(outcome.localRename.src)}`;
+                    if (localKey && !localRenameSeen.has(localKey)) {
+                        localRenameSeen.add(localKey);
+                        extraLocalRenames.push(outcome.localRename);
+                    }
                 }
             });
 
             const mergedPreview = {
                 ...preview,
-                renameQueue: preferLocalRename
-                    ? []
-                    : [...(preview.renameQueue ?? []), ...extraWpRenames],
-                localRenameQueue: preferLocalRename ? extraLocalRenames : [],
+                renameQueue: [...(preview.renameQueue ?? []), ...extraWpRenames],
+                localRenameQueue: extraLocalRenames,
             };
 
             const totalWpRenames = mergedPreview.renameQueue.length;
@@ -3882,11 +4000,12 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            if (totalWpRenames === 0 && totalLocalRenames === 0 && mergedPreview.applied === 0) {
-                return;
-            }
-
             if (totalWpRenames === 0 && totalLocalRenames === 0) {
+                notifyEditor(
+                    t('editor_quick_fix_slug_all_noop_title'),
+                    t('editor_quick_fix_slug_all_noop_body'),
+                    'warning',
+                );
                 return;
             }
 
@@ -3899,12 +4018,16 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
+                // Gắn listener TRƯỚC khi fire rename — tránh miss event khi local rename chậm.
+                const wpWaitPromise =
+                    totalWpRenames > 0 ? waitForWordPressSlugRenameFinished(1) : Promise.resolve(null);
+
                 await applyQuickFixSlugPreview(mergedPreview, keyword, { silent: true });
 
-                const wpDetail =
-                    totalWpRenames > 0 ? await waitForWordPressSlugRenameFinished(1) : null;
+                const wpDetail = await wpWaitPromise;
 
-                if (wpDetail || (pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
+                // Luôn finalize khi có local rename — cập nhật src + localSrc + wpSrc trong blocks.
+                if (wpDetail || totalLocalRenames > 0 || (pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
                     applySlugRenameFinished(wpDetail ?? { renamed: [] });
                 }
 
@@ -4125,18 +4248,12 @@ export default function SeoArticleEditor({
                 const enrichmentRow = rowHint ?? collectImagesFromBlocks(blocksRef.current).find(
                     (entry) => entry.blockId === blockId,
                 );
-                const preferLocalRename = enrichmentRow
-                    ? !isImageReadyForWpSlugFix(enrichmentRow)
-                    : true;
-
                 const preview = applyQuickFixSlugToBlock(
                     blocksRef.current,
                     keyword,
                     blockId,
                     enrichmentRow,
-                    preferLocalRename
-                        ? { wpOnly: false, includeWordPressRenames: false }
-                        : { wpOnly: true, includeWordPressRenames: true },
+                    { wpOnly: false, includeWordPressRenames: true },
                 );
                 if (preview.applied === 0) {
                     return;
@@ -4150,20 +4267,20 @@ export default function SeoArticleEditor({
                 }
 
                 if (renameCount === 0 && localRenameCount === 0) {
+                    notifyEditor(
+                        t('editor_quick_fix_slug_all_noop_title'),
+                        t('editor_quick_fix_slug_all_noop_body'),
+                        'warning',
+                    );
                     return;
                 }
 
-                if (preferLocalRename) {
-                    await applyQuickFixSlugPreview({ ...preview, renameQueue: [] }, keyword);
-                    if ((pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
-                        applySlugRenameFinished({ renamed: [] });
-                    }
+                await applyQuickFixSlugPreview(preview, keyword);
+
+                if (renameCount === 0 && (pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
+                    applySlugRenameFinished({ renamed: [] });
                     finalizeSlugRenameSideEffects();
-
-                    return;
                 }
-
-                applyQuickFixSlugPreview({ ...preview, localRenameQueue: [] }, keyword);
 
                 return;
             }
@@ -4173,7 +4290,6 @@ export default function SeoArticleEditor({
                 return;
             }
 
-            const preferLocalRename = !isImageReadyForWpSlugFix(row);
             const sourceRows = supplementalImages ?? [];
             const fallbackIndex = Math.max(
                 1,
@@ -4195,33 +4311,39 @@ export default function SeoArticleEditor({
 
             const enrichedRow = enrichSupplementalRow(row, fallbackIndex);
             const outcome = computeQuickFixSlugSupplementalOutcome(enrichedRow, keyword, {
-                wpOnly: !preferLocalRename,
+                wpOnly: false,
             });
 
             if (Object.keys(outcome.patch ?? {}).length > 0) {
                 patchSupplementalImageRow(enrichedRow, outcome.patch);
             }
 
-            if (!preferLocalRename && outcome?.wpRename) {
+            if (!outcome?.wpRename && !outcome?.localRename) {
+                notifyEditor(
+                    t('editor_quick_fix_slug_all_noop_title'),
+                    t('editor_quick_fix_slug_all_noop_body'),
+                    'warning',
+                );
+                return;
+            }
+
+            if (outcome?.wpRename) {
                 if (!confirmSlugRename({ count: 1, isQuickFix: true })) {
                     return;
                 }
-                pendingQuickFixKeywordRef.current = keyword;
-                requestWordPressRenames([outcome.wpRename]);
             }
 
-            if (preferLocalRename && outcome?.localRename) {
-                await applyQuickFixSlugPreview(
-                    {
-                        applied: 1,
-                        renameQueue: [],
-                        localRenameQueue: [outcome.localRename],
-                    },
-                    keyword,
-                );
-                if ((pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
-                    applySlugRenameFinished({ renamed: [] });
-                }
+            await applyQuickFixSlugPreview(
+                {
+                    applied: 1,
+                    renameQueue: outcome?.wpRename ? [outcome.wpRename] : [],
+                    localRenameQueue: outcome?.localRename ? [outcome.localRename] : [],
+                },
+                keyword,
+            );
+
+            if (!outcome?.wpRename && (pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
+                applySlugRenameFinished({ renamed: [] });
                 finalizeSlugRenameSideEffects();
             }
         },
@@ -4232,8 +4354,8 @@ export default function SeoArticleEditor({
             enrichSupplementalRow,
             finalizeSlugRenameSideEffects,
             focusKeyword,
+            notifyEditor,
             patchSupplementalImageRow,
-            requestWordPressRenames,
             supplementalImages,
         ],
     );

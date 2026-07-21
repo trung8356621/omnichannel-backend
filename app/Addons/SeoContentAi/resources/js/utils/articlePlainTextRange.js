@@ -1,5 +1,6 @@
 import { normalizeLinkText } from './articleLinkScroll';
 import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
+import { SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
 
 /**
  * @typedef {{ node: Text, start: number, endNode: Text, endOffset: number }} PlainTextRange
@@ -155,10 +156,16 @@ export function wrapTextRangeWithLink(doc, match, href) {
     const anchor = doc.createElement('a');
     anchor.href = url;
     anchor.className = SEO_EDITOR_LINK_CLASS;
+    if (SEO_LINK_DEFAULT_ATTRS.target) {
+        anchor.target = SEO_LINK_DEFAULT_ATTRS.target;
+    }
+    if (SEO_LINK_DEFAULT_ATTRS.rel) {
+        anchor.rel = SEO_LINK_DEFAULT_ATTRS.rel;
+    }
 
     try {
         const fragment = range.extractContents();
-        unwrapFormattingInFragment(fragment);
+        // Giữ strong/em/span bên trong một <a> duy nhất — không unwrap formatting.
         anchor.appendChild(fragment);
         range.insertNode(anchor);
 
@@ -166,31 +173,4 @@ export function wrapTextRangeWithLink(doc, match, href) {
     } catch {
         return false;
     }
-}
-
-/**
- * @param {DocumentFragment} fragment
- */
-function unwrapFormattingInFragment(fragment) {
-    const inlineTags = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE']);
-
-    const walk = (parent) => {
-        const children = [...parent.childNodes];
-        for (const child of children) {
-            if (child.nodeType === Node.ELEMENT_NODE) {
-                const el = /** @type {Element} */ (child);
-                if (inlineTags.has(el.tagName)) {
-                    while (el.firstChild) {
-                        parent.insertBefore(el.firstChild, el);
-                    }
-                    parent.removeChild(el);
-                    walk(parent);
-                } else {
-                    walk(el);
-                }
-            }
-        }
-    };
-
-    walk(fragment);
 }

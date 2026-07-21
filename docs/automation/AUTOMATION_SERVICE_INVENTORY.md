@@ -1,8 +1,8 @@
 # Automation Service Inventory — SeoContentAi
 
-**Phase:** 1 audit + 1b lock (Phase 2 foundation riêng)  
-**Ngày:** 2026-07-18  
-**Nguồn chân lý:** code hiện tại; docs MAP_* dùng để định vị, đã đối chiếu khi mâu thuẫn.  
+**Phase:** living inventory (Business Hook + product review outbound)  
+**Cập nhật:** 2026-07-21  
+**Nguồn chân lý:** code hiện tại; docs MAP_* / ACTION_CATALOG / EVENT_CATALOG.  
 **Canonical IDs / naming / selectability:** xem `AUTOMATION_BOUNDARIES.md`, `AUTOMATION_ACTION_CATALOG.md`.
 
 ## 1. Kết luận ngắn
@@ -11,7 +11,7 @@
 |---|---|
 | Content Project → Article | Local write (`PromptTestPublishService`, `CreateArticlesFromTaskService`) |
 | Content Project → WordPress **article** publish/sync | **Không** gọi `WordPressArticleSyncService` |
-| Content Project → WordPress **khác** | **Có** nếu workflow có node `post_comment_review` → `WordPressCommentReviewService` |
+| Content Project → WordPress **khác** | **Có** qua Automation: `post_comment_review` → local `article_product_reviews` → `wordpress.comment_review.publish` |
 | Article Editor save | Local only (`ArticleEditorPersistService`) |
 | Article Editor sync / queue / scheduled | Outbound WP; status payload **luôn** `publish` |
 | SEO Audit | Đọc + skip meta + tạo `SeoProjectTask`; không sửa/publish article |
@@ -27,12 +27,12 @@
 
 ## 2. Docs vs code
 
-| Claim trong docs | Code |
+| Claim | Status |
 |---|---|
-| MAP_SEO_PROJECTS / MAP_SEO_WP: Content Project + `PromptTestPublishService` local-only | **Đúng** cho article content |
-| MAP_SEO_EDITOR §2.6.1: Outbound gồm “workflow” | **Sai / mơ hồ** — project workflow không sync article WP; chỉ comment-review node mới outbound |
-| Outbound không gửi draft / luôn publish | **Đúng** (`resolveWordPressStatusPayload`) |
-| Approval project sync WP | **Sai nếu hiểu vậy** — `SeoProjectApprovalService` chỉ đổi status project + notify |
+| Content Project + `PromptTestPublishService` local-only (article) | **Đúng** — [MAP_SEO_PROJECTS](../MAP_SEO_PROJECTS.md) / [MAP_SEO_WP](../MAP_SEO_WP.md) |
+| Project workflow không sync article WP; comment-review outbound qua Automation | **Đúng** — [MAP_SEO_EDITOR](../MAP_SEO_EDITOR.md) Reviews + [ACTION_CATALOG](AUTOMATION_ACTION_CATALOG.md) |
+| Outbound article sync luôn `status=publish` | **Đúng** |
+| `SeoProjectApprovalService` chỉ status project + notify (không sync WP) | **Đúng** |
 
 ## 3. Bảng inventory
 
@@ -55,7 +55,7 @@ Chú thích cột: R=Read DB, W=Write DB, J=Dispatch Job, E=External API, P=Có 
 | Article | `ArticleEditorReadinessService` | Project run post-success | article | readiness DTO | ✓ | ✓ | — | — | — | Tên `syncWpPostContent*` chỉ local meta | internal / `article.readiness.refresh` |
 | Project | `SeoProjectWorkflowRunService` | Filament run pages | project/run/task | run items | ✓ | ✓ | — | — | — | Orchestrate local article create; post-success links/readiness | **Không** `project.run_everything`; dùng `project.task.run` mỏng |
 | Project | `CreateArticlesFromTaskService` | WorkflowRunService | TaskTestContext | article_id + steps | ✓ | ✓ | — | — | — | Tên “Publish”; gọi domain link keyword sync | `project.task.run` → internal article.create/update |
-| Project | `TaskWorkflowTestRunner` | CreateArticles, TestTask, Editor media WF | SeoTask + context | steps | ✓ | ✓ | — | **có nếu** `post_comment_review` | comment WP | Action nodes: save_article (local), save_vocabulary, **post_comment_review (WP)** | map từng action_type → business action |
+| Project | `TaskWorkflowTestRunner` | CreateArticles, TestTask, Editor media WF | SeoTask + context | steps | ✓ | ✓ | — | **local only** `post_comment_review` | comment WP via Automation | Action nodes: save_article (local), save_vocabulary, **post_comment_review (local+event)** | map từng action_type → business action |
 | Project | `PromptTestPublishService` | TaskWorkflowTestRunner | AI output | local article | ✓ | ✓ | — | — | — | Tên publish; analyze SEO local; mark pending sync | `article.content.update` / create |
 | Project | `SeoProjectTaskSyncService` | Create/Edit project | tasksData | tasks rows | ✓ | ✓ | — | — | — | Monthly limit | `project.task.create` (bulk sync) |
 | Project | `SeoProjectApprovalService` | EditArticle / ArticleResource approve | article + user | project approved | ✓ | ✓ | — | — | — | Relink task article_id; notify | `project.approve` / `article.approve` |
@@ -79,7 +79,7 @@ Chú thích cột: R=Read DB, W=Write DB, J=Dispatch Job, E=External API, P=Có 
 | Domain/WP inbound | `SyncDomainContentService` | WP bridge push | WP payload | local articles | ✓ | ✓ | ✓ scoring | ✓ inbound | — | Pull WP → Laravel | `wordpress.article.fetch` / import |
 | WP | `WordPressFaqSyncService` | (wrapper) | article | delegates syncForArticle | ✓ | ✓ | — | ✓ | ✓ | Wrapper rộng | deprecate / map sync_outbound (not selectable) |
 | WP | `WordPressLocalMediaSyncService` | Sync prepare/complete | article HTML | media IDs | ✓ | ✓ | — | ✓ | — | | `wordpress.article.update_media` |
-| WP | `WordPressCommentReviewService` | TaskWorkflowTestRunner, TestPrompt | AI comments | WP meta comments | ✓ | — | — | ✓ | — | **Outbound từ workflow** | `wordpress.comment_review.publish` |
+| WP | `WordPressCommentReviewService` / `ArticleProductReviewStoreService` | TaskWorkflowTestRunner, QuickCreate | AI comments | local `article_product_reviews` | ✓ | — | — | via Automation | — | **Outbound chỉ qua** `wordpress.comment_review.publish` | `wordpress.comment_review.publish` |
 | Site | Site / connection models + `SeoAccessControl` | mọi nơi | ids | scope | ✓ | — | — | — | — | Cross-DB | `AutomationSiteContextResolver` (không CRUD action) |
 
 ## 4. Call path chi tiết (đã xác nhận code)
@@ -147,13 +147,18 @@ ViewSeoProjectRun / retryTask
 
 ### 4.6 post_comment_review outbound WP
 
-`	ext
+```text
 TaskWorkflowTestRunner actionType=post_comment_review
-  → WordPressCommentReviewService::publishFromAiOutput
-    → requires wp_post_id + canSyncArticlesToWordPress
-    → VirtualCommentService::pushToWordPress
-  Action chuẩn: wordpress.comment_review.publish
-`
+  → WordPressCommentReviewService::storeLocalFromAiOutput
+  → ArticleProductReviewStoreService (table + article.product_reviews_generated)
+  → schedule (max_delay_time) → DispatchScheduledProductReviewPublishJob
+  → ProductReviewPublishDispatchService → article.product_review_publish_requested
+  → Rule execute-wordpress-comment-review-publish (sync) → wordpress.comment_review.publish
+  → POST /omi-seo-ai/v1/posts/{id}/virtual-comments (upsert _omi_review_id)
+  → WP frontend: Virtual_Comments (CusRev compat ≥ 1.0.59)
+```
+
+Action chuẩn: wordpress.comment_review.publish
 
 ### 4.7 SEO Audit / Keyword → Project
 

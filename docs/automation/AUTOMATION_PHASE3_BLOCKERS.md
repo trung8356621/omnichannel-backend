@@ -1,22 +1,20 @@
-# Automation Phase 3 Blockers
+# Automation Phase 3 Blockers (closed ledger)
 
-**Updated:** 2026-07-18
+**Updated:** 2026-07-21  
+**Status:** Phase 3 minimum/full **done**. File này chỉ còn quyết định khóa — không phải backlog mở.
 
-| Action key | Blocker | Decision |
-|---|---|---|
-| `article.review.request` | Không có service “request review” thuần. `SeoProjectApprovalService::approveLinkedProject` / `submitStaffEditingComplete` **approve project** (status=approved) + notify — semantic khác request. `markArticleReviewed` xóa local media + clear WP queue. | **Không** adapter. Catalog `internal_only`, không handler. Không thêm boolean flag che side effect. |
-| `wordpress.article.update` | Rejected (Phase 1b). | Dùng `wordpress.article.sync_outbound` legacy_not_selectable. |
-| Safe WP content update without publish status | Runtime luôn `status=publish`. | Không tạo action update an toàn. |
-| `wordpress.article.publish` handler | Chưa chứng minh đủ guard + idempotency + PublishIntent end-to-end cho production. | Giữ `internal_only`, không handler Phase 3, không expose UI. |
-| `wordpress.comment_review.publish` handler | Outbound WP từ workflow node hiện tại; cần migrate có kiểm soát. | Giữ `internal_only`, không handler Phase 3. |
+| Action key | Decision |
+|---|---|
+| `article.review.request` | **Không** adapter. Catalog `internal_only`. Approve project ≠ request review. |
+| `wordpress.article.update` | Rejected (1b). Dùng `wordpress.article.sync_outbound` `legacy_not_selectable`. |
+| Safe WP content update without publish | Không tạo. Runtime sync luôn `status=publish`. |
+| `wordpress.article.publish` | `internal_only`, chưa handler production (guard/idempotency/PublishIntent). |
+| `wordpress.comment_review.publish` | **Done** — xem [ACTION_CATALOG](AUTOMATION_ACTION_CATALOG.md) + [MAP_SEO_WP](../MAP_SEO_WP.md). |
 
-## Technical debt
+## Technical debt (còn mở)
 
 | Item | Status |
 |---|---|
-| Filament Resource trong Action | **Resolved** — `SeoIssueProjectTaskAssignmentService` + `KeywordProjectAssignmentService` |
-| Catalog `supportsDryRun` lệch handler | **Fixed** — `article.content.update` (+ seo_meta) catalog aligned |
-| `article.create` không reuse `CreateArticlesFromTaskService::createDraftArticle` | Accepted — method private + couple workflow |
-| `article.create` idempotency | **Resolved Phase 4A** — origin_type/origin_id |
-| `article.content.update` expected_revision | **Mitigated** — expected_updated_at / expected_content_hash (no revision column) |
-| `keyword.domain_link_list.sync` action | **Open** — catalog-only; observer vẫn chạy khi persist keyword |
+| `keyword.domain_link_list.sync` | **Open** — catalog-only; observer vẫn chạy khi persist keyword |
+
+Debt đã resolve (Filament extract, dry-run align, `article.create` idempotency, content conflict hash) → không liệt kê lại; xem [AUTOMATION_MIGRATION_STATUS](AUTOMATION_MIGRATION_STATUS.md).

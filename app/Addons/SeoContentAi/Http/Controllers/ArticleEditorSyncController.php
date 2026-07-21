@@ -15,13 +15,14 @@ use App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 
 /**
- * REST lưu / đồng bộ bài viết từ React Editor (thay Livewire payload HTML lớn).
+ * REST lưu / đồng bộ bài viết từ React Editor.
  *
  * - POST /api/seo/articles/{article}/save
- * - POST /api/seo/articles/{article}/sync-wp  (manual only — bypasses Automation Rules)
+ * - POST /api/seo/articles/{article}/sync-wp  (manual Automation trigger)
  * - POST /api/seo/articles/{article}/seo-meta
  */
 final class ArticleEditorSyncController extends Controller
@@ -86,28 +87,44 @@ final class ArticleEditorSyncController extends Controller
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        $context = WordPressManualSyncService::contextFromAuth($article, 'editor_sync_wp_button');
-        $result = $this->manualSync->enqueueFromEditorBundle($article, $request->editorBundle(), $context);
-        $status = ($result['success'] ?? false) ? 200 : 422;
+        /** @var User $actor */
+        $actor = $request->user();
+        abort_unless($actor instanceof User, 403);
 
-        if ($result['success'] ?? false) {
-            $result['queued'] = true;
-            $result['reload'] = false;
-            $result['manual'] = true;
+        $result = $this->manualSync->enqueueFromEditorBundle(
+            $article,
+            $request->editorBundle(),
+            $actor,
+            'article_editor.sync_wordpress',
+        );
+        $statusCode = ($result['success'] ?? false) ? 200 : 422;
+        $dispatchStatus = (string) ($result['status'] ?? (($result['success'] ?? false) ? 'dispatched' : 'blocked'));
+
+        if ($dispatchStatus === 'blocked') {
             $result['notification'] = [
-                'title' => __('seo-content-ai::filament.article_list.sync_queued_title'),
-                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.article_list.sync_queued_body')),
+                'title' => __('seo-content-ai::filament.automation.wp_sync_blocked_title'),
+                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.wp_sync_blocked_body')),
+                'status' => 'danger',
+            ];
+        } elseif ($dispatchStatus === 'deduplicated') {
+            $result['notification'] = [
+                'title' => __('seo-content-ai::filament.automation.gate.deduplicated_title'),
+                'body' => (string) ($result['message'] ?? ''),
                 'status' => 'info',
             ];
         } else {
+            $historyUrl = (string) ($result['automation_history_url'] ?? '');
+            $result['queued'] = true;
+            $result['reload'] = false;
             $result['notification'] = [
-                'title' => __('seo-content-ai::filament.article_list.sync_queue_failed_title'),
-                'body' => (string) ($result['message'] ?? ''),
-                'status' => 'danger',
+                'title' => __('seo-content-ai::filament.automation.gate.dispatched_title'),
+                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.article_list.sync_queued_body'))
+                    .($historyUrl !== '' ? ' '.__('seo-content-ai::filament.automation.view_progress').': '.$historyUrl : ''),
+                'status' => 'info',
             ];
         }
 
-        return response()->json($result, $status);
+        return response()->json($result, $statusCode);
     }
 
     public function saveSeoMeta(ArticleEditorSeoMetaRequest $request, SeoArticle $article): JsonResponse

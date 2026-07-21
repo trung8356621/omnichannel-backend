@@ -40,6 +40,7 @@ final class AutomationRule extends Model
 
     protected $casts = [
         'is_enabled' => 'boolean',
+        'allow_manual_trigger' => 'boolean',
         'priority' => 'integer',
         'stop_on_failure' => 'boolean',
         'version' => 'integer',

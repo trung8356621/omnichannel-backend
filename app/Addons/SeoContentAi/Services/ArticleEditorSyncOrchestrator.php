@@ -4,10 +4,9 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
-use App\Addons\SeoContentAi\Jobs\SyncArticleBodyMediaToWordPressJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
+use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressExecutionContext;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Contracts\Cache\LockTimeoutException;
@@ -46,7 +45,7 @@ final class ArticleEditorSyncOrchestrator
     public function syncFromEditorBundle(
         SeoArticle $article,
         array $bundle,
-        ManualWordPressContext $sideEffect,
+        WordPressExecutionContext $sideEffect,
         bool $fromQueue = false,
     ): array {
         if (! $fromQueue) {
@@ -78,7 +77,7 @@ final class ArticleEditorSyncOrchestrator
      * @param  array<string, mixed>  $bundle
      * @return array<string, mixed>
      */
-    private function runSyncPipeline(SeoArticle $article, array $bundle, ManualWordPressContext $sideEffect): array
+    private function runSyncPipeline(SeoArticle $article, array $bundle, WordPressExecutionContext $sideEffect): array
     {
         $steps = [];
         $warnings = [];
@@ -98,7 +97,8 @@ final class ArticleEditorSyncOrchestrator
         } else {
             $html = $this->persist->persistLocalSilent($article, $context, $html);
             $this->syncService->storeLocalSaveFingerprint($article->fresh(), $html, $seoAnalysis);
-            app(SeoArticleScoringQueueService::class)->dispatchForArticle($article->fresh() ?? $article, force: true);
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->articleContentUpdated($article->fresh() ?? $article);
             $steps[] = $this->step('save_local', 'done', 'Đã lưu bản nháp Laravel.');
         }
 
@@ -180,14 +180,8 @@ final class ArticleEditorSyncOrchestrator
 
         $deferInlineMedia = (bool) ($syncOptions['defer_inline_media_sync'] ?? false);
         if ($deferInlineMedia) {
-            SyncArticleBodyMediaToWordPressJob::dispatch(
-                (int) $article->id,
-                $seoOverride,
-                $sideEffect->userId,
-                $sideEffect->requestId,
-                $sideEffect->reason,
-                $sideEffect->correlationId,
-            );
+            // Body media must stay inside the same Automation Action — do not spawn seo-queue follow-up.
+            $deferInlineMedia = false;
         }
 
         $remoteIdentity = $this->wpContent->refreshSlugAndPermalinkFromWordPress($article->fresh());
@@ -200,6 +194,15 @@ final class ArticleEditorSyncOrchestrator
         }
 
         $steps[] = $this->step('finalize', 'done', (string) ($finalize['step_detail'] ?? $syncBody));
+
+        $article = $article->fresh() ?? $article;
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->wordpressSynced($article, [
+                'wp_post_id' => (int) ($article->wp_post_id ?? 0) ?: null,
+                'message' => $syncBody,
+            ]);
+        app(\App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPostSyncReconciler::class)
+            ->reconcileAfterArticleSynced($article);
 
         return [
             'success' => true,

@@ -199,7 +199,7 @@ flowchart TB
 | FAQ root | `ArticleFaqEditor` (`#seo-article-faq-root`) | FAQ bar: Generate / Import / Extract FAQ / Add; Extract disable tới khi có selection |
 | Portal tabs | `ArticleImagesTab` | Quản lý ảnh bài, AI jobs, mở media editor; UI hàng: **Except** + menu `⋯` (`.seo-article-images-more-menu`) |
 | Portal tabs | `SeoScorePanel` | Phân tích SEO client-side + violations |
-| Portal tabs | `ArticleReviewsTab` | Virtual reviews (product): header `{count} bình luận` + **Tạo bình luận nhanh** + **Làm mới**; Livewire `generateQuickPostReviews` / `refreshVirtualReviewsForEditor` |
+| Portal tabs | `ArticleReviewsTab` | Product reviews local + WP: `{count}` + **Tạo bình luận nhanh** + **Làm mới**; `StarRating` 1–5; Publish/Cancel Automation; Livewire `generateQuickPostReviews` / `refreshVirtualReviewsForEditor` |
 | Modal | `GenerateImageModal` → `ImageSplitterPanel` | Tạo ảnh AI + split album |
 | Overlay | `EditorBusyOverlay` | Lock UI khi heavy action |
 

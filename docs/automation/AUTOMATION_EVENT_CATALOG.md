@@ -77,7 +77,10 @@ Canonical context IDs: xem `AUTOMATION_BOUNDARIES.md` § Canonical IDs. Dùng `s
 | `wordpress.article_created` | article | `wp_post_id` | createForArticle |
 | `wordpress.article_updated` | article | fingerprint | sync_outbound hub |
 | `wordpress.article_published` | article | `wp_post_id`, `publish_intent` | publish* |
-| `wordpress.comment_review_published` | article | count | WordPressCommentReviewService |
+| `wordpress.comment_review_published` | article/review | `review_id`, `wp_comment_id`, `deduplicated` | PublishWordPressCommentReviewHookAction |
+| `wordpress.comment_review_publish_failed` | article/review | `review_id`, `error_code` | PublishWordPressCommentReviewHookAction |
+| `article.product_reviews_generated` | article | `review_ids`, `review_count`, `connection_id` | ArticleProductReviewStoreService |
+| `article.product_review_publish_requested` | article/review | `review_id`, `publish_intent` | StoreService fan-out / QueuePending |
 
 ## Emit rules (Phase 3)
 

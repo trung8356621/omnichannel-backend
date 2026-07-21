@@ -9,15 +9,13 @@ use App\Addons\SeoContentAi\Automation\Data\ActionResult;
 use App\Addons\SeoContentAi\Automation\Runtime\ActionRunner;
 use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Services\KeywordProjectAssignmentService;
 use App\Addons\SeoContentAi\Services\SeoIssueProjectTaskAssignmentService;
-use App\Addons\SeoContentAi\Services\SeoNotificationService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
- * Group 1 callers: SEO issue assign + keyword assign qua flag legacy/shadow/action.
+ * Group 1 callers: SEO issue assign + keyword assign — ActionRunner only (full cutover).
  */
 final class AssignmentCallerBridge
 {
@@ -26,7 +24,6 @@ final class AssignmentCallerBridge
         private readonly ActionRunner $actionRunner,
         private readonly SeoIssueProjectTaskAssignmentService $seoIssueAssignment,
         private readonly KeywordProjectAssignmentService $keywordAssignment,
-        private readonly SeoNotificationService $notifications,
         private readonly ParitySnapshotNormalizer $parityNormalizer,
     ) {}
 
@@ -110,7 +107,6 @@ final class AssignmentCallerBridge
         );
 
         $summary = $this->parityNormalizer->assignment($result, $projectId)['resulting_state'];
-        $this->notifyIfAdded($projectId, $summary);
 
         return $summary;
     }
@@ -186,27 +182,6 @@ final class AssignmentCallerBridge
             correlationId: $correlationId,
         );
 
-        $summary = $this->parityNormalizer->assignment($result, $projectId)['resulting_state'];
-        $this->notifyIfAdded($projectId, $summary);
-
-        return $summary;
-    }
-
-    /**
-     * @param  array{added:int, duplicate:int, overflow:int, domain_mismatch:int, already_in_project:int}  $summary
-     */
-    private function notifyIfAdded(int $projectId, array $summary): void
-    {
-        if ((int) ($summary['added'] ?? 0) <= 0) {
-            return;
-        }
-
-        $project = SeoProject::query()->find($projectId);
-        if ($project instanceof SeoProject) {
-            $this->notifications->notifyProjectOwnerTasksAdded(
-                $project->fresh() ?? $project,
-                (int) $summary['added'],
-            );
-        }
+        return $this->parityNormalizer->assignment($result, $projectId)['resulting_state'];
     }
 }

@@ -32,4 +32,13 @@ HTML;
         $this->assertStringContainsString('Đoạn mở.', $clean);
         $this->assertStringContainsString('Mục 1', $clean);
     }
+
+    public function test_strip_transient_also_merges_split_inline_links(): void
+    {
+        $html = '<p><a href="https://example.com/x">công nghệ</a><strong><a href="https://example.com/x">DWR</a></strong></p>';
+        $clean = app(ArticleEditorHtmlSanitizeService::class)->stripTransientEditorMarkup($html);
+
+        $this->assertSame(1, substr_count(strtolower($clean), '<a '));
+        $this->assertStringContainsString('<strong>DWR</strong>', $clean);
+    }
 }

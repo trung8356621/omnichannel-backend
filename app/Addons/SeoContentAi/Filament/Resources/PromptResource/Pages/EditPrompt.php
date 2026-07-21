@@ -7,8 +7,12 @@ namespace App\Addons\SeoContentAi\Filament\Resources\PromptResource\Pages;
 use App\Addons\SeoContentAi\Filament\Pages\SeoSettingsOverview;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use App\Addons\SeoContentAi\Filament\Resources\PromptResource;
+use App\Addons\SeoContentAi\PromptHooks\Exceptions\VersionNotFound;
 use App\Addons\SeoContentAi\PromptHooks\PromptHookFormSchema;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookEditorCatalog;
+use App\Addons\SeoContentAi\PromptHooks\Runtime\PromptHookRuntimeSettingsResolver;
 use App\Addons\SeoContentAi\Services\AiModelsReadinessService;
+use App\Addons\SeoContentAi\Support\ImageToolType;
 use App\Addons\SeoContentAi\Support\PromptPostProcessing;
 use Filament\Actions;
 
@@ -57,10 +61,25 @@ class EditPrompt extends SeoEditRecord
         $hookKey = trim((string) ($data['hook_key'] ?? ''));
         if ($hookKey !== '') {
             try {
-                $definition = app(\App\Addons\SeoContentAi\PromptHooks\PromptHookRegistry::class)->get($hookKey);
-                $data['hook_version'] = $definition->version;
-                $data['hook_settings'] = app(\App\Addons\SeoContentAi\PromptHooks\PromptHookSettingsResolver::class)
-                    ->resolve($definition, is_array($data['hook_settings'] ?? null) ? $data['hook_settings'] : null);
+                // Canonical catalog (semver 0.1.0) — không dùng legacy registry (version int 1).
+                // Legacy version trên form làm settingsFields rỗng + normalizeForSave ném VersionNotFound (save fail, không toast).
+                $catalog = app(PromptHookEditorCatalog::class);
+                $storedVersion = trim((string) ($data['hook_version'] ?? ''));
+                try {
+                    $definition = $storedVersion !== ''
+                        ? $catalog->find($hookKey, $storedVersion)
+                        : $catalog->latestPinnedOrFail($hookKey);
+                } catch (VersionNotFound) {
+                    $definition = $catalog->latestPinnedOrFail($hookKey);
+                }
+                $data['hook_version'] = $definition->version->toString();
+                $resolved = app(PromptHookRuntimeSettingsResolver::class)
+                    ->resolve(
+                        $definition,
+                        is_array($data['hook_settings'] ?? null) ? $data['hook_settings'] : [],
+                        [],
+                    );
+                $data['hook_settings'] = $resolved['hook'];
             } catch (\Throwable) {
                 // Hook manifest thiếu / đổi key — giữ raw state.
             }
@@ -92,7 +111,7 @@ class EditPrompt extends SeoEditRecord
         $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
         $postProcessing = is_array($settings['post_processing'] ?? null) ? $settings['post_processing'] : [];
 
-        if (! \App\Addons\SeoContentAi\Support\ImageToolType::fromMixed($data['tools'] ?? 'default')->isImagePipeline()
+        if (! ImageToolType::fromMixed($data['tools'] ?? 'default')->isImagePipeline()
             && $postProcessing === []) {
             $existingSettings = is_array($this->record->settings ?? null) ? $this->record->settings : [];
             $postProcessing = is_array($existingSettings['post_processing'] ?? null)

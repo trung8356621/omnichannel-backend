@@ -127,14 +127,14 @@ final class ArticleQuickPostReviewService
         }
 
         $count = (int) ($result['created_count'] ?? 0);
-        if ($count <= 0 && (int) ($article->wp_post_id ?? 0) > 0) {
-            $count = count($this->virtualComments->getFromWordPress($article));
-        }
 
         return [
             'success' => true,
             'message' => (string) ($result['message'] ?? ''),
             'created_count' => $count,
+            'review_ids' => $result['review_ids'] ?? [],
+            'automation_enabled' => (bool) ($result['automation_enabled'] ?? false),
+            'has_wp_post_id' => (bool) ($result['has_wp_post_id'] ?? ((int) ($article->wp_post_id ?? 0) > 0)),
         ];
     }
 
@@ -200,21 +200,7 @@ final class ArticleQuickPostReviewService
      */
     private function publishAiOutput(SeoArticle $article, string $aiOutput): array
     {
-        $items = $this->payloadParser->parse($aiOutput);
-        if ($items === []) {
-            return [
-                'success' => false,
-                'message' => 'Không parse được bình luận/review từ kết quả AI.',
-            ];
-        }
-
-        $result = $this->commentReviewPublisher->publishItems($article, $items);
-
-        return [
-            'success' => (bool) ($result['success'] ?? false),
-            'message' => (string) ($result['message'] ?? ''),
-            'created_count' => isset($result['created_count']) ? (int) $result['created_count'] : null,
-        ];
+        return $this->commentReviewPublisher->storeLocalFromAiOutput($article, $aiOutput);
     }
 
     /**

@@ -40,6 +40,30 @@ final class CoreAutomationModuleProvider implements AutomationModuleProvider
             module: 'automation',
         ));
 
+        $context->events->register(new BusinessEventDefinition(
+            name: BusinessEventName::ManualActionRequested->value,
+            subject: null,
+            payloadSchema: [
+                'action_code' => ['type' => 'string', 'required' => true],
+                'article_id' => ['type' => 'integer', 'required' => false],
+            ],
+            description: 'Manual Automation Action requested from UI/API.',
+            module: 'automation',
+        ));
+
+        $context->events->register(new BusinessEventDefinition(
+            name: BusinessEventName::NotificationRequested->value,
+            subject: null,
+            payloadSchema: [
+                'message' => ['type' => 'string', 'required' => false],
+                'title' => ['type' => 'string', 'required' => false],
+                'user_id' => ['type' => 'integer', 'required' => false],
+                'project_id' => ['type' => 'integer', 'required' => false],
+            ],
+            description: 'Request in-app notification delivery via Automation.',
+            module: 'notification',
+        ));
+
         $context->actions->register(new AutomationActionDefinition(
             actionCode: AutomationActionCode::WebhookSend->value,
             handlerClass: WebhookSendHookAction::class,

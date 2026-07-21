@@ -1508,8 +1508,14 @@
             }
         "
         x-on:flush-article-faqs.window="
-            setTimeout(() => {
-                if ($wire.pendingEditorCollectTarget) {
+            if (this._faqFlushFinalizeTimer) {
+                clearTimeout(this._faqFlushFinalizeTimer);
+            }
+            const targetAtFlush = $wire.pendingEditorCollectTarget;
+            this._faqFlushFinalizeTimer = setTimeout(() => {
+                this._faqFlushFinalizeTimer = null;
+                // Chỉ fallback khi saveArticleFaqs chưa clear pending (tránh double collect → double generate FAQ).
+                if ($wire.pendingEditorCollectTarget && $wire.pendingEditorCollectTarget === targetAtFlush) {
                     $wire.finalizePendingEditorCollect();
                 }
             }, 1200);
@@ -1530,6 +1536,13 @@
                         });
                     } catch (error) {
                         window.__seoEndArticleHeavyActionClient?.();
+                        if (!error?.notificationShown && typeof FilamentNotification !== 'undefined') {
+                            new FilamentNotification()
+                                .title(@js(__('seo-content-ai::filament.automation.wp_sync_blocked_title')))
+                                .body(error?.message ?? @js(__('seo-content-ai::filament.automation.wp_sync_blocked_body')))
+                                .danger()
+                                .send();
+                        }
                     }
                 })();
             } else if (detail.target === 'generate-faq') {

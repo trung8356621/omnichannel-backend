@@ -23,6 +23,7 @@ final class SeoQueueContextTest extends TestCase
         $blocked = $method->invoke($service);
         $this->assertIsArray($blocked);
         $this->assertFalse($blocked['success'] ?? true);
+        $this->assertSame('WORDPRESS_SYNC_FORBIDDEN_ROLE', $blocked['error_code'] ?? null);
 
         SeoQueueContext::runWpSyncFromQueue(function () use ($method, $service): void {
             $this->assertNull($method->invoke($service));

@@ -3,6 +3,7 @@ import { ExternalLink, Loader2, Search, Trash2 } from 'lucide-react';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { computeLinkBubblePosition } from '../utils/linkEditorAnchor';
+import { applyLinkToSelection } from '../utils/inlineLinkNormalizer';
 import { t } from '../utils/i18n';
 
 const ARTICLE_SEARCH_DEBOUNCE_MS = 450;
@@ -84,15 +85,7 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
 
             restoreEditorSelection();
 
-            const chain = editor.chain().focus();
-            if (editor.isActive('link')) {
-                chain.extendMarkRange('link').setLink({ href: trimmed }).run();
-                setUrl(trimmed);
-                return true;
-            }
-
-            if (!editor.state.selection.empty) {
-                chain.setLink({ href: trimmed }).run();
+            if (applyLinkToSelection(editor, trimmed)) {
                 setUrl(trimmed);
                 return true;
             }
@@ -117,15 +110,16 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
         captureEditorSelection();
 
         const selectedPhrase = readEditorSelectionText(editor);
+        const { empty } = editor.state.selection;
 
-        if (editor.isActive('link')) {
+        if (editor.isActive('link') && empty) {
             editor.chain().focus().extendMarkRange('link').run();
             setUrl(editor.getAttributes('link').href ?? '');
-            setAnchorPhrase(selectedPhrase);
-            setArticleQuery(selectedPhrase);
+            setAnchorPhrase(readEditorSelectionText(editor) || selectedPhrase);
+            setArticleQuery(readEditorSelectionText(editor) || selectedPhrase);
             setTimeout(() => inputRef.current?.focus(), 0);
         } else {
-            setUrl('');
+            setUrl(editor.isActive('link') ? (editor.getAttributes('link').href ?? '') : '');
             setAnchorPhrase(selectedPhrase);
             setArticleQuery(selectedPhrase);
             setTimeout(() => {
@@ -247,22 +241,28 @@ export default function LinkEditBubble({ editor, anchorRect, containerRef, onClo
 
     const applyLink = () => {
         const trimmed = url.trim();
+        restoreEditorSelection();
         const chain = editor.chain().focus();
         if (trimmed === '') {
             if (editor.isActive('link')) {
                 chain.extendMarkRange('link').unsetLink().run();
             }
-        } else if (editor.isActive('link')) {
-            chain.extendMarkRange('link').setLink({ href: trimmed }).run();
         } else {
-            chain.setLink({ href: trimmed }).run();
+            applyLinkToSelection(editor, trimmed);
         }
 
         onClose();
     };
 
     const removeLink = () => {
-        editor.chain().focus().extendMarkRange('link').unsetLink().run();
+        restoreEditorSelection();
+        const { empty } = editor.state.selection;
+        const chain = editor.chain().focus();
+        if (empty) {
+            chain.extendMarkRange('link').unsetLink().run();
+        } else {
+            chain.unsetLink().run();
+        }
         onClose();
     };
 

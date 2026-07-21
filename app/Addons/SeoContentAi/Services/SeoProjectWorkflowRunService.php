@@ -39,7 +39,7 @@ final class SeoProjectWorkflowRunService
 
     public function startRun(SeoProject $project, string $mode): SeoProjectRun
     {
-        return SeoProjectRun::query()->create([
+        $run = SeoProjectRun::query()->create([
             'project_id' => (int) $project->id,
             'user_id' => (int) auth()->id(),
             'mode' => $mode === SeoProjectRun::MODE_TEST ? SeoProjectRun::MODE_TEST : SeoProjectRun::MODE_FULL,
@@ -50,6 +50,11 @@ final class SeoProjectWorkflowRunService
             'items' => null,
             'started_at' => now(),
         ]);
+
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->runStarted($run);
+
+        return $run;
     }
 
     public function prepareRunQueue(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun

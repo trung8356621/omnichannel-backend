@@ -75,7 +75,7 @@ final class AutomationActionAdapterTest extends TestCase
 
         self::assertNotContains('wordpress.article.publish', $selectable);
         self::assertNotContains('wordpress.article.sync_outbound', $selectable);
-        self::assertNotContains('wordpress.comment_review.publish', $selectable);
+        self::assertContains('wordpress.comment_review.publish', $selectable);
         self::assertNotContains('article.review.request', $selectable);
     }
 

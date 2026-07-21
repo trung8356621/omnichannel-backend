@@ -40,14 +40,18 @@ final class WordPressSideEffectGuard
         }
 
         if ($context instanceof ManualWordPressContext) {
-            $this->assertManual($context, $operation, $payload);
-
-            return;
+            $this->block(
+                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
+                'ManualWordPressContext deprecated — WordPress mutations require AutomationWordPressContext.',
+                $operation,
+                $payload,
+                $context,
+            );
         }
 
         $this->block(
             UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-            'WordPress context origin is not automation|manual.',
+            'WordPress context origin must be automation.',
             $operation,
             $payload,
             $context,
@@ -123,20 +127,32 @@ final class WordPressSideEffectGuard
                 );
             }
         } else {
+            $manualActionCode = (string) (
+                $execution->action_code
+                ?? $execution->context['action_code']
+                ?? $execution->context['manual_action']['action_code']
+                ?? ''
+            );
+            $wpMutatingActions = [
+                AutomationActionCode::WordpressArticleSync->value,
+                AutomationActionCode::WordpressCommentReviewPublish->value,
+            ];
+            $manualWp = in_array($manualActionCode, $wpMutatingActions, true);
+
             $rule = $execution->rule()->with(['actions', 'nodes'])->first();
             $ruleHasWp = $rule !== null && (
                 $rule->actions->contains(
-                    static fn ($a): bool => (string) $a->action_code === AutomationActionCode::WordpressArticleSync->value,
+                    static fn ($a): bool => in_array((string) $a->action_code, $wpMutatingActions, true),
                 )
                 || $rule->nodes->contains(
-                    static fn ($n): bool => (string) ($n->action_code ?? '') === AutomationActionCode::WordpressArticleSync->value,
+                    static fn ($n): bool => in_array((string) ($n->action_code ?? ''), $wpMutatingActions, true),
                 )
             );
 
-            if (! $ruleHasWp) {
+            if (! $ruleHasWp && ! $manualWp) {
                 $this->block(
                     UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-                    'No wordpress.article.sync action bound to execution rule.',
+                    'No WordPress mutating action (article.sync / comment_review.publish) bound to execution.',
                     $operation,
                     $payload,
                     $context,

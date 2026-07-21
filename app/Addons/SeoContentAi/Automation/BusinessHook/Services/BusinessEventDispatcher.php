@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\BusinessHook\Services;
 
-use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationExecutionStatus;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Data\AutomationEventDispatchResult;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationEventDispatchOutcome;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationRunMode;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessHookErrorCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Jobs\ExecuteAutomationRuleJob;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationExecution;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\BusinessEvent;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Registry\BusinessEventRegistry;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationLoopGuard;
@@ -34,6 +35,8 @@ final class BusinessEventDispatcher
     ) {}
 
     /**
+     * BC: trả BusinessEvent. Outcome event nên dùng dispatchWithOutcome (không throw SKIPPED_NO_RULE).
+     *
      * @param  array<string, mixed>  $payload
      * @param  array<string, mixed>  $context
      */
@@ -44,10 +47,36 @@ final class BusinessEventDispatcher
         array $context = [],
         ?string $eventUuid = null,
     ): BusinessEvent {
+        $result = $this->dispatchWithOutcome($eventName, $subject, $payload, $context, $eventUuid);
+
+        if ($result->event instanceof BusinessEvent) {
+            return $result->event;
+        }
+
+        throw new AutomationException(
+            $result->errorCode ?? BusinessHookErrorCode::EventNotRegistered->value,
+            $result->message ?? "Failed to dispatch [{$eventName}].",
+        );
+    }
+
+    /**
+     * Typed dispatch — SKIPPED_NO_RULE không phải exception.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $context
+     */
+    public function dispatchWithOutcome(
+        string $eventName,
+        Model|string|null $subject = null,
+        array $payload = [],
+        array $context = [],
+        ?string $eventUuid = null,
+    ): AutomationEventDispatchResult {
         if (! $this->eventRegistry->has($eventName)) {
-            throw new AutomationException(
-                BusinessHookErrorCode::EventNotRegistered->value,
-                "Business event [{$eventName}] is not registered.",
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::RejectedInvalidPayload,
+                message: "Business event [{$eventName}] is not registered.",
+                errorCode: BusinessHookErrorCode::EventNotRegistered->value,
             );
         }
 
@@ -55,7 +84,12 @@ final class BusinessEventDispatcher
 
         $existing = BusinessEvent::query()->where('event_uuid', $eventUuid)->first();
         if ($existing instanceof BusinessEvent) {
-            return $existing;
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::Deduplicated,
+                event: $existing,
+                message: 'Event uuid already recorded.',
+                matchedRules: (int) (($existing->context['matched_rules'] ?? 0)),
+            );
         }
 
         $subjectType = null;
@@ -83,7 +117,12 @@ final class BusinessEventDispatcher
                 'error_code' => $e->errorCode,
                 'message' => $e->getMessage(),
             ]);
-            throw $e;
+
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::BlockedLoop,
+                message: $e->getMessage(),
+                errorCode: $e->errorCode,
+            );
         }
 
         $payloadErrors = $this->eventRegistry->validatePayload($eventName, $payload);
@@ -94,39 +133,118 @@ final class BusinessEventDispatcher
             ]);
         }
 
-        $event = BusinessEvent::query()->create([
-            'event_uuid' => $eventUuid,
-            'event_name' => $eventName,
-            'subject_type' => $subjectType,
-            'subject_id' => $subjectId,
-            'site_id' => $siteId,
-            'project_id' => $projectId,
-            'payload' => $this->sanitizer->sanitize($payload) ?? [],
-            'context' => $this->sanitizer->sanitize($context) ?? [],
-            'occurred_at' => now(),
-            'created_at' => now(),
-        ]);
+        try {
+            $event = BusinessEvent::query()->create([
+                'event_uuid' => $eventUuid,
+                'event_name' => $eventName,
+                'subject_type' => $subjectType,
+                'subject_id' => $subjectId,
+                'site_id' => $siteId,
+                'project_id' => $projectId,
+                'payload' => $this->sanitizer->sanitize($payload) ?? [],
+                'context' => $this->sanitizer->sanitize($context) ?? [],
+                'occurred_at' => now(),
+                'created_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('automation.event.persist_failed', [
+                'event_name' => $eventName,
+                'error' => $e->getMessage(),
+            ]);
 
-        $schedule = function () use ($event, $subjectData): void {
-            $this->scheduleMatchingRules($event, $subjectData);
-        };
-
-        if (DB::connection('omi_seo_ai')->transactionLevel() > 0) {
-            DB::connection('omi_seo_ai')->afterCommit($schedule);
-        } else {
-            $schedule();
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::FailedToDispatch,
+                message: $e->getMessage(),
+                errorCode: 'EVENT_PERSIST_FAILED',
+            );
         }
 
-        return $event;
+        $scheduleOutcome = null;
+        $schedule = function () use ($event, $subjectData, &$scheduleOutcome): void {
+            $scheduleOutcome = $this->scheduleMatchingRules($event, $subjectData);
+        };
+
+        try {
+            if (DB::connection('omi_seo_ai')->transactionLevel() > 0) {
+                DB::connection('omi_seo_ai')->afterCommit($schedule);
+                // Trong transaction: chưa schedule — coi như queued/pending match sau commit.
+                return new AutomationEventDispatchResult(
+                    outcome: AutomationEventDispatchOutcome::Queued,
+                    event: $event,
+                    message: 'Event persisted; rule match scheduled after commit.',
+                );
+            }
+
+            $schedule();
+        } catch (\Throwable $e) {
+            Log::error('automation.event.schedule_failed', [
+                'event_name' => $eventName,
+                'event_uuid' => $event->event_uuid,
+                'error' => $e->getMessage(),
+            ]);
+
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::FailedToDispatch,
+                event: $event,
+                message: $e->getMessage(),
+                errorCode: 'EVENT_SCHEDULE_FAILED',
+            );
+        }
+
+        return $scheduleOutcome instanceof AutomationEventDispatchResult
+            ? $scheduleOutcome
+            : new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::Queued,
+                event: $event,
+            );
     }
 
     /**
      * @param  array<string, mixed>  $subjectData
      */
-    private function scheduleMatchingRules(BusinessEvent $event, array $subjectData): void
+    private function scheduleMatchingRules(BusinessEvent $event, array $subjectData): AutomationEventDispatchResult
     {
         $rules = $this->matcher->match($event, $subjectData);
 
+        if ($rules->isEmpty()) {
+            $event->forceFill([
+                'context' => array_merge($event->context ?? [], [
+                    'matched_rules' => 0,
+                    'automation_match_status' => 'skipped',
+                    'automation_skip_code' => BusinessHookErrorCode::RuleNotFound->value,
+                    'reason' => 'no_enabled_rule',
+                ]),
+            ])->save();
+
+            $logContext = [
+                'event_uuid' => $event->event_uuid,
+                'event_name' => $event->event_name,
+                'automation_skip_code' => BusinessHookErrorCode::RuleNotFound->value,
+                'outcome' => AutomationEventDispatchOutcome::SkippedNoRule->value,
+            ];
+            if ($this->isOptionalConsumerEvent((string) $event->event_name)) {
+                Log::debug('automation.event.skipped_no_rule', $logContext);
+            } else {
+                Log::info('automation.event.skipped_no_rule', $logContext);
+            }
+
+            return new AutomationEventDispatchResult(
+                outcome: AutomationEventDispatchOutcome::SkippedNoRule,
+                event: $event,
+                message: 'No enabled automation rule for event.',
+                errorCode: BusinessHookErrorCode::RuleNotFound->value,
+                matchedRules: 0,
+            );
+        }
+
+        $event->forceFill([
+            'context' => array_merge($event->context ?? [], [
+                'matched_rules' => $rules->count(),
+                'automation_match_status' => 'matched',
+            ]),
+        ])->save();
+
+        $queued = 0;
         foreach ($rules as $rule) {
             try {
                 $execution = $this->executionService->createPendingExecution($event, $rule);
@@ -139,6 +257,7 @@ final class BusinessEventDispatcher
                 } else {
                     ExecuteAutomationRuleJob::dispatch($execution->id);
                 }
+                $queued++;
             } catch (\Throwable $e) {
                 Log::error('automation.schedule_failed', [
                     'event_uuid' => $event->event_uuid,
@@ -147,6 +266,13 @@ final class BusinessEventDispatcher
                 ]);
             }
         }
+
+        return new AutomationEventDispatchResult(
+            outcome: AutomationEventDispatchOutcome::Queued,
+            event: $event,
+            message: "Matched {$rules->count()} rule(s), queued {$queued}.",
+            matchedRules: $rules->count(),
+        );
     }
 
     /**
@@ -211,6 +337,23 @@ final class BusinessEventDispatcher
         return [
             'id' => (int) $subject->getKey(),
         ];
+    }
+
+    private function isOptionalConsumerEvent(string $eventName): bool
+    {
+        return in_array($eventName, [
+            BusinessEventName::WordpressSyncStarted->value,
+            BusinessEventName::WordpressSynced->value,
+            BusinessEventName::WordpressSyncFailed->value,
+            BusinessEventName::SeoAnalysisStarted->value,
+            BusinessEventName::SeoAnalysisCompleted->value,
+            BusinessEventName::SeoAnalysisFailed->value,
+            BusinessEventName::MediaProcessed->value,
+            BusinessEventName::MediaFailed->value,
+            BusinessEventName::ContentProjectRunStarted->value,
+            BusinessEventName::ContentProjectRunCompleted->value,
+            BusinessEventName::ContentProjectRunFailed->value,
+        ], true);
     }
 
     private function nullableInt(mixed $value): ?int

@@ -44,73 +44,9 @@ final class ArticleWpSyncQueueService
      */
     public function enqueueFromEditorBundle(SeoArticle $article, array $bundle, ?ManualWordPressContext $manual = null): array
     {
-        $article->refresh();
-        $existing = $this->readQueueMeta($article);
-
-        if (in_array((string) ($existing['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_PROCESSING], true)) {
-            return [
-                'success' => false,
-                'message' => 'Bài viết đang trong hàng đợi đồng bộ. Vui lòng đợi hoặc xem tab Queue.',
-            ];
-        }
-
-        // Phải gán lại $bundle — applyPublishImmediatelyToBundle trả về bản mới (PHP array copy).
-        $bundle = $this->applyPublishImmediatelyToBundle($bundle);
-        $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
-        $this->bundleApply->apply($article, $bundle, $context);
-
-        $html = (string) ($bundle['html'] ?? '');
-        $this->persist->persistLocalSilent($article->fresh() ?? $article, $context, $html);
-
-        $article = $this->bootstrapArticleDatabase($article->fresh() ?? $article);
-        $now = now();
-
-        $queuePayload = [
-            'status' => self::STATUS_PENDING,
-            'queued_at' => $now->toIso8601String(),
-            'started_at' => null,
-            'finished_at' => null,
-            'error' => null,
-            'user_id' => $manual?->userId ?? Auth::id(),
-            'publish_immediately' => $this->resolvePublishImmediately($bundle),
-            'scheduled_at' => $context->resolvePublishAtForSave()?->toIso8601String(),
-        ];
-
-        if ($manual instanceof ManualWordPressContext) {
-            $queuePayload = array_merge($queuePayload, $manual->toAuditMeta());
-            Log::info('wordpress.manual_sync.queued', $manual->toAuditMeta());
-        } else {
-            // Fail-closed: enqueue without manual context must not create WP jobs.
-            return [
-                'success' => false,
-                'message' => 'WordPress queue requires explicit ManualWordPressContext (manual sync only).',
-            ];
-        }
-
-        $article->articleMetas()->updateOrCreate(
-            ['meta_key' => self::META_KEY],
-            ['meta_value' => json_encode($queuePayload, JSON_UNESCAPED_UNICODE)],
-        );
-
-        $article->articleMetas()->updateOrCreate(
-            ['meta_key' => self::BUNDLE_META_KEY],
-            ['meta_value' => json_encode($this->compactBundleForQueue($bundle), JSON_UNESCAPED_UNICODE)],
-        );
-
-        if (! $this->dispatchWpSyncJob((int) $article->id)) {
-            $this->markFailed($article, 'Không ghi được job vào bảng `jobs`. Kiểm tra QUEUE_CONNECTION=database và worker đang chạy queue `seo`.');
-
-            return [
-                'success' => false,
-                'message' => 'Không ghi được job đồng bộ WordPress vào hàng đợi. Kiểm tra QUEUE_CONNECTION=database và chạy `php artisan queue:work --queue=seo,media_generation,default`.',
-            ];
-        }
-
         return [
-            'success' => true,
-            'message' => 'Đã đưa bài viết vào hàng đợi đồng bộ WordPress.',
-            'queued' => true,
-            'queue' => $queuePayload,
+            'success' => false,
+            'message' => 'Legacy seo queue orchestration removed. Use ManualAutomationDispatcher / WordPressManualSyncService (wordpress.article.sync).',
         ];
     }
 
@@ -149,6 +85,9 @@ final class ArticleWpSyncQueueService
 
         app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
             ->wordpressSynced($article, $result);
+
+        app(\App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPostSyncReconciler::class)
+            ->reconcileAfterArticleSynced($article);
     }
 
     public function clearQueueEntry(SeoArticle $article): void
@@ -196,62 +135,9 @@ final class ArticleWpSyncQueueService
      */
     public function resync(SeoArticle $article, ?ManualWordPressContext $manual = null): array
     {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            return [
-                'success' => false,
-                'message' => 'Không tìm thấy mục hàng đợi đồng bộ.',
-            ];
-        }
-
-        if (! in_array((string) ($payload['status'] ?? ''), [self::STATUS_PENDING, self::STATUS_FAILED, self::STATUS_PROCESSING], true)) {
-            return [
-                'success' => false,
-                'message' => 'Chỉ có thể đồng bộ lại bài đang chờ, đang xử lý hoặc thất bại.',
-            ];
-        }
-
-        $bundle = $this->readQueueBundle($article);
-        if ($bundle === []) {
-            return [
-                'success' => false,
-                'message' => 'Thiếu dữ liệu đồng bộ trong article_meta.',
-            ];
-        }
-
-        $article = $this->bootstrapArticleDatabase($article);
-        $now = now();
-
-        $payload['status'] = self::STATUS_PENDING;
-        $payload['queued_at'] = $now->toIso8601String();
-        $payload['started_at'] = null;
-        $payload['finished_at'] = null;
-        $payload['error'] = null;
-        $payload['user_id'] = $manual?->userId ?? Auth::id();
-        if ($manual instanceof ManualWordPressContext) {
-            $payload = array_merge($payload, $manual->toAuditMeta());
-            Log::info('wordpress.manual_sync.resync', $manual->toAuditMeta());
-        } else {
-            return [
-                'success' => false,
-                'message' => 'WordPress resync requires explicit ManualWordPressContext.',
-            ];
-        }
-        $this->writeQueueMeta($article, $payload);
-
-        if (! $this->dispatchWpSyncJob((int) $article->id)) {
-            $this->markFailed($article, 'Không ghi được job vào bảng `jobs`. Kiểm tra QUEUE_CONNECTION=database và worker queue `seo`.');
-
-            return [
-                'success' => false,
-                'message' => 'Không ghi được job đồng bộ WordPress vào hàng đợi.',
-            ];
-        }
-
         return [
-            'success' => true,
-            'message' => 'Đã đưa lại vào hàng đợi đồng bộ WordPress.',
-            'queued' => true,
+            'success' => false,
+            'message' => 'Legacy seo queue resync removed. Use ManualAutomationDispatcher (wordpress.article.sync).',
         ];
     }
 
@@ -490,24 +376,12 @@ final class ArticleWpSyncQueueService
 
     private function dispatchWpSyncJob(int $articleId): bool
     {
-        if ($articleId <= 0) {
-            return false;
-        }
+        Log::warning('wordpress.legacy_queue.dispatch_blocked', [
+            'article_id' => $articleId,
+            'message' => 'SyncArticleToWordPressFromQueueJob dispatch disabled — use ManualAutomationDispatcher.',
+        ]);
 
-        $this->purgeDispatchedJobsForArticle($articleId);
-
-        SyncArticleToWordPressFromQueueJob::dispatch($articleId);
-
-        // Unit tests: Bus::fake() không ghi bảng jobs — coi như dispatch thành công.
-        if (Bus::getFacadeRoot() instanceof BusFake) {
-            return true;
-        }
-
-        if ((string) config('queue.default') === 'sync') {
-            return true;
-        }
-
-        return $this->hasPendingWpSyncJob($articleId);
+        return false;
     }
 
     private function hasPendingWpSyncJob(int $articleId): bool

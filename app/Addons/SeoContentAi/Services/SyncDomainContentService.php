@@ -1291,13 +1291,10 @@ class SyncDomainContentService
         }
 
         try {
-            app(SeoArticleScoringQueueService::class)->dispatchIfSyncItemChanged(
-                $article,
-                $item,
-                $existing instanceof SeoArticle ? $existing : null,
-            );
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->articleContentUpdated($article);
         } catch (Throwable $e) {
-            Log::warning('Seo scoring queue dispatch failed after sync', [
+            Log::warning('business_hook.emit_failed after domain sync', [
                 'article_id' => $article->id,
                 'error' => $e->getMessage(),
             ]);

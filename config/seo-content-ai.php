@@ -49,17 +49,16 @@ return [
     'display_timezone' => env('SEO_CONTENT_AI_DISPLAY_TIMEZONE', 'Asia/Ho_Chi_Minh'),
 
     /**
-     * Phase 4A — per-caller migration mode: legacy | shadow | action.
-     * Không dùng một global boolean.
+     * Full cutover — Action only. Env values ignored; MigrationMode::fromConfig luôn Action.
      */
     'automation_migration' => [
-        'seo_issue_assignment' => env('AUTOMATION_MIGRATION_SEO_ISSUE_ASSIGNMENT', 'legacy'),
-        'keyword_project_assignment' => env('AUTOMATION_MIGRATION_KEYWORD_PROJECT_ASSIGNMENT', 'legacy'),
-        'project_article_attach' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_ATTACH', 'legacy'),
-        'project_task_complete' => env('AUTOMATION_MIGRATION_PROJECT_TASK_COMPLETE', 'legacy'),
-        'project_article_create' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_CREATE', 'legacy'),
-        'project_article_content_update' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_CONTENT_UPDATE', 'legacy'),
-        'project_article_seo_meta_update' => env('AUTOMATION_MIGRATION_PROJECT_ARTICLE_SEO_META_UPDATE', 'legacy'),
+        'seo_issue_assignment' => 'action',
+        'keyword_project_assignment' => 'action',
+        'project_article_attach' => 'action',
+        'project_task_complete' => 'action',
+        'project_article_create' => 'action',
+        'project_article_content_update' => 'action',
+        'project_article_seo_meta_update' => 'action',
     ],
 
     /** Số sample parity tối thiểu trước khi promote caller sang action. */

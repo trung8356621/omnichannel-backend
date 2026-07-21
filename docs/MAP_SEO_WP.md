@@ -225,6 +225,10 @@ flowchart TB
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.51:** `GET /omi-seo-ai/v1/posts/{id}/comment-reviews` đọc `_omi_seo_virtual_comments` (meta) + merge `wp_comments` — editor Reviews tab dùng endpoint này khi bấm **Làm mới**.
 
+**Product reviews → WP (Automation, ≥ plugin 1.0.59):** local `article_product_reviews` → schedule (`max_delay_time`) → `DispatchScheduledProductReviewPublishJob` (`automation-external`) → `ProductReviewPublishDispatchService` emit `article.product_review_publish_requested` + **chạy execution sync** (rule `execute-wordpress-comment-review-publish`, `run_mode=sync`) → `wordpress.comment_review.publish` (`WordPressCommentReviewPublisher` POST virtual-comments; ACL bypass qua `SeoQueueContext`; SideEffectGuard cho phép action `comment_review.publish`). Rules schedule: `publish-generated-product-reviews-to-wordpress`, `publish-pending-product-reviews-after-article-sync`.
+
+**Frontend WP (plugin ≥ 1.0.59):** CusRev (`cr-reviews-ajax-*`) chiếm tab Reviews — `Virtual_Comments::filter_product_review_tab` priority 999 ép callback `render_virtual_reviews_tab` khi có meta; template `single-product-reviews-virtual.php`; save meta purge WP Rocket/LiteSpeed. Format payload không đổi (`author`/`content`/`date`/`rating` + `_omi_*`).
+
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.54:** `class-attachment-renamer.php` — rename resolve attachment theo URL khi ID stale.
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.50:** `class-attachment-binary-replacer.php` đổi extension file sang `.webp` khi mime `image/webp`.

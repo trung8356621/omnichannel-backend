@@ -8164,6 +8164,61 @@ section[data-seo-section-id].is-outline-jump-highlight {
     color: #e5e7eb;
 }
 
+.seo-reviews-tab__status {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.125rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.seo-reviews-tab__status.is-scheduled,
+.seo-reviews-tab__status.is-pending_publish {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.seo-reviews-tab__status.is-pending_article {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.seo-reviews-tab__status.is-publishing {
+    background: #fef3c7;
+    color: #a16207;
+}
+
+.seo-reviews-tab__status.is-published {
+    background: #ecfdf5;
+    color: #047857;
+}
+
+.seo-reviews-tab__status.is-failed {
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+.seo-reviews-tab__hint {
+    margin: 0.25rem 0 0.5rem;
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.seo-reviews-tab__meta {
+    margin: 0.375rem 0 0;
+    font-size: 0.75rem;
+    color: #6b7280;
+}
+
+.seo-reviews-tab__error {
+    margin: 0.375rem 0 0;
+    font-size: 0.75rem;
+    color: #b91c1c;
+}
+
 /* ============================
    Tab Outline / DÃ n Ã½ (TOC)
    ============================ */
@@ -9562,4 +9617,250 @@ section[data-seo-section-id].is-outline-jump-highlight {
 .dark .seo-keyword-review-popover__option.is-active,
 .dark .seo-keyword-review-popover__option:hover {
     background: #1e293b;
+}
+/* —— HTML inspector (View HTML) —— */
+.seo-toolbar-btn__label {
+    margin-left: 0.25rem;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.seo-html-inspector-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgb(15 23 42 / 0.45);
+}
+
+.seo-html-inspector-modal {
+    width: min(920px, 100%);
+    max-height: min(88vh, 900px);
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    box-shadow: 0 20px 50px rgb(15 23 42 / 0.25);
+    overflow: hidden;
+}
+
+.dark .seo-html-inspector-modal {
+    background: #0f172a;
+    border-color: #1e293b;
+}
+
+.seo-html-inspector-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.dark .seo-html-inspector-header {
+    border-bottom-color: #1e293b;
+}
+
+.seo-html-inspector-title-wrap {
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+}
+
+.seo-html-inspector-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2rem;
+    height: 2rem;
+    padding: 0 0.4rem;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.seo-html-inspector-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.dark .seo-html-inspector-title {
+    color: #f8fafc;
+}
+
+.seo-html-inspector-subtitle {
+    margin: 0.15rem 0 0;
+    font-size: 12px;
+    color: #64748b;
+}
+
+.seo-html-inspector-tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.5rem 1rem 0;
+}
+
+.seo-html-inspector-tab {
+    position: relative;
+    border: 0;
+    background: transparent;
+    padding: 0.45rem 0.75rem;
+    font-size: 13px;
+    font-weight: 600;
+    color: #64748b;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+}
+
+.seo-html-inspector-tab.is-active {
+    color: #1d4ed8;
+    border-bottom-color: #1d4ed8;
+}
+
+.seo-html-inspector-tab-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 0.35rem;
+    border-radius: 999px;
+    background: #dc2626;
+    vertical-align: middle;
+}
+
+.seo-html-inspector-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: 0.75rem 1rem;
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+}
+
+.seo-html-inspector-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.85rem;
+    font-size: 12px;
+    color: #475569;
+}
+
+.seo-html-inspector-code,
+.seo-html-inspector-pre {
+    width: 100%;
+    min-height: 280px;
+    margin: 0;
+    padding: 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background: #f8fafc;
+    color: #0f172a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    resize: vertical;
+}
+
+.dark .seo-html-inspector-code,
+.dark .seo-html-inspector-pre {
+    background: #020617;
+    border-color: #1e293b;
+    color: #e2e8f0;
+}
+
+.seo-html-inspector-warnings {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: #b45309;
+    font-size: 13px;
+}
+
+.seo-html-inspector-split-list h3,
+.seo-html-inspector-preview h3 {
+    margin: 0.4rem 0;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.seo-html-inspector-split-list ul {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 12px;
+}
+
+.seo-html-inspector-split-list li {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.55rem;
+    margin-bottom: 0.35rem;
+}
+
+.seo-html-inspector-error {
+    margin: 0;
+    color: #b91c1c;
+    font-size: 12px;
+}
+
+.seo-html-inspector-ok {
+    margin: 0;
+    color: #15803d;
+    font-size: 12px;
+}
+
+.seo-html-inspector-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+.dark .seo-html-inspector-footer {
+    border-top-color: #1e293b;
+}
+
+.seo-html-inspector-btn,
+.seo-html-inspector-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #0f172a;
+    border-radius: 8px;
+    padding: 0.4rem 0.7rem;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.seo-html-inspector-icon-btn {
+    padding: 0.35rem;
+}
+
+.seo-html-inspector-btn.is-primary {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
+    color: #fff;
+}
+
+.dark .seo-html-inspector-btn,
+.dark .seo-html-inspector-icon-btn {
+    background: #1e293b;
+    border-color: #334155;
+    color: #e2e8f0;
 }

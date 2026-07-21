@@ -33,4 +33,15 @@ enum BusinessHookErrorCode: string
     case PublishDenied = 'AUTOMATION_PUBLISH_DENIED';
     case TenantScopeDenied = 'AUTOMATION_TENANT_SCOPE_DENIED';
     case RuleDisabled = 'AUTOMATION_RULE_DISABLED';
+    case ActionManualDisabled = 'AUTOMATION_ACTION_MANUAL_DISABLED';
+    case ActionNotAvailable = 'AUTOMATION_ACTION_NOT_AVAILABLE';
+    case RuleNotFound = 'AUTOMATION_RULE_NOT_FOUND';
+    case RuleNotPublished = 'AUTOMATION_RULE_NOT_PUBLISHED';
+    case RuleInvalid = 'AUTOMATION_RULE_INVALID';
+    case ConnectionMissing = 'AUTOMATION_CONNECTION_MISSING';
+    case CredentialMissing = 'AUTOMATION_CREDENTIAL_MISSING';
+    case PermissionDenied = 'AUTOMATION_PERMISSION_DENIED';
+    case TenantMismatch = 'AUTOMATION_TENANT_MISMATCH';
+    case ConflictingRules = 'AUTOMATION_CONFLICTING_RULES';
+    case ExecutionAlreadyActive = 'AUTOMATION_EXECUTION_ALREADY_ACTIVE';
 }

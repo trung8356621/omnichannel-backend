@@ -69,11 +69,19 @@ final class AutomationAuditWordpressCouplingCommand extends Command
         }
 
         $manual = (string) file_get_contents($this->addonPath('Services/WordPress/WordPressManualSyncService.php'));
-        if (! str_contains($manual, 'ManualWordPressContext')) {
-            $this->error('WordPressManualSyncService missing ManualWordPressContext');
+        if (! str_contains($manual, 'ManualAutomationDispatcher')) {
+            $this->error('WordPressManualSyncService missing ManualAutomationDispatcher');
             $fail = true;
         } else {
-            $this->line('ok: manual service builds ManualWordPressContext');
+            $this->line('ok: manual service uses ManualAutomationDispatcher');
+        }
+        if (str_contains($manual, 'SyncArticleToWordPressFromQueueJob::dispatch')
+            || str_contains($manual, 'use App\\Addons\\SeoContentAi\\Jobs\\SyncArticleToWordPressFromQueueJob')
+        ) {
+            $this->error('WordPressManualSyncService still dispatches/imports SyncArticleToWordPressFromQueueJob');
+            $fail = true;
+        } else {
+            $this->line('ok: manual service does not import/dispatch legacy seo WP job');
         }
 
         $this->newLine();

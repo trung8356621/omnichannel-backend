@@ -1,5 +1,6 @@
 import { DOMSerializer } from '@tiptap/pm/model';
 import { isCtaPlainTextType } from './ctaLinkFormat';
+import { normalizedLinkAttrs } from './inlineLinkNormalizer';
 
 /**
  * HTML của vùng đang bôi đen trong TipTap (dùng tách FAQ thủ công).
@@ -113,11 +114,7 @@ export function insertLinkInEditor(editor, label, href) {
             marks: [
                 {
                     type: 'link',
-                    attrs: {
-                        href: linkHref,
-                        target: null,
-                        rel: 'noopener noreferrer',
-                    },
+                    attrs: normalizedLinkAttrs(linkHref),
                 },
             ],
         })

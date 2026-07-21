@@ -30,10 +30,11 @@ final class AutomationPhase4MigrationTest extends TestCase
     }
     public function test_migration_mode_from_config(): void
     {
-        self::assertSame(MigrationMode::Legacy, MigrationMode::fromConfig('legacy'));
-        self::assertSame(MigrationMode::Shadow, MigrationMode::fromConfig('shadow'));
+        // Full cutover: mọi config value → Action (trừ emergency env).
+        self::assertSame(MigrationMode::Action, MigrationMode::fromConfig('legacy'));
+        self::assertSame(MigrationMode::Action, MigrationMode::fromConfig('shadow'));
         self::assertSame(MigrationMode::Action, MigrationMode::fromConfig('action'));
-        self::assertSame(MigrationMode::Legacy, MigrationMode::fromConfig('garbage'));
+        self::assertSame(MigrationMode::Action, MigrationMode::fromConfig('garbage'));
         self::assertTrue(MigrationMode::Shadow->writesViaLegacy());
         self::assertFalse(MigrationMode::Shadow->writesViaAction());
         self::assertTrue(MigrationMode::Action->writesViaAction());
@@ -44,7 +45,8 @@ final class AutomationPhase4MigrationTest extends TestCase
     {
         Config::set('seo-content-ai.automation_migration', []);
         $flags = new AutomationMigrationFlags;
-        self::assertSame(MigrationMode::Legacy, $flags->mode(AutomationMigrationFlags::SEO_ISSUE_ASSIGNMENT));
+        self::assertSame(MigrationMode::Action, $flags->mode(AutomationMigrationFlags::SEO_ISSUE_ASSIGNMENT));
+        self::assertFalse($flags->isLegacy(AutomationMigrationFlags::SEO_ISSUE_ASSIGNMENT));
     }
 
     public function test_content_conflict_guard_hash_mismatch(): void
@@ -96,6 +98,7 @@ final class AutomationPhase4MigrationTest extends TestCase
 
     public function test_migrator_legacy_only_calls_legacy(): void
     {
+        // Default cutover vẫn Action dù config = legacy.
         Config::set('seo-content-ai.automation_migration.seo_issue_assignment', 'legacy');
 
         $legacyCalls = 0;
@@ -126,23 +129,20 @@ final class AutomationPhase4MigrationTest extends TestCase
             actionKey: 'seo.project_task.create_from_issue',
         );
 
-        self::assertSame(['added' => 1], $out);
-        self::assertSame(1, $legacyCalls);
-        self::assertSame(0, $actionCalls);
+        self::assertInstanceOf(ActionResult::class, $out);
+        self::assertSame(0, $legacyCalls);
+        self::assertSame(1, $actionCalls);
         self::assertSame(0, $parityCalls);
     }
 
     public function test_migrator_shadow_no_action_write_and_parity_match(): void
     {
+        // Default cutover: shadow config vẫn Action.
         Config::set('seo-content-ai.automation_migration.seo_issue_assignment', 'shadow');
 
         $legacyCalls = 0;
         $actionCalls = 0;
         $parityCalls = 0;
-
-        Log::shouldReceive('info')->once()->withArgs(static function (string $message): bool {
-            return $message === 'automation.migration.parity_match';
-        });
 
         $migrator = $this->migrator();
 
@@ -168,31 +168,36 @@ final class AutomationPhase4MigrationTest extends TestCase
             actionKey: 'seo.project_task.create_from_issue',
         );
 
-        self::assertSame(1, $legacyCalls);
-        self::assertSame(1, $parityCalls);
-        self::assertSame(0, $actionCalls);
-        self::assertSame(['added' => 1, 'duplicate' => 0], $out);
+        self::assertInstanceOf(ActionResult::class, $out);
+        self::assertSame(0, $legacyCalls);
+        self::assertSame(0, $parityCalls);
+        self::assertSame(1, $actionCalls);
+        self::assertSame(99, $out->output['added']);
     }
 
     public function test_migrator_shadow_logs_mismatch(): void
     {
         Config::set('seo-content-ai.automation_migration.keyword_project_assignment', 'shadow');
 
-        Log::shouldReceive('warning')->once()->withArgs(static function (string $message): bool {
-            return $message === 'automation.migration.parity_mismatch';
-        });
-
+        $actionCalls = 0;
         $migrator = $this->migrator();
 
-        $migrator->run(
+        $result = $migrator->run(
             callerKey: AutomationMigrationFlags::KEYWORD_PROJECT_ASSIGNMENT,
             legacyWrite: static fn (): array => ['added' => 1],
-            actionWrite: static fn (): ActionResult => ActionResult::success(),
+            actionWrite: static function () use (&$actionCalls): ActionResult {
+                $actionCalls++;
+
+                return ActionResult::success(output: ['added' => 0]);
+            },
             parityExpected: static fn (): array => ['added' => 0],
             normalizeLegacy: static fn (mixed $v): array => (array) $v,
             normalizeExpected: static fn (array $v): array => $v,
             actionKey: 'keyword.assign_to_project',
         );
+
+        self::assertInstanceOf(ActionResult::class, $result);
+        self::assertSame(1, $actionCalls);
     }
 
     public function test_migrator_action_skips_legacy(): void
@@ -229,11 +234,13 @@ final class AutomationPhase4MigrationTest extends TestCase
 
     public function test_rollback_to_legacy_via_flag(): void
     {
+        // Full cutover: flag env không còn rollback được về Legacy.
         Config::set('seo-content-ai.automation_migration.project_task_complete', 'action');
         $flags = new AutomationMigrationFlags;
         self::assertSame(MigrationMode::Action, $flags->mode(AutomationMigrationFlags::PROJECT_TASK_COMPLETE));
 
         Config::set('seo-content-ai.automation_migration.project_task_complete', 'legacy');
-        self::assertSame(MigrationMode::Legacy, $flags->mode(AutomationMigrationFlags::PROJECT_TASK_COMPLETE));
+        self::assertSame(MigrationMode::Action, $flags->mode(AutomationMigrationFlags::PROJECT_TASK_COMPLETE));
+        self::assertFalse($flags->isLegacy(AutomationMigrationFlags::PROJECT_TASK_COMPLETE));
     }
 }

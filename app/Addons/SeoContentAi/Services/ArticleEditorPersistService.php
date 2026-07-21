@@ -39,7 +39,9 @@ final class ArticleEditorPersistService
         }
 
         if ($deferSeoAnalysis) {
-            app(SeoArticleScoringQueueService::class)->dispatchForArticle($article->fresh() ?? $article, force: true);
+            // Full cutover: không auto SEO score. Emit content_updated → Automation rule.
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->articleContentUpdated($article->fresh() ?? $article);
         }
 
         $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';

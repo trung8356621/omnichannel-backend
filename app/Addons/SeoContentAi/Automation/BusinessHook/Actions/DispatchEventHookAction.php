@@ -37,7 +37,7 @@ final class DispatchEventHookAction implements AutomationActionHandler
                 'event_name' => $eventName,
                 'payload' => $payload,
                 'context' => [
-                    'from_rule' => $context->rule->code,
+                    'from_rule' => $context->rule?->code,
                     'from_action' => 'automation.dispatch_event',
                 ],
             ]],

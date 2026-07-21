@@ -16,6 +16,8 @@ enum BusinessEventName: string
     case ArticleRestored = 'article.restored';
     case ArticleDeleted = 'article.deleted';
     case ArticlePublishRequested = 'article.publish_requested';
+    case ArticleProductReviewsGenerated = 'article.product_reviews_generated';
+    case ArticleProductReviewPublishRequested = 'article.product_review_publish_requested';
 
     case ContentProjectTaskCreated = 'content_project.task.created';
     case ContentProjectTaskUpdated = 'content_project.task.updated';
@@ -32,6 +34,8 @@ enum BusinessEventName: string
     case WordpressSynced = 'wordpress.synced';
     case WordpressSyncFailed = 'wordpress.sync_failed';
     case WordpressPostDeleted = 'wordpress.post_deleted';
+    case WordpressCommentReviewPublished = 'wordpress.comment_review_published';
+    case WordpressCommentReviewPublishFailed = 'wordpress.comment_review_publish_failed';
 
     case MediaUploaded = 'media.uploaded';
     case MediaProcessed = 'media.processed';
@@ -41,5 +45,8 @@ enum BusinessEventName: string
     case SeoAnalysisCompleted = 'seo.analysis_completed';
     case SeoAnalysisFailed = 'seo.analysis_failed';
 
+    case NotificationRequested = 'notification.requested';
+
     case ScheduleTriggered = 'automation.schedule.triggered';
+    case ManualActionRequested = 'automation.manual_action_requested';
 }

@@ -367,15 +367,11 @@ class EditArticle extends SeoEditRecord
         $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
             ->syncSlug(
                 $this->record->fresh(),
-                \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-                    $this->record,
-                    'edit_article_sync_slug',
-                ),
+                auth()->user(),
+                'article_editor.sync_slug',
                 $slug,
             );
         if ($result['success']) {
-            $this->refreshArticleSlugFromWordPressAfterSync();
-
             if (! $silent) {
                 Notification::make()
                     ->title(__('seo-content-ai::filament.article_edit.slug_synced'))
@@ -2525,7 +2521,7 @@ class EditArticle extends SeoEditRecord
 
     public function getVirtualCommentsCount(): int
     {
-        return count(app(VirtualCommentService::class)->getForEditor($this->record));
+        return count($this->getVirtualReviewsPayload());
     }
 
     public function getReviewsCountForEditor(): int
@@ -2607,29 +2603,37 @@ class EditArticle extends SeoEditRecord
         $this->dispatch('virtual-reviews-updated', reviews: $reviews);
 
         $success = (bool) ($result['success'] ?? false);
-        $message = trim((string) ($result['message'] ?? ''));
-
-        $notification = Notification::make()
-            ->title(
-                $success
-                    ? __('seo-content-ai::filament.article_list.quick_create_reviews_success')
-                    : __('seo-content-ai::filament.article_list.quick_create_reviews_failed'),
-            )
-            ->body(
-                $message !== ''
-                    ? $message
-                    : ($success
-                        ? __('seo-content-ai::filament.article_list.virtual_comments_count', ['count' => count($reviews)])
-                        : ''),
-            );
+        $count = (int) ($result['created_count'] ?? count($reviews));
+        $automationEnabled = (bool) ($result['automation_enabled'] ?? false);
+        $hasWpPostId = (bool) ($result['has_wp_post_id'] ?? ((int) ($this->record->wp_post_id ?? 0) > 0));
 
         if ($success) {
-            $notification->success();
+            if (! $automationEnabled) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_success'))
+                    ->body("Đã tạo {$count} review nhưng Automation đăng review đang tắt. Review hiện được lưu cục bộ.")
+                    ->warning()
+                    ->send();
+            } elseif (! $hasWpPostId) {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_success'))
+                    ->body("Đã tạo {$count} review. Review sẽ tự động được đăng sau khi bài viết đồng bộ WordPress.")
+                    ->success()
+                    ->send();
+            } else {
+                Notification::make()
+                    ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_success'))
+                    ->body("Đã tạo {$count} review. Hệ thống sẽ tự động đăng lên WordPress trong vòng 5 phút.")
+                    ->success()
+                    ->send();
+            }
         } else {
-            $notification->danger();
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.quick_create_reviews_failed'))
+                ->body(trim((string) ($result['message'] ?? '')) ?: '')
+                ->danger()
+                ->send();
         }
-
-        $notification->send();
 
         return $reviews;
     }
@@ -2685,7 +2689,8 @@ class EditArticle extends SeoEditRecord
      */
     public function getVirtualReviewsPayload(): array
     {
-        return app(VirtualCommentService::class)->getForEditor($this->record);
+        return app(\App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService::class)
+            ->listForEditor($this->record);
     }
 
     /**
@@ -3023,216 +3028,53 @@ class EditArticle extends SeoEditRecord
     }
 
     /**
-     * Bước 2: Liên kết WP + đồng bộ ảnh trong HTML (upload/WebP).
+     * @deprecated Phased Livewire WP mutation removed — use ManualAutomationDispatcher via Sync button.
      *
-     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     * @return array{success: bool, message: string, step: string}
      */
     public function syncWpPhasePreparePayload(): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
-        $syncService = app(WordPressArticleSyncService::class);
-        $article = $this->record->fresh();
-        $seoOverride = $this->resolveLivewireSeoPayloadForWordPress();
-
-        $ensure = $syncService->ensureWordPressPostForArticle(
-            $article,
-            \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-                $article,
-                'edit_article_phased_ensure',
-            ),
-            $seoOverride,
-        );
-        if (! ($ensure['success'] ?? false)) {
-            return [
-                'success' => false,
-                'message' => (string) ($ensure['message'] ?? 'Không liên kết được WordPress.'),
-                'step' => 'prepare_payload',
-            ];
-        }
-
-        $article = $article->fresh() ?? $article;
-        $context = $syncService->resolveEditorSyncContext($article);
-        if (! ($context['success'] ?? false)) {
-            return [
-                'success' => false,
-                'message' => (string) ($context['message'] ?? 'Không lấy được context WordPress.'),
-                'step' => 'prepare_payload',
-            ];
-        }
-
-        $prepared = $syncService->prepareEditorSyncPayload($article, $seoOverride);
-        $mediaCount = count($prepared['synced_local_media_ids'] ?? []);
-        $mediaErrors = is_array($prepared['local_media_sync_errors'] ?? null)
-            ? $prepared['local_media_sync_errors']
-            : [];
-
-        $this->wpSyncContext = $context;
-        $this->wpSyncPrepared = $prepared;
-        $this->wpSyncDecoded = null;
-
-        $detail = (string) ($ensure['step_detail'] ?? '');
-        if ($mediaCount > 0) {
-            $detail .= ($detail !== '' ? ', ' : '').'ảnh_sync='.$mediaCount;
-        }
-        if ($mediaErrors !== []) {
-            $detail .= ($detail !== '' ? ', ' : '').'ảnh_lỗi='.count($mediaErrors);
-        }
-        if ($prepared['skip_editor_sync'] ?? false) {
-            $detail .= ($detail !== '' ? ', ' : '').'editor_sync_skip=1';
-        }
-
-        $article->loadMissing('site');
-        if ($article->site instanceof Site) {
-            $optimization = app(SeoImageOptimizationService::class);
-            $config = $optimization->resolveForSite((int) $article->site->id);
-            if ((bool) $config->auto_convert_webp && ! $optimization->canEncodeWebp()) {
-                $detail .= ($detail !== '' ? ', ' : '').'webp_encode=unavailable';
-            }
-        }
-
         return [
-            'success' => true,
-            'message' => $mediaCount > 0
-                ? "Đã đồng bộ {$mediaCount} ảnh trong nội dung lên WordPress."
-                : 'Đã chuẩn bị payload (không có ảnh local cần upload).',
+            'success' => false,
+            'message' => 'Phased WordPress sync đã cắt. Dùng nút Đồng bộ WordPress (Manual Automation).',
             'step' => 'prepare_payload',
-            'step_detail' => $detail,
-            'warnings' => $mediaErrors,
         ];
     }
 
     /**
-     * Bước 3: POST editor-sync (nội dung + FAQ + SEO meta).
+     * @deprecated
      *
-     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     * @return array{success: bool, message: string, step: string}
      */
     public function syncWpPhaseEditorSync(): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
-        if (! is_array($this->wpSyncContext) || ! is_array($this->wpSyncPrepared)) {
-            return [
-                'success' => false,
-                'message' => 'Thiếu dữ liệu chuẩn bị — tải lại trang và thử lại.',
-                'step' => 'editor_sync',
-            ];
-        }
-
-        $syncService = app(WordPressArticleSyncService::class);
-        $article = $this->record->fresh();
-        $result = $syncService->executeEditorSyncRequest(
-            $article,
-            \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-                $article,
-                'edit_article_phased_editor_sync',
-            ),
-            $this->wpSyncContext,
-            $this->wpSyncPrepared,
-        );
-
-        if (! ($result['success'] ?? false)) {
-            return [
-                'success' => false,
-                'message' => (string) ($result['message'] ?? 'editor-sync thất bại.'),
-                'step' => 'editor_sync',
-                'step_detail' => (string) ($result['step_detail'] ?? ''),
-            ];
-        }
-
-        $this->wpSyncDecoded = is_array($result['decoded'] ?? null) ? $result['decoded'] : [];
-
-        $message = (string) ($result['message'] ?? 'Đã gửi nội dung lên WordPress.');
-        if ($result['skipped'] ?? false) {
-            $message = (string) ($result['message'] ?? 'Đã bỏ qua editor-sync.');
-        }
-
         return [
-            'success' => true,
-            'message' => $message,
+            'success' => false,
+            'message' => 'Phased WordPress sync đã cắt. Dùng nút Đồng bộ WordPress (Manual Automation).',
             'step' => 'editor_sync',
-            'step_detail' => (string) ($result['step_detail'] ?? ''),
         ];
     }
 
     /**
-     * Bước 4–5: Ảnh đại diện/album, WebP backfill, permalink, hoàn tất.
+     * @deprecated
      *
-     * @return array{success: bool, message: string, step: string, step_detail?: string}
+     * @return array{success: bool, message: string, step: string}
      */
     public function syncWpPhaseFinalize(): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
 
-        if (! is_array($this->wpSyncPrepared) || ! is_array($this->wpSyncDecoded)) {
-            return [
-                'success' => false,
-                'message' => 'Thiếu phản hồi editor-sync — tải lại trang và thử lại.',
-                'step' => 'finalize',
-            ];
-        }
-
-        try {
-            $syncService = app(WordPressArticleSyncService::class);
-            $article = $this->record->fresh();
-
-            $result = $syncService->completeEditorSyncResponse(
-                $article,
-                $this->wpSyncPrepared,
-                $this->wpSyncDecoded,
-            );
-
-            $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
-
-            if (! ($result['success'] ?? false)) {
-                $this->cancelHeavyArticleAction();
-
-                return [
-                    'success' => false,
-                    'message' => (string) ($result['message'] ?? 'Hoàn tất đồng bộ thất bại.'),
-                    'step' => 'finalize',
-                ];
-            }
-
-            $remoteIdentity = app(WordPressArticleContentService::class)
-                ->refreshSlugAndPermalinkFromWordPress($article->fresh());
-            $syncBody = (string) ($result['message'] ?? '');
-            if (! ($remoteIdentity['success'] ?? false)) {
-                $syncBody .= ' Chưa tải lại được slug/permalink mới nhất từ WordPress.';
-            }
-            if (! empty($result['faq_extract_debug'])) {
-                $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
-                $syncBody = ($headingText !== ''
-                    ? 'Sync completed but 0 FAQ extracted (detected heading: "'.$headingText.'"). Check FAQ debug block.'
-                    : 'Sync completed but 0 FAQ extracted - check FAQ debug block.').' '.$syncBody;
-            }
-
-            $this->refreshEditorAfterWordPressSync();
-
-            Notification::make()
-                ->title('WordPress synced')
-                ->body($syncBody)
-                ->success()
-                ->send();
-
-            $this->wpSyncContext = null;
-            $this->wpSyncPrepared = null;
-            $this->wpSyncDecoded = null;
-
-            $this->finishHeavyArticleActionWithReload(clearLocalState: true);
-
-            return [
-                'success' => true,
-                'message' => $syncBody,
-                'step' => 'finalize',
-                'step_detail' => (string) ($result['step_detail'] ?? ''),
-            ];
-        } catch (\Throwable $exception) {
-            $this->cancelHeavyArticleAction();
-
-            throw $exception;
-        }
+        return [
+            'success' => false,
+            'message' => 'Phased WordPress sync đã cắt. Dùng nút Đồng bộ WordPress (Manual Automation).',
+            'step' => 'finalize',
+        ];
     }
+
 
     /**
      * Lưu Laravel rồi đẩy lên WordPress.
@@ -3262,46 +3104,34 @@ class EditArticle extends SeoEditRecord
             }
 
             $article = $this->record->fresh();
-            $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-                $article,
-                'edit_article_sync_button',
-            );
             $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
-                ->publishNow($article, $manual, $this->resolveLivewireSeoPayloadForWordPress());
+                ->publishNow(
+                    $article,
+                    auth()->user(),
+                    'article_editor.sync_wordpress',
+                    $this->resolveLivewireSeoPayloadForWordPress(),
+                );
 
-            $this->dispatchFaqExtractDebugIfPresent($result['faq_extract_debug'] ?? null);
-
-            if ($result['success']) {
-                $remoteIdentity = app(WordPressArticleContentService::class)
-                    ->refreshSlugAndPermalinkFromWordPress($article->fresh());
-                $syncBody = $result['message'];
-                if (! ($remoteIdentity['success'] ?? false)) {
-                    $syncBody .= ' Chưa tải lại được slug/permalink mới nhất từ WordPress.';
-                }
-                if (! empty($result['faq_extract_debug'])) {
-                    $headingText = trim((string) ($result['faq_extract_debug']['heading']['text'] ?? ''));
-                    $syncBody = ($headingText !== ''
-                        ? 'Sync completed but 0 FAQ extracted (detected heading: "'.$headingText.'"). Check FAQ debug block.'
-                        : 'Sync completed but 0 FAQ extracted - check FAQ debug block.').' '.$syncBody;
-                }
-
+            if ($result['success'] ?? false) {
+                $historyUrl = (string) ($result['automation_history_url'] ?? '');
+                $status = (string) ($result['status'] ?? 'dispatched');
                 Notification::make()
-                    ->title('WordPress synced')
-                    ->body($syncBody)
-                    ->success()
+                    ->title($status === 'deduplicated'
+                        ? __('seo-content-ai::filament.automation.gate.deduplicated_title')
+                        : __('seo-content-ai::filament.automation.gate.dispatched_title'))
+                    ->body((string) ($result['message'] ?? '')
+                        .($historyUrl !== '' ? ' '.__('seo-content-ai::filament.automation.view_progress').': '.$historyUrl : ''))
+                    ->info()
                     ->send();
 
-                $this->refreshEditorAfterWordPressSync();
-                $this->finishHeavyArticleActionWithReload(clearLocalState: true);
+                $this->cancelHeavyArticleAction();
 
                 return;
             }
 
-            $failureBody = (string) ($result['message'] ?? '');
-
             Notification::make()
-                ->title('WordPress sync failed')
-                ->body($failureBody !== '' ? $failureBody : 'WordPress sync failed.')
+                ->title(__('seo-content-ai::filament.automation.wp_sync_blocked_title'))
+                ->body((string) ($result['message'] ?? __('seo-content-ai::filament.automation.wp_sync_blocked_body')))
                 ->danger()
                 ->send();
 
@@ -4513,6 +4343,15 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
+        // Tránh double-click / echo flush → 2 lần collect trước khi generate chạy.
+        if ($this->pendingEditorCollectTarget === 'generate-faq') {
+            return;
+        }
+
+        if (Cache::has($this->articleFaqGenerateLockKey().':held')) {
+            return;
+        }
+
         $this->pendingEditorCollectTarget = 'generate-faq';
         $this->dispatch('flush-article-faqs');
         $this->dispatch('article-faq-generate-started');
@@ -4520,41 +4359,53 @@ class EditArticle extends SeoEditRecord
 
     public function generateArticleFaqs(string $editorHtml = ''): void
     {
+        $lockKey = $this->articleFaqGenerateLockKey();
+        $lock = Cache::lock($lockKey, 180);
+        if (! $lock->get()) {
+            return;
+        }
+
+        Cache::put($lockKey.':held', 1, 180);
+
         try {
             $result = app(ArticleFaqGeneratorService::class)->generate($this->record, $editorHtml);
-        } catch (\InvalidArgumentException $exception) {
-            $this->dispatch('article-faq-generate-finished');
 
+            $html = (string) ($result['editor_html'] ?? '');
+            if ($html !== '') {
+                $this->editorHtml = $html;
+            }
+
+            $this->record->refresh();
+
+            $this->dispatch(
+                'article-faqs-extracted',
+                faqs: $result['faqs'] ?? [],
+                editorHtml: $html,
+            );
+
+            $count = (int) ($result['faq_count'] ?? 0);
+
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_edit.faq_generate_success'))
+                ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
+                ->success()
+                ->send();
+        } catch (\InvalidArgumentException $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_edit.faq_generate_failed'))
                 ->body($exception->getMessage())
                 ->danger()
                 ->send();
-
-            return;
+        } finally {
+            Cache::forget($lockKey.':held');
+            $lock->release();
+            $this->dispatch('article-faq-generate-finished');
         }
+    }
 
-        $html = (string) ($result['editor_html'] ?? '');
-        if ($html !== '') {
-            $this->editorHtml = $html;
-        }
-
-        $this->record->refresh();
-
-        $this->dispatch(
-            'article-faqs-extracted',
-            faqs: $result['faqs'] ?? [],
-            editorHtml: $html,
-        );
-        $this->dispatch('article-faq-generate-finished');
-
-        $count = (int) ($result['faq_count'] ?? 0);
-
-        Notification::make()
-            ->title(__('seo-content-ai::filament.article_edit.faq_generate_success'))
-            ->body(__('seo-content-ai::filament.article_edit.faq_generate_success_body', ['count' => $count]))
-            ->success()
-            ->send();
+    private function articleFaqGenerateLockKey(): string
+    {
+        return 'seo-article-faq-generate-'.(int) $this->record->id;
     }
 
     /**

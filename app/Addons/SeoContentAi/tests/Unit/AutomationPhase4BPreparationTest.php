@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Automation\Data\ActionResult;
+use App\Addons\SeoContentAi\Automation\Enums\MigrationMode;
 use App\Addons\SeoContentAi\Automation\Migration\ArticleActionOutputNormalizer;
 use App\Addons\SeoContentAi\Automation\Migration\AutomationCallerMigrator;
 use App\Addons\SeoContentAi\Automation\Migration\AutomationMigrationFlags;
@@ -288,9 +289,10 @@ final class AutomationPhase4BPreparationTest extends TestCase
         Config::set('seo-content-ai.automation_migration.project_article_content_update', 'legacy');
         Config::set('seo-content-ai.automation_migration.project_article_seo_meta_update', 'legacy');
         $flags = new AutomationMigrationFlags;
-        self::assertTrue($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_CREATE));
-        self::assertTrue($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_CONTENT_UPDATE));
-        self::assertTrue($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_SEO_META_UPDATE));
+        self::assertFalse($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_CREATE));
+        self::assertFalse($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_CONTENT_UPDATE));
+        self::assertFalse($flags->isLegacy(AutomationMigrationFlags::PROJECT_ARTICLE_SEO_META_UPDATE));
+        self::assertSame(MigrationMode::Action, $flags->mode(AutomationMigrationFlags::PROJECT_ARTICLE_CREATE));
     }
 
     public function test_planner_does_not_accept_eloquent_in_output_normalizer(): void

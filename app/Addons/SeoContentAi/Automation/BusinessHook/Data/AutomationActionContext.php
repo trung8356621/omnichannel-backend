@@ -17,7 +17,7 @@ final class AutomationActionContext
      */
     public function __construct(
         public readonly BusinessEvent $businessEvent,
-        public readonly AutomationRule $rule,
+        public readonly ?AutomationRule $rule,
         public readonly AutomationExecution $execution,
         public readonly ?Model $subject,
         public readonly array $subjectData,

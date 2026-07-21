@@ -1058,7 +1058,8 @@ final class TaskWorkflowTestRunner
             ];
         }
 
-        $result = $this->commentReviewPublisher->publishFromAiOutput($article->fresh() ?? $article, $input);
+        // Full cutover: local product reviews + automation events. No WP mid-workflow.
+        $result = $this->commentReviewPublisher->storeLocalFromAiOutput($article->fresh() ?? $article, $input);
 
         return [
             'node_id' => $nodeId,

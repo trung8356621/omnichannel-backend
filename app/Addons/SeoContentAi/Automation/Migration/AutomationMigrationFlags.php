@@ -7,7 +7,8 @@ namespace App\Addons\SeoContentAi\Automation\Migration;
 use App\Addons\SeoContentAi\Automation\Enums\MigrationMode;
 
 /**
- * Per-caller migration flags. Không dùng global boolean.
+ * Per-caller flags. Full cutover = Action.
+ * Emergency: AUTOMATION_MIGRATION_EMERGENCY_LEGACY=true → mọi caller Legacy.
  */
 final class AutomationMigrationFlags
 {
@@ -38,9 +39,9 @@ final class AutomationMigrationFlags
 
     public function mode(string $callerKey): MigrationMode
     {
-        $value = config('seo-content-ai.automation_migration.'.$callerKey, MigrationMode::Legacy->value);
+        unset($callerKey);
 
-        return MigrationMode::fromConfig($value);
+        return MigrationMode::fromConfig(null);
     }
 
     public function isLegacy(string $callerKey): bool

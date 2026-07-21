@@ -42,7 +42,7 @@ final class SeoProjectApprovalService
             $project->update(['status' => SeoProject::STATUS_APPROVED]);
         });
 
-        app(SeoNotificationService::class)->notifyPlannersProjectApproved($project, $article);
+        // Notification: Automation Engine only — không auto notify planners.
 
         return $project->fresh();
     }

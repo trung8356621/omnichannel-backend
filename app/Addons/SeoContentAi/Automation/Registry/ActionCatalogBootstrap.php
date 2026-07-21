@@ -262,15 +262,23 @@ final class ActionCatalogBootstrap
             new ActionDefinition(
                 key: 'wordpress.comment_review.publish',
                 name: 'Publish comment review to WordPress',
-                description: 'Push virtual comments/reviews to WordPress. Phase 2: internal_only (chưa expose UI/workflow).',
+                description: 'Publish one local product review to WordPress virtual-comments. Idempotent via _omi_review_id.',
                 module: 'wordpress',
                 sideEffect: ActionSideEffect::ExternalWrite,
                 riskLevel: ActionRiskLevel::High,
-                selectability: ActionSelectability::InternalOnly,
+                selectability: ActionSelectability::Selectable,
                 inputSchema: [
+                    'site_id' => ['type' => 'integer', 'required' => true],
+                    'connection_id' => ['type' => 'integer', 'required' => true],
                     'article_id' => ['type' => 'integer', 'required' => true],
+                    'review_id' => ['type' => 'integer', 'required' => true],
+                    'wp_post_id' => ['type' => 'integer', 'required' => false],
+                    'publish_intent' => ['type' => 'string', 'required' => true],
                 ],
-                emittedEvents: ['wordpress.comment_review_published'],
+                idempotent: true,
+                lockScope: 'review',
+                supportsDryRun: false,
+                emittedEvents: ['wordpress.comment_review_published', 'wordpress.comment_review_publish_failed'],
             ),
         ];
     }

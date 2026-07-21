@@ -262,12 +262,8 @@ class ListArticles extends ListRecords
             return;
         }
 
-        $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-            $article,
-            'list_articles_sync_seo_meta',
-        );
         $wpResult = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
-            ->syncSeoMeta($article, $manual, [
+            ->syncSeoMeta($article, auth()->user(), 'list_articles.sync_seo_meta', [
                 'focus_keyword' => $phrase,
             ]);
 
@@ -285,12 +281,9 @@ class ListArticles extends ListRecords
         }
 
         Notification::make()
-            ->title(__('seo-content-ai::filament.article_list.main_keyword_synced'))
-            ->body(__('seo-content-ai::filament.article_list.main_keyword_synced_wp_with_score', [
-                'score' => $score,
-                'keyword' => $phrase !== '' ? $phrase : __('seo-content-ai::filament.article_list.seo_keyword_empty'),
-            ]))
-            ->success()
+            ->title(__('seo-content-ai::filament.article_list.sync_queued_title'))
+            ->body((string) ($wpResult['message'] ?? ''))
+            ->info()
             ->send();
     }
 
@@ -313,12 +306,8 @@ class ListArticles extends ListRecords
             return;
         }
 
-        $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-            $article,
-            'list_articles_resync_queue',
-        );
         $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
-            ->resyncQueued($article, $manual);
+            ->resyncQueued($article, auth()->user(), 'list_articles.resync');
 
         if (! ($result['success'] ?? false)) {
             Notification::make()
@@ -333,7 +322,7 @@ class ListArticles extends ListRecords
         Notification::make()
             ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_queued'))
             ->body((string) ($result['message'] ?? ''))
-            ->success()
+            ->info()
             ->send();
 
         $this->resetTable();

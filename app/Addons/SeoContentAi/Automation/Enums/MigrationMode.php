@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\Enums;
 
+/**
+ * Full cutover: default Action.
+ * Emergency only: AUTOMATION_MIGRATION_EMERGENCY_LEGACY=true → Legacy (tắt event bridge path).
+ */
 enum MigrationMode: string
 {
     case Legacy = 'legacy';
@@ -12,13 +16,11 @@ enum MigrationMode: string
 
     public static function fromConfig(mixed $value): self
     {
-        $raw = is_string($value) ? strtolower(trim($value)) : '';
+        if (filter_var(env('AUTOMATION_MIGRATION_EMERGENCY_LEGACY', false), FILTER_VALIDATE_BOOLEAN)) {
+            return self::Legacy;
+        }
 
-        return match ($raw) {
-            self::Shadow->value => self::Shadow,
-            self::Action->value => self::Action,
-            default => self::Legacy,
-        };
+        return self::Action;
     }
 
     public function writesViaAction(): bool

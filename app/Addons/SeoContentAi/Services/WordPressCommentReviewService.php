@@ -5,15 +5,12 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
-use App\Addons\SeoContentAi\Support\CommentReviewPayloadParser;
-use App\Addons\SeoContentAi\Support\SeoAccessControl;
+use App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService;
 
 final class WordPressCommentReviewService
 {
     public function __construct(
-        private readonly CommentReviewPayloadParser $parser,
-        private readonly VirtualCommentService $virtualComments,
+        private readonly ArticleProductReviewStoreService $productReviewStore,
     ) {}
 
     /**
@@ -21,19 +18,28 @@ final class WordPressCommentReviewService
      */
     public function publishFromAiOutput(SeoArticle $article, string $aiOutput): array
     {
-        $items = $this->parser->parse($aiOutput);
-        if ($items === []) {
-            return [
-                'success' => false,
-                'message' => 'Không parse được bình luận/review từ kết quả AI.',
-            ];
-        }
-
-        return $this->publishItems($article, $items);
+        return $this->storeLocalFromAiOutput($article, $aiOutput);
     }
 
     /**
-     * Lưu bình luận/review ảo trực tiếp lên WordPress (meta _omi_seo_virtual_comments).
+     * Automatic workflow path: store local rows + emit product review events. No WordPress mutate.
+     *
+     * @return array{
+     *     success: bool,
+     *     message: string,
+     *     created_count?: int,
+     *     review_ids?: list<int>,
+     *     automation_enabled?: bool,
+     *     has_wp_post_id?: bool
+     * }
+     */
+    public function storeLocalFromAiOutput(SeoArticle $article, string $aiOutput): array
+    {
+        return $this->productReviewStore->storeFromAiOutput($article, $aiOutput, 'ai_generated');
+    }
+
+    /**
+     * Legacy direct push — cutover to local store + automation queue.
      *
      * @param  list<array<string, mixed>>  $items
      * @return array{success: bool, message: string, created_count?: int, error_count?: int, created?: array<int, mixed>, errors?: array<int, mixed>}
@@ -49,50 +55,18 @@ final class WordPressCommentReviewService
             ];
         }
 
-        $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
-        $kind = $isProduct ? 'review ảo' : 'bình luận ảo';
-
-        $wpPostId = (int) ($article->wp_post_id ?? 0);
-        if ($wpPostId <= 0) {
-            return [
-                'success' => false,
-                'message' => 'Bài viết chưa có WordPress Post ID — không thể lưu ' . $kind . '.',
-                'created_count' => 0,
-                'error_count' => count($items),
-            ];
-        }
-
-        if (! SeoAccessControl::canSyncArticlesToWordPress()) {
-            return [
-                'success' => false,
-                'message' => 'Quản lý nội dung không được đăng ' . $kind . ' lên WordPress.',
-                'created_count' => 0,
-                'error_count' => count($items),
-            ];
-        }
-
-        $result = $this->virtualComments->pushToWordPress($article, $items);
-        $count = (int) ($result['count'] ?? 0);
-
-        if (! ($result['success'] ?? false)) {
-            return [
-                'success' => false,
-                'message' => (string) ($result['message'] ?? 'Không lưu được ' . $kind . ' lên WordPress.'),
-                'created_count' => 0,
-                'error_count' => count($items),
-            ];
-        }
+        $result = $this->productReviewStore->storeItems($article, $items, 'legacy_publish_items');
 
         return [
-            'success' => true,
-            'message' => (string) ($result['message'] ?? sprintf('Đã lưu %d %s trên WordPress.', $count, $kind)),
-            'created_count' => $count,
-            'error_count' => 0,
-            'created' => array_map(
-                static fn (int $i): array => ['index' => $i, 'virtual' => true],
-                range(0, max($count, 1) - 1),
-            ),
+            'success' => (bool) ($result['success'] ?? false),
+            'message' => (string) ($result['message'] ?? ''),
+            'created_count' => (int) ($result['created_count'] ?? 0),
+            'error_count' => ($result['success'] ?? false) ? 0 : count($items),
+            'created' => [],
             'errors' => [],
+            'review_ids' => $result['review_ids'] ?? [],
+            'automation_enabled' => $result['automation_enabled'] ?? false,
+            'has_wp_post_id' => $result['has_wp_post_id'] ?? false,
         ];
     }
 }

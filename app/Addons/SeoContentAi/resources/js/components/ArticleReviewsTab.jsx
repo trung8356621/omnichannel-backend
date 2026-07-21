@@ -34,6 +34,64 @@ function formatReviewDate(raw) {
     return parsed.toLocaleString();
 }
 
+function formatClock(raw) {
+    const value = String(raw ?? '').trim();
+    if (!value) {
+        return '';
+    }
+    const parsed = new Date(value.replace(' ', 'T'));
+    if (Number.isNaN(parsed.getTime())) {
+        return value;
+    }
+    return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function statusPresentation(review) {
+    const status = String(review?.status ?? '');
+    const scheduledAt = review?.scheduled_at;
+    const nextRetryAt = review?.next_retry_at;
+    const errorCode = String(review?.last_error_code ?? '');
+
+    switch (status) {
+        case 'draft':
+            return { label: 'Local draft', hint: null };
+        case 'pending_article':
+            return { label: 'Waiting for article sync', hint: null };
+        case 'pending_publish':
+            return { label: 'Waiting for Automation', hint: null };
+        case 'scheduled': {
+            const clock = formatClock(scheduledAt);
+            if (clock) {
+                return { label: `Scheduled at ${clock}`, hint: null };
+            }
+            return { label: 'Scheduled', hint: null };
+        }
+        case 'publishing':
+            return { label: 'Publishing', hint: null };
+        case 'published':
+            return { label: 'Published', hint: null };
+        case 'failed_dispatch':
+            return {
+                label: 'Scheduling failed',
+                hint: errorCode || review?.last_error_message || null,
+            };
+        case 'failed': {
+            if (nextRetryAt) {
+                const clock = formatClock(nextRetryAt);
+                return {
+                    label: 'Automatic retry pending',
+                    hint: clock ? `Retry around ${clock}` : 'Retry scheduled',
+                };
+            }
+            return { label: 'Failed', hint: review?.last_error_message || null };
+        }
+        case 'cancelled':
+            return { label: 'Cancelled', hint: null };
+        default:
+            return { label: status ? String(status) : '', hint: null };
+    }
+}
+
 function StarRating({ rating }) {
     const value = Number(rating);
     if (!Number.isFinite(value) || value <= 0) {
@@ -90,101 +148,60 @@ export default function ArticleReviewsTab({
     }, [initialReviews]);
 
     useEffect(() => {
-        const onUpdated = (event) => {
-            applyReviewsPayload(event?.detail ?? {});
+        const handler = (event) => {
+            const detail = event?.detail ?? {};
+            applyReviewsPayload(detail.reviews ?? detail.params?.reviews ?? detail);
         };
-
-        window.addEventListener('virtual-reviews-updated', onUpdated);
-
-        return () => window.removeEventListener('virtual-reviews-updated', onUpdated);
+        window.addEventListener('virtual-reviews-updated', handler);
+        return () => window.removeEventListener('virtual-reviews-updated', handler);
     }, [applyReviewsPayload]);
 
     const handleRefresh = useCallback(async () => {
-        if (typeof onRefresh !== 'function') {
+        if (typeof onRefresh !== 'function' || refreshing) {
             return;
         }
-
         setRefreshing(true);
         try {
-            const next = await onRefresh();
-            applyReviewsPayload(next);
-        } catch (error) {
-            const message = String(error?.message ?? error ?? '').trim()
-                || t('reviews_tab_refresh_failed');
-
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('reviews_tab_refresh'),
-                        body: message,
-                        status: 'danger',
-                    },
-                }),
-            );
+            const result = await onRefresh();
+            applyReviewsPayload(result);
         } finally {
             setRefreshing(false);
         }
-    }, [onRefresh, applyReviewsPayload]);
+    }, [applyReviewsPayload, onRefresh, refreshing]);
 
     const handleQuickCreate = useCallback(async () => {
         if (typeof onQuickCreate !== 'function' || quickCreating) {
             return;
         }
-
         setQuickCreating(true);
         try {
-            const next = await onQuickCreate();
-            applyReviewsPayload(next);
-        } catch (error) {
-            const message = String(error?.message ?? error ?? '').trim()
-                || t('reviews_tab_quick_create_failed');
-
-            window.dispatchEvent(
-                new CustomEvent('seo-article-editor-notify', {
-                    detail: {
-                        title: t('reviews_tab_quick_create'),
-                        body: message,
-                        status: 'danger',
-                    },
-                }),
-            );
+            const result = await onQuickCreate();
+            applyReviewsPayload(result);
         } finally {
             setQuickCreating(false);
         }
-    }, [onQuickCreate, quickCreating, applyReviewsPayload]);
-
-    const showQuickCreateButton = canQuickCreate && reviews.length === 0 && typeof onQuickCreate === 'function';
-    const showConfigureLink = showConfigureReviews && String(quickCreateConfigUrl ?? '').trim() !== '';
+    }, [applyReviewsPayload, onQuickCreate, quickCreating]);
 
     return (
-        <div className="seo-tab-panel seo-reviews-tab">
+        <div className="seo-reviews-tab">
             <div className="seo-reviews-tab__header">
                 <p className="seo-reviews-tab__summary">
                     {t('reviews_tab_summary', { count: reviews.length })}
                 </p>
                 <div className="seo-reviews-tab__actions">
-                    {showQuickCreateButton ? (
+                    {canQuickCreate && typeof onQuickCreate === 'function' ? (
                         <button
                             type="button"
                             className="seo-reviews-tab__quick-create"
+                            disabled={quickCreating || reviews.length > 0}
                             onClick={handleQuickCreate}
-                            disabled={quickCreating || refreshing}
-                            title={t('reviews_tab_quick_create_hint')}
                         >
-                            <Plus size={14} className={quickCreating ? 'is-spinning' : ''} />
-                            <span>
-                                {quickCreating
-                                    ? t('reviews_tab_quick_create_loading')
-                                    : t('reviews_tab_quick_create')}
-                            </span>
+                            <Plus size={14} />
+                            {t('reviews_tab_quick_create')}
                         </button>
                     ) : null}
-                    {showConfigureLink ? (
-                        <a
-                            href={quickCreateConfigUrl}
-                            className="seo-reviews-tab__configure"
-                            title={t('reviews_tab_configure_hint')}
-                        >
+                    {showConfigureReviews && quickCreateConfigUrl ? (
+                        <a className="seo-reviews-tab__configure" href={quickCreateConfigUrl}>
                             {t('reviews_tab_configure')}
                         </a>
                     ) : null}
@@ -192,8 +209,8 @@ export default function ArticleReviewsTab({
                         <button
                             type="button"
                             className="seo-reviews-tab__refresh"
+                            disabled={refreshing}
                             onClick={handleRefresh}
-                            disabled={refreshing || quickCreating}
                         >
                             <RefreshCw size={14} className={refreshing ? 'is-spinning' : ''} />
                             {t('reviews_tab_refresh')}
@@ -210,19 +227,39 @@ export default function ArticleReviewsTab({
                         const author = String(review?.author ?? '').trim() || t('reviews_tab_guest');
                         const content = String(review?.content ?? '').trim();
                         const dateLabel = formatReviewDate(review?.date);
+                        const status = String(review?.status ?? '');
+                        const reviewId = Number(review?.id ?? 0);
+                        const presentation = statusPresentation(review);
 
                         return (
-                            <li key={`${author}-${index}-${dateLabel}`} className="seo-reviews-tab__item">
+                            <li key={reviewId || `${author}-${index}-${dateLabel}`} className="seo-reviews-tab__item">
                                 <div className="seo-reviews-tab__item-head">
                                     <strong className="seo-reviews-tab__author">{author}</strong>
                                     <StarRating rating={review?.rating} />
+                                    {presentation.label ? (
+                                        <span className={`seo-reviews-tab__status is-${status || 'unknown'}`}>
+                                            {presentation.label}
+                                        </span>
+                                    ) : null}
                                     {dateLabel ? (
                                         <time className="seo-reviews-tab__date" dateTime={String(review?.date ?? '')}>
                                             {dateLabel}
                                         </time>
                                     ) : null}
                                 </div>
+                                {presentation.hint ? (
+                                    <p className="seo-reviews-tab__hint">{presentation.hint}</p>
+                                ) : null}
                                 <p className="seo-reviews-tab__content">{content}</p>
+                                {status === 'published' ? (
+                                    <p className="seo-reviews-tab__meta">
+                                        WP Comment ID: {String(review?.wp_comment_id ?? '—')}
+                                        {review?.published_at ? ` · ${formatReviewDate(review.published_at)}` : ''}
+                                    </p>
+                                ) : null}
+                                {status === 'failed' && review?.last_error_message ? (
+                                    <p className="seo-reviews-tab__error">{String(review.last_error_message)}</p>
+                                ) : null}
                             </li>
                         );
                     })}

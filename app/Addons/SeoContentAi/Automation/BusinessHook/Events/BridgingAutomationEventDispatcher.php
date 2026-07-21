@@ -35,6 +35,14 @@ final class BridgingAutomationEventDispatcher implements AutomationEventDispatch
         'article.completed' => 'article.completed',
         'article.archived' => 'article.archived',
         'article.restored' => 'article.restored',
+        'seo.audit_completed' => 'seo.analysis_completed',
+        'seo.analysis_started' => 'seo.analysis_started',
+        'seo.analysis_completed' => 'seo.analysis_completed',
+        'seo.analysis_failed' => 'seo.analysis_failed',
+        'media.uploaded' => 'media.uploaded',
+        'media.processed' => 'media.processed',
+        'media.failed' => 'media.failed',
+        'notification.requested' => 'notification.requested',
     ];
 
     public function __construct(

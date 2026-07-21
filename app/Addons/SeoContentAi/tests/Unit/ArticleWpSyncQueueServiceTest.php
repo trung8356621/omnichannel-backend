@@ -24,7 +24,7 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $result = $service->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
 
         $this->assertFalse($result['success']);
-        $this->assertStringContainsString('ManualWordPressContext', (string) ($result['message'] ?? ''));
+        $this->assertStringContainsString('ManualAutomationDispatcher', (string) ($result['message'] ?? ''));
         Bus::assertNothingDispatched();
     }
 
@@ -38,6 +38,7 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $result = app(ArticleWpSyncQueueService::class)->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
 
         $this->assertFalse($result['success']);
+        $this->assertStringContainsString('ManualAutomationDispatcher', (string) ($result['message'] ?? ''));
         Bus::assertNothingDispatched();
     }
 
@@ -100,23 +101,19 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         Bus::assertNothingDispatched();
     }
 
-    public function test_dispatch_wp_sync_job_targets_seo_queue(): void
+    public function test_dispatch_wp_sync_job_is_blocked(): void
     {
         Bus::fake();
 
         $job = new SyncArticleToWordPressFromQueueJob(42);
-
         $this->assertSame(ArticleWpSyncQueueService::QUEUE_NAME, $job->queue);
 
-        // Pure dispatch path (không write article_meta) — xác nhận Bus nhận job đúng queue.
         $method = new \ReflectionMethod(ArticleWpSyncQueueService::class, 'dispatchWpSyncJob');
         $method->setAccessible(true);
         $ok = $method->invoke(app(ArticleWpSyncQueueService::class), 42);
 
-        $this->assertTrue($ok);
-        Bus::assertDispatched(SyncArticleToWordPressFromQueueJob::class, function (SyncArticleToWordPressFromQueueJob $dispatched): bool {
-            return $dispatched->articleId === 42 && $dispatched->queue === ArticleWpSyncQueueService::QUEUE_NAME;
-        });
+        $this->assertFalse($ok);
+        Bus::assertNothingDispatched();
     }
 
     public function test_prepare_bundle_for_immediate_sync_publishes_now(): void

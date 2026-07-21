@@ -111,6 +111,162 @@ final class AutomationDefaultRulesSeeder
             ],
         );
 
+        $this->seedIfMissing(
+            code: 'seo-analysis-on-content-updated',
+            data: [
+                'code' => 'seo-analysis-on-content-updated',
+                'name' => 'SEO analysis on content updated',
+                'description' => 'When article content updates, run SEO analysis. DISABLED by default.',
+                'event_name' => BusinessEventName::ArticleContentUpdated->value,
+                'is_enabled' => false,
+                'priority' => 100,
+                'stop_on_failure' => true,
+                'run_mode' => 'queued',
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::ArticleRunSeoAnalysis->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => false,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                        'force' => true,
+                    ],
+                    'settings' => [],
+                ],
+            ],
+        );
+
+        $this->seedIfMissing(
+            code: 'publish-generated-product-reviews-to-wordpress',
+            data: [
+                'code' => 'publish-generated-product-reviews-to-wordpress',
+                'name' => 'Publish generated product reviews to WordPress',
+                'description' => 'On article.product_reviews_generated: schedule each review with max_delay_time. DISABLED by default.',
+                'event_name' => BusinessEventName::ArticleProductReviewsGenerated->value,
+                'is_enabled' => false,
+                'priority' => 100,
+                'stop_on_failure' => false,
+                'run_mode' => 'queued',
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::ArticleProductReviewsScheduleGenerated->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                        'review_ids' => '{{ payload.review_ids }}',
+                    ],
+                    'settings' => [
+                        'max_delay_time' => 5,
+                    ],
+                ],
+            ],
+        );
+
+        $this->seedIfMissing(
+            code: 'publish-pending-product-reviews-after-article-sync',
+            data: [
+                'code' => 'publish-pending-product-reviews-after-article-sync',
+                'name' => 'Queue pending product reviews after article sync',
+                'description' => 'After wordpress.synced: reconcile all pending reviews and schedule publish. DISABLED by default.',
+                'event_name' => BusinessEventName::WordpressSynced->value,
+                'is_enabled' => false,
+                'priority' => 120,
+                'stop_on_failure' => false,
+                'run_mode' => 'queued',
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::ArticleProductReviewsQueuePending->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                    ],
+                    'settings' => [
+                        'max_delay_time' => 5,
+                    ],
+                ],
+            ],
+        );
+
+        // Infrastructure: delayed job emits publish_requested → this rule runs WP publish in-process (sync).
+        $this->seedIfMissing(
+            code: 'execute-wordpress-comment-review-publish',
+            data: [
+                'code' => 'execute-wordpress-comment-review-publish',
+                'name' => 'Execute WordPress comment review publish',
+                'description' => 'Internal: run wordpress.comment_review.publish after schedule delay. Keep enabled with product-review rules. Prefer sync so delayed job finishes publish without extra queue hop.',
+                'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
+                'is_enabled' => true,
+                'priority' => 50,
+                'stop_on_failure' => false,
+                'run_mode' => 'sync',
+                'trigger_type' => AutomationTriggerType::Event->value,
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::WordpressCommentReviewPublish->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'site_id' => '{{ payload.site_id }}',
+                        'connection_id' => '{{ payload.connection_id }}',
+                        'article_id' => '{{ payload.article_id }}',
+                        'review_id' => '{{ payload.review_id }}',
+                        'wp_post_id' => '{{ payload.wp_post_id }}',
+                        'publish_intent' => '{{ payload.publish_intent }}',
+                    ],
+                    'settings' => [],
+                ],
+            ],
+        );
+
+        $this->migrateProductReviewAutomationRules();
+
+        $this->seedIfMissing(
+            code: 'notify-on-notification-requested',
+            data: [
+                'code' => 'notify-on-notification-requested',
+                'name' => 'Deliver notification.requested',
+                'description' => 'Deliver in-app notification when notification.requested emitted. DISABLED by default.',
+                'event_name' => BusinessEventName::NotificationRequested->value,
+                'is_enabled' => false,
+                'priority' => 100,
+                'stop_on_failure' => true,
+                'run_mode' => 'queued',
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::NotificationSend->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'input_mapping' => [
+                        'message' => '{{ payload.message }}',
+                        'title' => '{{ payload.title }}',
+                        'user_id' => '{{ payload.user_id }}',
+                        'project_id' => '{{ payload.project_id }}',
+                    ],
+                    'settings' => [],
+                ],
+            ],
+        );
+
         $this->seedArticleCompletePipelineGraph();
     }
 
@@ -165,6 +321,125 @@ final class AutomationDefaultRulesSeeder
 
         if ($rule->published_version_id === null) {
             $this->versionService->publish($rule);
+        }
+    }
+
+    /**
+     * Migrate existing product-review rules to schedule/reconcile + max_delay_time + internal publish rule.
+     */
+    private function migrateProductReviewAutomationRules(): void
+    {
+        $generated = AutomationRule::query()
+            ->where('code', 'publish-generated-product-reviews-to-wordpress')
+            ->first();
+        if ($generated instanceof AutomationRule) {
+            $generated->forceFill([
+                'event_name' => BusinessEventName::ArticleProductReviewsGenerated->value,
+                'description' => 'On article.product_reviews_generated: schedule each review with max_delay_time.',
+            ])->save();
+            $generated->loadMissing('actions');
+            $scheduleAction = $generated->actions->first(
+                static fn ($a): bool => (string) $a->action_code === AutomationActionCode::ArticleProductReviewsScheduleGenerated->value
+            );
+            if ($scheduleAction === null) {
+                foreach ($generated->actions as $old) {
+                    $old->delete();
+                }
+                $generated->actions()->create([
+                    'action_code' => AutomationActionCode::ArticleProductReviewsScheduleGenerated->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                        'review_ids' => '{{ payload.review_ids }}',
+                    ],
+                    'settings' => ['max_delay_time' => 5],
+                ]);
+            } else {
+                $settings = is_array($scheduleAction->settings) ? $scheduleAction->settings : [];
+                $settings = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings($settings);
+                $scheduleAction->forceFill([
+                    'settings' => $settings,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                        'review_ids' => '{{ payload.review_ids }}',
+                    ],
+                ])->save();
+            }
+        }
+
+        $pending = AutomationRule::query()
+            ->where('code', 'publish-pending-product-reviews-after-article-sync')
+            ->first();
+        if ($pending instanceof AutomationRule) {
+            $pending->loadMissing('actions');
+            foreach ($pending->actions as $action) {
+                if ((string) $action->action_code !== AutomationActionCode::ArticleProductReviewsQueuePending->value) {
+                    continue;
+                }
+                $settings = is_array($action->settings) ? $action->settings : [];
+                $settings = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings($settings);
+                $action->forceFill(['settings' => $settings])->save();
+            }
+        }
+
+        $executeActions = [
+            [
+                'action_code' => AutomationActionCode::WordpressCommentReviewPublish->value,
+                'position' => 0,
+                'is_enabled' => true,
+                'continue_on_failure' => true,
+                'delay_seconds' => 0,
+                'input_mapping' => [
+                    'site_id' => '{{ payload.site_id }}',
+                    'connection_id' => '{{ payload.connection_id }}',
+                    'article_id' => '{{ payload.article_id }}',
+                    'review_id' => '{{ payload.review_id }}',
+                    'wp_post_id' => '{{ payload.wp_post_id }}',
+                    'publish_intent' => '{{ payload.publish_intent }}',
+                ],
+                'settings' => [],
+            ],
+        ];
+
+        $execute = AutomationRule::query()
+            ->where('code', 'execute-wordpress-comment-review-publish')
+            ->first();
+        if (! $execute instanceof AutomationRule) {
+            $this->ruleService->createRule([
+                'code' => 'execute-wordpress-comment-review-publish',
+                'name' => 'Execute WordPress comment review publish',
+                'description' => 'Internal: run wordpress.comment_review.publish after schedule delay.',
+                'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
+                'is_enabled' => true,
+                'priority' => 50,
+                'stop_on_failure' => false,
+                'run_mode' => 'sync',
+                'trigger_type' => AutomationTriggerType::Event->value,
+                'conditions' => null,
+            ], $executeActions);
+
+            return;
+        }
+
+        $execute->forceFill([
+            'is_enabled' => true,
+            'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
+            'run_mode' => 'sync',
+            'trigger_type' => AutomationTriggerType::Event->value,
+        ])->save();
+
+        $execute->loadMissing('actions');
+        $publishAction = $execute->actions->first(
+            static fn ($a): bool => (string) $a->action_code === AutomationActionCode::WordpressCommentReviewPublish->value
+        );
+        if ($publishAction === null) {
+            foreach ($execute->actions as $old) {
+                $old->delete();
+            }
+            $execute->actions()->create($executeActions[0]);
         }
     }
 

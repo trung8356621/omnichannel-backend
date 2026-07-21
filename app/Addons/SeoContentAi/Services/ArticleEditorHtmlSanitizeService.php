@@ -43,7 +43,9 @@ final class ArticleEditorHtmlSanitizeService
         $this->unwrapTransientMarks($root);
         $this->stripTransientClasses($root);
 
-        return $this->serializeRoot($doc, $root);
+        $cleaned = $this->serializeRoot($doc, $root);
+
+        return app(InlineLinkNormalizer::class)->normalize($cleaned);
     }
 
     /**

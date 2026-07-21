@@ -79,12 +79,8 @@ class ListArticleSyncQueue extends ListRecords
             return;
         }
 
-        $manual = \App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::contextFromAuth(
-            $article,
-            'list_sync_queue_resync',
-        );
         $result = app(\App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService::class)
-            ->resyncQueued($article, $manual);
+            ->resyncQueued($article, auth()->user(), 'list_sync_queue.resync');
 
         if (! ($result['success'] ?? false)) {
             Notification::make()
@@ -99,7 +95,7 @@ class ListArticleSyncQueue extends ListRecords
         Notification::make()
             ->title(__('seo-content-ai::filament.article_list.sync_queue_resync_queued'))
             ->body((string) ($result['message'] ?? ''))
-            ->success()
+            ->info()
             ->send();
 
         $this->resetTable();

@@ -108,7 +108,7 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 |---|---|---|---|---|---|---|
 | `wordpress.article.sync_outbound` | CATALOG_ONLY (legacy) | legacy_not_selectable | none Phase 3 | Automation PASS (blocked workflow) | no | `implies_publish_status=true` |
 | `wordpress.article.publish` | CATALOG_ONLY | internal_only | none | Automation PASS (PublishIntent) | no | critical; cần guard/idempotency trước handler |
-| `wordpress.comment_review.publish` | CATALOG_ONLY | internal_only | none | Automation PASS (non-selectable) | no | high; workflow node hiện gọi service trực tiếp |
+| `wordpress.comment_review.publish` | IMPLEMENT | selectable | `PublishWordPressCommentReviewHookAction` | ProductReviewAutomationPublishTest | yes (rules + sync execute) | virtual meta upsert `_omi_review_id`; delayed job → `ProductReviewPublishDispatchService` + rule `execute-wordpress-comment-review-publish` (`run_mode=sync`); queue ACL via `SeoQueueContext`; SideEffectGuard allows this action |
 
 ---
 

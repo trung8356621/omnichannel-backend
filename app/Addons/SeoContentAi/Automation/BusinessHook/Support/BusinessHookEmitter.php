@@ -6,13 +6,12 @@ namespace App\Addons\SeoContentAi\Automation\BusinessHook\Support;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\BusinessEventDispatcher;
-use App\Addons\SeoContentAi\Automation\Data\EventEnvelope;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 
 /**
  * Helper emit domain business events từ application services.
@@ -34,22 +33,88 @@ final class BusinessHookEmitter
         array $context = [],
         ?string $eventUuid = null,
     ): void {
+        $this->emitOutcomeSafely($event, $subject, $payload, $context, $eventUuid);
+    }
+
+    /**
+     * Best-effort outcome/domain event. SKIPPED_NO_RULE / dispatcher lỗi không lan ra caller.
+     *
+     * @param  array<string, mixed>  $payload
+     * @param  array<string, mixed>  $context
+     */
+    public function emitOutcomeSafely(
+        BusinessEventName|string $event,
+        ?Model $subject = null,
+        array $payload = [],
+        array $context = [],
+        ?string $eventUuid = null,
+    ): void {
         $name = $event instanceof BusinessEventName ? $event->value : $event;
 
         try {
-            $this->dispatcher->dispatch(
+            $result = $this->dispatcher->dispatchWithOutcome(
                 eventName: $name,
                 subject: $subject,
                 payload: $payload,
                 context: $context,
                 eventUuid: $eventUuid,
             );
+
+            if ($result->isSkippedNoRule()) {
+                return;
+            }
+
+            if ($result->isRejectedOrInvalid()) {
+                Log::warning('automation.outcome_event_dispatch_failed', [
+                    'event_name' => $name,
+                    'outcome' => $result->outcome->value,
+                    'error_code' => $result->errorCode,
+                    'message' => $result->message,
+                ]);
+            }
         } catch (\Throwable $e) {
-            Log::warning('business_hook.emit_failed', [
-                'event' => $name,
-                'error' => $e->getMessage(),
+            report($e);
+
+            Log::warning('automation.outcome_event_dispatch_failed', [
+                'event_name' => $name,
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
             ]);
         }
+    }
+
+    public function articleCreated(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ArticleCreated, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+            'status' => (string) ($article->status ?? ''),
+        ], $context);
+    }
+
+    public function articleContentUpdated(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ArticleContentUpdated, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function articleCompleted(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ArticleCompleted, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+            'status' => 'completed',
+        ], $context);
+    }
+
+    public function articleDeleted(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ArticleDeleted, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ], $context);
     }
 
     public function articleArchived(SeoArticle $article, array $context = []): void
@@ -67,6 +132,35 @@ final class BusinessHookEmitter
             'article_id' => (int) $article->id,
             'site_id' => (int) ($article->site_id ?? 0) ?: null,
             'status' => 'restored',
+        ], $context);
+    }
+
+    public function taskCreated(SeoProjectTask $task, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ContentProjectTaskCreated, $task, [
+            'task_id' => (int) $task->id,
+            'project_id' => (int) ($task->project_id ?? 0) ?: null,
+            'site_id' => (int) ($task->site_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function taskUpdated(SeoProjectTask $task, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ContentProjectTaskUpdated, $task, [
+            'task_id' => (int) $task->id,
+            'project_id' => (int) ($task->project_id ?? 0) ?: null,
+            'status' => (string) ($task->status ?? ''),
+        ], $context);
+    }
+
+    public function taskCompleted(SeoProjectTask $task, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ContentProjectTaskCompleted, $task, [
+            'task_id' => (int) $task->id,
+            'project_id' => (int) ($task->project_id ?? 0) ?: null,
+            'site_id' => (int) ($task->site_id ?? 0) ?: null,
+            'article_id' => (int) ($task->article_id ?? 0) ?: null,
+            'status' => 'completed',
         ], $context);
     }
 
@@ -90,12 +184,30 @@ final class BusinessHookEmitter
         ], $context);
     }
 
+    public function runStarted(SeoProjectRun $run, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ContentProjectRunStarted, $run, [
+            'run_id' => (int) $run->id,
+            'project_id' => (int) ($run->project_id ?? 0) ?: null,
+            'status' => 'running',
+        ], $context);
+    }
+
     public function runCompleted(SeoProjectRun $run, array $context = []): void
     {
         $this->emit(BusinessEventName::ContentProjectRunCompleted, $run, [
             'run_id' => (int) $run->id,
             'project_id' => (int) ($run->project_id ?? 0) ?: null,
             'status' => 'completed',
+        ], $context);
+    }
+
+    public function runFailed(SeoProjectRun $run, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ContentProjectRunFailed, $run, [
+            'run_id' => (int) $run->id,
+            'project_id' => (int) ($run->project_id ?? 0) ?: null,
+            'status' => 'failed',
         ], $context);
     }
 
@@ -119,21 +231,72 @@ final class BusinessHookEmitter
         ], $context);
     }
 
+    public function wordpressSyncStarted(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::WordpressSyncStarted, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+            'status' => 'started',
+        ], $context);
+    }
+
+    public function mediaUploaded(SeoMedia $media, array $context = []): void
+    {
+        $this->emit(BusinessEventName::MediaUploaded, $media, [
+            'media_id' => (int) $media->id,
+            'site_id' => (int) ($media->site_id ?? 0) ?: null,
+            'article_id' => (int) ($media->article_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function mediaProcessed(SeoMedia $media, array $context = []): void
+    {
+        $this->emit(BusinessEventName::MediaProcessed, $media, [
+            'media_id' => (int) $media->id,
+            'site_id' => (int) ($media->site_id ?? 0) ?: null,
+            'article_id' => (int) ($media->article_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function mediaFailed(SeoMedia $media, string $error, array $context = []): void
+    {
+        $this->emit(BusinessEventName::MediaFailed, $media, [
+            'media_id' => (int) $media->id,
+            'site_id' => (int) ($media->site_id ?? 0) ?: null,
+            'error' => $error,
+        ], $context);
+    }
+
+    public function seoAnalysisStarted(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::SeoAnalysisStarted, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function seoAnalysisCompleted(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::SeoAnalysisCompleted, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    public function seoAnalysisFailed(SeoArticle $article, string $error, array $context = []): void
+    {
+        $this->emit(BusinessEventName::SeoAnalysisFailed, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+            'error' => $error,
+        ], $context);
+    }
+
     /**
-     * Emit both ActionRunner envelope (log bridge) friendly helper.
-     *
-     * @param  array{type: string, id: int|string|null}  $entity
-     * @param  array<string, mixed>  $context
      * @param  array<string, mixed>  $payload
      */
-    public function envelope(string $eventKey, array $entity, array $context = [], array $payload = []): EventEnvelope
+    public function notificationRequested(array $payload, array $context = []): void
     {
-        return EventEnvelope::make(
-            eventKey: $eventKey,
-            entity: $entity,
-            context: $context,
-            payload: $payload,
-            eventId: (string) Str::uuid(),
-        );
+        $this->emit(BusinessEventName::NotificationRequested, null, $payload, $context);
     }
 }

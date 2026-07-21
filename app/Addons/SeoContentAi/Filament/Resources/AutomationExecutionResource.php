@@ -83,6 +83,18 @@ class AutomationExecutionResource extends SeoPanelResource
                         Infolists\Components\TextEntry::make('status')
                             ->label(__('seo-content-ai::filament.automation.status'))
                             ->badge(),
+                        Infolists\Components\TextEntry::make('trigger_type')
+                            ->label(__('seo-content-ai::filament.automation.trigger_type'))
+                            ->badge(),
+                        Infolists\Components\TextEntry::make('action_code')
+                            ->label(__('seo-content-ai::filament.automation.action_code'))
+                            ->placeholder('—'),
+                        Infolists\Components\TextEntry::make('initiated_by_user_id')
+                            ->label(__('seo-content-ai::filament.automation.initiated_by'))
+                            ->placeholder('—'),
+                        Infolists\Components\TextEntry::make('initiated_from')
+                            ->label(__('seo-content-ai::filament.automation.initiated_from'))
+                            ->placeholder('—'),
                         Infolists\Components\TextEntry::make('attempt')
                             ->label(__('seo-content-ai::filament.automation.attempt')),
                         Infolists\Components\TextEntry::make('rule_version')
@@ -93,7 +105,8 @@ class AutomationExecutionResource extends SeoPanelResource
                                 ? AutomationRuleResource::getUrl('view', ['record' => $record->rule])
                                 : null),
                         Infolists\Components\TextEntry::make('rule.code')
-                            ->label(__('seo-content-ai::filament.automation.rule').' code'),
+                            ->label(__('seo-content-ai::filament.automation.rule').' code')
+                            ->placeholder('—'),
                         Infolists\Components\TextEntry::make('businessEvent.event_name')
                             ->label(__('seo-content-ai::filament.automation.event')),
                         Infolists\Components\TextEntry::make('subject_display')
@@ -238,7 +251,36 @@ class AutomationExecutionResource extends SeoPanelResource
                 Tables\Columns\TextColumn::make('status')
                     ->label(__('seo-content-ai::filament.automation.status'))
                     ->badge()
+                    ->color(fn (?string $state): string => match ($state) {
+                        'failed' => 'danger',
+                        'partial' => 'warning',
+                        'processing' => 'info',
+                        'completed' => 'success',
+                        default => 'gray',
+                    })
                     ->sortable(),
+                Tables\Columns\TextColumn::make('trigger_type')
+                    ->label(__('seo-content-ai::filament.automation.trigger_type'))
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'manual' => __('seo-content-ai::filament.automation.trigger_manual'),
+                        'schedule' => __('seo-content-ai::filament.automation.trigger_schedule'),
+                        'system' => __('seo-content-ai::filament.automation.trigger_system'),
+                        default => __('seo-content-ai::filament.automation.trigger_event'),
+                    })
+                    ->sortable(),
+                Tables\Columns\TextColumn::make('action_code')
+                    ->label(__('seo-content-ai::filament.automation.action_code'))
+                    ->placeholder(fn (AutomationExecution $record): string => (string) ($record->rule?->code ?? '—'))
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('initiated_by_user_id')
+                    ->label(__('seo-content-ai::filament.automation.initiated_by'))
+                    ->placeholder('—')
+                    ->toggleable(),
+                Tables\Columns\TextColumn::make('initiated_from')
+                    ->label(__('seo-content-ai::filament.automation.initiated_from'))
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('attempt')
                     ->label(__('seo-content-ai::filament.automation.attempt'))
                     ->alignCenter()
@@ -246,7 +288,8 @@ class AutomationExecutionResource extends SeoPanelResource
                 Tables\Columns\TextColumn::make('rule.code')
                     ->label(__('seo-content-ai::filament.automation.filters_rule'))
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->placeholder('—'),
                 Tables\Columns\TextColumn::make('businessEvent.event_name')
                     ->label(__('seo-content-ai::filament.automation.event'))
                     ->toggleable(),
@@ -266,6 +309,14 @@ class AutomationExecutionResource extends SeoPanelResource
             ])
             ->defaultSort('id', 'desc')
             ->filters([
+                Tables\Filters\SelectFilter::make('trigger_type')
+                    ->label(__('seo-content-ai::filament.automation.trigger_type'))
+                    ->options([
+                        'event' => __('seo-content-ai::filament.automation.trigger_event'),
+                        'manual' => __('seo-content-ai::filament.automation.trigger_manual'),
+                        'schedule' => __('seo-content-ai::filament.automation.trigger_schedule'),
+                        'system' => __('seo-content-ai::filament.automation.trigger_system'),
+                    ]),
                 Tables\Filters\SelectFilter::make('automation_rule_id')
                     ->label(__('seo-content-ai::filament.automation.filters_rule'))
                     ->relationship('rule', 'code')
@@ -281,6 +332,14 @@ class AutomationExecutionResource extends SeoPanelResource
                         'skipped' => 'Skipped',
                         'cancelled' => 'Cancelled',
                     ]),
+                Tables\Filters\SelectFilter::make('action_code')
+                    ->label(__('seo-content-ai::filament.automation.action_code'))
+                    ->options(fn (): array => AutomationExecution::query()
+                        ->whereNotNull('action_code')
+                        ->distinct()
+                        ->orderBy('action_code')
+                        ->pluck('action_code', 'action_code')
+                        ->all()),
                 Tables\Filters\SelectFilter::make('event_name')
                     ->label(__('seo-content-ai::filament.automation.filters_event'))
                     ->options(fn (): array => BusinessEvent::query()

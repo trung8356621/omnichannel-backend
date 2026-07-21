@@ -53,7 +53,12 @@ class SeoMediaStorageService
             app(SeoWatermarkService::class)->applyToMediaIfEnabled($media);
         }
 
-        return $media->fresh();
+        $fresh = $media->fresh() ?? $media;
+        $emitter = app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class);
+        $emitter->mediaUploaded($fresh);
+        $emitter->mediaProcessed($fresh);
+
+        return $fresh;
     }
 
     /**
@@ -151,7 +156,12 @@ class SeoMediaStorageService
             app(SeoWatermarkService::class)->applyToMediaIfEnabled($media);
         }
 
-        return $media->fresh();
+        $fresh = $media->fresh() ?? $media;
+        $emitter = app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class);
+        $emitter->mediaUploaded($fresh);
+        $emitter->mediaProcessed($fresh);
+
+        return $fresh;
     }
 
     public function renameBySlug(SeoMedia $media, string $newSlug): SeoMedia
@@ -182,7 +192,11 @@ class SeoMediaStorageService
             'url' => $this->urlForPath($newPath),
         ]);
 
-        return $media->fresh();
+        $fresh = $media->fresh() ?? $media;
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->mediaProcessed($fresh);
+
+        return $fresh;
     }
 
     public function urlForPath(string $relativePath): string

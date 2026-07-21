@@ -1,6 +1,7 @@
 import { normalizeLinkText } from './articleLinkScroll';
 import { findPlainTextRangeInRoot, wrapTextRangeWithLink } from './articlePlainTextRange';
 import { SEO_EDITOR_LINK_CLASS, stripEditorTransientMarkup } from './articleEditorTransientMarkup';
+import { normalizeInlineLinks, SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
 
 /**
  * Thay lần xuất hiện đầu tiên của searchText bằng text thuần (không link).
@@ -35,7 +36,7 @@ export function replaceFirstPlainTextWithText(html, searchText, insertText) {
         range.insertNode(doc.createTextNode(value));
 
         return {
-            html: stripEditorTransientMarkup(body.innerHTML),
+            html: normalizeInlineLinks(stripEditorTransientMarkup(body.innerHTML)),
             replaced: true,
         };
     } catch {
@@ -76,6 +77,12 @@ export function replaceFirstPlainTextWithLink(html, searchText, label, href) {
     const anchor = doc.createElement('a');
     anchor.href = url;
     anchor.className = SEO_EDITOR_LINK_CLASS;
+    if (SEO_LINK_DEFAULT_ATTRS.target) {
+        anchor.target = SEO_LINK_DEFAULT_ATTRS.target;
+    }
+    if (SEO_LINK_DEFAULT_ATTRS.rel) {
+        anchor.rel = SEO_LINK_DEFAULT_ATTRS.rel;
+    }
     anchor.textContent = linkLabel;
 
     try {
@@ -83,7 +90,7 @@ export function replaceFirstPlainTextWithLink(html, searchText, label, href) {
         range.insertNode(anchor);
 
         return {
-            html: stripEditorTransientMarkup(body.innerHTML),
+            html: normalizeInlineLinks(stripEditorTransientMarkup(body.innerHTML)),
             replaced: true,
         };
     } catch {
@@ -158,7 +165,7 @@ export function wrapPlainTextWithLink(html, phrase, href, occurrenceIndex = 0) {
     const ok = wrapTextRangeWithLink(doc, match, url);
 
     return {
-        html: stripEditorTransientMarkup(body.innerHTML),
+        html: normalizeInlineLinks(stripEditorTransientMarkup(body.innerHTML)),
         replaced: ok,
     };
 }

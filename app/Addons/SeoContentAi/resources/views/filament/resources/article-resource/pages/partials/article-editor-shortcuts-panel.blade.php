@@ -15,7 +15,7 @@
                         <span class="article-editor-shortcuts-keys">
                             <kbd>Ctrl</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>Shift</kbd><span class="article-editor-shortcuts-plus">+</span><kbd>S</kbd>
                         </span>
-                        <span class="article-editor-shortcuts-desc">Đồng bộ WordPress</span>
+                        <span class="article-editor-shortcuts-desc">Đồng bộ WordPress (qua Automation)</span>
                     </li>
                 @endif
                 <li>

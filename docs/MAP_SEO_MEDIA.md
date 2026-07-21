@@ -373,8 +373,10 @@ Filament page riêng cho AI image enhancement (magic eraser, background removal,
 | `GeminiMediaGenerationService` | `Services/GeminiMediaGenerationService.php` | Render + log `render_model`; unavailable → mark + retry next |
 | `MediaGenerationService` | `Services/MediaGenerationService.php` | Entry image gen; delegate typography → `TypographyPipelineService` |
 | `TypographyPipelineService` | `Services/TypographyPipelineService.php` | N candidate → Vision → winner; validation fail không hủy ảnh đã render |
+| `EditorWorkflowExecutionService` | `Services/EditorWorkflowExecutionService.php` | Editor `source=workflow` → full graph qua `TaskWorkflowTestRunner::run()`; BC `extract_last_prompt_bc` nếu graph không trả media |
+| `TaskWorkflowTestRunner` | `Services/TaskWorkflowTestRunner.php` | Tool image/`image_typography`: `runFullDependentChain=false` (không ép text Flash trên parent) — parity Test Prompt |
 
-Changelog: `docs/CHANGELOG_AI_IMAGE_ROUTING_PHASE1.md`, `CHANGELOG_AI_IMAGE_ROUTING_PHASE2.md`, `CHANGELOG_AI_MODEL_VERSION_ROUTING.md`.
+**Settings routing UI:** `SeoSettingsAiAdvanced` (priority + typography validation); Editor/Workflows chỉ Prompt\|Workflow slot — xem [MAP_SEO_SETTINGS.md](MAP_SEO_SETTINGS.md).
 
 ### Typography candidate (không spam thư viện)
 

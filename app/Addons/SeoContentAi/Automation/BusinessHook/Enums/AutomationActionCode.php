@@ -10,6 +10,9 @@ namespace App\Addons\SeoContentAi\Automation\BusinessHook\Enums;
 enum AutomationActionCode: string
 {
     case WordpressArticleSync = 'wordpress.article.sync';
+    case WordpressCommentReviewPublish = 'wordpress.comment_review.publish';
+    case ArticleProductReviewsQueuePending = 'article.product_reviews.queue_pending';
+    case ArticleProductReviewsScheduleGenerated = 'article.product_reviews.schedule_generated';
     case ArticleGenerateContent = 'article.generate_content';
     case ArticleRunSeoAnalysis = 'article.run_seo_analysis';
     case WebhookSend = 'webhook.send';

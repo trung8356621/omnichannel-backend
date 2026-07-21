@@ -62,10 +62,17 @@ final class AnalyzeArticleSeoJob implements ShouldBeUnique, ShouldQueue
         $scoringQueue->markProcessing($article);
 
         try {
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->seoAnalysisStarted($article);
             $analyzer->analyze($article);
-            $scoringQueue->markCompleted($article->fresh() ?? $article);
+            $fresh = $article->fresh() ?? $article;
+            $scoringQueue->markCompleted($fresh);
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->seoAnalysisCompleted($fresh);
         } catch (Throwable $exception) {
             $scoringQueue->markFailed($article, $exception->getMessage());
+            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+                ->seoAnalysisFailed($article, $exception->getMessage());
 
             throw $exception;
         }

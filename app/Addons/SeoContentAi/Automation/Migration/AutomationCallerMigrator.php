@@ -9,8 +9,8 @@ use App\Addons\SeoContentAi\Automation\Enums\MigrationMode;
 use Illuminate\Support\Str;
 
 /**
- * Shadow: legacy ghi thật; parity qua dry-run/plan — không double-write, không emit event từ shadow.
- * Action: chỉ ActionRunner ghi.
+ * Default: Action only.
+ * Emergency Legacy: AUTOMATION_MIGRATION_EMERGENCY_LEGACY=true.
  */
 final class AutomationCallerMigrator
 {
@@ -21,8 +21,8 @@ final class AutomationCallerMigrator
 
     /**
      * @param  callable(): mixed  $legacyWrite
-     * @param  callable(): ActionResult  $actionWrite  Chỉ gọi khi mode=action
-     * @param  callable(): array<string, mixed>  $parityExpected  Dry-run/plan — không ghi
+     * @param  callable(): ActionResult  $actionWrite
+     * @param  callable(): array<string, mixed>  $parityExpected
      * @param  callable(mixed): array<string, mixed>  $normalizeLegacy
      * @param  callable(array<string, mixed>): array<string, mixed>  $normalizeExpected
      */
@@ -57,23 +57,8 @@ final class AutomationCallerMigrator
             return $result;
         }
 
-        if ($mode === MigrationMode::Shadow) {
-            $started = hrtime(true);
-            $expectedRaw = $parityExpected();
-            $legacyResult = $legacyWrite();
-            $durationMs = (int) ((hrtime(true) - $started) / 1_000_000);
-
-            $this->parityLogger->compare(
-                callerKey: $callerKey,
-                actionKey: $actionKey,
-                expected: $normalizeExpected(is_array($expectedRaw) ? $expectedRaw : []),
-                actual: $normalizeLegacy($legacyResult),
-                correlationId: $correlationId,
-                durationMs: $durationMs,
-            );
-
-            return $legacyResult;
-        }
+        // Emergency Legacy — parity logger unused.
+        unset($parityExpected, $normalizeLegacy, $normalizeExpected, $actionKey, $correlationId);
 
         return $legacyWrite();
     }

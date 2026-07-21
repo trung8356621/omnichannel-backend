@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
 use App\Addons\SeoContentAi\Filament\Pages\SeoQueueManager;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
@@ -353,6 +354,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.sync-wp');
+                Route::post('/{article}/product-reviews/reconcile', ArticleProductReviewReconcileController::class)
+                    ->whereNumber('article')
+                    ->name('seo.articles.product-reviews.reconcile');
                 Route::get('/{article}/revisions/{revision}', [SeoArticleRevisionController::class, 'show'])
                     ->whereNumber('article')
                     ->whereNumber('revision')

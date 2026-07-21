@@ -14,6 +14,7 @@ import {
     AlignJustify,
     Link2,
     Unlink,
+    Code2,
     Minus,
     Undo2,
     Redo2,
@@ -67,7 +68,7 @@ function InsertActionButton({ onClick, onMouseDown, title, children, label }) {
     );
 }
 
-export default function BlockFormatToolbar({ editor, onDelete, canDelete = true, onEditLink }) {
+export default function BlockFormatToolbar({ editor, onDelete, canDelete = true, onEditLink, onViewHtml }) {
     const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
     const [overflowOpen, setOverflowOpen] = useState(false);
     /** Giữ vị trí con trỏ trước khi modal (portal) lấy focus. */
@@ -246,6 +247,14 @@ export default function BlockFormatToolbar({ editor, onDelete, canDelete = true,
                         title={t('toolbar_unlink')}
                     >
                         <Unlink size={ICON_SIZE} />
+                    </ToolbarButton>
+                    <ToolbarButton
+                        onClick={() => onViewHtml?.()}
+                        disabled={!editor || !onViewHtml}
+                        title={t('toolbar_view_html')}
+                    >
+                        <Code2 size={ICON_SIZE} />
+                        <span className="seo-toolbar-btn__label">HTML</span>
                     </ToolbarButton>
                 </ToolbarGroup>
 

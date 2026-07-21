@@ -130,10 +130,8 @@ final class PromptHookFormSchema
         $catalog = app(PromptHookEditorCatalog::class);
         $version = trim((string) ($data['hook_version'] ?? ''));
         try {
-            $definition = $version !== ''
-                ? $catalog->find($hookKey, $version)
-                : $catalog->latestPinnedOrFail($hookKey);
-        } catch (DefinitionNotFound|VersionNotFound|\InvalidArgumentException $exception) {
+            $definition = self::resolveDefinitionForSave($catalog, $hookKey, $version);
+        } catch (DefinitionNotFound|\InvalidArgumentException $exception) {
             throw ValidationException::withMessages([
                 'hook_key' => $exception->getMessage(),
             ]);
@@ -210,13 +208,35 @@ final class PromptHookFormSchema
         }
 
         try {
-            $catalog = app(PromptHookEditorCatalog::class);
-
-            return $version !== ''
-                ? $catalog->find($hookKey, $version)
-                : $catalog->latestPinnedOrFail($hookKey);
+            return self::resolveDefinitionForSave(
+                app(PromptHookEditorCatalog::class),
+                $hookKey,
+                trim($version),
+            );
         } catch (\Throwable) {
             return null;
+        }
+    }
+
+    /**
+     * Resolve hook for editor/save. Legacy int version (vd. "1" → 1.0.0) fallback latest pinned.
+     *
+     * @throws DefinitionNotFound
+     * @throws \InvalidArgumentException
+     */
+    private static function resolveDefinitionForSave(
+        PromptHookEditorCatalog $catalog,
+        string $hookKey,
+        string $version,
+    ): PromptHookDefinition {
+        if ($version === '') {
+            return $catalog->latestPinnedOrFail($hookKey);
+        }
+
+        try {
+            return $catalog->find($hookKey, $version);
+        } catch (VersionNotFound) {
+            return $catalog->latestPinnedOrFail($hookKey);
         }
     }
 

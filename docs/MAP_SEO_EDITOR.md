@@ -219,7 +219,7 @@ sequenceDiagram
 
 | Nút                       | Phạm vi                                            | Hành vi                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Ảnh local/chưa sync: local rename (`executeSeoMediaSlugRenamesTwoPhase`) + `finalizeBlocksAfterWpRename`. Ảnh WP: 1 batch `renameAttachmentSlugsOnWordPress(..., silent=true)` → **1 toast** React (`editor_quick_fix_slug_all_done_*`). Map `attachment_id` / `seo_media_id` / `block_id` / `old_url`. |
+| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Gắn `waitForWordPressSlugRenameFinished` **trước** `applyQuickFixSlugPreview`. Local + WP rename; `applyRenameResultsToBlocks` / `findAllRenameEntriesForImageRow` **merge cả** `wpSrc` + `localSrc` + `src`/`slug` (tránh 404 khi chỉ đổi 1 phía). Map `attachment_id` / `seo_media_id` / `block_id` / `old_url`. Toast batch `editor_quick_fix_slug_all_done_*`. |
 | **Fix slug** (1 ảnh)      | Một dòng                                           | Ảnh local đổi slug local ngay; ảnh WP confirm rồi `renameAttachmentSlugsOnWordPress` (toast Filament). Không gate “phải Sync WP trước” trên ảnh local. |
 | **Fix alt/title all**     | Ảnh không Except                                   | `alt`+`title`=focus keyword. **Gộp batch:** 1 `updateSeoMediaMeta(items)` + tối đa 1 `updateAttachmentMetaOnWordPress` (chỉ WP chưa sync qua SEO media) → **1 toast** tổng (không spam từng ảnh). |
 | **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + `pushAltTitleMetaToStores` (1 toast). |
@@ -354,11 +354,14 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 
 | Thành phần | File | Vai trò |
 |------------|------|---------|
-| UI panel | `ArticleReviewsTab.jsx` | Header: `{count} bình luận` + nút **Tạo bình luận nhanh** + **Làm mới** |
+| UI panel | `ArticleReviewsTab.jsx` | Header: `{count} bình luận` + **Tạo bình luận nhanh** + **Làm mới**; `StarRating` 1–5; status schedule/Automation (không Publish now / Cancel) |
+| Store | `ArticleProductReviewStoreService` | Local `article_product_reviews`; `CommentReviewRatingAssigner` gán/backfill `rating`; emit `article.product_reviews_generated` |
+| Schedule | `PendingProductReviewReconciler` + `DispatchScheduledProductReviewPublishJob` | `max_delay_time` (phút) → delay random; queue `automation-external` |
+| Publish WP | `ProductReviewPublishDispatchService` → `wordpress.comment_review.publish` | Rule infra `execute-wordpress-comment-review-publish` (`run_mode=sync`); publisher + SideEffectGuard + `SeoQueueContext` |
 | Livewire | `EditArticle::generateQuickPostReviews()` | Gọi `ArticleQuickPostReviewService::runForArticle()`; `abort_if` Content Manager |
-| Service | `ArticleQuickPostReviewService` | Workflow Đăng bình luận → `WordPressCommentReviewService` |
-| Service | `VirtualCommentService::getFromWordPress()` | GET `omi-seo-ai/v1/posts/{id}/comment-reviews` — đọc meta `_omi_seo_virtual_comments` + `wp_comments` |
-| WP plugin | `Rest_Controller::handle_get_comment_reviews` (≥ 1.0.51) | Trả virtual meta trước, merge review DB thật |
+| Service | `ArticleQuickPostReviewService` | Workflow → store local + events (không POST WP trực tiếp) |
+| Service | `VirtualCommentService::getFromWordPress()` | GET `omi-seo-ai/v1/posts/{id}/comment-reviews` — meta `_omi_seo_virtual_comments` + `wp_comments` |
+| WP plugin | `Virtual_Comments` + REST (≥ 1.0.59) | Upsert meta; CusRev compat (`render_virtual_reviews_tab`); purge page cache |
 | Job (async cũ) | `GenerateArticleReviewsJob` | Hàng đợi + cache notify — vẫn dùng khi flow queue |
 | Settings | `getEditorSettingsPayload()` | `can_quick_create_reviews`, `show_configure_reviews_link`, `quick_create_reviews_config_url` |
 | Metadata | `publish-sidebar.blade.php` | Chỉ hiển thị trạng thái duyệt / số bình luận — **không** còn nút tạo nhanh |
@@ -535,7 +538,7 @@ flowchart TB
 
 | Hướng | Entry | Hub |
 |-------|-------|-----|
-| **Outbound** (SEO → WP) | Nút Sync editor, workflow, list actions | `WordPressArticleSyncService` |
+| **Outbound** (SEO → WP) | Nút Sync editor, list/queue/scheduled, Business Hook `wordpress.article.sync` (rule enabled) | `WordPressArticleSyncService` — **không** từ Content Project workflow tạo bài |
 | **Inbound** (WP → SEO) | Plugin push `POST /api/seo-wp-bridge/push-content` | `SyncDomainContentService` |
 
 ### 2.6.2 Outbound từ EditArticle

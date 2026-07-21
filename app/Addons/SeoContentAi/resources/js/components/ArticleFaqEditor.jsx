@@ -205,6 +205,7 @@ export default function ArticleFaqEditor({
     }, [faqs]);
 
     const skipBlurDuplicateCheckRef = useRef(false);
+    const flushFaqsInFlightRef = useRef(false);
     const [renewingIndex, setRenewingIndex] = useState(null);
     const [generatingAll, setGeneratingAll] = useState(false);
     const [markdownImportOpen, setMarkdownImportOpen] = useState(false);
@@ -231,12 +232,19 @@ export default function ArticleFaqEditor({
 
     const flushFaqs = useCallback(() => {
         if (!articleId) return;
+        if (flushFaqsInFlightRef.current) {
+            return;
+        }
+        flushFaqsInFlightRef.current = true;
         setSaveStatus('saving');
         window.dispatchEvent(
             new CustomEvent('save-article-faqs', {
                 detail: { faqs: faqsRef.current },
             }),
         );
+        window.setTimeout(() => {
+            flushFaqsInFlightRef.current = false;
+        }, 400);
     }, [articleId]);
 
     const { debounced: debouncedSave } = useDebouncedCallback((rows) => {

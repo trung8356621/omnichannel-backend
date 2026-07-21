@@ -37,9 +37,9 @@ final class AutomationRuleMatcher
             ->when(
                 $event->event_name === BusinessEventName::ScheduleTriggered->value,
                 static fn ($query) => $query->where('trigger_type', AutomationTriggerType::Schedule->value),
+                // Manual trigger_type never matches domain events — only ManualAutomationDispatcher.
                 static fn ($query) => $query->where(function ($sub): void {
                     $sub->where('trigger_type', AutomationTriggerType::Event->value)
-                        ->orWhere('trigger_type', AutomationTriggerType::Manual->value)
                         ->orWhereNull('trigger_type');
                 }),
             )

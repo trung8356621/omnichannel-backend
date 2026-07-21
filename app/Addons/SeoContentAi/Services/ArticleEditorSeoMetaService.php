@@ -20,7 +20,6 @@ final class ArticleEditorSeoMetaService
         private readonly ArticleGoogleSerpPreviewService $googleSerpPreview,
         private readonly WordPressArticleContentService $wpContent,
         private readonly WordPressPermalinkBuilder $permalinkBuilder,
-        private readonly SeoArticleScoringQueueService $scoringQueue,
     ) {}
 
     /**
@@ -52,7 +51,8 @@ final class ArticleEditorSeoMetaService
 
         $article = $article->fresh(['articleMetas', 'site']) ?? $article;
 
-        $this->scoringQueue->dispatchForArticle($article, force: true);
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->articleContentUpdated($article);
 
         return $this->buildResponse($article, $focusKeyword, $metaDescription, $normalizedSlug);
     }

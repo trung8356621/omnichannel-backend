@@ -4,125 +4,195 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\WordPress;
 
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Services\ManualAutomationDispatcher;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
+use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
-use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
-use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
-use Illuminate\Support\Facades\Log;
+use App\Models\User;
 use Illuminate\Support\Str;
 
 /**
- * Sole orchestration entry for explicit user WordPress sync.
- * Automation must use SyncArticleToWordPressHookAction instead.
+ * Manual WordPress UI entry → ManualAutomationDispatcher only.
  */
 final class WordPressManualSyncService
 {
     public function __construct(
+        private readonly ManualAutomationDispatcher $manualDispatcher,
+        private readonly ArticleEditorBundleApplyService $bundleApply,
+        private readonly ArticleEditorPersistService $persist,
         private readonly ArticleWpSyncQueueService $syncQueue,
-        private readonly WordPressArticleSyncService $syncService,
     ) {}
-
-    public static function contextFromAuth(SeoArticle $article, string $reason): ManualWordPressContext
-    {
-        $userId = (int) (auth()->id() ?? 0);
-        if ($userId <= 0) {
-            throw new \RuntimeException('Manual WordPress sync requires authenticated user.');
-        }
-
-        return new ManualWordPressContext(
-            userId: $userId,
-            requestId: (string) Str::uuid(),
-            articleId: (int) $article->id,
-            siteId: (int) ($article->site_id ?? 0),
-            reason: $reason,
-            correlationId: (string) Str::uuid(),
-        );
-    }
 
     /**
      * @param  array<string, mixed>  $bundle
-     * @return array{success: bool, message: string, queued?: bool, queue?: array<string, mixed>, manual?: true}
+     * @return array<string, mixed>
      */
-    public function enqueueFromEditorBundle(SeoArticle $article, array $bundle, ManualWordPressContext $context): array
+    public function enqueueFromEditorBundle(SeoArticle $article, array $bundle, User $actor, string $initiatedFrom): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
+        abort_unless($actor->getKey() > 0, 403);
 
-        $this->audit($context, 'enqueue');
+        $bundle = $this->syncQueue->applyPublishImmediatelyToBundle($bundle);
+        $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
+        $this->bundleApply->apply($article, $bundle, $context);
 
-        $result = $this->syncQueue->enqueueFromEditorBundle($article, $bundle, $context);
-        $result['manual'] = true;
+        $html = (string) ($bundle['html'] ?? '');
+        $this->persist->persistLocalSilent($article->fresh() ?? $article, $context, $html);
 
-        return $result;
+        $article = $article->fresh() ?? $article;
+        $publishImmediately = (bool) filter_var(
+            data_get($bundle, 'publish_box.publish_immediately', false),
+            FILTER_VALIDATE_BOOL,
+        );
+
+        return $this->dispatchWordpress(
+            $article,
+            $actor,
+            $initiatedFrom,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'content_version' => $this->contentVersion($article, $html),
+            ],
+            [
+                'mode' => $publishImmediately ? 'publish' : 'sync',
+                'seo_override' => $context->seoPayloadForWordPress(),
+            ],
+        );
     }
 
     /**
-     * @return array{success: bool, message: string, queued?: bool, manual?: true}
+     * @return array<string, mixed>
      */
-    public function resyncQueued(SeoArticle $article, ManualWordPressContext $context): array
+    public function resyncQueued(SeoArticle $article, User $actor, string $initiatedFrom): array
     {
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        $this->audit($context, 'resync');
-
-        $result = $this->syncQueue->resync($article, $context);
-        $result['manual'] = true;
-
-        return $result;
+        return $this->dispatchWordpress(
+            $article,
+            $actor,
+            $initiatedFrom,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'content_version' => 'rerun:'.now()->getTimestamp(),
+            ],
+            ['mode' => 'sync'],
+        );
     }
 
     /**
      * @param  array<string, mixed>|null  $seoOverride
      * @return array<string, mixed>
      */
-    public function publishNow(SeoArticle $article, ManualWordPressContext $context, ?array $seoOverride = null): array
+    public function publishNow(SeoArticle $article, User $actor, string $initiatedFrom, ?array $seoOverride = null): array
     {
         abort_if(SeoAccessControl::isContentManager(), 403);
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        $this->audit($context, 'publish_now');
-
-        $result = $this->syncService->publishForArticle($article, $context, $seoOverride);
-        $result['manual'] = true;
-        $result['initiated_by'] = $context->userId;
-        $result['request_id'] = $context->requestId;
-
-        return $result;
+        return $this->dispatchWordpress(
+            $article,
+            $actor,
+            $initiatedFrom,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'content_version' => 'publish:'.($article->updated_at?->getTimestamp() ?? time()),
+            ],
+            [
+                'mode' => 'publish',
+                'seo_override' => $seoOverride ?? [],
+            ],
+        );
     }
 
-    public function syncSeoMeta(SeoArticle $article, ManualWordPressContext $context, array $seoOverride): array
+    /**
+     * @param  array<string, mixed>  $seoOverride
+     * @return array<string, mixed>
+     */
+    public function syncSeoMeta(SeoArticle $article, User $actor, string $initiatedFrom, array $seoOverride): array
     {
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
-        $this->audit($context, 'sync_seo_meta');
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->syncService->syncSeoMetaForArticle($article, $context, $seoOverride);
+        return $this->dispatchWordpress(
+            $article,
+            $actor,
+            $initiatedFrom,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'content_version' => 'seo_meta:'.md5(json_encode($seoOverride)),
+            ],
+            [
+                'mode' => 'seo_meta',
+                'seo_override' => $seoOverride,
+            ],
+        );
     }
 
-    public function syncSlug(SeoArticle $article, ManualWordPressContext $context, string $slug): array
+    /**
+     * @return array<string, mixed>
+     */
+    public function syncSlug(SeoArticle $article, User $actor, string $initiatedFrom, string $slug): array
     {
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
-        $this->audit($context, 'sync_slug');
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->syncService->syncSlugForArticle($article, $context, $slug);
+        return $this->dispatchWordpress(
+            $article,
+            $actor,
+            $initiatedFrom,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0),
+                'content_version' => 'slug:'.$slug,
+            ],
+            [
+                'mode' => 'slug',
+                'slug' => $slug,
+            ],
+        );
     }
 
-    private function audit(ManualWordPressContext $context, string $action): void
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  array<string, mixed>  $settings
+     * @return array<string, mixed>
+     */
+    private function dispatchWordpress(
+        SeoArticle $article,
+        User $actor,
+        string $initiatedFrom,
+        array $input,
+        array $settings,
+    ): array {
+        $result = $this->manualDispatcher->dispatch(
+            actionCode: AutomationActionCode::WordpressArticleSync->value,
+            subject: $article,
+            actor: $actor,
+            input: $input,
+            settings: $settings,
+            context: [
+                'request_id' => (string) Str::uuid(),
+                'initiated_from' => $initiatedFrom,
+            ],
+            initiatedFrom: $initiatedFrom,
+        );
+
+        return $result->toArray();
+    }
+
+    private function contentVersion(SeoArticle $article, string $html): string
     {
-        Log::info('wordpress.manual_sync', [
-            'manual' => true,
-            'initiated_by' => $context->userId,
-            'user_id' => $context->userId,
-            'article_id' => $context->articleId,
-            'site_id' => $context->siteId,
-            'reason' => $context->reason,
-            'request_id' => $context->requestId,
-            'correlation_id' => $context->correlationId,
-            'action' => $action,
-            'source' => 'WordPressManualSyncService',
-        ]);
+        return substr(hash('sha256', ((string) ($article->updated_at?->getTimestamp() ?? 0)).'|'.$html), 0, 16);
     }
 }

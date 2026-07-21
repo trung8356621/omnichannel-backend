@@ -75,6 +75,8 @@ final class AutomationExecutionService
                 'automation_rule_version_id' => $versionId,
                 'rule_version' => $versionNumber,
                 'status' => AutomationExecutionStatus::Pending->value,
+                'trigger_type' => $rule->trigger_type ?: 'event',
+                'action_code' => null,
                 'attempt' => 1,
                 'idempotency_key' => $idempotencyKey,
                 'context' => [
@@ -106,6 +108,14 @@ final class AutomationExecutionService
 
         $execution = $claimed;
         $event = $execution->businessEvent;
+
+        // Option A: manual single-action — immutable snapshot in context, no event rule required.
+        if (($execution->context['manual_action'] ?? null) !== null
+            || (string) ($execution->trigger_type ?? '') === 'manual'
+        ) {
+            return $this->runManualSingleAction($execution, $event, $dryRun);
+        }
+
         $rule = $execution->rule()->with('actions')->first();
 
         if (! $event instanceof BusinessEvent || ! $rule instanceof AutomationRule) {
@@ -219,6 +229,40 @@ final class AutomationExecutionService
             }
 
             $delaySeconds = max(0, (int) $action->delay_seconds);
+            $settingsForDelay = is_array($action->settings) ? $action->settings : [];
+            $executionContext = is_array($execution->context) ? $execution->context : [];
+            $eventPayload = is_array($event->payload ?? null) ? $event->payload : [];
+            $delayAlreadyApplied = (bool) ($executionContext['product_review_delay_applied']
+                ?? $eventPayload['product_review_delay_applied']
+                ?? false);
+
+            // max_delay_time chỉ cho child publish — KHÔNG delay schedule_generated / queue_pending.
+            $actionCode = (string) $action->action_code;
+            $isProductReviewScheduler = in_array($actionCode, [
+                'article.product_reviews.schedule_generated',
+                'article.product_reviews.queue_pending',
+            ], true);
+
+            if (! $isProductReviewScheduler
+                && ! $delayAlreadyApplied
+                && ! in_array((int) $action->position, $delayedPositions, true)
+            ) {
+                $maxDelayMinutes = (int) ($settingsForDelay['max_delay_time']
+                    ?? $settingsForDelay['delay_max_after_minutes']
+                    ?? 0);
+                if ($maxDelayMinutes > 0) {
+                    $minSeconds = 60;
+                    $maxSeconds = max($minSeconds, $maxDelayMinutes * 60);
+                    $delaySeconds = random_int($minSeconds, $maxSeconds);
+                }
+            } elseif ($delayAlreadyApplied || $isProductReviewScheduler) {
+                // Scheduler actions chạy ngay; delay nằm ở DispatchScheduledProductReviewPublishJob.
+                if ($isProductReviewScheduler) {
+                    $delaySeconds = max(0, (int) $action->delay_seconds);
+                } else {
+                    $delaySeconds = 0;
+                }
+            }
             if ($delaySeconds > 0 && ! in_array((int) $action->position, $delayedPositions, true)) {
                 $delayedPositions[] = (int) $action->position;
                 $this->persistProgress($execution, $nextPosition, $delayedPositions, $previousOutputs);
@@ -534,6 +578,227 @@ final class AutomationExecutionService
                 ['site_id', 'project_id', 'article_id', 'post_type', 'status', 'title'],
                 array_keys($subject->getAttributes()),
             )),
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $manualAction
+     */
+    private function runManualSingleAction(
+        AutomationExecution $execution,
+        ?BusinessEvent $event,
+        bool $dryRun,
+    ): AutomationExecution {
+        if ($execution->isCancellationRequested()) {
+            $execution->forceFill([
+                'status' => AutomationExecutionStatus::Cancelled->value,
+                'error_code' => BusinessHookErrorCode::RuleDisabled->value,
+                'error_message' => 'Cancellation requested — no side effects.',
+                'finished_at' => now(),
+            ])->save();
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        if (! $event instanceof BusinessEvent) {
+            $this->failExecution($execution, BusinessHookErrorCode::ExecutionClaimFailed->value, 'Missing business event.');
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        /** @var array<string, mixed>|null $snapshot */
+        $snapshot = is_array($execution->context['manual_action'] ?? null)
+            ? $execution->context['manual_action']
+            : null;
+
+        $actionCode = (string) ($snapshot['action_code'] ?? $execution->action_code ?? '');
+        if ($actionCode === '' || $snapshot === null) {
+            $this->failExecution($execution, BusinessHookErrorCode::ActionNotRegistered->value, 'Manual action snapshot missing.');
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        $input = is_array($snapshot['input'] ?? null) ? $snapshot['input'] : [];
+        $settings = is_array($snapshot['settings'] ?? null) ? $snapshot['settings'] : [];
+
+        $loaded = $this->subjectLoader->load($event);
+        if ($loaded['error_code'] !== null && $event->subject_id !== null) {
+            $this->failExecution(
+                $execution,
+                (string) $loaded['error_code'],
+                (string) ($loaded['error_message'] ?? 'Subject unavailable.'),
+            );
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        $subject = $loaded['model'];
+        $subjectData = $subject instanceof Model
+            ? $this->subjectArray($subject)
+            : ['id' => $event->subject_id, 'type' => $event->subject_type];
+
+        $existingAction = AutomationActionExecution::query()
+            ->where('automation_execution_id', $execution->id)
+            ->where('position', 0)
+            ->first();
+
+        if ($existingAction instanceof AutomationActionExecution
+            && $existingAction->status === AutomationActionExecutionStatus::Completed->value
+        ) {
+            $execution->forceFill([
+                'status' => AutomationExecutionStatus::Completed->value,
+                'finished_at' => $execution->finished_at ?? now(),
+            ])->save();
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        if ($dryRun) {
+            $this->recordManualActionStatus(
+                $execution,
+                $actionCode,
+                AutomationActionExecutionStatus::Completed,
+                $input,
+                ['dry_run' => true],
+                null,
+                'Dry run — action not executed.',
+            );
+            $execution->forceFill([
+                'status' => AutomationExecutionStatus::Completed->value,
+                'finished_at' => now(),
+            ])->save();
+
+            return $execution->fresh() ?? $execution;
+        }
+
+        $actionExec = $this->startManualActionExecution($execution, $actionCode, $input, $existingAction);
+
+        try {
+            if (! $this->actionRegistry->has($actionCode)) {
+                throw new AutomationException(
+                    BusinessHookErrorCode::ActionNotRegistered->value,
+                    "Action [{$actionCode}] is not registered.",
+                );
+            }
+
+            $inputErrors = $this->actionRegistry->validateInput($actionCode, $input);
+            if ($inputErrors !== []) {
+                throw new AutomationException(
+                    BusinessHookErrorCode::MissingRequiredInput->value,
+                    implode(' ', $inputErrors),
+                );
+            }
+
+            $handler = $this->actionRegistry->resolveHandler($actionCode);
+            $actionContext = new AutomationActionContext(
+                businessEvent: $event,
+                rule: null,
+                execution: $execution,
+                subject: $subject,
+                subjectData: $subjectData,
+                siteId: $event->site_id,
+                projectId: $event->project_id,
+                actorId: $execution->initiated_by_user_id
+                    ?? (isset(($event->context ?? [])['actor_id']) ? (int) $event->context['actor_id'] : null),
+                correlationId: isset(($execution->context ?? [])['correlation_id'])
+                    ? (string) $execution->context['correlation_id']
+                    : (isset(($event->context ?? [])['correlation_id'])
+                        ? (string) $event->context['correlation_id']
+                        : null),
+                automationDepth: (int) (($event->context ?? [])['automation_depth'] ?? 0),
+                previousOutputs: [],
+                dryRun: false,
+            );
+
+            $result = $handler->handle($actionContext, $input, $settings);
+        } catch (AutomationException $e) {
+            $result = AutomationActionResult::failure($e->errorCode, $e->getMessage());
+        } catch (\Throwable $e) {
+            $result = AutomationActionResult::failure('AUTOMATION_ACTION_EXCEPTION', $e->getMessage());
+        }
+
+        $this->finishActionExecution($actionExec, $result);
+
+        $execution->forceFill([
+            'status' => $result->success
+                ? AutomationExecutionStatus::Completed->value
+                : AutomationExecutionStatus::Failed->value,
+            'error_code' => $result->success ? null : $result->errorCode,
+            'error_message' => $result->success ? null : $this->redactor->redactMessage($result->message),
+            'finished_at' => now(),
+            'context' => array_merge($execution->context ?? [], [
+                'next_position' => 1,
+                'previous_outputs' => ['0' => $result->output],
+            ]),
+        ])->save();
+
+        return $execution->fresh() ?? $execution;
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     */
+    private function startManualActionExecution(
+        AutomationExecution $execution,
+        string $actionCode,
+        array $input,
+        ?AutomationActionExecution $existing,
+    ): AutomationActionExecution {
+        $payload = [
+            'automation_rule_action_id' => null,
+            'action_code' => $actionCode,
+            'status' => AutomationActionExecutionStatus::Processing->value,
+            'attempt' => $existing ? ((int) $existing->attempt + 1) : 1,
+            'input_snapshot' => $this->redactor->redact($input),
+            'output_snapshot' => null,
+            'error_code' => null,
+            'error_message' => null,
+            'started_at' => now(),
+            'finished_at' => null,
+        ];
+
+        if ($existing instanceof AutomationActionExecution) {
+            $existing->forceFill($payload)->save();
+
+            return $existing;
+        }
+
+        return AutomationActionExecution::query()->create(array_merge($payload, [
+            'automation_execution_id' => $execution->id,
+            'position' => 0,
+        ]));
+    }
+
+    /**
+     * @param  array<string, mixed>  $input
+     * @param  array<string, mixed>  $output
+     */
+    private function recordManualActionStatus(
+        AutomationExecution $execution,
+        string $actionCode,
+        AutomationActionExecutionStatus $status,
+        array $input,
+        array $output,
+        ?string $errorCode,
+        string $message,
+    ): void {
+        AutomationActionExecution::query()->updateOrCreate(
+            [
+                'automation_execution_id' => $execution->id,
+                'position' => 0,
+            ],
+            [
+                'automation_rule_action_id' => null,
+                'action_code' => $actionCode,
+                'status' => $status->value,
+                'attempt' => 1,
+                'input_snapshot' => $this->redactor->redact($input),
+                'output_snapshot' => $this->redactor->redact($output),
+                'error_code' => $errorCode,
+                'error_message' => $this->redactor->redactMessage($message),
+                'started_at' => now(),
+                'finished_at' => now(),
+            ],
         );
     }
 

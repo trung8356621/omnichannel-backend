@@ -172,7 +172,18 @@ final class AutomationOperationsDashboard extends SeoPanelPage implements HasTab
                 Tables\Columns\TextColumn::make('id')->sortable(),
                 Tables\Columns\TextColumn::make('execution_uuid')->limit(12)->tooltip(fn ($record) => $record->execution_uuid),
                 Tables\Columns\TextColumn::make('rule.code')->label('Rule')->searchable(),
-                Tables\Columns\TextColumn::make('status')->badge(),
+                Tables\Columns\TextColumn::make('status')
+                    ->badge()
+                    ->color(fn (?string $state): string => match ($state) {
+                        AutomationExecutionStatus::Failed->value => 'danger',
+                        AutomationExecutionStatus::Partial->value => 'warning',
+                        AutomationExecutionStatus::Processing->value => 'info',
+                        AutomationExecutionStatus::Pending->value => 'gray',
+                        AutomationExecutionStatus::Cancelled->value,
+                        AutomationExecutionStatus::Skipped->value => 'gray',
+                        AutomationExecutionStatus::Completed->value => 'success',
+                        default => 'gray',
+                    }),
                 Tables\Columns\TextColumn::make('attempt')->sortable(),
                 Tables\Columns\TextColumn::make('error_code')->limit(20)->toggleable(),
                 Tables\Columns\TextColumn::make('started_at')->dateTime()->sortable(),

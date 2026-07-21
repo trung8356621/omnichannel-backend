@@ -1740,6 +1740,8 @@ final class WordPressArticleSyncService
 
         return [
             'success' => false,
+            'error_code' => 'WORDPRESS_SYNC_FORBIDDEN_ROLE',
+            'failed_stage' => 'permission_gate',
             'message' => 'Vai trò Quản lý nội dung chỉ được lưu trên Laravel, không đồng bộ WordPress.',
         ];
     }

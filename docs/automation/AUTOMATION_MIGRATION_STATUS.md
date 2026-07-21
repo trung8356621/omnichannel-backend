@@ -1,6 +1,6 @@
 # Automation Migration Status — SeoContentAi
 
-**Cập nhật:** 2026-07-18
+**Cập nhật:** 2026-07-21
 
 ## Phase tracker
 
@@ -149,7 +149,7 @@ Phase 3 **không** đánh dấu complete trước khi Automation test chạy —
 | `EditArticle` sync phases | `WordPressArticleSyncService` | `wordpress.article.publish` | no | **High** |
 | Queue / cron publish | Jobs + Scheduled | `wordpress.article.publish` + intent | no | Retry |
 | Project workflow article write | CreateArticles + PromptTestPublish | `article.*` + `project.task.*` | no | Naming |
-| `post_comment_review` | `WordPressCommentReviewService` | `wordpress.comment_review.publish` | no | **High** |
+| `post_comment_review` | `ArticleProductReviewStoreService` | `wordpress.comment_review.publish` | yes (handler+rules seeded disabled) | **Medium** — enable rules + migrate legacy meta |
 | Audit/List assign | domain assignment service (via Resource) | `seo.project_task.create_from_issue` | no | Dup tasks mitigated in service |
 | Keyword vocab/cluster | `WorkflowKeywordResearchService` | `keyword.*` | no | Medium |
 | Approval | `SeoProjectApprovalService` | `article.approve` | no | Low |
@@ -158,7 +158,7 @@ Phase 3 **không** đánh dấu complete trước khi Automation test chạy —
 
 1. `article.create` chưa có idempotency key nghiệp vụ.
 2. `article.content.update` chưa conflict revision.
-3. WP publish / comment_review vẫn gọi service trực tiếp từ workflow/UI.
+3. WP comment_review: handler + default rules seeded (disabled). Enable `publish-generated-product-reviews-to-wordpress` + `publish-pending-product-reviews-after-article-sync`.
 4. `keyword.domain_link_list.sync` observer side effect chưa thành action riêng.
 5. Migrate caller phải dual-run / parity — chưa bắt đầu.
 6. Regression DB-dependent cần chạy trên môi trường có `omi_seo_ai`.

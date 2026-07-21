@@ -326,14 +326,8 @@ final class VirtualCommentService
             return [];
         }
 
-        if ((int) ($article->wp_post_id ?? 0) > 0 && SeoAccessControl::canSyncArticlesToWordPress()) {
-            $migrated = $this->pushToWordPress($article, $legacyLocal);
-            if ($migrated['success'] ?? false) {
-                $fromWordPress = $this->getFromWordPress($article);
-
-                return $fromWordPress !== [] ? $fromWordPress : $legacyLocal;
-            }
-        }
+        // Full cutover: không silent migrate-push WP khi đọc editor.
+        // Manual sync qua syncToWordPress(); automation qua HookAction.
 
         return $legacyLocal;
     }

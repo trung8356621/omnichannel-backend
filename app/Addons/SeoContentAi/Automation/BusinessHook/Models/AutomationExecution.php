@@ -16,6 +16,10 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $automation_rule_version_id
  * @property int $rule_version
  * @property string $status
+ * @property string $trigger_type
+ * @property int|null $initiated_by_user_id
+ * @property string|null $initiated_from
+ * @property string|null $action_code
  * @property int $attempt
  * @property string $idempotency_key
  * @property array<string, mixed>|null $context
@@ -39,6 +43,7 @@ final class AutomationExecution extends Model
         'automation_rule_version_id' => 'integer',
         'rule_version' => 'integer',
         'attempt' => 'integer',
+        'initiated_by_user_id' => 'integer',
         'context' => 'array',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',

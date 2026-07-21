@@ -225,9 +225,7 @@ final class SeoProjectTaskSyncService
         $fresh = $project->fresh();
         if ($fresh instanceof SeoProject) {
             app(SeoProjectArticleOwnerSyncService::class)->syncProjectArticles($fresh);
-            if ($newTaskCount > 0) {
-                app(SeoNotificationService::class)->notifyProjectOwnerTasksAdded($fresh, $newTaskCount);
-            }
+            // Notification: Automation Engine only (no automatic SeoNotificationService).
         }
 
         return $result;
@@ -450,8 +448,8 @@ final class SeoProjectTaskSyncService
             'source_content' => $row->sourceContent,
             'source_key' => $row->sourceKey,
             'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
-                ? ($row->rewriteMode ?? SeoProjectTask::REWRITE_MODE_KEYWORD)
-                : null,
+                ? SeoProjectTask::normalizeRewriteMode($row->rewriteMode ?? null)
+                : SeoProjectTask::REWRITE_MODE_KEYWORD,
             'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
             'description' => $row->description,
             'loai_san_pham' => $row->loaiSanPham,
@@ -549,8 +547,8 @@ final class SeoProjectTaskSyncService
             'source_key' => $row->sourceKey,
             'description' => $row->description,
             'rewrite_mode' => $row->type === SeoProjectTask::TYPE_REWRITE
-                ? ($row->rewriteMode ?? SeoProjectTask::REWRITE_MODE_KEYWORD)
-                : null,
+                ? SeoProjectTask::normalizeRewriteMode($row->rewriteMode ?? null)
+                : SeoProjectTask::REWRITE_MODE_KEYWORD,
             'rewrite_notes' => $row->type === SeoProjectTask::TYPE_REWRITE ? $row->rewriteNotes : null,
             'target_date' => $targetDate,
             'status' => SeoProjectTask::STATUS_PENDING,

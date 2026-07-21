@@ -346,12 +346,15 @@ Engine AI trung tâm, 1181 dòng. **Dependencies:**
 |--------|-------|
 | `run(prompt, variables, ...)` | Entry point: compile prompt → route provider → xử lý chain |
 | `runWithCompiledPrompt()` | Chạy với prompt đã compile sẵn |
+| `runDirectImagePreview()` | Image tool (+ optional sub_task): compile parts → `executeImage` **không** chạy planner text Flash |
 | `runChainStepOutput()` | Chạy 1 bước trong chain (dùng cho ImageGenerationChainService) |
 | `compilePrompt()` | Compile prompt từ parts + variables |
 | `callProvider()` | Router cuối: gemini → `callGemini()`, claude → `callClaude()`, image → `MediaGenerationService` |
 | `callGemini()` | Gọi Gemini API với retry model/version |
 | `callClaude()` | Delegate sang `AiExecutionService::executeClaude()` |
 | `executeWithModelRouting()` | Gọi `AiModelRouterService::executeWithFailover()` |
+
+**Image path parity:** `GenerateMediaJob` và `TaskWorkflowTestRunner` (tool image/`image_typography`) dùng `runFullDependentChain=false` → cùng pipeline Test Prompt / Editor. Không ép `modelOverride` category Flash lên image node.
 
 ### 5.2 AiModelRouterService
 

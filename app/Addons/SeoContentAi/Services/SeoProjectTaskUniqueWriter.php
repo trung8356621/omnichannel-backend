@@ -63,6 +63,14 @@ final class SeoProjectTaskUniqueWriter
 
         $sourceKey = (string) $attributes['source_key'];
 
+        // DB column rewrite_mode NOT NULL — never insert null (new_keyword/improve/…).
+        $typeNormalized = (string) ($attributes['type'] ?? $type);
+        if ($typeNormalized === SeoProjectTask::TYPE_REWRITE) {
+            $attributes['rewrite_mode'] = SeoProjectTask::normalizeRewriteMode($attributes['rewrite_mode'] ?? null);
+        } else {
+            $attributes['rewrite_mode'] = SeoProjectTask::REWRITE_MODE_KEYWORD;
+        }
+
         $existing = SeoProjectTask::withTrashed()
             ->where('project_id', $projectId)
             ->where('source_key', $sourceKey)

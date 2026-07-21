@@ -13,7 +13,6 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionSelectability;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
-use App\Addons\SeoContentAi\Services\SeoArticleScoringQueueService;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -25,7 +24,6 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
 {
     public function __construct(
         private readonly ArticleWordPressSyncFlagService $syncFlags,
-        private readonly SeoArticleScoringQueueService $scoringQueue,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -113,12 +111,8 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
         }
 
         $fresh = $article->fresh() ?? $article;
-        $dispatchScoring = ! array_key_exists('dispatch_scoring', $input)
-            || filter_var($input['dispatch_scoring'], FILTER_VALIDATE_BOOLEAN);
-
-        if ($dispatchScoring) {
-            $this->scoringQueue->dispatchForArticle($fresh, force: true);
-        }
+        // Full cutover: không auto dispatch SEO score từ meta update.
+        // SEO analysis chỉ qua article.run_seo_analysis (Automation) hoặc manual.
 
         return ActionResult::success(
             output: [
@@ -126,7 +120,7 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
                 'focus_keyword' => $focusKeyword,
                 'meta_description' => $metaDescription,
                 'slug' => $normalizedSlug !== '' ? $normalizedSlug : (string) ($fresh->slug ?? ''),
-                'seo_analysis_pending' => $dispatchScoring,
+                'seo_analysis_pending' => false,
             ],
             events: [
                 ActionSupport::articleEvent('article.seo_meta_updated', $context, $articleId, [
@@ -136,6 +130,7 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
                         $normalizedSlug !== '' ? 'slug' : null,
                     ])),
                 ]),
+                ActionSupport::articleEvent('article.content_updated', $context, $articleId, []),
             ],
             changed: ['seo_meta'],
         );

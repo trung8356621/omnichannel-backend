@@ -15,6 +15,7 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import Paragraph from '@tiptap/extension-paragraph';
 import { SEO_EDITOR_LINK_CLASS } from './articleEditorTransientMarkup';
+import { SEO_LINK_DEFAULT_ATTRS } from './inlineLinkNormalizer';
 
 /** Giữ class / data attribute trên paragraph (vd. placeholder FAQ). */
 const PreservedParagraph = Paragraph.extend({
@@ -86,6 +87,57 @@ const SeoEditorImage = Image.extend({
     },
 });
 
+/**
+ * Link mark: priority cao (outermost), spanning, attrs parse về default thống nhất
+ * để text node liền kề (thường + bold) không bị serializer tách thành nhiều <a>.
+ */
+const SeoEditorLink = Link.extend({
+    priority: 1000,
+
+    spanning: true,
+
+    addAttributes() {
+        const defaults = {
+            target: SEO_LINK_DEFAULT_ATTRS.target,
+            rel: SEO_LINK_DEFAULT_ATTRS.rel,
+            class: SEO_LINK_DEFAULT_ATTRS.class,
+            ...this.options.HTMLAttributes,
+        };
+
+        return {
+            href: {
+                default: null,
+                parseHTML: (element) => element.getAttribute('href'),
+            },
+            target: {
+                default: defaults.target ?? null,
+                parseHTML: (element) => element.getAttribute('target') || defaults.target || null,
+            },
+            rel: {
+                default: defaults.rel ?? null,
+                parseHTML: (element) => element.getAttribute('rel') || defaults.rel || null,
+            },
+            class: {
+                default: defaults.class ?? null,
+                parseHTML: (element) => element.getAttribute('class') || defaults.class || null,
+            },
+            title: {
+                default: null,
+                parseHTML: (element) => element.getAttribute('title'),
+            },
+        };
+    },
+}).configure({
+    openOnClick: false,
+    enableClickSelection: true,
+    autolink: true,
+    HTMLAttributes: {
+        target: SEO_LINK_DEFAULT_ATTRS.target,
+        rel: SEO_LINK_DEFAULT_ATTRS.rel,
+        class: SEO_EDITOR_LINK_CLASS,
+    },
+});
+
 export const articleEditorExtensions = [
     StarterKit.configure({
         heading: false,
@@ -102,14 +154,7 @@ export const articleEditorExtensions = [
     Highlight.configure({ multicolor: false }),
     TextStyle,
     Color,
-    Link.configure({
-        openOnClick: false,
-        enableClickSelection: true,
-        HTMLAttributes: {
-            rel: 'noopener noreferrer',
-            class: SEO_EDITOR_LINK_CLASS,
-        },
-    }),
+    SeoEditorLink,
     TextAlign.configure({ types: ['heading', 'paragraph'] }),
     Table.configure({ resizable: true }),
     TableRow,

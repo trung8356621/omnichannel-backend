@@ -1,4 +1,5 @@
 import { stripEditorTransientMarkup } from './articleEditorTransientMarkup';
+import { normalizeInlineLinks } from './inlineLinkNormalizer';
 
 const HEADING_TAG_RE = /^h([1-6])$/i;
 const BLOCK_WRAPPER_TAGS = new Set(['p', 'div']);
@@ -219,10 +220,12 @@ export function cleanBlockHtmlForEditorDisplay(html) {
 }
 
 /**
- * HTML lưu vào block state sau khi TipTap export (coalesce + bỏ paragraph rỗng).
+ * HTML lưu vào block state sau khi TipTap export (coalesce + bỏ paragraph rỗng + merge link tách).
  */
 export function persistBlockHtmlFromEditor(originalHtml, exportedHtml) {
-    return normalizeSectionHeadingBlockHtml(coalesceTiptapExportHtml(originalHtml, exportedHtml));
+    return normalizeInlineLinks(
+        normalizeSectionHeadingBlockHtml(coalesceTiptapExportHtml(originalHtml, exportedHtml)),
+    );
 }
 
 /**

@@ -58,6 +58,21 @@ final class PromptHookFormSchemaTest extends TestCase
         self::assertArrayNotHasKey('garbage', $data['hook_settings']);
     }
 
+    public function test_normalize_falls_back_when_legacy_integer_version(): void
+    {
+        $data = PromptHookFormSchema::normalizeForSave([
+            'hook_key' => 'article.meta_description_suggestion',
+            'hook_version' => '1',
+            'hook_settings' => ['max_length' => 160, 'min_length' => 100],
+            'tools' => 'default',
+        ]);
+
+        self::assertSame('article.meta_description_suggestion', $data['hook_key']);
+        self::assertSame('0.1.0', $data['hook_version']);
+        self::assertSame(160, $data['hook_settings']['max_length']);
+        self::assertSame(100, $data['hook_settings']['min_length']);
+    }
+
     public function test_normalize_rejects_image_tool_for_text_hook(): void
     {
         $this->expectException(ValidationException::class);

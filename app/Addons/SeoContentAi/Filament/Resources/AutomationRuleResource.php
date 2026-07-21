@@ -254,7 +254,15 @@ class AutomationRuleResource extends SeoPanelResource
                                 Forms\Components\TextInput::make('delay_seconds')
                                     ->numeric()
                                     ->default(0)
-                                    ->minValue(0),
+                                    ->minValue(0)
+                                    ->helperText('Delay cố định (giây). Bỏ qua nếu settings có max_delay_time.'),
+                                Forms\Components\TextInput::make('max_delay_time')
+                                    ->label('Thời gian trì hoãn tối đa')
+                                    ->numeric()
+                                    ->minValue(0)
+                                    ->maxValue(1440)
+                                    ->default(5)
+                                    ->helperText('Mỗi review đăng ngẫu nhiên từ 1 phút đến tối đa (phút). 0 = đăng ngay.'),
                                 Forms\Components\Textarea::make('input_mapping_json')
                                     ->label('Input mapping (JSON)')
                                     ->rows(2)
@@ -262,6 +270,7 @@ class AutomationRuleResource extends SeoPanelResource
                                 Forms\Components\Textarea::make('settings_json')
                                     ->label('Settings (JSON)')
                                     ->rows(2)
+                                    ->helperText('Product review: {"max_delay_time":5}')
                                     ->columnSpanFull(),
                             ])
                             ->columns(2)
@@ -463,11 +472,43 @@ class AutomationRuleResource extends SeoPanelResource
                 'continue_on_failure' => (bool) ($row['continue_on_failure'] ?? false),
                 'delay_seconds' => (int) ($row['delay_seconds'] ?? 0),
                 'input_mapping' => static::decodeJsonField($row['input_mapping_json'] ?? null, 'input_mapping_json'),
-                'settings' => static::decodeJsonField($row['settings_json'] ?? null, 'action settings_json'),
+                'settings' => static::mergeMaxDelayTimeIntoSettings(
+                    static::decodeJsonField($row['settings_json'] ?? null, 'action settings_json'),
+                    $row['max_delay_time'] ?? $row['delay_max_after_minutes'] ?? null,
+                ),
             ];
         }
 
         return $actions;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $settings
+     * @return array<string, mixed>|null
+     */
+    public static function mergeMaxDelayTimeIntoSettings(?array $settings, mixed $maxDelayTime): ?array
+    {
+        $out = is_array($settings) ? $settings : [];
+        if ($maxDelayTime === null || $maxDelayTime === '') {
+            if (array_key_exists('delay_max_after_minutes', $out) && ! array_key_exists('max_delay_time', $out)) {
+                $out = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings($out);
+            }
+
+            return $out === [] ? null : $out;
+        }
+
+        $out = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings(
+            $out,
+            $maxDelayTime,
+        );
+
+        return $out === [] ? null : $out;
+    }
+
+    /** @deprecated use mergeMaxDelayTimeIntoSettings */
+    public static function mergeDelayMaxAfterIntoSettings(?array $settings, mixed $delayMaxAfterMinutes): ?array
+    {
+        return static::mergeMaxDelayTimeIntoSettings($settings, $delayMaxAfterMinutes);
     }
 
     public static function createRuleFromFormData(array $data): AutomationRule
@@ -560,15 +601,20 @@ class AutomationRuleResource extends SeoPanelResource
             return [];
         }
 
-        return $rule->actions->map(static fn ($action): array => [
-            'action_code' => $action->action_code,
-            'position' => $action->position,
-            'is_enabled' => $action->is_enabled,
-            'continue_on_failure' => $action->continue_on_failure,
-            'delay_seconds' => $action->delay_seconds,
-            'input_mapping_json' => static::encodeJsonField($action->input_mapping),
-            'settings_json' => static::encodeJsonField($action->settings),
-        ])->all();
+        return $rule->actions->map(static function ($action): array {
+            $settings = is_array($action->settings) ? $action->settings : [];
+
+            return [
+                'action_code' => $action->action_code,
+                'position' => $action->position,
+                'is_enabled' => $action->is_enabled,
+                'continue_on_failure' => $action->continue_on_failure,
+                'delay_seconds' => $action->delay_seconds,
+                'max_delay_time' => (int) ($settings['max_delay_time'] ?? $settings['delay_max_after_minutes'] ?? 0) ?: null,
+                'input_mapping_json' => static::encodeJsonField($action->input_mapping),
+                'settings_json' => static::encodeJsonField($action->settings),
+            ];
+        })->all();
     }
 
     /**

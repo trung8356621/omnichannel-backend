@@ -373,11 +373,27 @@ export async function syncArticleToWordPressViaApi(articleId, payload) {
         body: JSON.stringify(payload),
     });
 
-    if (!response.ok || data.success === false) {
-        throw new Error(data.message ?? 'Đồng bộ WordPress thất bại.');
+    const payloadData = data && typeof data === 'object' ? data : {};
+
+    // Gate blocked / fail: server đã gắn notification — phải toast trước khi throw.
+    if (payloadData.notification) {
+        showArticleEditorFilamentToast(payloadData.notification);
     }
 
-    return data;
+    if (!response.ok || payloadData.success === false) {
+        const message = String(
+            payloadData.message
+                ?? payloadData.notification?.body
+                ?? 'Đồng bộ WordPress thất bại.',
+        );
+        const error = new Error(message);
+        error.automationStatus = String(payloadData.status ?? 'blocked');
+        error.notificationShown = Boolean(payloadData.notification);
+        error.payload = payloadData;
+        throw error;
+    }
+
+    return payloadData;
 }
 
 const TOAST_DEDUPE_MS = 2200;
@@ -594,3 +610,42 @@ export function finishArticleEditorApiAction(result, articleId, siteId, action =
 export function notifyEditorFromApi(_wire, notification) {
     showArticleEditorFilamentToast(notification);
 }
+
+/**
+ * Safety net: reconcile pending product reviews when editor opens (no WP wait).
+ * @param {number} articleId
+ * @returns {Promise<{success: boolean, data?: Record<string, unknown>, message?: string}>}
+ */
+export async function reconcileProductReviewsForArticle(articleId) {
+    const id = Number(articleId) || 0;
+    if (id <= 0) {
+        return { success: false, message: 'Invalid article id' };
+    }
+
+    const { response, data } = await seoArticleApiFetch(
+        `/api/seo/articles/${id}/product-reviews/reconcile`,
+        {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: '{}',
+        },
+    );
+
+    const payloadData = data && typeof data === 'object' ? data : {};
+    if (!response.ok || payloadData.success === false) {
+        return {
+            success: false,
+            message: String(payloadData.message ?? 'Reconcile product reviews failed.'),
+            data: payloadData.data,
+        };
+    }
+
+    return {
+        success: true,
+        data: payloadData.data && typeof payloadData.data === 'object' ? payloadData.data : payloadData,
+    };
+}
+

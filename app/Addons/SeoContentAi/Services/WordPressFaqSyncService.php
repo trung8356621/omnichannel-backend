@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\UnauthorizedWordPressSideEffectException;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\WordPressExecutionContext;
 
@@ -16,12 +15,10 @@ final class WordPressFaqSyncService
 {
     public function syncForArticle(SeoArticle $article, WordPressExecutionContext $sideEffect): bool
     {
-        if (! $sideEffect instanceof ManualWordPressContext
-            && $sideEffect->origin() !== 'automation'
-        ) {
+        if ($sideEffect->origin() !== 'automation') {
             throw new UnauthorizedWordPressSideEffectException(
                 UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-                'FAQ sync requires automation|manual context.',
+                'FAQ sync requires AutomationWordPressContext.',
             );
         }
 
