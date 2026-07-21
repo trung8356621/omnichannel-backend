@@ -49,16 +49,20 @@ export function resolveArticleImageSrc(row) {
         return '';
     }
 
+    // src là canonical sau Fix slug / finalize — ưu tiên trước localSrc (có thể stale).
+    const src = String(row.src ?? '').trim();
+    if (src) {
+        return isLocalSeoMediaSrc(src) ? src : resolveFullWordPressImageUrl(src);
+    }
+
     const local = String(row.localSrc ?? row.local_src ?? '').trim();
     if (local) {
         return local;
     }
 
     const wp = String(row.wpSrc ?? row.wp_src ?? row.wp_url ?? '').trim();
-    const src = String(row.src ?? '').trim();
-    const candidate = wp || src;
 
-    return resolveFullWordPressImageUrl(candidate);
+    return resolveFullWordPressImageUrl(wp);
 }
 
 /**

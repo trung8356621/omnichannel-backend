@@ -80,13 +80,12 @@ Tất cả jobs dispatch đơn lẻ (không dùng `Bus::batch` hay `::withChain`
 |-----|-------|---------|-------|-----------|-----------------|
 | **ImportSeoDatabaseJob** | default | 3600s | 1 | Import SQL backup vào SEO DB với progress callback. Chỉ dispatch khi file ≥5MB (`config db_import_queue_threshold`) và queue !== sync | `SeoDatabaseBackupService::importConnection()` |
 
-### Queue Control Service
+### Queue Manager UI (đã gỡ)
 
-**`Services/SeoQueueControlService.php`** (315 dòng) — Quản lý queue jobs:
-- `statusForOwner(int $ownerId)`: đếm pending/running audit jobs, pending default jobs
-- `pauseForOwner(int $ownerId)` / `resumeForOwner(int $ownerId)`: cache TTL 30 ngày
-- `purgePendingAuditJobsForOwner(int $ownerId)`: xóa AuditLinkStatusJob pending theo siteId
-- `isPausedForSite(int $siteId)` / `isPausedForOwner(int $ownerId)`: kiểm tra pause
+- Đã xóa `Filament/Pages/SeoQueueManager` (`/queue-manager`), banner `global-queue-worker-alert`, và `Services/SeoQueueControlService`.
+- Laravel Queue chỉ còn infrastructure (worker CLI / Supervisor). Không còn pause/resume/stop audit từ UI.
+- Automation nav: Rules / Executions / Operations — không thay bằng dashboard queue mới.
+- Regression: `tests/Unit/QueueManagerRemovalTest.php`.
 
 ### Runtime Runners (không phải Job — chạy trong handle() của Job)
 
@@ -111,17 +110,16 @@ Tất cả jobs dispatch đơn lẻ (không dùng `Bus::batch` hay `::withChain`
 |---|------------------|-------------|-------------|
 | 1 | **SeoEngineService** (core) dùng trong SEO analysis | SUPER_MAP_INDEX §3 | Chưa có link |
 | 2 | **SeoDatabaseBackupService** — backup/restore SEO DB | MAP_SEO_SETTINGS | Chưa có |
-| 3 | **SeoQueueControlService** — queue job control | KHÔNG MAP nào | Chưa có |
-| 4 | **SeoAnalyzerService** — SEO tổng thể (1160 dòng) | MAP_SEO_EDITOR §5 | Chưa có section riêng |
-| 5 | **ArticlePolylangSyncService** — Polylang sync | MAP_SEO_WP | Chỉ nhắc qua Editor |
-| 6 | **ArticleQuickTranslateService** — translate nhanh | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
-| 7 | **ArticleQuickPostReviewService** — post review nhanh | MAP_SEO_EDITOR | Chỉ nhắc tab name |
-| 8 | **ArticleInternalLinkSuggestionService** | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
-| 9 | **ArticleInternalLinkSearchService** | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
-| 10 | **ArticlePendingInternalLinkService** | KHÔNG MAP nào | Chưa có |
-| 11 | **ArticleKeywordLinkReconcileService** | KHÔNG MAP nào | Chưa có |
-| 12 | **ArticleFeaturedSnippetGeneratorService** | MAP_SEO_SETTINGS §2 | Đã nhắc prompt config, thiếu service detail |
-| 13 | **VirtualCommentService** (507 dòng) | KHÔNG MAP nào | Chưa có |
+| 3 | **SeoAnalyzerService** — SEO tổng thể (1160 dòng) | MAP_SEO_EDITOR §5 | Chưa có section riêng |
+| 4 | **ArticlePolylangSyncService** — Polylang sync | MAP_SEO_WP | Chỉ nhắc qua Editor |
+| 5 | **ArticleQuickTranslateService** — translate nhanh | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
+| 6 | **ArticleQuickPostReviewService** — post review nhanh | MAP_SEO_EDITOR | Chỉ nhắc tab name |
+| 7 | **ArticleInternalLinkSuggestionService** | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
+| 8 | **ArticleInternalLinkSearchService** | MAP_SEO_EDITOR | Chỉ nhắc Livewire method |
+| 9 | **ArticlePendingInternalLinkService** | KHÔNG MAP nào | Chưa có |
+| 10 | **ArticleKeywordLinkReconcileService** | KHÔNG MAP nào | Chưa có |
+| 11 | **ArticleFeaturedSnippetGeneratorService** | MAP_SEO_SETTINGS §2 | Đã nhắc prompt config, thiếu service detail |
+| 12 | **VirtualCommentService** (507 dòng) | KHÔNG MAP nào | Chưa có |
 | 14 | **GlobalAiChatService** | MAP_SEO_EDITOR | Chỉ nhắc route, thiếu service detail |
 | 15 | **Các FAQ services** (12 files: BodySync, ManualExtract, WordPressImport/Restore, ExtractDebug, PromptVariables, ContentFaq, Persistence, HtmlRenderer...) | KHÔNG MAP nào / rải rác | Chưa có phần FAQ riêng |
 | 16 | **Các Article services** (CtaPlaceholder, EditorReadiness, EditorHistory, EditorMediaAi, ProductGalleryDistribute, PostImages, MediaLocal, MarkdownToHtml, ContentSeoBonus, TextTranslateTool) | KHÔNG MAP nào | Chưa có |

@@ -177,6 +177,10 @@ class SeoContentAiServiceProvider extends ServiceProvider
             return $registry;
         });
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Runtime\ActionRunner::class);
+        $this->app->singleton(
+            \App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher::class,
+            \App\Addons\SeoContentAi\Automation\Runtime\CatalogBusinessActionDispatcher::class,
+        );
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Migration\AutomationMigrationFlags::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Migration\AutomationParitySampleRecorder::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\Migration\AutomationParityLogger::class);
@@ -217,6 +221,7 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 \App\Addons\SeoContentAi\Console\AutomationRetryCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationDiagnoseCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationAuditWordpressCouplingCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationAuditCouplingCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationAuditDirectBusinessActionsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationAuditEntryPointsCommand::class,
                 \App\Addons\SeoContentAi\Console\QueueInspectWordpressCommand::class,

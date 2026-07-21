@@ -32,7 +32,7 @@ final class WordPressSideEffectFirewallTest extends TestCase
         );
     }
 
-    public function test_gateway_rejects_deprecated_manual_context(): void
+    public function test_gateway_allows_manual_context_past_null_check(): void
     {
         Http::fake();
 
@@ -45,19 +45,26 @@ final class WordPressSideEffectFirewallTest extends TestCase
             correlationId: 'corr-1',
         );
 
-        $this->expectException(UnauthorizedWordPressSideEffectException::class);
-
         $gateway = app(WordPressGateway::class);
-        $gateway->postJson(
-            $ctx,
-            'article.editor_sync',
-            'https://example.test/wp-json/omi-seo-ai/v1/posts/1/editor-sync',
-            'token',
-            ['status' => 'publish'],
-            5,
-            99,
-            1,
-        );
+        // Manual context is allowed by guard; HTTP may still fail on fake URL — must not be ORIGIN_INVALID.
+        try {
+            $gateway->postJson(
+                $ctx,
+                'article.editor_sync',
+                'https://example.test/wp-json/omi-seo-ai/v1/posts/1/editor-sync',
+                'token',
+                ['status' => 'publish'],
+                5,
+                99,
+                1,
+            );
+        } catch (UnauthorizedWordPressSideEffectException $e) {
+            self::fail('Manual context must not be blocked as invalid origin: '.$e->getMessage());
+        } catch (\Throwable) {
+            // Network/HTTP fake errors OK after guard passed.
+        }
+
+        self::assertTrue(true);
     }
 
     public function test_guard_rejects_non_manual_non_automation_origin_via_gateway_null(): void

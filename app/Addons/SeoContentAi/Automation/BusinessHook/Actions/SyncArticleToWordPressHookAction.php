@@ -11,18 +11,20 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessHookErrorCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\SeoArticle;
-use App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPostSyncReconciler;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\AutomationWordPressContext;
-use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Services\WordPress\SyncArticleToWordPressPipeline;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use Illuminate\Support\Str;
 
+/**
+ * wordpress.article.sync — article/product + media only. No product review orchestration.
+ */
 final class SyncArticleToWordPressHookAction implements AutomationActionHandler
 {
     public function __construct(
-        private readonly WordPressArticleSyncService $syncService,
+        private readonly SyncArticleToWordPressPipeline $pipeline,
         private readonly BusinessHookEmitter $emitter,
-        private readonly ProductReviewPostSyncReconciler $productReviewReconciler,
     ) {}
 
     public function handle(AutomationActionContext $context, array $input, array $settings): AutomationActionResult
@@ -76,6 +78,7 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
         $mode = (string) ($settings['mode'] ?? 'sync');
         /** @var array{seo_title?: string, meta_description?: string, focus_keyword?: string}|null $seoOverride */
         $seoOverride = is_array($settings['seo_override'] ?? null) ? $settings['seo_override'] : null;
+        $slug = (string) ($settings['slug'] ?? $article->slug ?? '');
 
         $this->emitter->emitOutcomeSafely(BusinessEventName::WordpressSyncStarted, $article, [
             'article_id' => $articleId,
@@ -83,25 +86,15 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
             'status' => 'started',
         ]);
 
-        // Queue worker không Auth → actualRole() = content_manager → chặn sync nếu thiếu SeoQueueContext.
         try {
             $result = SeoQueueContext::runWpSyncFromQueue(function () use (
                 $mode,
                 $article,
                 $sideEffect,
                 $seoOverride,
-                $settings,
+                $slug,
             ): array {
-                return match ($mode) {
-                    'publish' => $this->syncService->publishForArticle($article, $sideEffect, $seoOverride),
-                    'seo_meta' => $this->syncService->syncSeoMetaForArticle($article, $sideEffect, $seoOverride ?? []),
-                    'slug' => $this->syncService->syncSlugForArticle(
-                        $article,
-                        $sideEffect,
-                        (string) ($settings['slug'] ?? $article->slug ?? ''),
-                    ),
-                    default => $this->syncService->syncForArticle($article, $sideEffect, $seoOverride),
-                };
+                return $this->pipeline->run($article, $sideEffect, $mode, $seoOverride, $slug);
             });
         } catch (\Throwable $wordpressException) {
             $this->emitter->emitOutcomeSafely(BusinessEventName::WordpressSyncFailed, $article, [
@@ -120,15 +113,12 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
                     'mode' => $mode,
                     'wp_success' => false,
                     'failed_stage' => 'wordpress.operation',
-                    'exception_class' => $wordpressException::class,
-                    'exception_message' => $wordpressException->getMessage(),
                 ],
             );
         }
 
         if (! ($result['success'] ?? false)) {
             $errorCode = (string) ($result['error_code'] ?? 'WORDPRESS_SYNC_FAILED');
-            $failedStage = (string) ($result['failed_stage'] ?? 'wordpress.operation');
             $message = (string) ($result['message'] ?? 'WordPress sync failed.');
 
             $this->emitter->emitOutcomeSafely(BusinessEventName::WordpressSyncFailed, $article, [
@@ -137,23 +127,14 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
                 'error' => $message,
                 'status' => 'failed',
                 'error_code' => $errorCode,
-                'failed_stage' => $failedStage,
             ]);
 
-            return AutomationActionResult::failure(
-                $errorCode,
-                $message,
-                [
-                    'article_id' => $articleId,
-                    'idempotency_key' => $idempotencyKey,
-                    'mode' => $mode,
-                    'wp_success' => false,
-                    'failed_stage' => $failedStage,
-                    'exception_class' => $result['exception_class'] ?? null,
-                    'exception_message' => $result['exception_message'] ?? null,
-                    'step_detail' => $result['step_detail'] ?? null,
-                ],
-            );
+            return AutomationActionResult::failure($errorCode, $message, [
+                'article_id' => $articleId,
+                'idempotency_key' => $idempotencyKey,
+                'mode' => $mode,
+                'wp_success' => false,
+            ]);
         }
 
         $article = $article->fresh() ?? $article;
@@ -164,22 +145,24 @@ final class SyncArticleToWordPressHookAction implements AutomationActionHandler
             'site_id' => (int) ($article->site_id ?? 0) ?: null,
             'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
             'status' => 'synced',
-        ]);
-
-        // Safety net: event có thể SKIPPED_NO_RULE / miss queue — reconciler idempotent.
-        $this->productReviewReconciler->reconcileAfterArticleSynced($article, $context->actorId);
+            'origin' => (string) ($context->execution->trigger_type ?? 'event'),
+            'automation_execution_id' => (int) $context->execution->id,
+            'sync_operation_id' => $idempotencyKey,
+        ], [], $idempotencyKey);
 
         return AutomationActionResult::success(
             output: [
                 'article_id' => $articleId,
+                'post_type' => ArticlePostTypeResolver::resolve($article),
                 'wp_post_id' => $wpPostId > 0 ? $wpPostId : null,
+                'wordpress_connection_id' => (int) ($article->site_id ?? 0) ?: null,
+                'sync_status' => 'completed',
                 'message' => (string) ($result['message'] ?? 'synced'),
                 'mode' => $mode,
                 'idempotency_key' => $idempotencyKey,
-                'trigger_type' => (string) ($context->execution->trigger_type ?? 'event'),
                 'wp_success' => true,
             ],
-            message: 'WordPress sync completed.',
+            message: 'WordPress article sync completed.',
         );
     }
 }

@@ -10,7 +10,6 @@ use App\Addons\SeoContentAi\Models\SeoLinkMap;
 use App\Addons\SeoContentAi\Services\KeywordLinkTargetResolver;
 use App\Addons\SeoContentAi\Services\LinkAuditCacheService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Services\SeoQueueControlService;
 use App\Addons\SeoContentAi\Support\SeoLinkMapHttpAuditClassifier;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -41,14 +40,7 @@ final class AuditLinkStatusJob implements ShouldQueue
         SeoDatabaseConnectionService $databaseConnection,
         KeywordLinkTargetResolver $targetResolver,
         LinkAuditCacheService $auditCache,
-        SeoQueueControlService $queueControl,
     ): void {
-        if ($queueControl->isPausedForSite($this->siteId)) {
-            $this->delete();
-
-            return;
-        }
-
         if ($this->siteId > 0) {
             $databaseConnection->bootstrapSeoDatabaseConnection($this->siteId);
         }

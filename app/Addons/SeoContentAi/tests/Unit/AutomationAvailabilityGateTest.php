@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Data\ManualAutomationDispatchResult;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessHookErrorCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationAvailabilityGate;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Services\ManualAutomationDispatcher;
@@ -40,7 +39,7 @@ final class AutomationAvailabilityGateTest extends TestCase
         $source = (string) file_get_contents($base.'/Automation/BusinessHook/Services/ManualAutomationDispatcher.php');
         self::assertStringContainsString('availabilityGate->checkManual', $source);
         self::assertStringContainsString('ManualAutomationDispatchResult', $source);
-        self::assertStringContainsString('STATUS_BLOCKED', $source);
+        self::assertStringContainsString('ManualAutomationDispatchResult::blocked', $source);
         $createPos = strpos($source, 'AutomationExecution::query()->create');
         $gatePos = strpos($source, 'checkManual');
         self::assertNotFalse($createPos);
@@ -48,12 +47,14 @@ final class AutomationAvailabilityGateTest extends TestCase
         self::assertLessThan($createPos, $gatePos);
     }
 
-    public function test_wordpress_manual_service_returns_dispatch_result_array(): void
+    public function test_wordpress_manual_service_queues_without_automation_gate(): void
     {
         $base = dirname(__DIR__, 2);
         $source = (string) file_get_contents($base.'/Services/WordPress/WordPressManualSyncService.php');
-        self::assertStringContainsString('->toArray()', $source);
-        self::assertStringContainsString(AutomationActionCode::WordpressArticleSync->value === 'wordpress.article.sync' ? 'WordpressArticleSync' : 'x', $source);
+        self::assertStringContainsString('ManualWordPressSyncJob', $source);
+        self::assertStringContainsString('ManualSyncContext', $source);
+        self::assertStringNotContainsString('ManualAutomationDispatcher', $source);
+        self::assertStringNotContainsString('AutomationAvailabilityGate', $source);
         self::assertStringNotContainsString('AutomationException', $source);
     }
 

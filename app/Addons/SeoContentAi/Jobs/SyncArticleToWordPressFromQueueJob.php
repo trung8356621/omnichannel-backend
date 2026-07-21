@@ -16,7 +16,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
 /**
- * @deprecated Legacy seo-queue orchestration. New clicks must use ManualAutomationDispatcher.
+ * @deprecated Legacy seo-queue orchestration. New clicks must use WordPressManualSyncService.
  * Remaining queued jobs fail closed without WordPress side effects.
  */
 final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
@@ -45,7 +45,7 @@ final class SyncArticleToWordPressFromQueueJob implements ShouldQueue
         $databaseConnection->bootstrapLegacySharedConnection();
 
         $article = SeoArticle::query()->find($this->articleId);
-        $message = 'DEPRECATED: SyncArticleToWordPressFromQueueJob disabled. Use ManualAutomationDispatcher → wordpress.article.sync.';
+        $message = 'DEPRECATED: SyncArticleToWordPressFromQueueJob disabled. Use WordPressManualSyncService → ManualWordPressSyncJob.';
         Log::channel('wordpress-side-effect')->error('wordpress.side_effect.blocked', [
             'operation' => 'queue.sync_article.legacy',
             'article_id' => $this->articleId,

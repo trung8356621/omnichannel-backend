@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\Modules\WordPress;
 
+use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\CreateProductReviewsHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\PublishWordPressCommentReviewHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\QueuePendingProductReviewsHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\ScheduleGeneratedProductReviewsHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\SyncArticleToWordPressHookAction;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\SyncProductReviewsToWordPressHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Data\AutomationActionDefinition;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Data\BusinessEventDefinition;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
@@ -47,7 +49,7 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
             settingsRules: [
                 'mode' => ['type' => 'string', 'required' => false],
             ],
-            description: 'Sync article to WordPress via existing sync service.',
+            description: 'Sync article/product content and media to WordPress. Does not create or publish product reviews.',
             isAsyncSafe: true,
             timeout: 120,
             module: 'wordpress',
@@ -59,13 +61,13 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
                 'article_id' => ['label' => 'Article ID', 'type' => 'integer', 'source' => 'input'],
                 'mode' => ['label' => 'Sync mode', 'type' => 'select', 'source' => 'settings', 'options' => ['sync', 'publish']],
             ],
-            supportsManualTrigger: true,
+            supportsManualTrigger: false,
             manualPermission: 'wordpress.sync',
             manualLabel: 'Đồng bộ WordPress',
-            manualDescription: 'Thực thi thủ công qua Automation Engine (wordpress.article.sync).',
-            manualConfirmation: 'Đồng bộ bài viết lên WordPress ngay?',
+            manualDescription: 'Automatic only. Manual UI uses WordPressManualSyncService + ManualSyncContext.',
+            manualConfirmation: null,
             manualIdempotencyScope: 'subject',
-            manualEnabled: true,
+            manualEnabled: false,
         ));
 
         $context->actions->register(new AutomationActionDefinition(
@@ -80,7 +82,7 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
                 'publish_intent' => ['type' => 'string', 'required' => true],
             ],
             settingsRules: [],
-            description: 'Publish one local product review to WordPress virtual-comments meta.',
+            description: 'DEPRECATED stub — use product-review.sync-wp. Safe no-op.',
             isAsyncSafe: true,
             timeout: 90,
             module: 'wordpress',
@@ -98,8 +100,69 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
             supportsManualTrigger: false,
             manualPermission: 'wordpress.sync',
             manualLabel: 'Publish product review',
-            manualDescription: 'Internal — publish via Automation schedule only.',
-            manualConfirmation: 'Xuất bản review này lên WordPress?',
+            manualDescription: 'Deprecated.',
+            manualConfirmation: null,
+            manualIdempotencyScope: 'subject',
+            manualEnabled: false,
+        ));
+
+        $context->actions->register(new AutomationActionDefinition(
+            actionCode: AutomationActionCode::ProductReviewCreate->value,
+            handlerClass: CreateProductReviewsHookAction::class,
+            inputRules: [
+                'article_id' => ['type' => 'integer', 'required' => true],
+            ],
+            settingsRules: [
+                'enabled' => ['type' => 'boolean', 'required' => false],
+                'target_count' => ['type' => 'integer', 'required' => false, 'minimum' => 0, 'maximum' => 50],
+                'block_if_real_reviews_exist' => ['type' => 'boolean', 'required' => false],
+            ],
+            description: 'Evaluate ProductReviewCreationPolicy and create local pending product reviews (no WordPress write).',
+            isAsyncSafe: true,
+            timeout: 60,
+            module: 'wordpress',
+            defaultQueue: AutomationQueueName::External->value,
+            rateLimitKey: 'wordpress',
+            maxAttemptsPerMinute: 60,
+            supportsTest: false,
+            fieldMeta: [
+                'article_id' => ['label' => 'Article ID', 'type' => 'integer', 'source' => 'input'],
+                'enabled' => ['label' => 'Enabled', 'type' => 'boolean', 'source' => 'settings'],
+                'target_count' => ['label' => 'Target review count', 'type' => 'integer', 'source' => 'settings'],
+                'block_if_real_reviews_exist' => ['label' => 'Block if real WP reviews exist', 'type' => 'boolean', 'source' => 'settings'],
+            ],
+            supportsManualTrigger: false,
+            manualEnabled: false,
+        ));
+
+        $context->actions->register(new AutomationActionDefinition(
+            actionCode: AutomationActionCode::ProductReviewSyncWp->value,
+            handlerClass: SyncProductReviewsToWordPressHookAction::class,
+            inputRules: [
+                'article_id' => ['type' => 'integer', 'required' => true],
+            ],
+            settingsRules: [
+                'enabled' => ['type' => 'boolean', 'required' => false],
+                'retry_failed' => ['type' => 'boolean', 'required' => false],
+            ],
+            description: 'Sync pending/failed local product reviews to WordPress product post (idempotent).',
+            isAsyncSafe: true,
+            timeout: 120,
+            module: 'wordpress',
+            defaultQueue: AutomationQueueName::External->value,
+            rateLimitKey: 'wordpress',
+            maxAttemptsPerMinute: 30,
+            supportsTest: false,
+            fieldMeta: [
+                'article_id' => ['label' => 'Article ID', 'type' => 'integer', 'source' => 'input'],
+                'enabled' => ['label' => 'Enabled', 'type' => 'boolean', 'source' => 'settings'],
+                'retry_failed' => ['label' => 'Retry failed', 'type' => 'boolean', 'source' => 'settings'],
+            ],
+            supportsManualTrigger: false,
+            manualPermission: 'wordpress.sync',
+            manualLabel: 'Sync product reviews',
+            manualDescription: 'Automatic linear action after product-review.create.',
+            manualConfirmation: null,
             manualIdempotencyScope: 'subject',
             manualEnabled: false,
         ));
@@ -109,7 +172,7 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
                 'label' => 'Thời gian trì hoãn tối đa',
                 'type' => 'integer',
                 'source' => 'settings',
-                'description' => 'Mỗi review sẽ được đăng ngẫu nhiên trong khoảng từ 1 phút đến thời gian tối đa đã cấu hình.',
+                'description' => 'DEPRECATED.',
             ],
         ];
 
@@ -122,7 +185,7 @@ final class WordPressAutomationModuleProvider implements AutomationModuleProvide
             settingsRules: [
                 'max_delay_time' => ['type' => 'integer', 'required' => false, 'minimum' => 0, 'maximum' => 1440],
             ],
-            description: 'Reconcile pending product reviews after article WordPress sync and schedule delayed publish.',
+            description: 'DEPRECATED no-op — use product-review.sync-wp.',
             isAsyncSafe: true,
             timeout: 60,
             module: 'wordpress',

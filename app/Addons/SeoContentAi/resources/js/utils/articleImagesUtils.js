@@ -1143,6 +1143,15 @@ export function buildRenameResultMaps(entries) {
     const byBlockId = new Map();
     const byOldUrl = new Map();
 
+    const pushMapList = (map, key, entry) => {
+        if (key === '' || key === 0 || key == null) {
+            return;
+        }
+        const list = map.get(key) ?? [];
+        list.push(entry);
+        map.set(key, list);
+    };
+
     (Array.isArray(entries) ? entries : []).forEach((entry) => {
         const wpId = Number(entry?.attachment_id ?? 0);
         const seoId = Number(entry?.seo_media_id ?? 0);
@@ -1150,20 +1159,35 @@ export function buildRenameResultMaps(entries) {
         const oldUrl = normalizeSrcKey(String(entry?.old_url ?? ''));
 
         if (wpId > 0) {
-            byAttachmentId.set(wpId, entry);
+            pushMapList(byAttachmentId, wpId, entry);
         }
         if (seoId > 0) {
-            bySeoMediaId.set(seoId, entry);
+            pushMapList(bySeoMediaId, seoId, entry);
         }
         if (blockId !== '') {
-            byBlockId.set(blockId, entry);
+            pushMapList(byBlockId, blockId, entry);
         }
         if (oldUrl !== '') {
-            byOldUrl.set(oldUrl, entry);
+            pushMapList(byOldUrl, oldUrl, entry);
         }
     });
 
     return { byAttachmentId, bySeoMediaId, byBlockId, byOldUrl };
+}
+
+function pushRenameMapEntries(push, map, key) {
+    if (key === '' || key === 0 || key == null || !map?.has(key)) {
+        return;
+    }
+
+    const value = map.get(key);
+    if (Array.isArray(value)) {
+        value.forEach(push);
+
+        return;
+    }
+
+    push(value);
 }
 
 function findAllRenameEntriesForImageRow(row, maps) {
@@ -1201,28 +1225,14 @@ function findAllRenameEntriesForImageRow(row, maps) {
         entries.push(entry);
     };
 
-    if (wpId > 0 && maps.byAttachmentId.has(wpId)) {
-        push(maps.byAttachmentId.get(wpId));
-    }
-    if (seoId > 0 && maps.bySeoMediaId.has(seoId)) {
-        push(maps.bySeoMediaId.get(seoId));
-    }
-    if (blockId !== '' && maps.byBlockId.has(blockId)) {
-        push(maps.byBlockId.get(blockId));
-    }
+    pushRenameMapEntries(push, maps.byAttachmentId, wpId);
+    pushRenameMapEntries(push, maps.bySeoMediaId, seoId);
+    pushRenameMapEntries(push, maps.byBlockId, blockId);
     for (const srcKey of srcCandidates) {
-        if (maps.byOldUrl.has(srcKey)) {
-            push(maps.byOldUrl.get(srcKey));
-        }
+        pushRenameMapEntries(push, maps.byOldUrl, srcKey);
     }
 
     return entries;
-}
-
-function findRenameEntryForImageRow(row, maps) {
-    const entries = findAllRenameEntriesForImageRow(row, maps);
-
-    return entries[0] ?? null;
 }
 
 /**
@@ -1254,27 +1264,63 @@ export function resetSupplementalImagesAfterSlugRename(supplementalRows, blocks,
                 return row;
             }
 
-            const entry = findRenameEntryForImageRow(row, maps);
-            if (!entry) {
+            const entries = findAllRenameEntriesForImageRow(row, maps);
+            if (entries.length === 0) {
                 return row;
             }
 
-            const newUrl = String(entry.new_url ?? '').trim();
-            const newSlug = String(entry.new_slug ?? '').trim();
-            if (!newUrl) {
+            let nextWpSrc = String(row?.wpSrc ?? row?.wp_url ?? '').trim();
+            let nextLocalSrc = String(row?.localSrc ?? row?.local_src ?? '').trim();
+            let nextSlug = String(row?.slug ?? '').trim();
+            let localUpdated = false;
+            let wpUpdated = false;
+
+            entries.forEach((item) => {
+                const newUrl = String(item.new_url ?? '').trim();
+                if (!newUrl) {
+                    return;
+                }
+                const entrySlug = String(item.new_slug ?? slugFromUrl(newUrl)).trim();
+                if (entrySlug) {
+                    nextSlug = entrySlug;
+                }
+                if (isLocalSeoMediaSrc(newUrl)) {
+                    nextLocalSrc = newUrl;
+                    localUpdated = true;
+                } else {
+                    nextWpSrc = newUrl;
+                    wpUpdated = true;
+                }
+            });
+
+            if (nextSlug && nextLocalSrc && !localUpdated) {
+                const localSlug = slugFromUrl(nextLocalSrc);
+                if (localSlug && localSlug !== nextSlug) {
+                    nextLocalSrc = '';
+                }
+            }
+
+            const originalSrc = String(row?.src ?? '').trim();
+            const nextSrc = wpUpdated && nextWpSrc
+                ? nextWpSrc
+                : (localUpdated && nextLocalSrc)
+                  ? nextLocalSrc
+                  : (nextLocalSrc || nextWpSrc || originalSrc);
+
+            if (!nextSrc) {
                 return row;
             }
 
-            const isLocal = isLocalSeoMediaSrc(newUrl);
+            const isLocal = isLocalSeoMediaSrc(nextSrc);
 
             return {
                 ...row,
-                src: newUrl,
-                slug: newSlug || row.slug,
-                wp_url: isLocal ? String(row?.wp_url ?? '').trim() : newUrl,
-                wpSrc: isLocal ? String(row?.wpSrc ?? '').trim() : newUrl,
-                localSrc: isLocal ? newUrl : String(row?.localSrc ?? row?.local_src ?? '').trim(),
-                local_src: isLocal ? newUrl : String(row?.local_src ?? '').trim(),
+                src: nextSrc,
+                slug: nextSlug || row.slug,
+                wp_url: nextWpSrc || (isLocal ? String(row?.wp_url ?? '').trim() : nextSrc),
+                wpSrc: nextWpSrc || (isLocal ? String(row?.wpSrc ?? '').trim() : nextSrc),
+                localSrc: nextLocalSrc,
+                local_src: nextLocalSrc,
             };
         });
 
@@ -1336,6 +1382,103 @@ function localSlugRenameItemKey(item) {
  * @param {{ renameById: Function, renameByUrl: Function }} adapters
  * @returns {Promise<Array<{seo_media_id: number|null, src: string, new_slug: string, old_slug: string, block_id: string, data: {id?: number, slug: string, url: string}}>>}
  */
+/**
+ * Đảm bảo mỗi item WP rename queue có entry finalize — recovery khi file WP đã đổi tên.
+ */
+export function ensureWpRenameResultsCoverQueue(requestItems, renamed = []) {
+    const list = Array.isArray(renamed) ? [...renamed] : [];
+    const covered = new Set(
+        list
+            .map((row) => Number(row?.attachment_id ?? row?.attachmentId ?? 0))
+            .filter((id) => id > 0),
+    );
+
+    (Array.isArray(requestItems) ? requestItems : []).forEach((item) => {
+        const attachmentId = Number(item?.attachment_id ?? item?.wp_attachment_id ?? 0);
+        if (attachmentId <= 0 || covered.has(attachmentId)) {
+            return;
+        }
+
+        const newSlug = String(item?.new_slug ?? '').trim();
+        const oldUrl = String(item?.old_url ?? item?.oldUrl ?? item?.src ?? '').trim();
+        if (!newSlug || !oldUrl) {
+            return;
+        }
+
+        list.push({
+            attachment_id: attachmentId,
+            block_id: String(item?.block_id ?? item?.blockId ?? '').trim(),
+            old_url: oldUrl,
+            new_url: replaceUrlSlug(oldUrl, newSlug),
+            new_slug: newSlug,
+            success: true,
+        });
+        covered.add(attachmentId);
+    });
+
+    return list;
+}
+
+/**
+ * Đảm bảo mỗi item trong queue local rename có result để finalize block.
+ * Trường hợp file đã đổi tên trên disk (re-run sau Fix slug dở) — API fail nhưng editor vẫn cần URL mới.
+ */
+export function ensureLocalRenameResultsCoverQueue(queue, results = []) {
+    const covered = new Set();
+    const list = Array.isArray(results) ? [...results] : [];
+
+    list.forEach((row) => {
+        const id = Number(row?.data?.id ?? row?.seo_media_id ?? 0);
+        if (id > 0) {
+            covered.add(`id:${id}`);
+        }
+        const blockId = String(row?.block_id ?? '').trim();
+        if (blockId) {
+            covered.add(`block:${blockId}`);
+        }
+        const srcKey = normalizeSrcKey(String(row?.src ?? ''));
+        if (srcKey) {
+            covered.add(`src:${srcKey}`);
+        }
+    });
+
+    (Array.isArray(queue) ? queue : []).forEach((item) => {
+        const id = Number(item?.seo_media_id ?? 0);
+        const blockId = String(item?.block_id ?? '').trim();
+        const src = String(item?.src ?? '').trim();
+        const newSlug = String(item?.new_slug ?? '').trim();
+        const keys = [
+            id > 0 ? `id:${id}` : '',
+            blockId ? `block:${blockId}` : '',
+            src ? `src:${normalizeSrcKey(src)}` : '',
+        ].filter(Boolean);
+
+        if (keys.some((key) => covered.has(key))) {
+            return;
+        }
+        if (!newSlug || !src) {
+            return;
+        }
+
+        const synthetic = {
+            seo_media_id: id > 0 ? id : null,
+            src,
+            block_id: blockId,
+            new_slug: newSlug,
+            old_slug: String(item?.old_slug ?? '').trim(),
+            data: {
+                id: id > 0 ? id : null,
+                slug: newSlug,
+                url: replaceUrlSlug(src, newSlug),
+            },
+        };
+        list.push(synthetic);
+        keys.forEach((key) => covered.add(key));
+    });
+
+    return list;
+}
+
 export async function executeSeoMediaSlugRenamesTwoPhase(items, { renameById, renameByUrl }) {
     const queue = (Array.isArray(items) ? items : [])
         .map((item) => ({
@@ -1482,10 +1625,17 @@ export function applyRenameResultsToBlocks(blocks, wpRenamed = [], localResults 
             return block;
         }
 
+        const originalSrc = String(image.src ?? '').trim();
+        const originalSrcIsLocal = isLocalSeoMediaSrc(originalSrc);
         let nextWpSrc = String(image.wpSrc ?? '').trim();
         let nextLocalSrc = String(image.localSrc ?? '').trim();
+        if (!nextLocalSrc && originalSrcIsLocal) {
+            nextLocalSrc = originalSrc;
+        }
         let nextSlug = String(image.slug ?? '').trim();
         let resolvedSeoId = Number(image.seoMediaId ?? 0);
+        let localUpdated = false;
+        let wpUpdated = false;
 
         entries.forEach((entry) => {
             const newUrl = String(entry.new_url ?? '').trim();
@@ -1502,12 +1652,38 @@ export function applyRenameResultsToBlocks(blocks, wpRenamed = [], localResults 
             }
             if (isLocalSeoMediaSrc(newUrl)) {
                 nextLocalSrc = newUrl;
+                localUpdated = true;
             } else {
                 nextWpSrc = resolveFullWordPressImageUrl(newUrl);
+                wpUpdated = true;
             }
         });
 
-        const nextSrc = nextLocalSrc || nextWpSrc || String(image.src ?? '').trim();
+        // localSrc cũ lệch slug sau WP rename → bỏ, tránh thắng src và 404.
+        if (nextSlug && nextLocalSrc && !localUpdated) {
+            const localSlug = slugFromUrl(nextLocalSrc);
+            if (localSlug && localSlug !== nextSlug) {
+                nextLocalSrc = '';
+            }
+        }
+
+        let nextSrc = '';
+        if (originalSrcIsLocal) {
+            nextSrc = (localUpdated ? nextLocalSrc : '') || nextLocalSrc || nextWpSrc || originalSrc;
+        } else {
+            nextSrc = (wpUpdated ? nextWpSrc : '') || nextWpSrc || nextLocalSrc || originalSrc;
+        }
+
+        if (
+            nextSlug
+            && nextSrc
+            && isLocalSeoMediaSrc(nextSrc)
+            && slugFromUrl(nextSrc) !== nextSlug
+            && nextWpSrc
+        ) {
+            nextSrc = nextWpSrc;
+        }
+
         if (!nextSrc) {
             return block;
         }
@@ -1814,7 +1990,14 @@ export function syncProductAlbumUrlsFromBlockImages(articleId, blocks) {
             return item;
         }
 
-        const nextUrl = String(match.src ?? '').trim();
+        const matchWp = String(match.wpSrc ?? match.wp_url ?? '').trim();
+        const matchSrc = String(match.src ?? '').trim();
+        const matchLocal = String(match.localSrc ?? match.local_src ?? '').trim();
+        // Gallery WP ưu tiên URL WordPress mới; không giữ localSrc stale → 404.
+        const nextUrl = (!isLocalSeoMediaSrc(matchWp) && matchWp)
+            || (!isLocalSeoMediaSrc(matchSrc) && matchSrc)
+            || matchSrc
+            || matchLocal;
         if (!nextUrl || nextUrl === String(item.url ?? '').trim()) {
             return item;
         }

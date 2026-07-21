@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Automation\Registry;
 
+use App\Addons\SeoContentAi\Automation\Actions\Article\ApproveArticleAction;
 use App\Addons\SeoContentAi\Automation\Actions\Article\CreateArticleAction;
 use App\Addons\SeoContentAi\Automation\Actions\Article\UpdateArticleContentAction;
 use App\Addons\SeoContentAi\Automation\Actions\Article\UpdateArticleSeoMetaAction;
 use App\Addons\SeoContentAi\Automation\Actions\Foundation\PingAction;
 use App\Addons\SeoContentAi\Automation\Actions\Keyword\AssignKeywordToProjectAction;
 use App\Addons\SeoContentAi\Automation\Actions\Keyword\SaveKeywordVocabularyAction;
+use App\Addons\SeoContentAi\Automation\Actions\Keyword\SyncKeywordDomainLinkListAction;
 use App\Addons\SeoContentAi\Automation\Actions\Keyword\SyncKeywordTopicClusterAction;
 use App\Addons\SeoContentAi\Automation\Actions\Project\AttachArticleToProjectTaskAction;
 use App\Addons\SeoContentAi\Automation\Actions\Project\CreateProjectTaskAction;
@@ -31,6 +33,7 @@ final class ActionHandlerRegistrar
             CreateArticleAction::class,
             UpdateArticleContentAction::class,
             UpdateArticleSeoMetaAction::class,
+            ApproveArticleAction::class,
             CreateProjectTaskAction::class,
             AttachArticleToProjectTaskAction::class,
             MarkProjectTaskCompletedAction::class,
@@ -39,6 +42,7 @@ final class ActionHandlerRegistrar
             AssignKeywordToProjectAction::class,
             SaveKeywordVocabularyAction::class,
             SyncKeywordTopicClusterAction::class,
+            SyncKeywordDomainLinkListAction::class,
             AttachPromptResultAction::class,
         ];
     }

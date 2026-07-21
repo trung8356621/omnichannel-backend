@@ -30,6 +30,11 @@ function registerSeoProjectRunQueue() {
     Alpine.data('seoProjectRunQueue', (config = {}) => ({
         config,
         removedTaskIds: [],
+        runSettingsOpen: false,
+        syncAllOpen: false,
+        generatePostImages: Boolean(config?.runSettings?.generate_post_images ?? false),
+        runSettingsSubmitting: false,
+        syncAllBusy: false,
 
         init() {
             const hasTaskIds = Array.isArray(this.config.taskIds) && this.config.taskIds.length > 0;
@@ -191,6 +196,10 @@ function registerSeoProjectRunQueue() {
         },
 
         startRerunAllQueue() {
+            this.openRerunSettingsModal();
+        },
+
+        openRerunSettingsModal() {
             const taskIds = Array.isArray(this.config.rerunAllTaskIds)
                 ? this.config.rerunAllTaskIds.map((id) => Number(id)).filter((id) => id > 0)
                 : [];
@@ -199,20 +208,86 @@ function registerSeoProjectRunQueue() {
                 return;
             }
 
-            const confirmMessage = String(
-                this.config.labels?.rerunAllConfirm
-                ?? 'Chạy lại tất cả hạng mục trong danh sách?',
-            );
+            this.generatePostImages = Boolean(this.config?.runSettings?.generate_post_images ?? false);
+            this.runSettingsOpen = true;
+        },
 
-            if (! window.confirm(confirmMessage)) {
+        async confirmRerunSettings() {
+            const taskIds = Array.isArray(this.config.rerunAllTaskIds)
+                ? this.config.rerunAllTaskIds.map((id) => Number(id)).filter((id) => id > 0)
+                : [];
+
+            if (taskIds.length === 0) {
+                this.runSettingsOpen = false;
+
                 return;
             }
 
-            this.startQueue(taskIds, {
-                partial: false,
-                refresh: true,
-                preserveActions: false,
-            });
+            const wire = this.resolveWire();
+            if (! wire?.updateRunSettingsForRerun) {
+                window.alert('Không kết nối được Livewire để lưu Run settings.');
+
+                return;
+            }
+
+            this.runSettingsSubmitting = true;
+
+            try {
+                const response = await wire.updateRunSettingsForRerun({
+                    generate_post_images: this.generatePostImages === true,
+                });
+
+                if (response?.settings) {
+                    this.config.runSettings = response.settings;
+                }
+
+                this.runSettingsOpen = false;
+
+                await this.startQueue(taskIds, {
+                    partial: false,
+                    refresh: true,
+                    preserveActions: false,
+                });
+            } catch (error) {
+                const message = error?.message ? String(error.message) : 'Không lưu được Run settings.';
+                window.alert(message);
+            } finally {
+                this.runSettingsSubmitting = false;
+            }
+        },
+
+        openSyncAllConfirm() {
+            if (! this.config.canSyncAll) {
+                return;
+            }
+
+            this.syncAllOpen = true;
+        },
+
+        async confirmSyncAll() {
+            const wire = this.resolveWire();
+            if (! wire?.syncAllCompleted) {
+                window.alert('Không kết nối được Livewire để sync.');
+
+                return;
+            }
+
+            if (this.syncAllBusy) {
+                return;
+            }
+
+            this.syncAllBusy = true;
+
+            try {
+                await wire.syncAllCompleted();
+                this.syncAllOpen = false;
+                await wire.refresh?.();
+            } catch (error) {
+                const message = error?.message ? String(error.message) : 'Không dispatch được sync.';
+                window.alert(message);
+            } finally {
+                this.syncAllBusy = false;
+            }
         },
 
         isRowVisible(taskId) {
@@ -228,6 +303,10 @@ function registerSeoProjectRunQueue() {
             }
 
             this.removedTaskIds = Array.from(new Set([...this.removedTaskIds.map(Number), id]));
+
+            // x-show trên <tr> không ổn định — xóa DOM ngay sau archive.
+            const row = this.findRow(id);
+            row?.remove();
         },
 
         archiveTaskRow(taskId) {
@@ -256,7 +335,7 @@ function registerSeoProjectRunQueue() {
             }
 
             Promise.resolve(wire.archiveItem(id)).catch(() => {
-                // Giữ row ẩn; notification lỗi do Livewire/Filament.
+                // Row đã xóa; notification lỗi do Livewire/Filament.
             });
         },
 
@@ -306,6 +385,8 @@ function registerSeoProjectRunQueue() {
                         finalizePartialQueue: () => component.call('finalizePartialQueue'),
                         completeRunQueue: (stopped) => component.call('completeRunQueue', stopped),
                         archiveItem: (taskId) => component.call('archiveItem', taskId),
+                        updateRunSettingsForRerun: (settings) => component.call('updateRunSettingsForRerun', settings),
+                        syncAllCompleted: () => component.call('syncAllCompleted'),
                         refresh: async () => {
                             if (typeof component.$wire?.$refresh === 'function') {
                                 await component.$wire.$refresh();
@@ -329,6 +410,8 @@ function registerSeoProjectRunQueue() {
                     finalizePartialQueue: () => this.$wire.finalizePartialQueue(),
                     completeRunQueue: (stopped) => this.$wire.completeRunQueue(stopped),
                     archiveItem: (taskId) => this.$wire.archiveItem(taskId),
+                    updateRunSettingsForRerun: (settings) => this.$wire.updateRunSettingsForRerun(settings),
+                    syncAllCompleted: () => this.$wire.syncAllCompleted(),
                     refresh: async () => {
                         if (typeof this.$wire.$refresh === 'function') {
                             await this.$wire.$refresh();

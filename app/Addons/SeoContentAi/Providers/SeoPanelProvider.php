@@ -6,9 +6,11 @@ namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
-use App\Addons\SeoContentAi\Filament\Pages\SeoQueueManager;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorOperationController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewStatusController;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleWordPressProductReviewsController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleMediaPickerController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleOutlineController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticlePreviewController;
@@ -31,7 +33,6 @@ use App\Addons\SeoContentAi\Http\Middleware\SeoPlannerPermissionMiddleware;
 use App\Addons\SeoContentAi\Http\Middleware\SetDynamicSeoDatabase;
 use App\Addons\SeoContentAi\Services\PromptMediaStorageService;
 use App\Addons\SeoContentAi\Services\SeoDatabaseConnectionService;
-use App\Addons\SeoContentAi\Services\SeoQueueControlService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Http\Middleware\SetDynamicSeoDatabaseByHash;
@@ -115,32 +116,6 @@ class SeoPanelProvider extends PanelProvider
 
             SeoConnectionContext::applyUrlDefaults();
         });
-
-        FilamentView::registerRenderHook(
-            PanelsRenderHook::CONTENT_START,
-            function (): HtmlString {
-                if (! auth()->check()) {
-                    return new HtmlString('');
-                }
-
-                if (filament()->getCurrentPanel()?->getId() !== 'seo') {
-                    return new HtmlString('');
-                }
-
-                $queueControl = app(SeoQueueControlService::class);
-                if (! $queueControl->shouldShowOfflineAlertForCurrentOwner()) {
-                    return new HtmlString('');
-                }
-
-                return new HtmlString(
-                    view('seo-content-ai::components.global-queue-worker-alert', [
-                        'showAlert' => true,
-                        'queueStatus' => $queueControl->statusForCurrentOwner(),
-                        'queueManagerUrl' => SeoQueueManager::getUrl(),
-                    ])->render()
-                );
-            },
-        );
 
         FilamentView::registerRenderHook(
             'panels::global-search.after',
@@ -354,6 +329,24 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.sync-wp');
+                Route::get('/{article}/operation-status', [ArticleEditorOperationController::class, 'status'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.operation-status');
+                Route::post('/{article}/fix-media-slugs', [ArticleEditorOperationController::class, 'fixMediaSlugs'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.fix-media-slugs');
+                Route::get('/{article}/wordpress-product-reviews', ArticleWordPressProductReviewsController::class)
+                    ->whereNumber('article')
+                    ->name('seo.articles.wordpress-product-reviews');
+                Route::get('/{article}/product-review-status', [ArticleProductReviewStatusController::class, 'status'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.product-review-status');
+                Route::post('/{article}/product-reviews/create', [ArticleProductReviewStatusController::class, 'create'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.product-reviews.create');
+                Route::post('/{article}/product-reviews/sync', [ArticleProductReviewStatusController::class, 'sync'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.product-reviews.sync');
                 Route::post('/{article}/product-reviews/reconcile', ArticleProductReviewReconcileController::class)
                     ->whereNumber('article')
                     ->name('seo.articles.product-reviews.reconcile');

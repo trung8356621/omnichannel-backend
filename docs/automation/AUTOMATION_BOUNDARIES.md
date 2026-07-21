@@ -16,7 +16,9 @@ Cấm workflow JSON chứa: `::`, `@`, `App\`, `Services\`, class/method PHP.
 
 **Phase 3 Full:** Action handler **cấm** phụ thuộc Filament Resource / Page / Livewire. Extract domain service; Resource chỉ giữ notification/UI.
 
-**Phase 4A:** Production callers local-only đi qua `AutomationCallerMigrator` + per-caller flag (`legacy`/`shadow`/`action`). Shadow không double-write. Xem `AUTOMATION_PHASE4_ROLLOUT.md`.
+**Phase 4A:** Production callers local-only đi qua `AutomationCallerMigrator` — default **Action**. Emergency Legacy: `AUTOMATION_MIGRATION_EMERGENCY_LEGACY=true`.
+
+**Action Runtime cutover:** Manual/UI/Command dùng `BusinessActionDispatcher` (không giả lập Automation Rule). Domain service không emit business event khi gọi từ Action.
 
 ## 2. Canonical IDs (LOCKED)
 
@@ -58,7 +60,7 @@ Legacy tên lệch (giữ service, đổi contract):
 
 ## 5. Keyword boundary
 
-Tách action; không `keyword.process`. Observer domain link list = side effect riêng.
+Tách action; không `keyword.process`. Domain link list = Action `keyword.domain_link_list.sync` qua Rule trên `keyword.saved`. Observer chỉ emit event + phrase propagate — không sync link list.
 
 ## 6. WordPress outbound boundary
 

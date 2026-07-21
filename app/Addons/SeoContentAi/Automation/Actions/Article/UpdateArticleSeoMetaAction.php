@@ -12,18 +12,16 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionRiskLevel;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSelectability;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
-use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
-use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
+use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 
 /**
- * Local SEO meta only — không dùng ArticleEditorSeoMetaService (có WP content service trong ctor/response).
+ * Local SEO meta via ArticleEditorSeoMetaService::persist — Action owns events.
  */
 final class UpdateArticleSeoMetaAction implements BusinessAction
 {
     public function __construct(
-        private readonly ArticleWordPressSyncFlagService $syncFlags,
+        private readonly ArticleEditorSeoMetaService $seoMeta,
     ) {}
 
     public static function definition(): ActionDefinition
@@ -41,7 +39,6 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
                 'focus_keyword' => ['type' => 'string', 'required' => false],
                 'meta_description' => ['type' => 'string', 'required' => false],
                 'slug' => ['type' => 'string', 'required' => false],
-                // false: caller sẽ analyze/score sau (tránh double queue khi wire project publish).
                 'dispatch_scoring' => ['type' => 'boolean', 'required' => false],
             ],
             outputSchema: [
@@ -52,7 +49,7 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
             ],
             idempotent: true,
             lockScope: 'article',
-            emittedEvents: ['article.seo_meta_updated'],
+            emittedEvents: ['article.seo_meta_updated', 'article.content_updated'],
         );
     }
 
@@ -70,49 +67,25 @@ final class UpdateArticleSeoMetaAction implements BusinessAction
 
         $focusKeyword = trim((string) ($input['focus_keyword'] ?? ''));
         $metaDescription = trim((string) ($input['meta_description'] ?? ''));
-        $normalizedSlug = Str::slug(trim((string) ($input['slug'] ?? '')));
+        $slug = trim((string) ($input['slug'] ?? ''));
 
         try {
-            ActionSupport::withArticleLock($articleId, function () use ($article, $focusKeyword, $metaDescription, $normalizedSlug, $context): void {
-                DB::connection('omi_seo_ai')->transaction(function () use ($article, $focusKeyword, $metaDescription, $normalizedSlug, $context): void {
-                    foreach (['seo_meta_description', 'meta_description'] as $key) {
-                        if ($metaDescription === '') {
-                            $article->articleMetas()->where('meta_key', $key)->delete();
-                        } else {
-                            $article->articleMetas()->updateOrCreate(
-                                ['meta_key' => $key],
-                                ['meta_value' => $metaDescription],
-                            );
-                        }
-                    }
-
-                    $siteId = (int) ($article->site_id ?? 0);
-                    $actorId = $context->actorId ?? (auth()->id() !== null ? (int) auth()->id() : 0);
-                    if ($siteId > 0 && $focusKeyword !== '' && $actorId > 0) {
-                        KeywordFocusAttach::syncMainKeyword($article, $siteId, $actorId, $focusKeyword);
-                    } elseif ($focusKeyword !== '') {
-                        $article->articleMetas()->updateOrCreate(
-                            ['meta_key' => 'seo_focus_keyword'],
-                            ['meta_value' => $focusKeyword],
+            [$fresh, $focusKeyword, $metaDescription, $normalizedSlug] = ActionSupport::withArticleLock(
+                $articleId,
+                function () use ($article, $focusKeyword, $metaDescription, $slug): array {
+                    return DB::connection('omi_seo_ai')->transaction(function () use ($article, $focusKeyword, $metaDescription, $slug): array {
+                        return $this->seoMeta->persist(
+                            $article->fresh() ?? $article,
+                            $focusKeyword,
+                            $metaDescription,
+                            $slug,
                         );
-                    }
-
-                    if ($normalizedSlug !== '') {
-                        $previous = trim((string) ($article->slug ?? ''));
-                        if ($normalizedSlug !== $previous) {
-                            $article->update(['slug' => $normalizedSlug]);
-                            $this->syncFlags->markLocalEditPending($article->fresh() ?? $article);
-                        }
-                    }
-                });
-            });
+                    });
+                },
+            );
         } catch (\Throwable $exception) {
             return ActionResult::failure('seo_meta_update_failed', $exception->getMessage());
         }
-
-        $fresh = $article->fresh() ?? $article;
-        // Full cutover: không auto dispatch SEO score từ meta update.
-        // SEO analysis chỉ qua article.run_seo_analysis (Automation) hoặc manual.
 
         return ActionResult::success(
             output: [

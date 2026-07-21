@@ -164,7 +164,7 @@ class SeoMediaStorageService
         return $fresh;
     }
 
-    public function renameBySlug(SeoMedia $media, string $newSlug): SeoMedia
+    public function renameBySlug(SeoMedia $media, string $newSlug, bool $copyThenDelete = false): SeoMedia
     {
         $newSlug = Str::slug($newSlug);
         if ($newSlug === '') {
@@ -179,18 +179,31 @@ class SeoMediaStorageService
         $newFilename = $allocated['filename'];
 
         $disk = Storage::disk('public');
-        if ($disk->exists($oldPath)) {
-            if ($newPath !== $oldPath) {
+        $copied = false;
+        if ($disk->exists($oldPath) && $newPath !== $oldPath) {
+            if ($copyThenDelete) {
+                if (! $disk->copy($oldPath, $newPath)) {
+                    throw new \RuntimeException('Không copy được file ảnh sang path mới.');
+                }
+                $copied = true;
+            } else {
                 $disk->move($oldPath, $newPath);
             }
         }
 
-        $media->update([
-            'filename' => $newFilename,
-            'slug' => $newSlug,
-            'path' => $newPath,
-            'url' => $this->urlForPath($newPath),
-        ]);
+        try {
+            $media->update([
+                'filename' => $newFilename,
+                'slug' => $newSlug,
+                'path' => $newPath,
+                'url' => $this->urlForPath($newPath),
+            ]);
+        } catch (\Throwable $e) {
+            if ($copied && $disk->exists($newPath)) {
+                $disk->delete($newPath);
+            }
+            throw $e;
+        }
 
         $fresh = $media->fresh() ?? $media;
         app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)

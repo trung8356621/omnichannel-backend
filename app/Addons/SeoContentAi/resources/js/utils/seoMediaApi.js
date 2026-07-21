@@ -5,6 +5,7 @@ const APPLY_WATERMARK_URL = '/api/seo/media/apply-watermark';
 const TEST_OPTIMIZE_LOCAL_WEBP_URL = '/api/seo/media/test-optimize-local-webp';
 const RENAME_URL_TEMPLATE = '/api/seo/media/{id}/rename';
 const RENAME_BY_URL = '/api/seo/media/rename-by-url';
+const FIX_MEDIA_SLUGS_TEMPLATE = '/api/seo/articles/{id}/fix-media-slugs';
 const UPDATE_META_URL = '/api/seo/media/update-meta';
 const SAVE_EDITED_URL_TEMPLATE = '/api/seo/media/{id}/save-edited';
 const MEDIA_IMAGE_EDITOR_PATH = '/seo/media-image-editor';
@@ -451,8 +452,13 @@ export async function testOptimizeLocalWebp({ siteId, seoMediaId }) {
     return data;
 }
 
-export async function renameSeoMedia(mediaId, newSlug) {
+export async function renameSeoMedia(mediaId, newSlug, { articleId = null } = {}) {
     const url = RENAME_URL_TEMPLATE.replace('{id}', String(mediaId));
+    const payload = { new_slug: newSlug };
+    const resolvedArticleId = Number.parseInt(String(articleId ?? ''), 10);
+    if (Number.isFinite(resolvedArticleId) && resolvedArticleId > 0) {
+        payload.article_id = resolvedArticleId;
+    }
     const response = await fetch(url, {
         method: 'POST',
         headers: {
@@ -461,7 +467,7 @@ export async function renameSeoMedia(mediaId, newSlug) {
             Accept: 'application/json',
         },
         credentials: 'same-origin',
-        body: JSON.stringify({ new_slug: newSlug }),
+        body: JSON.stringify(payload),
     });
 
     const data = await response.json().catch(() => ({}));
@@ -473,6 +479,36 @@ export async function renameSeoMedia(mediaId, newSlug) {
 
     if (data.url) {
         data.url = normalizeSeoMediaUrl(data.url);
+    }
+
+    return data;
+}
+
+/**
+ * Batch fix local media slugs for an article (disk + media + article body/meta).
+ * @param {number} articleId
+ * @param {Array<{seo_media_id?: number|null, url?: string, src?: string, new_slug: string, old_slug?: string}>} items
+ */
+export async function fixArticleMediaSlugs(articleId, items) {
+    const id = Number(articleId) || 0;
+    if (id <= 0) {
+        throw new Error('Invalid article id');
+    }
+
+    const response = await fetch(FIX_MEDIA_SLUGS_TEMPLATE.replace('{id}', String(id)), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+            Accept: 'application/json',
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({ items: Array.isArray(items) ? items : [] }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.success) {
+        throw new Error(String(data.message ?? 'Không thể đổi slug ảnh.'));
     }
 
     return data;

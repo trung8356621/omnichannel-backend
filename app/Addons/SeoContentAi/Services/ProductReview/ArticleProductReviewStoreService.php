@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\ProductReview;
 
-use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Enums\ArticleProductReviewStatus;
 use App\Addons\SeoContentAi\Models\ArticleProductReview;
 use App\Addons\SeoContentAi\Models\SeoArticle;
@@ -17,14 +15,13 @@ use App\Addons\SeoContentAi\Services\VirtualCommentService;
 use Illuminate\Support\Facades\DB;
 
 /**
- * Normalize AI output → local article_product_reviews → emit generated events.
- * Never calls WordPress.
+ * Normalize AI/UI input → local pending article_product_reviews.
+ * Never calls WordPress. Sync owned by SyncArticleToWordPressPipeline.
  */
 final class ArticleProductReviewStoreService
 {
     public function __construct(
         private readonly CommentReviewPayloadParser $parser,
-        private readonly BusinessHookEmitter $emitter,
         private readonly VirtualCommentService $virtualComments,
         private readonly CommentReviewRatingAssigner $ratingAssigner,
     ) {}
@@ -88,9 +85,7 @@ final class ArticleProductReviewStoreService
         }
 
         $wpPostId = (int) ($article->wp_post_id ?? 0);
-        $status = $wpPostId > 0
-            ? ArticleProductReviewStatus::PendingPublish
-            : ArticleProductReviewStatus::PendingArticle;
+        $status = ArticleProductReviewStatus::Pending;
 
         $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
         $createdIds = [];
@@ -137,14 +132,25 @@ final class ArticleProductReviewStoreService
                 $idempotencyKey = hash(
                     'sha256',
                     implode('|', [
+                        $siteId,
                         $connectionId,
                         (int) $article->id,
+                        $wpPostId,
                         $contentHash,
+                        mb_strtolower($author),
+                        (string) ($email ?? ''),
                         $source,
-                        $index,
-                        now()->format('YmdHis'),
                     ]),
                 );
+
+                $existing = ArticleProductReview::query()
+                    ->where('connection_id', $connectionId)
+                    ->where('idempotency_key', $idempotencyKey)
+                    ->first();
+                if ($existing instanceof ArticleProductReview) {
+                    $createdIds[] = (int) $existing->id;
+                    continue;
+                }
 
                 $review = ArticleProductReview::query()->create([
                     'article_id' => (int) $article->id,
@@ -166,14 +172,12 @@ final class ArticleProductReviewStoreService
                 $createdIds[] = (int) $review->id;
             }
 
-            // Mirror legacy meta for older readers until UI fully cut over.
+            // Optional local mirror for legacy readers — not source of truth.
             $mirrorItems = ArticleProductReview::query()
                 ->where('article_id', (int) $article->id)
                 ->whereIn('status', [
-                    ArticleProductReviewStatus::PendingArticle->value,
-                    ArticleProductReviewStatus::PendingPublish->value,
-                    ArticleProductReviewStatus::Publishing->value,
-                    ArticleProductReviewStatus::Published->value,
+                    ArticleProductReviewStatus::Pending->value,
+                    ArticleProductReviewStatus::Syncing->value,
                     ArticleProductReviewStatus::Failed->value,
                 ])
                 ->orderBy('id')
@@ -205,85 +209,46 @@ final class ArticleProductReviewStoreService
         }
 
         $article = $article->fresh() ?? $article;
-        $automationEnabled = $this->isPublishAutomationEnabled();
-
-        $this->emitter->emit(BusinessEventName::ArticleProductReviewsGenerated, $article, [
-            'article_id' => (int) $article->id,
-            'site_id' => $siteId,
-            'connection_id' => $connectionId,
-            'review_ids' => $createdIds,
-            'review_count' => count($createdIds),
-            'automation_enabled' => $automationEnabled,
-            'has_wp_post_id' => $wpPostId > 0,
-        ]);
-
-        $kind = $isProduct ? 'review ảo' : 'bình luận ảo';
-        $message = sprintf('Đã lưu %d %s local.', count($createdIds), $kind);
-        if ($automationEnabled && $wpPostId > 0) {
-            $message = sprintf(
-                'Đã tạo %d review. Hệ thống sẽ tự động đăng lên WordPress trong vòng vài phút (theo Automation).',
-                count($createdIds),
-            );
-        } elseif ($automationEnabled) {
-            $message = sprintf(
-                'Đã tạo %d review. Review sẽ tự động được đăng sau khi bài viết đồng bộ WordPress.',
-                count($createdIds),
-            );
-        } else {
-            $message = sprintf(
-                'Đã tạo %d review nhưng Automation đăng review đang tắt. Review hiện được lưu cục bộ.',
-                count($createdIds),
-            );
-        }
+        $kind = $isProduct ? 'review tạm' : 'bình luận tạm';
+        $message = $wpPostId > 0
+            ? sprintf('Đã lưu %d %s. Sẽ đồng bộ WordPress ở lần sync bài tiếp theo.', count($createdIds), $kind)
+            : sprintf('Đã lưu %d %s. Sẽ đồng bộ sau khi product có trên WordPress.', count($createdIds), $kind);
 
         return [
             'success' => true,
             'message' => $message,
             'created_count' => count($createdIds),
             'review_ids' => $createdIds,
-            'automation_enabled' => $automationEnabled,
+            'automation_enabled' => true,
             'has_wp_post_id' => $wpPostId > 0,
         ];
     }
 
     /**
+     * Pending local rows only — WordPress is source of truth for synced reviews.
+     *
      * @return list<array<string, mixed>>
      */
     public function listForEditor(SeoArticle $article): array
     {
-        $rows = ArticleProductReview::query()
+        return ArticleProductReview::query()
             ->where('article_id', (int) $article->id)
-            ->where('status', '!=', ArticleProductReviewStatus::Cancelled->value)
+            ->whereIn('status', [
+                ArticleProductReviewStatus::Pending->value,
+                ArticleProductReviewStatus::Syncing->value,
+                ArticleProductReviewStatus::Failed->value,
+            ])
             ->orderBy('id')
-            ->get();
-
-        if ($rows->isNotEmpty()) {
-            $isProduct = ArticlePostTypeResolver::resolve($article) === 'product';
-            if ($isProduct) {
-                foreach ($rows->values() as $index => $review) {
-                    /** @var ArticleProductReview $review */
-                    if ($review->rating !== null) {
-                        continue;
-                    }
-                    $review->rating = $this->ratingAssigner->resolve(null, (int) $index);
-                    $review->save();
-                }
-            }
-
-            return $rows->map(static fn (ArticleProductReview $r): array => $r->toEditorArray())->all();
-        }
-
-        return $this->virtualComments->getForEditor($article);
+            ->get()
+            ->map(static fn (ArticleProductReview $r): array => $r->toEditorArray())
+            ->all();
     }
 
     public function isPublishAutomationEnabled(): bool
     {
         try {
             return \App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule::query()
-                ->whereIn('code', [
-                    'publish-generated-product-reviews-to-wordpress',
-                    'publish-pending-product-reviews-after-article-sync',
-                ])
+                ->where('code', 'sync-article-to-wordpress')
                 ->where('is_enabled', true)
                 ->exists();
         } catch (\Throwable) {
@@ -292,21 +257,12 @@ final class ArticleProductReviewStoreService
     }
 
     /**
-     * Queue pending reviews after article has wp_post_id (via reconciler — no direct WP).
+     * @deprecated Reviews sync inside SyncArticleToWordPressPipeline.
      *
-     * @return list<int> review ids queued
+     * @return list<int>
      */
     public function queuePendingForArticle(SeoArticle $article, string $publishIntent = 'publish_after_article'): array
     {
-        $result = app(PendingProductReviewReconciler::class)->reconcileForArticle(
-            article: $article,
-            settings: ['max_delay_time' => ProductReviewDelaySettings::DEFAULT_MINUTES],
-            reviewIds: null,
-            publishIntent: $publishIntent,
-            actorId: null,
-            dryRun: false,
-        );
-
-        return $result->queuedReviewIds;
+        return [];
     }
 }

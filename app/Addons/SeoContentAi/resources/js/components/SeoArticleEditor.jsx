@@ -43,7 +43,7 @@ import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
 import ArticleReviewsTab from './ArticleReviewsTab';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
-import { reconcileProductReviewsForArticle } from '../utils/articleEditorApi';
+import { fetchWordPressProductReviews } from '../utils/articleEditorApi';
 import { csrfToken, seoArticleApiHeaders } from '../utils/seoArticleApi';
 import {
     buildSeoAnalysisPayload,
@@ -77,6 +77,8 @@ import {
     computeQuickFixAltTitleSupplementalOutcome,
     computeQuickFixSlugSupplementalOutcome,
     executeSeoMediaSlugRenamesTwoPhase,
+    ensureLocalRenameResultsCoverQueue,
+    ensureWpRenameResultsCoverQueue,
     enrichWpRenamedWithRequestMeta,
     enrichBlocksWithPostImages,
     finalizeBlocksAfterWpRename,
@@ -100,8 +102,13 @@ import {
     fetchSeoMediaStatus,
     renameSeoMedia,
     renameSeoMediaByUrl,
+    fixArticleMediaSlugs,
     updateSeoMediaMeta,
 } from '../utils/seoMediaApi';
+import {
+    showArticleOperationOverlay,
+    scheduleArticleEditorReload,
+} from '../utils/articleOperationTracker';
 import { t } from '../utils/i18n';
 import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
@@ -2179,67 +2186,43 @@ export default function SeoArticleEditor({
         return () => window.removeEventListener('virtual-reviews-updated', onReviewsUpdated);
     }, []);
 
-    const productReviewsReconcileOnceRef = useRef(false);
+    const [reviewsLoadWarning, setReviewsLoadWarning] = useState(null);
+    const [reviewsLoading, setReviewsLoading] = useState(false);
+    const productReviewsLoadOnceRef = useRef(false);
     useEffect(() => {
-        if (!showReviewsTab || !isProductPost || !articleId || productReviewsReconcileOnceRef.current) {
+        if (!showReviewsTab || !isProductPost || !articleId || productReviewsLoadOnceRef.current) {
             return undefined;
         }
-        productReviewsReconcileOnceRef.current = true;
+        productReviewsLoadOnceRef.current = true;
         let cancelled = false;
 
         (async () => {
+            setReviewsLoading(true);
+            setReviewsLoadWarning(null);
             try {
-                const result = await reconcileProductReviewsForArticle(articleId);
-                if (cancelled || !result.success) {
-                    if (!cancelled && result.success === false && result.message) {
-                        window.dispatchEvent(
-                            new CustomEvent('seo-article-editor-notify', {
-                                detail: {
-                                    title: 'Không thể lên lịch đăng review',
-                                    body: String(result.message),
-                                    status: 'danger',
-                                },
-                            }),
-                        );
-                    }
+                const result = await fetchWordPressProductReviews(articleId);
+                if (cancelled) {
+                    return;
+                }
+                if (!result.success) {
+                    setReviewsLoadWarning(String(result.message ?? 'Không thể tải đánh giá từ WordPress.'));
                     return;
                 }
 
                 const data = result.data ?? {};
-                if (data.automation_disabled && Number(data.review_count ?? 0) > 0) {
-                    window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                                title: 'Automation đăng review đang tắt',
-                                body: `Có ${Number(data.review_count)} review chưa được đăng vì Automation đang tắt.`,
-                                status: 'warning',
-                            },
-                        }),
-                    );
-                } else if (Number(data.queued ?? 0) > 0) {
-                    window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                                title: 'Đã lên lịch đăng review',
-                                body: `Đã khôi phục và lên lịch tự động đăng ${Number(data.queued)} review lên WordPress.`,
-                                status: 'success',
-                            },
-                        }),
-                    );
+                const remote = Array.isArray(data.reviews) ? data.reviews : [];
+                const pending = Array.isArray(data.pending_local_reviews) ? data.pending_local_reviews : [];
+                setVirtualReviews([...remote, ...pending]);
+                if (data.warning) {
+                    setReviewsLoadWarning(String(data.warning));
                 }
-
-                await callEditArticleLivewire('refreshVirtualReviewsForEditor');
             } catch (error) {
                 if (!cancelled) {
-                    window.dispatchEvent(
-                        new CustomEvent('seo-article-editor-notify', {
-                            detail: {
-                                title: 'Không thể lên lịch đăng review',
-                                body: String(error?.message ?? 'Mở Automation Operations để xem lỗi.'),
-                                status: 'danger',
-                            },
-                        }),
-                    );
+                    setReviewsLoadWarning(String(error?.message ?? 'Không thể tải đánh giá từ WordPress.'));
+                }
+            } finally {
+                if (!cancelled) {
+                    setReviewsLoading(false);
                 }
             }
         })();
@@ -2249,10 +2232,31 @@ export default function SeoArticleEditor({
         };
     }, [articleId, isProductPost, showReviewsTab]);
 
-    const refreshVirtualReviews = useCallback(
-        () => callEditArticleLivewire('refreshVirtualReviewsForEditor'),
-        [],
-    );
+    const refreshVirtualReviews = useCallback(async () => {
+        if (!articleId || !isProductPost) {
+            return callEditArticleLivewire('refreshVirtualReviewsForEditor');
+        }
+        setReviewsLoading(true);
+        try {
+            const result = await fetchWordPressProductReviews(articleId);
+            if (!result.success) {
+                setReviewsLoadWarning(String(result.message ?? 'Không thể tải đánh giá từ WordPress.'));
+                return [];
+            }
+            const data = result.data ?? {};
+            const remote = Array.isArray(data.reviews) ? data.reviews : [];
+            const pending = Array.isArray(data.pending_local_reviews) ? data.pending_local_reviews : [];
+            const merged = [...remote, ...pending];
+            setVirtualReviews(merged);
+            setReviewsLoadWarning(data.warning ? String(data.warning) : null);
+            return merged;
+        } catch (error) {
+            setReviewsLoadWarning(String(error?.message ?? 'Không thể tải đánh giá từ WordPress.'));
+            return [];
+        } finally {
+            setReviewsLoading(false);
+        }
+    }, [articleId, isProductPost]);
 
     const generateQuickPostReviews = useCallback(
         () => callEditArticleLivewire('generateQuickPostReviews'),
@@ -2303,6 +2307,7 @@ export default function SeoArticleEditor({
     panelFaqsRef.current = panelFaqs;
     const pendingQuickFixKeywordRef = useRef('');
     const pendingLocalRenameResultsRef = useRef([]);
+    const pendingLocalRenameQueueRef = useRef([]);
     const pendingWpRenameRequestRef = useRef([]);
     const slugRenameManagedByBatchRef = useRef(false);
     const generateImageTargetRef = useRef('editor');
@@ -3407,7 +3412,7 @@ export default function SeoArticleEditor({
             }
 
             if (seoMediaId > 0) {
-                renameSeoMedia(seoMediaId, trimmed)
+                renameSeoMedia(seoMediaId, trimmed, { articleId })
                     .then((data) => {
                         applyPatch({
                             slug: data.slug,
@@ -3553,7 +3558,7 @@ export default function SeoArticleEditor({
             return (async () => {
                 try {
                     const results = await executeSeoMediaSlugRenamesTwoPhase(uniqueLocalRenames, {
-                        renameById: renameSeoMedia,
+                        renameById: (id, slug) => renameSeoMedia(id, slug, { articleId }),
                         renameByUrl: (src, slug, opts) => renameLocalMediaByUrl(src, slug, opts),
                     });
 
@@ -3635,6 +3640,9 @@ export default function SeoArticleEditor({
 
             pendingQuickFixKeywordRef.current = keyword;
             pendingLocalRenameResultsRef.current = [];
+            pendingLocalRenameQueueRef.current = Array.isArray(preview.localRenameQueue)
+                ? [...preview.localRenameQueue]
+                : [];
 
             const tasks = [];
 
@@ -3658,60 +3666,40 @@ export default function SeoArticleEditor({
                     }
 
                     return executeSeoMediaSlugRenamesTwoPhase(items, {
-                        renameById: renameSeoMedia,
+                        renameById: (id, slug) => renameSeoMedia(id, slug, { articleId }),
                         renameByUrl: (src, slug, opts) => renameLocalMediaByUrl(src, slug, opts),
                     });
                 };
 
-                if (blockRenames.length > 0) {
-                    tasks.push(
-                        (async () => {
-                            try {
-                                const results = await runLocalRenames(blockRenames);
-                                pendingLocalRenameResultsRef.current = [
-                                    ...pendingLocalRenameResultsRef.current,
-                                    ...results,
-                                ];
-                                // Không setBlocks từng cái ở đây — finalize một lần qua
-                                // applySlugRenameFinished để tránh race localSrc stale.
-                            } catch (error) {
-                                window.dispatchEvent(
-                                    new CustomEvent('seo-article-editor-notify', {
-                                        detail: {
-                                            title: t('editor_cannot_rename_local_image_slug'),
-                                            body: error?.message ?? t('editor_try_again_later'),
-                                            status: 'danger',
-                                        },
-                                    }),
-                                );
+                // Chạy tuần tự + gộp 1 lần — tránh race ghi đè pendingLocalRenameResultsRef.
+                tasks.push(
+                    (async () => {
+                        const merged = [];
+                        try {
+                            if (blockRenames.length > 0) {
+                                merged.push(...(await runLocalRenames(blockRenames)));
                             }
-                        })(),
-                    );
-                }
+                            if (supplementalRenames.length > 0) {
+                                merged.push(...(await runLocalRenames(supplementalRenames)));
+                            }
+                        } catch (error) {
+                            window.dispatchEvent(
+                                new CustomEvent('seo-article-editor-notify', {
+                                    detail: {
+                                        title: t('editor_cannot_rename_local_image_slug'),
+                                        body: error?.message ?? t('editor_try_again_later'),
+                                        status: 'danger',
+                                    },
+                                }),
+                            );
+                        }
 
-                if (supplementalRenames.length > 0) {
-                    tasks.push(
-                        (async () => {
-                            try {
-                                const results = await runLocalRenames(supplementalRenames);
-                                pendingLocalRenameResultsRef.current = [
-                                    ...pendingLocalRenameResultsRef.current,
-                                    ...results,
-                                ];
-                            } catch (error) {
-                                window.dispatchEvent(
-                                    new CustomEvent('seo-article-editor-notify', {
-                                        detail: {
-                                            title: t('editor_cannot_rename_local_image_slug'),
-                                            body: error?.message ?? t('editor_try_again_later'),
-                                            status: 'danger',
-                                        },
-                                    }),
-                                );
-                            }
-                        })(),
-                    );
-                }
+                        pendingLocalRenameResultsRef.current = [
+                            ...pendingLocalRenameResultsRef.current,
+                            ...merged,
+                        ];
+                    })(),
+                );
             }
 
             return tasks.length > 0 ? Promise.all(tasks) : Promise.resolve();
@@ -3720,13 +3708,21 @@ export default function SeoArticleEditor({
     );
 
     const applySlugRenameFinished = useCallback((detail) => {
-        const wpRenamed = enrichWpRenamedWithRequestMeta(
+        const rawWpRenamed = enrichWpRenamedWithRequestMeta(
             Array.isArray(detail?.renamed) ? detail.renamed : [],
             pendingWpRenameRequestRef.current,
         );
+        // success === false: chỉ dùng renamed thật. Còn lại: fill queue thiếu (file đã rename sẵn).
+        const wpRenamed = detail?.success === false
+            ? rawWpRenamed
+            : ensureWpRenameResultsCoverQueue(pendingWpRenameRequestRef.current, rawWpRenamed);
         pendingWpRenameRequestRef.current = [];
-        const localResults = [...(pendingLocalRenameResultsRef.current ?? [])];
+        const localResults = ensureLocalRenameResultsCoverQueue(
+            pendingLocalRenameQueueRef.current,
+            pendingLocalRenameResultsRef.current ?? [],
+        );
         pendingLocalRenameResultsRef.current = [];
+        pendingLocalRenameQueueRef.current = [];
         pendingQuickFixKeywordRef.current = '';
 
         const nextBlocks = finalizeBlocksAfterWpRename(blocksRef.current, wpRenamed, localResults);
@@ -3860,7 +3856,7 @@ export default function SeoArticleEditor({
 
         try {
             const localResults = await executeSeoMediaSlugRenamesTwoPhase(uniqueLocalRenames, {
-                renameById: renameSeoMedia,
+                renameById: (id, slug) => renameSeoMedia(id, slug, { articleId }),
                 renameByUrl: (src, slug, opts) => renameLocalMediaByUrl(src, slug, opts),
             });
             const nextBlocks = finalizeBlocksAfterWpRename(blocksRef.current, [], localResults);
@@ -4010,6 +4006,13 @@ export default function SeoArticleEditor({
             }
 
             setQuickFixSlugAllBusy(true);
+            showArticleOperationOverlay('processing', 'media_slug_fix');
+            window.__seoArticleHeavyActionOverlay?.show('sync', {
+                persistUntilUnload: true,
+                title: 'Đang sửa slug ảnh',
+                message: 'Vui lòng không chỉnh sửa bài viết trong lúc đổi slug.',
+            });
+            setArticleAutosaveLock('quick-fix-slug-all', true);
 
             await new Promise((resolve) => {
                 window.requestAnimationFrame(() => resolve());
@@ -4018,50 +4021,79 @@ export default function SeoArticleEditor({
             try {
                 slugRenameManagedByBatchRef.current = true;
 
-                // Gắn listener TRƯỚC khi fire rename — tránh miss event khi local rename chậm.
                 const wpWaitPromise =
                     totalWpRenames > 0 ? waitForWordPressSlugRenameFinished(1) : Promise.resolve(null);
 
-                await applyQuickFixSlugPreview(mergedPreview, keyword, { silent: true });
-
-                const wpDetail = await wpWaitPromise;
-
-                // Luôn finalize khi có local rename — cập nhật src + localSrc + wpSrc trong blocks.
-                if (wpDetail || totalLocalRenames > 0 || (pendingLocalRenameResultsRef.current?.length ?? 0) > 0) {
-                    applySlugRenameFinished(wpDetail ?? { renamed: [] });
+                if (totalWpRenames > 0) {
+                    requestWordPressRenames(mergedPreview.renameQueue, { silent: true });
                 }
 
-                finalizeSlugRenameSideEffects();
+                const wpDetail = await wpWaitPromise;
+                const wpFailed = wpDetail != null && wpDetail.success === false;
+                if (wpFailed) {
+                    throw new Error(String(wpDetail?.message ?? t('editor_try_again_later')));
+                }
+
+                let localSucceeded = totalLocalRenames === 0;
+                if (totalLocalRenames > 0) {
+                    await fixArticleMediaSlugs(
+                        articleId,
+                        (mergedPreview.localRenameQueue ?? []).map((item) => ({
+                            seo_media_id: Number(item?.seo_media_id ?? 0) || null,
+                            url: String(item?.src ?? item?.url ?? '').trim(),
+                            new_slug: String(item?.new_slug ?? '').trim(),
+                            old_slug: String(item?.old_slug ?? '').trim(),
+                        })),
+                    );
+                    localSucceeded = true;
+                }
+
+                if (!localSucceeded && totalLocalRenames > 0) {
+                    throw new Error(t('editor_try_again_later'));
+                }
 
                 const wpRenamedCount = Array.isArray(wpDetail?.renamed) ? wpDetail.renamed.length : 0;
-                const localDoneCount = Math.max(totalLocalRenames, 0);
-                const totalDone = Math.max(wpRenamedCount, totalWpRenames) + localDoneCount;
-                const failed = wpDetail != null && wpDetail.success === false;
+                const totalDone = Math.max(wpRenamedCount, totalWpRenames) + totalLocalRenames;
 
                 notifyEditor(
-                    failed ? t('editor_quick_fix_slug_all_failed_title') : t('editor_quick_fix_slug_all_done_title'),
-                    failed
-                        ? String(wpDetail?.message ?? t('editor_try_again_later'))
-                        : String(
-                              wpDetail?.message
-                                  || t('editor_quick_fix_slug_all_done_body', { count: totalDone || totalWpRenames + totalLocalRenames }),
-                          ),
-                    failed ? 'danger' : 'success',
+                    t('editor_quick_fix_slug_all_done_title'),
+                    String(
+                        wpDetail?.message
+                            || t('editor_quick_fix_slug_all_done_body', {
+                                count: totalDone || totalWpRenames + totalLocalRenames,
+                            }),
+                    ),
+                    'success',
                 );
+
+                showArticleOperationOverlay('success', 'media_slug_fix');
+                scheduleArticleEditorReload(articleId, { delayMs: 500 });
+            } catch (error) {
+                notifyEditor(
+                    t('editor_quick_fix_slug_all_failed_title'),
+                    String(error?.message ?? t('editor_try_again_later')),
+                    'danger',
+                );
+                // Partial WP rename có thể đã ghi DB — reload để đọc trạng thái thật.
+                if (totalWpRenames > 0) {
+                    scheduleArticleEditorReload(articleId, { delayMs: 1500 });
+                } else {
+                    setArticleAutosaveLock('quick-fix-slug-all', false);
+                    window.__seoArticleHeavyActionOverlay && (window.__seoArticleHeavyActionOverlay.persistUntilUnload = false);
+                    window.__seoEndArticleHeavyActionClient?.();
+                    setQuickFixSlugAllBusy(false);
+                }
             } finally {
                 slugRenameManagedByBatchRef.current = false;
-                setQuickFixSlugAllBusy(false);
-                window.__seoEndArticleHeavyActionClient?.();
             }
         },
         [
-            applyQuickFixSlugPreview,
-            applySlugRenameFinished,
+            articleId,
             buildQuickFixContext,
-            finalizeSlugRenameSideEffects,
             notifyEditor,
             patchSupplementalImageRow,
             quickFixSlugAllBusy,
+            requestWordPressRenames,
             waitForWordPressSlugRenameFinished,
         ],
     );
@@ -9617,8 +9649,11 @@ export default function SeoArticleEditor({
                           className="seo-assistant-widget--reviews"
                       >
                           <ArticleReviewsTab
+                              articleId={articleId}
                               initialReviews={virtualReviews}
                               onRefresh={refreshVirtualReviews}
+                              loading={reviewsLoading}
+                              warning={reviewsLoadWarning}
                               canQuickCreate={canQuickCreateReviews}
                               showConfigureReviews={showConfigureReviewsLink}
                               quickCreateConfigUrl={quickCreateReviewsConfigUrl}

@@ -564,9 +564,9 @@ export function finishArticleSaveFromApi(result) {
 }
 
 /**
- * Hoàn tất Sync WP — vẫn reload trang sau khi đồng bộ.
+ * Hoàn tất Sync WP — giữ overlay + poll; reload khi backend báo terminal.
  *
- * @param {{ reload?: boolean, clear_local_state?: boolean, notification?: Record<string, string> }} result
+ * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, notification?: Record<string, string>, operation?: object }} result
  * @param {number} articleId
  * @param {number} siteId
  */
@@ -576,8 +576,19 @@ export function finishArticleSyncFromApi(result, articleId, siteId) {
     }
 
     if (result.queued) {
-        window.__seoEndArticleHeavyActionClient?.();
+        window.__seoArticleHeavyActionOverlay?.show('sync', {
+            persistUntilUnload: true,
+            title: 'Đang chờ đồng bộ WordPress',
+            message: 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.',
+        });
+        window.__seoArticleAutosaveLock?.set('article-operation', true);
         window.dispatchEvent(new CustomEvent('article-wordpress-sync-queued', { detail: result }));
+        window.__seoArticleOperationTracker?.apply?.(articleId, result.operation ?? {
+            type: 'wordpress_sync',
+            status: 'queued',
+            stage: 'queued',
+        });
+        window.__seoArticleOperationTracker?.poll?.(articleId);
 
         return;
     }
@@ -612,18 +623,115 @@ export function notifyEditorFromApi(_wire, notification) {
 }
 
 /**
- * Safety net: reconcile pending product reviews when editor opens (no WP wait).
+ * Load WordPress product reviews for Edit Article (source of truth).
  * @param {number} articleId
- * @returns {Promise<{success: boolean, data?: Record<string, unknown>, message?: string}>}
  */
-export async function reconcileProductReviewsForArticle(articleId) {
+export async function fetchWordPressProductReviews(articleId) {
     const id = Number(articleId) || 0;
     if (id <= 0) {
         return { success: false, message: 'Invalid article id' };
     }
 
     const { response, data } = await seoArticleApiFetch(
-        `/api/seo/articles/${id}/product-reviews/reconcile`,
+        `/api/seo/articles/${id}/wordpress-product-reviews`,
+        {
+            method: 'GET',
+            headers: {
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+        },
+    );
+
+    const payloadData = data && typeof data === 'object' ? data : {};
+    if (!response.ok || payloadData.success === false) {
+        return {
+            success: false,
+            message: String(payloadData.message ?? 'Không thể tải đánh giá từ WordPress.'),
+            data: payloadData.data,
+        };
+    }
+
+    return {
+        success: true,
+        data: payloadData.data && typeof payloadData.data === 'object' ? payloadData.data : payloadData,
+    };
+}
+
+/**
+ * Shared backend policy status for product reviews.
+ * @param {number} articleId
+ */
+export async function fetchProductReviewStatus(articleId) {
+    const id = Number(articleId) || 0;
+    if (id <= 0) {
+        return { success: false, message: 'Invalid article id' };
+    }
+
+    const { response, data } = await seoArticleApiFetch(
+        `/api/seo/articles/${id}/product-review-status`,
+        {
+            method: 'GET',
+            headers: { 'X-CSRF-TOKEN': csrfToken() },
+        },
+    );
+
+    const payloadData = data && typeof data === 'object' ? data : {};
+    if (!response.ok || payloadData.success === false) {
+        return {
+            success: false,
+            message: String(payloadData.message ?? 'Không thể tải trạng thái đánh giá.'),
+            data: payloadData.data,
+        };
+    }
+
+    return {
+        success: true,
+        data: payloadData.data && typeof payloadData.data === 'object' ? payloadData.data : payloadData,
+    };
+}
+
+/**
+ * @param {number} articleId
+ * @param {Record<string, unknown>} [body]
+ */
+export async function createProductReviewsForArticle(articleId, body = {}) {
+    const id = Number(articleId) || 0;
+    if (id <= 0) {
+        return { success: false, message: 'Invalid article id' };
+    }
+
+    const { response, data } = await seoArticleApiFetch(
+        `/api/seo/articles/${id}/product-reviews/create`,
+        {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRF-TOKEN': csrfToken(),
+            },
+            body: JSON.stringify(body ?? {}),
+        },
+    );
+
+    const payloadData = data && typeof data === 'object' ? data : {};
+    return {
+        success: response.ok && payloadData.success !== false,
+        message: String(payloadData.message ?? ''),
+        data: payloadData.data,
+        status: payloadData.status,
+    };
+}
+
+/**
+ * @param {number} articleId
+ */
+export async function syncProductReviewsForArticle(articleId) {
+    const id = Number(articleId) || 0;
+    if (id <= 0) {
+        return { success: false, message: 'Invalid article id' };
+    }
+
+    const { response, data } = await seoArticleApiFetch(
+        `/api/seo/articles/${id}/product-reviews/sync`,
         {
             method: 'POST',
             headers: {
@@ -635,17 +743,19 @@ export async function reconcileProductReviewsForArticle(articleId) {
     );
 
     const payloadData = data && typeof data === 'object' ? data : {};
-    if (!response.ok || payloadData.success === false) {
-        return {
-            success: false,
-            message: String(payloadData.message ?? 'Reconcile product reviews failed.'),
-            data: payloadData.data,
-        };
-    }
-
     return {
-        success: true,
-        data: payloadData.data && typeof payloadData.data === 'object' ? payloadData.data : payloadData,
+        success: response.ok && payloadData.success !== false,
+        message: String(payloadData.message ?? ''),
+        data: payloadData.data,
+        status: payloadData.status,
     };
+}
+
+/**
+ * @deprecated Prefer fetchWordPressProductReviews / fetchProductReviewStatus
+ * @param {number} articleId
+ */
+export async function reconcileProductReviewsForArticle(articleId) {
+    return fetchWordPressProductReviews(articleId);
 }
 

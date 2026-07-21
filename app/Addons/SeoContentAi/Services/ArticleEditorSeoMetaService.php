@@ -41,6 +41,27 @@ final class ArticleEditorSeoMetaService
         string $metaDescription,
         string $slug = '',
     ): array {
+        [$article, $focusKeyword, $metaDescription, $normalizedSlug] = $this->persist(
+            $article,
+            $focusKeyword,
+            $metaDescription,
+            $slug,
+        );
+
+        return $this->buildResponse($article, $focusKeyword, $metaDescription, $normalizedSlug);
+    }
+
+    /**
+     * Persist only — không emit BusinessHookEmitter. Caller/Action owns events.
+     *
+     * @return array{0: SeoArticle, 1: string, 2: string, 3: string} [article, focus_keyword, meta_description, normalized_slug]
+     */
+    public function persist(
+        SeoArticle $article,
+        string $focusKeyword,
+        string $metaDescription,
+        string $slug = '',
+    ): array {
         $focusKeyword = trim($focusKeyword);
         $metaDescription = trim($metaDescription);
         $normalizedSlug = Str::slug(trim($slug));
@@ -51,10 +72,7 @@ final class ArticleEditorSeoMetaService
 
         $article = $article->fresh(['articleMetas', 'site']) ?? $article;
 
-        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
-            ->articleContentUpdated($article);
-
-        return $this->buildResponse($article, $focusKeyword, $metaDescription, $normalizedSlug);
+        return [$article, $focusKeyword, $metaDescription, $normalizedSlug];
     }
 
     private function persistSlugLocalOnly(SeoArticle $article, string $normalizedSlug): void
@@ -101,7 +119,7 @@ final class ArticleEditorSeoMetaService
      *     seo_analysis_pending: bool
      * }
      */
-    private function buildResponse(
+    public function buildResponse(
         SeoArticle $article,
         string $focusKeyword,
         string $metaDescription,

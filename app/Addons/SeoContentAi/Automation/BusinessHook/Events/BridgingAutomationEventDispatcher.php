@@ -25,6 +25,9 @@ final class BridgingAutomationEventDispatcher implements AutomationEventDispatch
     private const KEY_MAP = [
         'article.created' => 'article.created',
         'article.content_updated' => 'article.content_updated',
+        'article.seo_meta_updated' => 'article.seo_meta_updated',
+        'article.approved' => 'article.approved',
+        'keyword.saved' => 'keyword.saved',
         'project.task_created' => 'content_project.task.created',
         'project.task_completed' => 'content_project.task.completed',
         'project.task_failed' => 'content_project.task.failed',
@@ -72,9 +75,10 @@ final class BridgingAutomationEventDispatcher implements AutomationEventDispatch
             );
 
             // Acceptance path: task completed with article → also emit article.completed
+            // Content Project Run defers WordPress sync to manual "Sync all".
             if ($mapped === BusinessEventName::ContentProjectTaskCompleted->value) {
                 $articleId = (int) ($payload['article_id'] ?? 0);
-                if ($articleId > 0) {
+                if ($articleId > 0 && $this->shouldBridgeArticleCompleted($event)) {
                     $article = SeoArticle::query()->find($articleId);
                     $businessEvents->dispatch(
                         eventName: BusinessEventName::ArticleCompleted->value,
@@ -102,6 +106,17 @@ final class BridgingAutomationEventDispatcher implements AutomationEventDispatch
         }
     }
 
+    private function shouldBridgeArticleCompleted(EventEnvelope $event): bool
+    {
+        if (filter_var($event->context['suppress_article_completed_bridge'] ?? false, FILTER_VALIDATE_BOOL)) {
+            return false;
+        }
+
+        $origin = (string) ($event->context['origin'] ?? '');
+
+        return $origin !== 'content_project_run';
+    }
+
     private function resolveSubject(EventEnvelope $event): Model|string|null
     {
         $type = (string) ($event->entity['type'] ?? '');
@@ -124,8 +139,12 @@ final class BridgingAutomationEventDispatcher implements AutomationEventDispatch
         $entityId = $event->entity['id'] ?? null;
 
         return match ($mapped) {
-            'article.created', 'article.content_updated', 'article.completed', 'article.archived', 'article.restored' => array_merge([
+            'article.created', 'article.content_updated', 'article.seo_meta_updated', 'article.approved', 'article.completed', 'article.archived', 'article.restored' => array_merge([
                 'article_id' => $payload['article_id'] ?? $entityId,
+                'site_id' => $payload['site_id'] ?? ($event->context['site_id'] ?? null),
+            ], $payload),
+            'keyword.saved' => array_merge([
+                'keyword_id' => $payload['keyword_id'] ?? $entityId,
                 'site_id' => $payload['site_id'] ?? ($event->context['site_id'] ?? null),
             ], $payload),
             'content_project.task.created', 'content_project.task.completed', 'content_project.task.failed', 'content_project.task.archived' => array_merge([

@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Automation\Enums\ActionSelectability;
 use App\Addons\SeoContentAi\Automation\Enums\ActionSideEffect;
 use App\Addons\SeoContentAi\Automation\Support\ActionSupport;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
+use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use Illuminate\Support\Facades\DB;
@@ -42,6 +43,16 @@ final class UpdateArticleContentAction implements BusinessAction
                 'content' => ['type' => 'string', 'required' => true],
                 'title' => ['type' => 'string', 'required' => false],
                 'slug' => ['type' => 'string', 'required' => false],
+                'status' => ['type' => 'string', 'required' => false],
+                'post_type' => ['type' => 'string', 'required' => false],
+                'visibility' => ['type' => 'string', 'required' => false],
+                'publish_day' => ['type' => 'string', 'required' => false],
+                'publish_month' => ['type' => 'string', 'required' => false],
+                'publish_year' => ['type' => 'string', 'required' => false],
+                'publish_hour' => ['type' => 'string', 'required' => false],
+                'publish_minute' => ['type' => 'string', 'required' => false],
+                'seo_meta_description' => ['type' => 'string', 'required' => false],
+                'focus_keyword' => ['type' => 'string', 'required' => false],
                 'expected_updated_at' => ['type' => 'string', 'required' => false],
                 'expected_content_hash' => ['type' => 'string', 'required' => false],
             ],
@@ -91,18 +102,7 @@ final class UpdateArticleContentAction implements BusinessAction
             );
         }
 
-        $saveContext = ArticleEditorSaveContext::fromBundle($article, [
-            'article_meta' => [
-                'title' => $title !== '' ? $title : (string) $article->title,
-                'slug' => $slugInput !== null && $slugInput !== ''
-                    ? $slugInput
-                    : (string) ($article->slug ?? ''),
-            ],
-            'publish_box' => [
-                'status' => (string) ($article->status ?? 'draft'),
-                'post_type' => (string) ($article->type ?? 'article'),
-            ],
-        ]);
+        $saveContext = ArticleEditorSaveContext::fromBundle($article, $this->buildEditorBundle($article, $title, $slugInput, $input));
 
         try {
             $result = ActionSupport::withArticleLock($articleId, function () use ($article, $saveContext, $content, $input) {
@@ -145,5 +145,44 @@ final class UpdateArticleContentAction implements BusinessAction
             ],
             changed: ['content', 'title'],
         );
+    }
+
+    /**
+     * Build ArticleEditorSaveContext bundle từ input Action — giữ shape giống editor bundle
+     * (article_meta/publish_box) để không mất publish status/visibility/SEO revision snapshot
+     * khi cutover từ controller trực tiếp sang Action.
+     *
+     * @param  array<string, mixed>  $input
+     * @return array<string, mixed>
+     */
+    private function buildEditorBundle(SeoArticle $article, string $title, ?string $slugInput, array $input): array
+    {
+        $articleMeta = [
+            'title' => $title !== '' ? $title : (string) $article->title,
+            'slug' => $slugInput !== null && $slugInput !== ''
+                ? $slugInput
+                : (string) ($article->slug ?? ''),
+        ];
+        if (array_key_exists('seo_meta_description', $input)) {
+            $articleMeta['seo_meta_description'] = (string) $input['seo_meta_description'];
+        }
+        if (array_key_exists('focus_keyword', $input)) {
+            $articleMeta['focus_keyword'] = (string) $input['focus_keyword'];
+        }
+
+        $publishBox = [
+            'status' => (string) ($input['status'] ?? $article->status ?? 'draft'),
+            'post_type' => (string) ($input['post_type'] ?? $article->type ?? 'article'),
+        ];
+        foreach (['visibility', 'publish_day', 'publish_month', 'publish_year', 'publish_hour', 'publish_minute'] as $field) {
+            if (array_key_exists($field, $input)) {
+                $publishBox[$field] = (string) $input[$field];
+            }
+        }
+
+        return [
+            'article_meta' => $articleMeta,
+            'publish_box' => $publishBox,
+        ];
     }
 }

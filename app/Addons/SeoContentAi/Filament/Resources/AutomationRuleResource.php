@@ -101,7 +101,33 @@ class AutomationRuleResource extends SeoPanelResource
 
         return $form
             ->schema([
-                Forms\Components\Section::make(__('seo-content-ai::filament.automation.rule'))
+                Forms\Components\Section::make('Summary')
+                    ->description('Readonly overview. Changes apply after Save & Publish.')
+                    ->schema([
+                        Forms\Components\Placeholder::make('summary_name')
+                            ->label('Name')
+                            ->content(fn (?AutomationRule $record): string => (string) ($record?->name ?? '—')),
+                        Forms\Components\Placeholder::make('summary_code')
+                            ->label('Code')
+                            ->content(fn (?AutomationRule $record): string => (string) ($record?->code ?? '—')),
+                        Forms\Components\Placeholder::make('summary_event')
+                            ->label('Event')
+                            ->content(fn (?AutomationRule $record): string => (string) ($record?->event_name ?? '—')),
+                        Forms\Components\Placeholder::make('summary_mode')
+                            ->label('Mode')
+                            ->content(fn (?AutomationRule $record): string => (string) ($record?->workflow_mode ?? 'linear')),
+                        Forms\Components\Placeholder::make('summary_status')
+                            ->label('Status')
+                            ->content(fn (?AutomationRule $record): string => $record?->is_enabled ? 'Enabled' : 'Disabled'),
+                        Forms\Components\Placeholder::make('summary_published')
+                            ->label('Published version')
+                            ->content(fn (?AutomationRule $record): string => $record?->published_version_id
+                                ? 'v'.(string) ($record->version ?? '—').' Published'
+                                : 'Unpublished'),
+                    ])
+                    ->columns(3)
+                    ->visible(fn (?AutomationRule $record): bool => $record !== null),
+                Forms\Components\Section::make('Rule settings')
                     ->schema([
                         Forms\Components\TextInput::make('name')
                             ->required()
@@ -143,7 +169,8 @@ class AutomationRuleResource extends SeoPanelResource
                             ])
                             ->default(AutomationWorkflowMode::Linear->value)
                             ->required()
-                            ->native(false),
+                            ->native(false)
+                            ->helperText('Linear = fixed pipeline (no Visual Builder). Graph = Open Workflow Builder.'),
                         Forms\Components\Select::make('trigger_type')
                             ->label('Trigger type')
                             ->options([
@@ -154,6 +181,18 @@ class AutomationRuleResource extends SeoPanelResource
                             ->default(AutomationTriggerType::Event->value)
                             ->required()
                             ->native(false),
+                        Forms\Components\Toggle::make('stop_on_failure')
+                            ->label(__('seo-content-ai::filament.automation.stop_on_failure'))
+                            ->default(true),
+                        Forms\Components\Toggle::make('is_enabled')
+                            ->label(__('seo-content-ai::filament.automation.is_enabled'))
+                            ->default(false)
+                            ->helperText('Runtime enable. Does not publish draft.'),
+                    ])
+                    ->columns(2),
+                Forms\Components\Section::make('Advanced execution settings')
+                    ->collapsed()
+                    ->schema([
                         Forms\Components\TextInput::make('schedule_expression')
                             ->label('Cron expression')
                             ->placeholder('0 * * * *')
@@ -173,27 +212,51 @@ class AutomationRuleResource extends SeoPanelResource
                         Forms\Components\Placeholder::make('last_scheduled_at')
                             ->label('Last run')
                             ->content(fn (?AutomationRule $record): string => $record?->last_scheduled_at?->toDateTimeString() ?? '—'),
-                        Forms\Components\Toggle::make('stop_on_failure')
-                            ->label(__('seo-content-ai::filament.automation.stop_on_failure'))
-                            ->default(true),
-                        Forms\Components\Toggle::make('is_enabled')
-                            ->label(__('seo-content-ai::filament.automation.is_enabled'))
-                            ->default(false),
                         Forms\Components\TextInput::make('version')
-                            ->label(__('seo-content-ai::filament.automation.version'))
+                            ->label('Draft / published version counter')
                             ->disabled()
                             ->dehydrated(false),
-                        Forms\Components\Textarea::make('conditions_json')
-                            ->label(__('seo-content-ai::filament.automation.conditions').' (JSON)')
-                            ->rows(4)
-                            ->columnSpanFull()
-                            ->helperText('Leave empty for no conditions. Example: {"all":[{"field":"event.site_id","operator":"exists"}]}'),
                         Forms\Components\Textarea::make('settings_json')
                             ->label(__('seo-content-ai::filament.automation.settings').' (JSON)')
                             ->rows(3)
                             ->columnSpanFull(),
+                        Forms\Components\Textarea::make('conditions_json')
+                            ->label('Raw conditions JSON')
+                            ->rows(4)
+                            ->columnSpanFull()
+                            ->helperText('Advanced. Prefer Conditions builder below when possible.'),
                     ])
                     ->columns(2),
+                Forms\Components\Section::make('Conditions')
+                    ->description('All conditions must match.')
+                    ->schema([
+                        Forms\Components\Repeater::make('conditions_builder')
+                            ->label('')
+                            ->schema([
+                                Forms\Components\TextInput::make('field')
+                                    ->placeholder('article.post_type')
+                                    ->required(),
+                                Forms\Components\Select::make('operator')
+                                    ->options([
+                                        'equals' => 'equals',
+                                        'not_equals' => 'not_equals',
+                                        'exists' => 'exists',
+                                        'in' => 'in',
+                                        'contains' => 'contains',
+                                    ])
+                                    ->default('equals')
+                                    ->required()
+                                    ->native(false),
+                                Forms\Components\TextInput::make('value')
+                                    ->placeholder('product'),
+                            ])
+                            ->columns(3)
+                            ->defaultItems(0)
+                            ->addActionLabel('Add condition')
+                            ->columnSpanFull()
+                            ->dehydrated(false)
+                            ->helperText('Saved via raw JSON on submit when builder empty; builder UI for clarity — sync to conditions_json before save if you edit rows.'),
+                    ]),
                 Forms\Components\Section::make('Graph nodes')
                     ->visible(fn (Forms\Get $get): bool => $get('workflow_mode') === AutomationWorkflowMode::Graph->value)
                     ->schema([
@@ -230,7 +293,8 @@ class AutomationRuleResource extends SeoPanelResource
                             ->columns(2)
                             ->columnSpanFull(),
                     ]),
-                Forms\Components\Section::make(__('seo-content-ai::filament.automation.actions'))
+                Forms\Components\Section::make('Workflow (Linear)')
+                    ->description('Actions run top-to-bottom. Fixed pipeline — do not reorder/add/remove required steps. Product reviews sync inside wordpress.article.sync.')
                     ->visible(fn (Forms\Get $get): bool => $get('workflow_mode') !== AutomationWorkflowMode::Graph->value)
                     ->schema([
                         Forms\Components\Repeater::make('actions_data')
@@ -241,28 +305,20 @@ class AutomationRuleResource extends SeoPanelResource
                                     ->options($actionOptions)
                                     ->searchable()
                                     ->required()
-                                    ->native(false),
+                                    ->native(false)
+                                    ->disabled()
+                                    ->dehydrated(),
                                 Forms\Components\TextInput::make('position')
                                     ->numeric()
                                     ->default(0)
-                                    ->required(),
+                                    ->required()
+                                    ->disabled()
+                                    ->dehydrated(),
                                 Forms\Components\Toggle::make('is_enabled')
                                     ->label(__('seo-content-ai::filament.automation.is_enabled'))
                                     ->default(true),
                                 Forms\Components\Toggle::make('continue_on_failure')
                                     ->default(false),
-                                Forms\Components\TextInput::make('delay_seconds')
-                                    ->numeric()
-                                    ->default(0)
-                                    ->minValue(0)
-                                    ->helperText('Delay cố định (giây). Bỏ qua nếu settings có max_delay_time.'),
-                                Forms\Components\TextInput::make('max_delay_time')
-                                    ->label('Thời gian trì hoãn tối đa')
-                                    ->numeric()
-                                    ->minValue(0)
-                                    ->maxValue(1440)
-                                    ->default(5)
-                                    ->helperText('Mỗi review đăng ngẫu nhiên từ 1 phút đến tối đa (phút). 0 = đăng ngay.'),
                                 Forms\Components\Textarea::make('input_mapping_json')
                                     ->label('Input mapping (JSON)')
                                     ->rows(2)
@@ -270,11 +326,14 @@ class AutomationRuleResource extends SeoPanelResource
                                 Forms\Components\Textarea::make('settings_json')
                                     ->label('Settings (JSON)')
                                     ->rows(2)
-                                    ->helperText('Product review: {"max_delay_time":5}')
+                                    ->helperText('Product sync: content + media + pending product reviews.')
                                     ->columnSpanFull(),
                             ])
                             ->columns(2)
                             ->defaultItems(0)
+                            ->addable(false)
+                            ->deletable(false)
+                            ->reorderable(false)
                             ->columnSpanFull(),
                     ]),
             ]);
@@ -286,11 +345,24 @@ class AutomationRuleResource extends SeoPanelResource
             ->columns([
                 Tables\Columns\TextColumn::make('name')
                     ->searchable()
-                    ->sortable(),
+                    ->sortable()
+                    ->description(fn (AutomationRule $record): string => (string) $record->code),
                 Tables\Columns\TextColumn::make('code')
+                    ->label('Code')
                     ->searchable()
                     ->sortable()
-                    ->copyable(),
+                    ->copyable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                Tables\Columns\TextColumn::make('classification')
+                    ->badge()
+                    ->colors([
+                        'success' => fn ($state): bool => in_array((string) $state, ['business', 'production'], true),
+                        'info' => fn ($state): bool => in_array((string) $state, ['system', 'infrastructure'], true),
+                        'gray' => 'sample',
+                        'warning' => 'experimental',
+                        'danger' => 'deprecated',
+                    ])
+                    ->sortable(),
                 Tables\Columns\TextColumn::make('workflow_mode')
                     ->label('Mode')
                     ->badge()
@@ -303,6 +375,10 @@ class AutomationRuleResource extends SeoPanelResource
                     ->label(__('seo-content-ai::filament.automation.is_enabled'))
                     ->boolean()
                     ->sortable(),
+                Tables\Columns\IconColumn::make('is_published')
+                    ->label('Published')
+                    ->boolean()
+                    ->getStateUsing(fn (AutomationRule $record): bool => $record->published_version_id !== null),
                 Tables\Columns\TextColumn::make('priority')
                     ->label(__('seo-content-ai::filament.automation.priority'))
                     ->sortable()
@@ -310,16 +386,35 @@ class AutomationRuleResource extends SeoPanelResource
                 Tables\Columns\TextColumn::make('version')
                     ->label(__('seo-content-ai::filament.automation.version'))
                     ->sortable()
-                    ->alignCenter(),
+                    ->alignCenter()
+                    ->toggleable(isToggledHiddenByDefault: true),
                 Tables\Columns\TextColumn::make('latestExecution.status')
                     ->label(__('seo-content-ai::filament.automation.latest_run'))
                     ->badge()
                     ->placeholder('—'),
             ])
             ->defaultSort('priority')
+            ->groups([
+                Tables\Grouping\Group::make('event_name')
+                    ->label('Source event')
+                    ->collapsible(),
+                Tables\Grouping\Group::make('classification')
+                    ->label('Classification')
+                    ->collapsible(),
+            ])
+            ->defaultGroup('event_name')
             ->filters([
                 Tables\Filters\TernaryFilter::make('is_enabled')
                     ->label(__('seo-content-ai::filament.automation.is_enabled')),
+                Tables\Filters\SelectFilter::make('classification')
+                    ->options([
+                        'business' => 'business',
+                        'system' => 'system',
+                        'infrastructure' => 'infrastructure',
+                        'sample' => 'sample',
+                        'deprecated' => 'deprecated',
+                        'production' => 'production (legacy)',
+                    ]),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
@@ -341,6 +436,13 @@ class AutomationRuleResource extends SeoPanelResource
                     ->action(function (AutomationRule $record): void {
                         static::toggleEnabled($record, false);
                     }),
+                Tables\Actions\Action::make('openWorkflow')
+                    ->label('Open workflow')
+                    ->icon('heroicon-o-squares-2x2')
+                    ->visible(fn (AutomationRule $record): bool => (string) ($record->workflow_mode ?? 'linear') === AutomationWorkflowMode::Graph->value)
+                    ->url(fn (AutomationRule $record): string => \App\Addons\SeoContentAi\Filament\Pages\AutomationWorkflowBuilder::getUrl([
+                        'rule' => $record->getKey(),
+                    ])),
                 Tables\Actions\Action::make('duplicate')
                     ->label(__('seo-content-ai::filament.automation.duplicate'))
                     ->icon('heroicon-o-document-duplicate')

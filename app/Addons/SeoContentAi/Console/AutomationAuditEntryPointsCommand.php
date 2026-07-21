@@ -36,13 +36,13 @@ final class AutomationAuditEntryPointsCommand extends Command
             ],
             [
                 'file' => 'Services/WordPress/WordPressManualSyncService.php',
-                'needles' => ['ManualAutomationDispatcher', 'toArray()'],
-                'forbidden' => ['SyncArticleToWordPressFromQueueJob::dispatch'],
+                'needles' => ['ManualSyncContext', 'ManualWordPressSyncJob'],
+                'forbidden' => ['ManualAutomationDispatcher', 'SyncArticleToWordPressFromQueueJob::dispatch'],
             ],
             [
                 'file' => 'Http/Controllers/ArticleEditorSyncController.php',
-                'needles' => ['notification', 'wp_sync_blocked_title', 'dispatched_title'],
-                'forbidden' => ['SyncArticleToWordPressFromQueueJob'],
+                'needles' => ['notification', 'WordPressManualSyncService'],
+                'forbidden' => ['SyncArticleToWordPressFromQueueJob', 'ManualAutomationDispatcher'],
             ],
         ];
 

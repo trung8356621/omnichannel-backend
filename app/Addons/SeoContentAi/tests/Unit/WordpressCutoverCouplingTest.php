@@ -73,7 +73,8 @@ final class WordpressCutoverCouplingTest extends TestCase
     {
         $base = dirname(__DIR__, 2);
         self::assertFileExists($base.'/Services/WordPress/WordPressManualSyncService.php');
-        self::assertFileExists($base.'/Automation/BusinessHook/Services/ManualAutomationDispatcher.php');
+        self::assertFileExists($base.'/Services/WordPress/ManualSyncContext.php');
+        self::assertFileExists($base.'/Jobs/ManualWordPressSyncJob.php');
         self::assertFileExists($base.'/Automation/BusinessHook/Actions/SyncArticleToWordPressHookAction.php');
         self::assertFileExists($base.'/Console/AutomationAuditWordpressCouplingCommand.php');
 
@@ -81,6 +82,7 @@ final class WordpressCutoverCouplingTest extends TestCase
         self::assertStringContainsString('WordPressManualSyncService', $controller);
         self::assertStringNotContainsString('ArticleWpSyncQueueService', $controller);
         self::assertStringNotContainsString('SyncArticleToWordPressFromQueueJob', $controller);
+        self::assertStringNotContainsString('ManualAutomationDispatcher', $controller);
     }
 
     public function test_execution_service_cancels_when_rule_disabled(): void

@@ -11,15 +11,15 @@
 | 2 | Contracts, Registry, Runner, Context, execution log, foundation tests | **done** |
 | 3 (minimum) | Action adapters tối thiểu | **done** |
 | 3 Full | Extract Filament deps, classify catalog, skill, chạy test | **done** |
-| 4A | Migrate local-only callers (flag + shadow) | **in progress** — Group 1 wired, default `legacy` |
-| 4B | Group 2 wire (bridges + production callers) | **wired** (default `legacy`) — chưa deployed/shadow/promoted; see `AUTOMATION_PHASE4B_PREP.md` + `AUTOMATION_PHASE4B_HOSTING_VALIDATION.md` |
+| 4A | Migrate local-only callers (flag + shadow) | **done** — default `action`; emergency legacy only (`AUTOMATION_MIGRATION_EMERGENCY_LEGACY`) |
+| 4B | Group 2 + Editor/Approval/Keyword cutover | **done** — production callers via `BusinessActionDispatcher`; see `AUTOMATION_CUTOVER_AUDIT.md` |
 | 5A | Audit Prompt Workflows + Hook Spec v0.1 | **done** — docs `automation/prompt/*`; fixtures; Spec helpers; không đổi production prompt behavior |
 | 5B | Prompt Hook Runtime Core (single-hook) | **done** — loader/registry/engine/bridge; default **legacy**; experimental@0.1.0; outline/FAQ/keywords wired |
 | 5C | Production adapter + PromptResult attach + rollout gates | **code ready** — `PromptRunnerProviderAdapter`; `prompt_result.attach`; promotion/live-shadow gates; default **legacy** |
 | 5D1 | Hosting rollout + single-hook stabilization support | **code ready** — parity aggregator; per-hook thresholds; mode/rollback policy; status/parity commands; runbook + fill-in report; defaults still **legacy**; title/meta experimental |
 | Outline vertical slice | Editor binding → ExplicitBinding → RuntimeEngine | **code ready** — `article.outline.generate@0.1.0` selectable; hosting tested = no; stable = no |
-| 4 full | Migrate high-risk / WP | not started |
-| 5 | Regression + static guards + docs finalize | not started |
+| 4 full | Migrate high-risk / WP + local Action Runtime | **done (2026-07-21)** — Editor/Approval/Keyword/WP; Migrated=yes, direct write=0, legacy fallback=0 |
+| 5 | Regression + static guards + docs finalize | **done (code)** — `AutomationActionCutoverArchitectureTest` + strict audit-coupling; hosting `automation:seed-rules` still required |
 
 ## Decisions locked (1b)
 
@@ -158,7 +158,7 @@ Phase 3 **không** đánh dấu complete trước khi Automation test chạy —
 
 1. `article.create` chưa có idempotency key nghiệp vụ.
 2. `article.content.update` chưa conflict revision.
-3. WP comment_review: handler + default rules seeded (disabled). Enable `publish-generated-product-reviews-to-wordpress` + `publish-pending-product-reviews-after-article-sync`.
+3. WP product reviews: linear actions `product-review.create` + `product-review.sync-wp` on `article > wordpress`. Legacy review rules deprecated+hidden.
 4. `keyword.domain_link_list.sync` observer side effect chưa thành action riêng.
 5. Migrate caller phải dual-run / parity — chưa bắt đầu.
 6. Regression DB-dependent cần chạy trên môi trường có `omi_seo_ai`.

@@ -202,7 +202,7 @@ final class BusinessHookEngineTest extends TestCase
         self::assertSame(SyncArticleToWordPressHookAction::class, $definition->handlerClass);
     }
 
-    public function test_default_rules_seeder_defines_expected_codes_disabled(): void
+    public function test_default_rules_seeder_defines_expected_codes(): void
     {
         $source = (string) file_get_contents(
             dirname(__DIR__, 2).'/Automation/BusinessHook/Seed/AutomationDefaultRulesSeeder.php',
@@ -211,12 +211,14 @@ final class BusinessHookEngineTest extends TestCase
         self::assertStringContainsString("'sync-article-to-wordpress'", $source);
         self::assertStringContainsString("'notify-workflow-failure'", $source);
         self::assertStringContainsString("'dispatch-publish-request'", $source);
+        self::assertStringContainsString('article > wordpress', $source);
+        self::assertStringContainsString('article.publish.request > wordpress', $source);
 
-        foreach (['sync-article-to-wordpress', 'notify-workflow-failure', 'dispatch-publish-request'] as $code) {
+        foreach (['sync-article-to-wordpress', 'dispatch-publish-request'] as $code) {
             self::assertMatchesRegularExpression(
-                "/code:\s*'{$code}'[\s\S]*?'is_enabled'\s*=>\s*false/",
+                "/code:\\s*'{$code}'[\\s\\S]{0,800}'is_enabled'\\s*=>\\s*true/",
                 $source,
-                "Expected {$code} to be disabled by default in seeder.",
+                "Expected {$code} enabled in seeder.",
             );
         }
 

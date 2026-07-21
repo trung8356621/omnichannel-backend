@@ -42,6 +42,7 @@ import {
     syncProductAlbumToServer,
 } from './utils/articleProductAlbumStorage';
 import { installArticleAutosaveLock } from './utils/articleAutosaveLock';
+import { installArticleOperationTracker } from './utils/articleOperationTracker';
 import { mountArticleTitlePromptHook } from './utils/articleTitlePromptHook';
 import './utils/seoAssistantNavigator';
 import {
@@ -50,6 +51,19 @@ import {
     saveWpCategoryIds,
 } from './utils/articleWpCategoriesStorage';
 installArticleAutosaveLock();
+installArticleOperationTracker();
+queueMicrotask(() => {
+    const activeOp = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
+    const articleId = Number(activeOp?.article_id ?? 0);
+    if (activeOp && typeof activeOp === 'object' && articleId > 0) {
+        window.__seoArticleOperationTracker?.apply?.(articleId, activeOp);
+
+        return;
+    }
+    if (articleId > 0) {
+        window.__seoArticleOperationTracker?.bootstrap?.(articleId);
+    }
+});
 
 window.addEventListener('seo-editor-slug-updated', (event) => {
     const detail = event?.detail ?? {};

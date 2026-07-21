@@ -185,7 +185,27 @@ class SeoProjectResource extends SeoPanelResource
                         ->required()
                         ->live()
                         ->visible(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
-                        ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive())),
+                        ->dehydrated(fn (?SeoProject $record): bool => ! ($record instanceof SeoProject && $record->isArchive()))
+                        ->rules([
+                            fn (Get $get, ?SeoProject $record): \Closure => function (string $attribute, mixed $value, \Closure $fail) use ($get, $record): void {
+                                if ($value === null || $value === '') {
+                                    return;
+                                }
+
+                                $siteId = (int) ($get('site_id') ?? 0);
+                                if ($siteId <= 0) {
+                                    return;
+                                }
+
+                                if (static::monthlyProjectExistsForSiteMonth(
+                                    $siteId,
+                                    (string) $value,
+                                    $record instanceof SeoProject ? (int) $record->getKey() : null,
+                                )) {
+                                    $fail(__('seo-content-ai::filament.projects.month_already_exists'));
+                                }
+                            },
+                        ]),
 
                     Forms\Components\Hidden::make('status')
                         ->default(SeoProject::STATUS_MANUAL)
@@ -896,6 +916,33 @@ class SeoProjectResource extends SeoPanelResource
         return $data;
     }
 
+    public static function monthlyProjectExistsForSiteMonth(
+        int $siteId,
+        string $month,
+        ?int $ignoreProjectId = null,
+    ): bool {
+        if ($siteId <= 0 || $month === '') {
+            return false;
+        }
+
+        $monthStart = Carbon::parse($month)->startOfMonth()->format('Y-m-d');
+
+        $query = SeoProject::query()
+            ->where('site_id', $siteId)
+            ->whereDate('month', $monthStart)
+            ->where(function (Builder $builder): void {
+                $builder
+                    ->where('kind', SeoProject::KIND_MONTHLY)
+                    ->orWhereNull('kind');
+            });
+
+        if ($ignoreProjectId !== null && $ignoreProjectId > 0) {
+            $query->whereKeyNot($ignoreProjectId);
+        }
+
+        return $query->exists();
+    }
+
     public static function getRelations(): array
     {
         return [];
@@ -1036,11 +1083,11 @@ class SeoProjectResource extends SeoPanelResource
         return new HtmlString('<p>'.e($base).'</p>'.$warnings->toHtml());
     }
 
-    public static function createProjectWorkflowRun(SeoProject $project, string $mode): SeoProjectRun
+    public static function createProjectWorkflowRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
         $runner = app(SeoProjectWorkflowRunService::class);
         $limit = $mode === SeoProjectRun::MODE_TEST ? SeoProjectWorkflowRunService::TEST_RUN_LIMIT : null;
-        $run = $runner->startRun($project, $mode);
+        $run = $runner->startRun($project, $mode, $settings);
 
         return $runner->prepareRunQueue($project, $run, $limit);
     }

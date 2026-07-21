@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Automation\Modules\Content;
 
 use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\ArticleGenerateContentHookAction;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Actions\SyncKeywordDomainLinkListHookAction;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Data\AutomationActionDefinition;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Data\BusinessEventDefinition;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
@@ -12,6 +13,7 @@ use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationQueueName;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
 use App\Addons\SeoContentAi\Automation\Platform\AutomationModuleContext;
 use App\Addons\SeoContentAi\Automation\Platform\Contracts\AutomationModuleProvider;
+use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
@@ -28,6 +30,8 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
         foreach ([
             [BusinessEventName::ArticleCreated, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false, 'post_type' => false, 'status' => false]],
             [BusinessEventName::ArticleContentUpdated, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false]],
+            [BusinessEventName::ArticleSeoMetaUpdated, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false]],
+            [BusinessEventName::ArticleApproved, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false, 'project_id' => false]],
             [BusinessEventName::ArticleCompleted, SeoArticle::class, 'content', ['article_id' => true, 'site_id' => false, 'project_id' => false, 'status' => false]],
             [BusinessEventName::ArticleArchived, SeoArticle::class, 'content', ['article_id' => true]],
             [BusinessEventName::ArticleRestored, SeoArticle::class, 'content', ['article_id' => true]],
@@ -45,6 +49,8 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
             [BusinessEventName::ContentProjectRunStarted, SeoProjectRun::class, 'project', ['run_id' => true, 'project_id' => false]],
             [BusinessEventName::ContentProjectRunCompleted, SeoProjectRun::class, 'project', ['run_id' => true, 'project_id' => false]],
             [BusinessEventName::ContentProjectRunFailed, SeoProjectRun::class, 'project', ['run_id' => true, 'project_id' => false]],
+
+            [BusinessEventName::KeywordSaved, Keyword::class, 'keyword', ['keyword_id' => true, 'site_id' => true, 'phrase' => true, 'target_url' => false, 'previous_phrase' => false, 'operation' => false]],
         ] as [$enum, $subject, $module, $fields]) {
             /** @var BusinessEventName $enum */
             $schema = [];
@@ -77,6 +83,30 @@ final class ContentAutomationModuleProvider implements AutomationModuleProvider
             maxAttemptsPerMinute: 20,
             fieldMeta: [
                 'task_id' => ['label' => 'Task ID', 'type' => 'integer', 'source' => 'input'],
+            ],
+        ));
+
+        $context->actions->register(new AutomationActionDefinition(
+            actionCode: AutomationActionCode::KeywordDomainLinkListSync->value,
+            handlerClass: SyncKeywordDomainLinkListHookAction::class,
+            inputRules: [
+                'keyword_id' => ['type' => 'integer', 'required' => false],
+                'site_id' => ['type' => 'integer', 'required' => false],
+                'phrase' => ['type' => 'string', 'required' => false],
+                'target_url' => ['type' => 'string', 'required' => false],
+                'previous_phrase' => ['type' => 'string', 'required' => false],
+                'operation' => ['type' => 'string', 'required' => false],
+            ],
+            settingsRules: [],
+            description: 'Sync keyword phrase into domain link list (idempotent).',
+            isAsyncSafe: true,
+            timeout: 60,
+            module: 'keyword',
+            defaultQueue: AutomationQueueName::Critical->value,
+            fieldMeta: [
+                'keyword_id' => ['label' => 'Keyword ID', 'type' => 'integer', 'source' => 'payload'],
+                'site_id' => ['label' => 'Site ID', 'type' => 'integer', 'source' => 'payload'],
+                'phrase' => ['label' => 'Phrase', 'type' => 'string', 'source' => 'payload'],
             ],
         ));
     }

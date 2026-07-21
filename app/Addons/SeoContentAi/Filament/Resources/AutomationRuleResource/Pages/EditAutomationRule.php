@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource\Pages;
 
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationWorkflowMode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Models\AutomationRule;
-use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use App\Addons\SeoContentAi\Filament\Pages\AutomationWorkflowBuilder;
+use App\Addons\SeoContentAi\Filament\Resources\AutomationRuleResource;
 use App\Addons\SeoContentAi\Filament\Resources\Pages\SeoEditRecord;
 use Filament\Actions;
 use Filament\Notifications\Notification;
@@ -43,12 +44,21 @@ final class EditAutomationRule extends SeoEditRecord
 
     protected function getHeaderActions(): array
     {
-        return [
-            Actions\Action::make('visualBuilder')
-                ->label('Visual builder')
-                ->icon('heroicon-o-squares-2x2')
-                ->url(fn (): string => AutomationWorkflowBuilder::getUrl(['rule' => $this->record->getKey()])),
+        /** @var AutomationRule $record */
+        $record = $this->record;
+
+        $actions = [
             Actions\ViewAction::make(),
         ];
+
+        // Linear = fixed pipeline — no Visual Builder.
+        if ((string) ($record->workflow_mode ?? 'linear') === AutomationWorkflowMode::Graph->value) {
+            array_unshift($actions, Actions\Action::make('visualBuilder')
+                ->label('Open Workflow Builder')
+                ->icon('heroicon-o-squares-2x2')
+                ->url(fn (): string => AutomationWorkflowBuilder::getUrl(['rule' => $record->getKey()])));
+        }
+
+        return $actions;
     }
 }

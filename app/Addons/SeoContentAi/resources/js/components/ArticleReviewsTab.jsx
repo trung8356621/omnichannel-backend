@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Plus, RefreshCw, Star } from 'lucide-react';
+import {
+    createProductReviewsForArticle,
+    fetchProductReviewStatus,
+    syncProductReviewsForArticle,
+} from '../utils/articleEditorApi';
 import { t } from '../utils/i18n';
 
 function normalizeReviewsPayload(result) {
@@ -123,8 +128,11 @@ function StarRating({ rating }) {
  * }} props
  */
 export default function ArticleReviewsTab({
+    articleId = null,
     initialReviews = [],
     onRefresh,
+    loading = false,
+    warning = null,
     canQuickCreate = false,
     showConfigureReviews = false,
     quickCreateConfigUrl = '',
@@ -135,6 +143,50 @@ export default function ArticleReviewsTab({
     ));
     const [refreshing, setRefreshing] = useState(false);
     const [quickCreating, setQuickCreating] = useState(false);
+    const [status, setStatus] = useState(null);
+    const [statusLoading, setStatusLoading] = useState(false);
+    const [statusBusy, setStatusBusy] = useState(false);
+
+    const blockReasonLabel = (reason) => {
+        switch (String(reason || '')) {
+            case 'wordpress_real_reviews_exist':
+                return 'WordPress đã có review thật.';
+            case 'target_count_reached':
+                return 'Đã đủ số review mục tiêu.';
+            case 'local_pending_reviews_exist':
+                return 'Đang có review chờ đồng bộ.';
+            case 'wordpress_unavailable':
+                return 'Không thể kiểm tra WordPress.';
+            case 'not_product':
+                return 'Chỉ áp dụng cho product.';
+            case 'feature_disabled':
+                return 'Tính năng tạo review đang tắt.';
+            default:
+                return reason ? String(reason) : null;
+        }
+    };
+
+    const loadStatus = useCallback(async () => {
+        const id = Number(articleId) || 0;
+        if (id <= 0) {
+            return null;
+        }
+        setStatusLoading(true);
+        try {
+            const result = await fetchProductReviewStatus(id);
+            if (result.success && result.data) {
+                setStatus(result.data);
+                return result.data;
+            }
+            return null;
+        } finally {
+            setStatusLoading(false);
+        }
+    }, [articleId]);
+
+    useEffect(() => {
+        loadStatus();
+    }, [loadStatus]);
 
     const applyReviewsPayload = useCallback((result) => {
         const next = normalizeReviewsPayload(result);
@@ -157,17 +209,62 @@ export default function ArticleReviewsTab({
     }, [applyReviewsPayload]);
 
     const handleRefresh = useCallback(async () => {
-        if (typeof onRefresh !== 'function' || refreshing) {
+        if (refreshing) {
             return;
         }
         setRefreshing(true);
         try {
-            const result = await onRefresh();
-            applyReviewsPayload(result);
+            if (typeof onRefresh === 'function') {
+                const result = await onRefresh();
+                applyReviewsPayload(result);
+            }
+            await loadStatus();
         } finally {
             setRefreshing(false);
         }
-    }, [applyReviewsPayload, onRefresh, refreshing]);
+    }, [applyReviewsPayload, loadStatus, onRefresh, refreshing]);
+
+    const handleCreateReviews = useCallback(async () => {
+        const id = Number(articleId) || 0;
+        if (id <= 0 || statusBusy || !status?.can_create_reviews) {
+            return;
+        }
+        setStatusBusy(true);
+        try {
+            const result = await createProductReviewsForArticle(id);
+            if (result.status) {
+                setStatus(result.status);
+            } else {
+                await loadStatus();
+            }
+            if (typeof onRefresh === 'function') {
+                applyReviewsPayload(await onRefresh());
+            }
+        } finally {
+            setStatusBusy(false);
+        }
+    }, [articleId, applyReviewsPayload, loadStatus, onRefresh, status?.can_create_reviews, statusBusy]);
+
+    const handleSyncPending = useCallback(async () => {
+        const id = Number(articleId) || 0;
+        if (id <= 0 || statusBusy) {
+            return;
+        }
+        setStatusBusy(true);
+        try {
+            const result = await syncProductReviewsForArticle(id);
+            if (result.status) {
+                setStatus(result.status);
+            } else {
+                await loadStatus();
+            }
+            if (typeof onRefresh === 'function') {
+                applyReviewsPayload(await onRefresh());
+            }
+        } finally {
+            setStatusBusy(false);
+        }
+    }, [articleId, applyReviewsPayload, loadStatus, onRefresh, statusBusy]);
 
     const handleQuickCreate = useCallback(async () => {
         if (typeof onQuickCreate !== 'function' || quickCreating) {
@@ -177,13 +274,61 @@ export default function ArticleReviewsTab({
         try {
             const result = await onQuickCreate();
             applyReviewsPayload(result);
+            await loadStatus();
         } finally {
             setQuickCreating(false);
         }
-    }, [applyReviewsPayload, onQuickCreate, quickCreating]);
+    }, [applyReviewsPayload, loadStatus, onQuickCreate, quickCreating]);
 
     return (
         <div className="seo-reviews-tab">
+            {loading || statusLoading ? (
+                <p className="seo-reviews-tab__summary" role="status">
+                    Đang tải đánh giá từ WordPress…
+                </p>
+            ) : null}
+            {warning || status?.warning ? (
+                <p className="seo-reviews-tab__summary" role="alert" style={{ color: '#b45309' }}>
+                    {warning || status?.warning}
+                </p>
+            ) : null}
+            {status ? (
+                <div className="seo-reviews-tab__summary" style={{ marginBottom: 12 }}>
+                    <div><strong>WordPress Reviews</strong></div>
+                    <div>Real reviews: {Number(status.wordpress_real_review_count ?? 0)}</div>
+                    <div>Generated reviews: {Number(status.wordpress_generated_review_count ?? 0)}</div>
+                    <div>Target count: {Number(status.target_count ?? 0)}</div>
+                    <div>Missing: {Number(status.missing_count ?? 0)}</div>
+                    <div>Pending in Laravel: {Number(status.local_pending_count ?? 0)}</div>
+                    <div>Reviewed in Laravel: {Number(status.local_reviewed_count ?? 0)}</div>
+                    {!status.can_create_reviews && status.create_block_reason ? (
+                        <div style={{ color: '#b45309', marginTop: 6 }}>
+                            {blockReasonLabel(status.create_block_reason)}
+                        </div>
+                    ) : null}
+                    <div className="seo-reviews-tab__actions" style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <button type="button" className="seo-reviews-tab__refresh" disabled={refreshing || statusBusy} onClick={handleRefresh}>
+                            Refresh status
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-reviews-tab__quick-create"
+                            disabled={!status.can_create_reviews || statusBusy}
+                            onClick={handleCreateReviews}
+                        >
+                            Create reviews
+                        </button>
+                        <button
+                            type="button"
+                            className="seo-reviews-tab__refresh"
+                            disabled={Number(status.local_pending_count ?? 0) <= 0 || statusBusy}
+                            onClick={handleSyncPending}
+                        >
+                            Sync pending reviews
+                        </button>
+                    </div>
+                </div>
+            ) : null}
             <div className="seo-reviews-tab__header">
                 <p className="seo-reviews-tab__summary">
                     {t('reviews_tab_summary', { count: reviews.length })}

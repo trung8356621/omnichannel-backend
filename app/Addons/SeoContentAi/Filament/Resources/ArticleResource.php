@@ -1542,15 +1542,45 @@ class ArticleResource extends SeoPanelResource
         $alreadySubmitted = $service->contentManagerHasSubmitted($article, $user);
 
         try {
-            $project = $service->approveLinkedProject($article, $user);
-        } catch (\Illuminate\Validation\ValidationException $exception) {
+            $result = app(\App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher::class)->dispatch(
+                'article.approve',
+                [
+                    'article_id' => (int) $article->id,
+                    'actor_user_id' => (int) $user->id,
+                ],
+                \App\Addons\SeoContentAi\Automation\Data\ActionContext::fromArray([
+                    'origin' => 'filament.article_resource',
+                    'actor_id' => (int) $user->id,
+                    'site_id' => (int) ($article->site_id ?? 0) ?: null,
+                ]),
+            );
+        } catch (\Throwable $exception) {
             Notification::make()
                 ->title(__('seo-content-ai::filament.article_list.staff_submit_failed'))
-                ->body(collect($exception->errors())->flatten()->first() ?? $exception->getMessage())
+                ->body($exception->getMessage())
                 ->danger()
                 ->send();
 
             return;
+        }
+
+        if (! $result->success) {
+            Notification::make()
+                ->title(__('seo-content-ai::filament.article_list.staff_submit_failed'))
+                ->body((string) ($result->error['message'] ?? 'Approval failed.'))
+                ->danger()
+                ->send();
+
+            return;
+        }
+
+        $alreadySubmitted = (bool) ($result->output['already_approved'] ?? $alreadySubmitted);
+        $projectName = (string) ($result->output['project_name'] ?? '');
+        if ($projectName === '') {
+            $projectId = (int) ($result->output['project_id'] ?? 0);
+            $projectName = $projectId > 0
+                ? (string) (SeoProject::query()->whereKey($projectId)->value('name') ?? $projectId)
+                : '';
         }
 
         if ($alreadySubmitted) {
@@ -1566,7 +1596,7 @@ class ArticleResource extends SeoPanelResource
             ->title(__('seo-content-ai::filament.article_list.staff_mark_editing_done_success'))
             ->body(__('seo-content-ai::filament.article_list.staff_mark_editing_done_success_body', [
                 'title' => (string) $article->title,
-                'project' => (string) $project->name,
+                'project' => $projectName,
             ]))
             ->success()
             ->send();
@@ -1677,10 +1707,6 @@ class ArticleResource extends SeoPanelResource
             ->where('article_id', (int) $article->id)
             ->get(['id', 'path']);
 
-        if ($mediaRows->isEmpty()) {
-            return 0;
-        }
-
         $mediaIds = [];
         foreach ($mediaRows as $media) {
             $mediaIds[] = (int) $media->id;
@@ -1698,6 +1724,10 @@ class ArticleResource extends SeoPanelResource
 
             SeoMedia::query()->whereIn('id', $mediaIds)->delete();
         }
+
+        // Same article cleanup lifecycle: reviewed product reviews (WP already source of truth).
+        app(\App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPendingRepository::class)
+            ->deleteReviewedForArticle($article);
 
         return count($mediaIds);
     }

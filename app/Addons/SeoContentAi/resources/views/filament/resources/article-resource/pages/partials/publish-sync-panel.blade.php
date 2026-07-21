@@ -107,8 +107,8 @@
                     window.addEventListener('article-wordpress-sync-lock', lockPage);
                     window.addEventListener('article-wordpress-sync-unlock', unlockPage);
                     window.addEventListener('article-wordpress-sync-queued', () => {
-                        this.syncInFlight = false;
-                        this.pageActionLocked = false;
+                        this.syncInFlight = true;
+                        this.pageActionLocked = true;
                     });
                     window.addEventListener('article-editor-save-patched', (event) => {
                         const box = event?.detail?.publish_box ?? {};

@@ -54,10 +54,11 @@ Canonical context IDs: xem `AUTOMATION_BOUNDARIES.md` § Canonical IDs. Dùng `s
 | event_key | entity | payload gợi ý | Producer |
 |---|---|---|---|
 | `article.created` | article | `post_type`, `site_id` | local create |
-| `article.content_updated` | article | `changed_fields` | Persist / PromptTestPublish |
-| `article.seo_meta_updated` | article | keys | SeoMeta |
+| `article.content_updated` | article | `changed_fields` | **UpdateArticleContentAction** / **UpdateArticleSeoMetaAction** (bridge) |
+| `article.seo_meta_updated` | article | keys | **UpdateArticleSeoMetaAction** |
 | `article.review_requested` | article | reason? | review flow |
-| `article.approved` | article | `project_id` | ApprovalService |
+| `article.approved` | article | `project_id` | **ApproveArticleAction** |
+| `keyword.saved` | keyword | phrase, site_id, operation | KeywordLinkListSyncObserver (emit only) |
 | `article.publish_requested` | article | `publish_intent` | trước queue/cron — **không authorize** |
 | `article.published` | article | local `status` | local → published |
 | `project.created` | project | `site_id` | SeoProject create |
@@ -77,6 +78,7 @@ Canonical context IDs: xem `AUTOMATION_BOUNDARIES.md` § Canonical IDs. Dùng `s
 | `wordpress.article_created` | article | `wp_post_id` | createForArticle |
 | `wordpress.article_updated` | article | fingerprint | sync_outbound hub |
 | `wordpress.article_published` | article | `wp_post_id`, `publish_intent` | publish* |
+| `wordpress.synced` | article | `sync_operation_id`, `origin` | ManualJob / SyncArticleToWordPressHookAction (dedupe by event_uuid) |
 | `wordpress.comment_review_published` | article/review | `review_id`, `wp_comment_id`, `deduplicated` | PublishWordPressCommentReviewHookAction |
 | `wordpress.comment_review_publish_failed` | article/review | `review_id`, `error_code` | PublishWordPressCommentReviewHookAction |
 | `article.product_reviews_generated` | article | `review_ids`, `review_count`, `connection_id` | ArticleProductReviewStoreService |

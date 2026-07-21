@@ -89,7 +89,7 @@ final class ProjectTaskCallerBridge
         $task->refresh();
     }
 
-    public function markCompleted(SeoProjectTask $task, int $articleId, ?int $actorId = null, ?int $siteId = null): void
+    public function markCompleted(SeoProjectTask $task, int $articleId, ?int $actorId = null, ?int $siteId = null, string $origin = 'migration.project_task_complete'): void
     {
         $taskId = (int) $task->id;
         $alreadyCompleted = (string) ($task->status ?? '') === SeoProjectTask::STATUS_COMPLETED
@@ -140,10 +140,11 @@ final class ProjectTaskCallerBridge
             actionWrite: fn (): ActionResult => $this->actionRunner->run(
                 'project.task.mark_completed',
                 ActionContext::fromArray([
-                    'origin' => 'migration.project_task_complete',
+                    'origin' => $origin,
                     'actor_id' => $actorId,
                     'site_id' => $siteId,
                     'correlation_id' => $correlationId,
+                    'suppress_article_completed_bridge' => $origin === 'content_project_run',
                 ]),
                 [
                     'task_id' => $taskId,

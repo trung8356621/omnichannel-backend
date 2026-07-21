@@ -137,9 +137,8 @@ advanced_analysis: [
 | `Jobs/RunKeywordGroupMetricBatchJob` | Batch allintitle / search volume (queue `seo`) |
 | `SeoPerformanceDashboardService::buildRankingRows()` | Merge rank snapshot + metric snapshots; status semantics đầy đủ |
 | `SeoPerformanceDashboardService::buildRankKpiCards()` | KPI chỉ khi có position số; không có → label `empty_no_data` / `empty_no_target_domain` |
-| `Services/SeoQueueControlService::countPendingNamedQueueJobs('seo')` | Đếm job rank pending; banner worker cần `--queue=seo,...` |
 
-**Queue worker rank:** job `RunKeywordRankCheckBatchJob` / `RunSingleKeywordRankCheckJob` / `RunKeywordGroupMetricBatchJob` dùng `->onQueue('seo')`. Worker phải listen `seo` (vd. `.cmd`: `--queue=seo,media_generation,default`).
+**Queue worker rank:** job `RunKeywordRankCheckBatchJob` / `RunSingleKeywordRankCheckJob` / `RunKeywordGroupMetricBatchJob` dùng `->onQueue('seo')`. Worker phải listen `seo` (ops CLI / Supervisor — không còn Queue Manager UI hay banner worker offline).
 
 **Modal nhóm (`rank-group-modal`):** Alpine sở hữu `open` — bật/tắt khung **ngay** (`open = true/false`), không chờ Livewire round-trip. Livewire chỉ load/persist: `openGroupModal()`, `loadGroupModalData()`, `saveGroupModal()`, `closeGroupModal()`. Alpine state: `modalMode`, `localLoading`, title/submit label client-side. Edit: skeleton qua `localLoading || $wire.groupModalLoading`. Layout: Tên nhóm\|Thiết bị (gap `form-grid--name-device`), Mô tả textarea, Quốc gia\|Ngôn ngữ\|Vị trí, Target domain select + custom domain. Rule: `.cursor/rules/modal-alpine.mdc`.
 

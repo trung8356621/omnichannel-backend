@@ -73,6 +73,20 @@ class EditSeoProject extends SeoEditRecord
             $data['name'] = SeoProject::defaultNameFromMonth($data['month']);
         }
 
+        if (! $record->isArchive()) {
+            $siteId = isset($data['site_id']) ? (int) $data['site_id'] : (int) ($record->site_id ?? 0);
+            $month = (string) ($data['month'] ?? $record->month?->format('Y-m-d') ?? '');
+            if ($siteId > 0 && $month !== '' && SeoProjectResource::monthlyProjectExistsForSiteMonth(
+                $siteId,
+                $month,
+                (int) $record->getKey(),
+            )) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'data.month' => __('seo-content-ai::filament.projects.month_already_exists'),
+                ]);
+            }
+        }
+
         $tasksData = $data['tasks_data'] ?? [];
         $projectSiteId = isset($data['site_id']) ? (int) $data['site_id'] : null;
         $sanitized = app(SeoProjectTaskSyncService::class)->sanitizeTasksData($tasksData, $projectSiteId);

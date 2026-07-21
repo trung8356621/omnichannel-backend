@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Product/comment review local lifecycle — source of truth trước/sau publish WP virtual meta.
+ * Local pending Product Review. WordPress is source of truth after status=reviewed.
  */
 class ArticleProductReview extends Model
 {
@@ -27,6 +27,7 @@ class ArticleProductReview extends Model
         'configured_max_delay_minutes' => 'integer',
         'review_date' => 'datetime',
         'published_at' => 'datetime',
+        'synced_at' => 'datetime',
         'scheduled_at' => 'datetime',
         'publishing_started_at' => 'datetime',
         'next_retry_at' => 'datetime',
@@ -36,6 +37,7 @@ class ArticleProductReview extends Model
         'site_id' => 'integer',
         'connection_id' => 'integer',
         'publish_execution_id' => 'integer',
+        'retry_count' => 'integer',
     ];
 
     public function article(): BelongsTo
@@ -58,12 +60,16 @@ class ArticleProductReview extends Model
                 : (string) $this->status,
             'wp_comment_id' => $this->wp_comment_id,
             'published_at' => $this->published_at?->toIso8601String(),
+            'synced_at' => $this->synced_at?->toIso8601String(),
             'scheduled_at' => $this->scheduled_at?->toIso8601String(),
             'selected_delay_seconds' => $this->selected_delay_seconds,
             'configured_max_delay_minutes' => $this->configured_max_delay_minutes,
             'next_retry_at' => $this->next_retry_at?->toIso8601String(),
             'last_error_message' => $this->last_error_message,
             'last_error_code' => $this->last_error_code,
+            'pending_local' => ! ($this->status instanceof ArticleProductReviewStatus
+                ? $this->status->isReviewed()
+                : false),
         ];
 
         if ($this->author_email !== null && $this->author_email !== '') {

@@ -7,6 +7,8 @@ namespace App\Addons\SeoContentAi\Automation\BusinessHook\Seed;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationEdgeBranch;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationNodeType;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationRuleClassification;
+use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationRuleVisibility;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationTriggerType;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationWorkflowMode;
 use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\BusinessEventName;
@@ -29,10 +31,12 @@ final class AutomationDefaultRulesSeeder
             code: 'sync-article-to-wordpress',
             data: [
                 'code' => 'sync-article-to-wordpress',
-                'name' => 'Sync article to WordPress',
-                'description' => 'When article completed and has site, sync to WordPress. DISABLED by default.',
+                'name' => 'article > wordpress',
+                'description' => 'When article completed and has site, Linear: wordpress.article.sync → product-review.create → product-review.sync-wp. Business.',
+                'classification' => AutomationRuleClassification::Business->value,
+                'visibility' => AutomationRuleVisibility::User->value,
                 'event_name' => BusinessEventName::ArticleCompleted->value,
-                'is_enabled' => false,
+                'is_enabled' => true,
                 'priority' => 100,
                 'stop_on_failure' => true,
                 'run_mode' => 'queued',
@@ -57,6 +61,35 @@ final class AutomationDefaultRulesSeeder
                     ],
                     'settings' => ['mode' => 'sync'],
                 ],
+                [
+                    'action_code' => AutomationActionCode::ProductReviewCreate->value,
+                    'position' => 1,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                    ],
+                    'settings' => [
+                        'enabled' => true,
+                        'target_count' => 10,
+                        'block_if_real_reviews_exist' => true,
+                    ],
+                ],
+                [
+                    'action_code' => AutomationActionCode::ProductReviewSyncWp->value,
+                    'position' => 2,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
+                    ],
+                    'settings' => [
+                        'enabled' => true,
+                        'retry_failed' => true,
+                    ],
+                ],
             ],
         );
 
@@ -64,10 +97,11 @@ final class AutomationDefaultRulesSeeder
             code: 'notify-workflow-failure',
             data: [
                 'code' => 'notify-workflow-failure',
-                'name' => 'Notify workflow failure',
-                'description' => 'Notify when content project task fails. DISABLED by default.',
+                'name' => 'content_project.task.failed > notification',
+                'description' => 'Notify when content project task fails. Business.',
+                'classification' => AutomationRuleClassification::Business->value,
                 'event_name' => BusinessEventName::ContentProjectTaskFailed->value,
-                'is_enabled' => false,
+                'is_enabled' => true,
                 'priority' => 100,
                 'stop_on_failure' => true,
                 'run_mode' => 'queued',
@@ -90,23 +124,34 @@ final class AutomationDefaultRulesSeeder
             code: 'dispatch-publish-request',
             data: [
                 'code' => 'dispatch-publish-request',
-                'name' => 'Dispatch publish request',
-                'description' => 'article.completed → wordpress.sync_requested. DISABLED by default.',
-                'event_name' => BusinessEventName::ArticleCompleted->value,
-                'is_enabled' => false,
+                'name' => 'article.publish.request > wordpress',
+                'description' => 'article.publish_requested → wordpress.article.sync (scheduled/due linked posts). Business.',
+                'classification' => AutomationRuleClassification::Business->value,
+                'event_name' => BusinessEventName::ArticlePublishRequested->value,
+                'is_enabled' => true,
                 'priority' => 200,
                 'stop_on_failure' => true,
                 'run_mode' => 'queued',
-                'conditions' => null,
+                'conditions' => [
+                    'all' => [
+                        [
+                            'field' => 'event.site_id',
+                            'operator' => 'exists',
+                        ],
+                    ],
+                ],
             ],
             actions: [
                 [
-                    'action_code' => AutomationActionCode::AutomationDispatchEvent->value,
+                    'action_code' => AutomationActionCode::WordpressArticleSync->value,
                     'position' => 0,
                     'is_enabled' => true,
-                    'settings' => [
-                        'event_name' => BusinessEventName::WordpressSyncRequested->value,
+                    'continue_on_failure' => false,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'article_id' => '{{ payload.article_id }}',
                     ],
+                    'settings' => ['mode' => 'publish'],
                 ],
             ],
         );
@@ -115,10 +160,11 @@ final class AutomationDefaultRulesSeeder
             code: 'seo-analysis-on-content-updated',
             data: [
                 'code' => 'seo-analysis-on-content-updated',
-                'name' => 'SEO analysis on content updated',
-                'description' => 'When article content updates, run SEO analysis. DISABLED by default.',
+                'name' => 'article.content > seo.analysis',
+                'description' => 'When article content updates, run SEO analysis. Business.',
+                'classification' => AutomationRuleClassification::Business->value,
                 'event_name' => BusinessEventName::ArticleContentUpdated->value,
-                'is_enabled' => false,
+                'is_enabled' => true,
                 'priority' => 100,
                 'stop_on_failure' => true,
                 'run_mode' => 'queued',
@@ -141,11 +187,47 @@ final class AutomationDefaultRulesSeeder
         );
 
         $this->seedIfMissing(
+            code: 'sync-keyword-domain-link-list-on-saved',
+            data: [
+                'code' => 'sync-keyword-domain-link-list-on-saved',
+                'name' => 'keyword.saved > domain_link_list.sync',
+                'description' => 'When keyword saved, sync domain link list. Business.',
+                'classification' => AutomationRuleClassification::Business->value,
+                'event_name' => BusinessEventName::KeywordSaved->value,
+                'is_enabled' => true,
+                'priority' => 100,
+                'stop_on_failure' => false,
+                'run_mode' => 'queued',
+                'conditions' => null,
+            ],
+            actions: [
+                [
+                    'action_code' => AutomationActionCode::KeywordDomainLinkListSync->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => false,
+                    'delay_seconds' => 0,
+                    'input_mapping' => [
+                        'keyword_id' => '{{ payload.keyword_id }}',
+                        'site_id' => '{{ payload.site_id }}',
+                        'phrase' => '{{ payload.phrase }}',
+                        'target_url' => '{{ payload.target_url }}',
+                        'previous_phrase' => '{{ payload.previous_phrase }}',
+                        'operation' => '{{ payload.operation }}',
+                    ],
+                    'settings' => [],
+                ],
+            ],
+        );
+
+        $this->seedIfMissing(
             code: 'publish-generated-product-reviews-to-wordpress',
             data: [
                 'code' => 'publish-generated-product-reviews-to-wordpress',
-                'name' => 'Publish generated product reviews to WordPress',
-                'description' => 'On article.product_reviews_generated: schedule each review with max_delay_time. DISABLED by default.',
+                'name' => 'article.product.reviews > schedule',
+                'description' => 'Deprecated: product review scheduling now runs inside SyncArticleToWordPressPipeline (see "article > wordpress").',
+                'classification' => AutomationRuleClassification::Deprecated->value,
+                'visibility' => AutomationRuleVisibility::Hidden->value,
                 'event_name' => BusinessEventName::ArticleProductReviewsGenerated->value,
                 'is_enabled' => false,
                 'priority' => 100,
@@ -175,8 +257,10 @@ final class AutomationDefaultRulesSeeder
             code: 'publish-pending-product-reviews-after-article-sync',
             data: [
                 'code' => 'publish-pending-product-reviews-after-article-sync',
-                'name' => 'Queue pending product reviews after article sync',
-                'description' => 'After wordpress.synced: reconcile all pending reviews and schedule publish. DISABLED by default.',
+                'name' => 'wordpress.article.synced > article.product.reviews',
+                'description' => 'Deprecated: pending product review sync now runs inside SyncArticleToWordPressPipeline (see "article > wordpress").',
+                'classification' => AutomationRuleClassification::Deprecated->value,
+                'visibility' => AutomationRuleVisibility::Hidden->value,
                 'event_name' => BusinessEventName::WordpressSynced->value,
                 'is_enabled' => false,
                 'priority' => 120,
@@ -201,15 +285,17 @@ final class AutomationDefaultRulesSeeder
             ],
         );
 
-        // Infrastructure: delayed job emits publish_requested → this rule runs WP publish in-process (sync).
+        // Deprecated: SyncArticleToWordPressPipeline now owns comment-review publish end to end.
         $this->seedIfMissing(
             code: 'execute-wordpress-comment-review-publish',
             data: [
                 'code' => 'execute-wordpress-comment-review-publish',
-                'name' => 'Execute WordPress comment review publish',
-                'description' => 'Internal: run wordpress.comment_review.publish after schedule delay. Keep enabled with product-review rules. Prefer sync so delayed job finishes publish without extra queue hop.',
+                'name' => 'article.product.reviews > wordpress.publish',
+                'description' => 'Deprecated: WordPress comment-review publish now runs inside SyncArticleToWordPressPipeline (see "article > wordpress").',
+                'classification' => AutomationRuleClassification::Deprecated->value,
+                'visibility' => AutomationRuleVisibility::Hidden->value,
                 'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
-                'is_enabled' => true,
+                'is_enabled' => false,
                 'priority' => 50,
                 'stop_on_failure' => false,
                 'run_mode' => 'sync',
@@ -236,14 +322,14 @@ final class AutomationDefaultRulesSeeder
             ],
         );
 
-        $this->migrateProductReviewAutomationRules();
-
         $this->seedIfMissing(
             code: 'notify-on-notification-requested',
             data: [
                 'code' => 'notify-on-notification-requested',
-                'name' => 'Deliver notification.requested',
-                'description' => 'Deliver in-app notification when notification.requested emitted. DISABLED by default.',
+                'name' => 'notification.requested > notification',
+                'description' => 'Deliver in-app notification when notification.requested emitted. System until producers stabilize.',
+                'classification' => AutomationRuleClassification::System->value,
+                'visibility' => AutomationRuleVisibility::Admin->value,
                 'event_name' => BusinessEventName::NotificationRequested->value,
                 'is_enabled' => false,
                 'priority' => 100,
@@ -267,7 +353,345 @@ final class AutomationDefaultRulesSeeder
             ],
         );
 
+        $this->migrateProductReviewAutomationRules();
+        $this->promoteArticleOwnershipRules();
         $this->seedArticleCompletePipelineGraph();
+        $this->repairEnabledUnpublishedRules();
+    }
+
+    /**
+     * enabled + unpublished = invalid runtime. Publish business rules; keep
+     * system/sample/deprecated disabled until explicitly promoted.
+     */
+    private function repairEnabledUnpublishedRules(): void
+    {
+        $rows = AutomationRule::query()
+            ->where('is_enabled', true)
+            ->whereNull('published_version_id')
+            ->get();
+
+        foreach ($rows as $rule) {
+            if (! $rule instanceof AutomationRule) {
+                continue;
+            }
+
+            $code = (string) $rule->code;
+            $classification = (string) ($rule->classification ?? AutomationRuleClassification::Business->value);
+
+            if (in_array($classification, [
+                AutomationRuleClassification::System->value,
+                AutomationRuleClassification::Experimental->value,
+                AutomationRuleClassification::Sample->value,
+                AutomationRuleClassification::Deprecated->value,
+            ], true) || in_array($code, [
+                'notify-on-notification-requested',
+                'publish-generated-product-reviews-to-wordpress',
+                'publish-pending-product-reviews-after-article-sync',
+                'execute-wordpress-comment-review-publish',
+            ], true)) {
+                $rule->forceFill([
+                    'is_enabled' => false,
+                    'classification' => $code === 'notify-on-notification-requested'
+                        ? AutomationRuleClassification::System->value
+                        : (in_array($code, [
+                            'publish-generated-product-reviews-to-wordpress',
+                            'publish-pending-product-reviews-after-article-sync',
+                            'execute-wordpress-comment-review-publish',
+                        ], true)
+                            ? AutomationRuleClassification::Deprecated->value
+                            : $classification),
+                    'visibility' => in_array($code, [
+                        'publish-generated-product-reviews-to-wordpress',
+                        'publish-pending-product-reviews-after-article-sync',
+                        'execute-wordpress-comment-review-publish',
+                    ], true)
+                        ? AutomationRuleVisibility::Hidden->value
+                        : ($code === 'notify-on-notification-requested'
+                            ? AutomationRuleVisibility::Admin->value
+                            : ($rule->visibility ?? AutomationRuleVisibility::User->value)),
+                ])->save();
+
+                continue;
+            }
+
+            $rule->loadMissing('actions');
+            if ($rule->actions->isEmpty() && ! $rule->isGraphMode()) {
+                $rule->forceFill(['is_enabled' => false])->save();
+
+                continue;
+            }
+
+            $this->versionService->publish($rule);
+        }
+
+        $notify = AutomationRule::query()
+            ->where('code', 'notify-on-notification-requested')
+            ->first();
+        if ($notify instanceof AutomationRule) {
+            $notify->forceFill([
+                'is_enabled' => false,
+                'classification' => AutomationRuleClassification::System->value,
+                'visibility' => AutomationRuleVisibility::Admin->value,
+                'name' => 'notification.requested > notification',
+            ])->save();
+        }
+
+        // Deprecated product-review rules: force disabled + hidden even over stale legacy data.
+        foreach ([
+            'publish-generated-product-reviews-to-wordpress',
+            'publish-pending-product-reviews-after-article-sync',
+            'execute-wordpress-comment-review-publish',
+        ] as $deprecatedCode) {
+            $deprecatedRule = AutomationRule::query()->where('code', $deprecatedCode)->first();
+            if ($deprecatedRule instanceof AutomationRule) {
+                $deprecatedRule->forceFill([
+                    'is_enabled' => false,
+                    'classification' => AutomationRuleClassification::Deprecated->value,
+                    'visibility' => AutomationRuleVisibility::Hidden->value,
+                ])->save();
+            }
+        }
+    }
+
+    /**
+     * Production ownership: article.completed → WP sync; publish_requested → WP publish.
+     * Graph sample stays disabled.
+     */
+    private function promoteArticleOwnershipRules(): void
+    {
+        $sync = AutomationRule::query()->where('code', 'sync-article-to-wordpress')->first();
+        if ($sync instanceof AutomationRule) {
+            $sync->forceFill([
+                'name' => 'article > wordpress',
+                'description' => 'When article completed and has site, Linear: wordpress.article.sync → product-review.create → product-review.sync-wp. Business.',
+                'classification' => AutomationRuleClassification::Business->value,
+                'visibility' => AutomationRuleVisibility::User->value,
+                'event_name' => BusinessEventName::ArticleCompleted->value,
+                'is_enabled' => true,
+                'priority' => 100,
+                'stop_on_failure' => true,
+                'run_mode' => 'queued',
+                'workflow_mode' => AutomationWorkflowMode::Linear->value,
+                'conditions' => [
+                    'all' => [
+                        [
+                            'field' => 'event.site_id',
+                            'operator' => 'exists',
+                        ],
+                    ],
+                ],
+            ])->save();
+
+            $desiredActions = [
+                [
+                    'action_code' => AutomationActionCode::WordpressArticleSync->value,
+                    'position' => 0,
+                    'is_enabled' => true,
+                    'continue_on_failure' => false,
+                    'delay_seconds' => 0,
+                    'input_mapping' => ['article_id' => '{{ payload.article_id }}'],
+                    'settings' => ['mode' => 'sync'],
+                ],
+                [
+                    'action_code' => AutomationActionCode::ProductReviewCreate->value,
+                    'position' => 1,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => ['article_id' => '{{ payload.article_id }}'],
+                    'settings' => [
+                        'enabled' => true,
+                        'target_count' => 10,
+                        'block_if_real_reviews_exist' => true,
+                    ],
+                ],
+                [
+                    'action_code' => AutomationActionCode::ProductReviewSyncWp->value,
+                    'position' => 2,
+                    'is_enabled' => true,
+                    'continue_on_failure' => true,
+                    'delay_seconds' => 0,
+                    'input_mapping' => ['article_id' => '{{ payload.article_id }}'],
+                    'settings' => [
+                        'enabled' => true,
+                        'retry_failed' => true,
+                    ],
+                ],
+            ];
+
+            $sync->loadMissing('actions');
+            $currentCodes = $sync->actions->sortBy('position')->pluck('action_code')->map(static fn ($c) => (string) $c)->values()->all();
+            $desiredCodes = array_map(static fn (array $a): string => (string) $a['action_code'], $desiredActions);
+            $needsReplace = $currentCodes !== $desiredCodes;
+
+            if ($needsReplace) {
+                foreach ($sync->actions as $old) {
+                    $old->delete();
+                }
+                foreach ($desiredActions as $row) {
+                    $sync->actions()->create($row);
+                }
+            }
+
+            $sync = $sync->fresh(['actions']) ?? $sync;
+            if ($needsReplace || $sync->published_version_id === null) {
+                $this->versionService->publish($sync);
+            }
+        }
+
+        $publishReq = AutomationRule::query()->where('code', 'dispatch-publish-request')->first();
+        if ($publishReq instanceof AutomationRule) {
+            $publishReq->forceFill([
+                'name' => 'article.publish.request > wordpress',
+                'description' => 'article.publish_requested → wordpress.article.sync (scheduled/due linked posts). Business.',
+                'classification' => AutomationRuleClassification::Business->value,
+                'event_name' => BusinessEventName::ArticlePublishRequested->value,
+                'is_enabled' => true,
+                'priority' => 200,
+                'stop_on_failure' => true,
+                'run_mode' => 'queued',
+                'workflow_mode' => AutomationWorkflowMode::Linear->value,
+                'conditions' => [
+                    'all' => [
+                        [
+                            'field' => 'event.site_id',
+                            'operator' => 'exists',
+                        ],
+                    ],
+                ],
+            ])->save();
+
+            $publishReq->loadMissing('actions');
+            foreach ($publishReq->actions as $old) {
+                $old->delete();
+            }
+            $publishReq->actions()->create([
+                'action_code' => AutomationActionCode::WordpressArticleSync->value,
+                'position' => 0,
+                'is_enabled' => true,
+                'continue_on_failure' => false,
+                'delay_seconds' => 0,
+                'input_mapping' => ['article_id' => '{{ payload.article_id }}'],
+                'settings' => ['mode' => 'publish'],
+            ]);
+
+            $publishReq = $publishReq->fresh(['actions']) ?? $publishReq;
+            $this->versionService->publish($publishReq);
+        }
+
+        $graph = AutomationRule::query()->where('code', 'article-complete-pipeline-graph')->first();
+        if ($graph instanceof AutomationRule) {
+            $graph->forceFill([
+                'name' => 'sample: article complete pipeline (graph)',
+                'description' => 'SAMPLE only — disabled. Production ownership is sync-article-to-wordpress linear rule.',
+                'classification' => AutomationRuleClassification::Sample->value,
+                'is_enabled' => false,
+                'event_name' => BusinessEventName::ArticleCompleted->value,
+            ])->save();
+        }
+
+        $this->promoteLinearRule(
+            code: 'seo-analysis-on-content-updated',
+            name: 'article.content > seo.analysis',
+            description: 'When article content updates, run SEO analysis. Business.',
+            event: BusinessEventName::ArticleContentUpdated->value,
+            actionCode: AutomationActionCode::ArticleRunSeoAnalysis->value,
+            inputMapping: [
+                'article_id' => '{{ payload.article_id }}',
+                'force' => true,
+            ],
+            settings: [],
+            priority: 100,
+            stopOnFailure: true,
+        );
+
+        $this->promoteLinearRule(
+            code: 'sync-keyword-domain-link-list-on-saved',
+            name: 'keyword.saved > domain_link_list.sync',
+            description: 'When keyword saved, sync domain link list. Business.',
+            event: BusinessEventName::KeywordSaved->value,
+            actionCode: AutomationActionCode::KeywordDomainLinkListSync->value,
+            inputMapping: [
+                'keyword_id' => '{{ payload.keyword_id }}',
+                'site_id' => '{{ payload.site_id }}',
+                'phrase' => '{{ payload.phrase }}',
+                'target_url' => '{{ payload.target_url }}',
+                'previous_phrase' => '{{ payload.previous_phrase }}',
+                'operation' => '{{ payload.operation }}',
+            ],
+            settings: [],
+            priority: 100,
+            stopOnFailure: false,
+        );
+
+        $this->promoteLinearRule(
+            code: 'notify-workflow-failure',
+            name: 'content_project.task.failed > notification',
+            description: 'Notify when content project task fails. Business.',
+            event: BusinessEventName::ContentProjectTaskFailed->value,
+            actionCode: AutomationActionCode::NotificationSend->value,
+            inputMapping: [
+                'message' => 'Task {{ payload.task_id }} failed',
+            ],
+            settings: [],
+            priority: 100,
+            stopOnFailure: true,
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $inputMapping
+     * @param  array<string, mixed>  $settings
+     */
+    private function promoteLinearRule(
+        string $code,
+        string $name,
+        string $description,
+        string $event,
+        string $actionCode,
+        array $inputMapping,
+        array $settings,
+        int $priority,
+        bool $stopOnFailure,
+        bool $continueOnFailure = false,
+    ): void {
+        $rule = AutomationRule::query()->where('code', $code)->first();
+        if (! $rule instanceof AutomationRule) {
+            return;
+        }
+
+        $rule->forceFill([
+            'name' => $name,
+            'description' => $description,
+            'classification' => AutomationRuleClassification::Business->value,
+            'event_name' => $event,
+            'is_enabled' => true,
+            'priority' => $priority,
+            'stop_on_failure' => $stopOnFailure,
+            'run_mode' => 'queued',
+            'workflow_mode' => AutomationWorkflowMode::Linear->value,
+        ])->save();
+
+        $rule->loadMissing('actions');
+        foreach ($rule->actions as $old) {
+            $old->delete();
+        }
+        $rule->actions()->create([
+            'action_code' => $actionCode,
+            'position' => 0,
+            'is_enabled' => true,
+            'continue_on_failure' => $continueOnFailure,
+            'delay_seconds' => 0,
+            'input_mapping' => $inputMapping,
+            'settings' => $settings,
+        ]);
+
+        $rule = $rule->fresh(['actions']) ?? $rule;
+        if ($rule->published_version_id === null) {
+            $this->versionService->publish($rule);
+        } else {
+            $this->versionService->publish($rule);
+        }
     }
 
     private function seedArticleCompletePipelineGraph(): void
@@ -275,6 +699,12 @@ final class AutomationDefaultRulesSeeder
         $code = 'article-complete-pipeline-graph';
         $existing = AutomationRule::query()->where('code', $code)->first();
         if ($existing instanceof AutomationRule && $existing->nodes()->exists()) {
+            $existing->forceFill([
+                'name' => 'sample: article complete pipeline (graph)',
+                'classification' => AutomationRuleClassification::Sample->value,
+                'is_enabled' => false,
+            ])->save();
+
             return;
         }
 
@@ -282,8 +712,9 @@ final class AutomationDefaultRulesSeeder
             ? $existing
             : $this->ruleService->createRule([
                 'code' => $code,
-                'name' => 'Article complete pipeline (graph)',
-                'description' => 'Sample graph: condition → delay → WP sync → branches. DISABLED.',
+                'name' => 'sample: article complete pipeline (graph)',
+                'description' => 'SAMPLE graph: condition → delay → WP sync → branches. Always disabled.',
+                'classification' => AutomationRuleClassification::Sample->value,
                 'event_name' => BusinessEventName::ArticleCompleted->value,
                 'is_enabled' => false,
                 'priority' => 150,
@@ -325,121 +756,28 @@ final class AutomationDefaultRulesSeeder
     }
 
     /**
-     * Migrate existing product-review rules to schedule/reconcile + max_delay_time + internal publish rule.
+     * Deprecate legacy product-review business rules — ownership is SyncArticleToWordPressPipeline.
      */
     private function migrateProductReviewAutomationRules(): void
     {
-        $generated = AutomationRule::query()
-            ->where('code', 'publish-generated-product-reviews-to-wordpress')
-            ->first();
-        if ($generated instanceof AutomationRule) {
-            $generated->forceFill([
-                'event_name' => BusinessEventName::ArticleProductReviewsGenerated->value,
-                'description' => 'On article.product_reviews_generated: schedule each review with max_delay_time.',
-            ])->save();
-            $generated->loadMissing('actions');
-            $scheduleAction = $generated->actions->first(
-                static fn ($a): bool => (string) $a->action_code === AutomationActionCode::ArticleProductReviewsScheduleGenerated->value
-            );
-            if ($scheduleAction === null) {
-                foreach ($generated->actions as $old) {
-                    $old->delete();
-                }
-                $generated->actions()->create([
-                    'action_code' => AutomationActionCode::ArticleProductReviewsScheduleGenerated->value,
-                    'position' => 0,
-                    'is_enabled' => true,
-                    'continue_on_failure' => true,
-                    'delay_seconds' => 0,
-                    'input_mapping' => [
-                        'article_id' => '{{ payload.article_id }}',
-                        'review_ids' => '{{ payload.review_ids }}',
-                    ],
-                    'settings' => ['max_delay_time' => 5],
-                ]);
-            } else {
-                $settings = is_array($scheduleAction->settings) ? $scheduleAction->settings : [];
-                $settings = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings($settings);
-                $scheduleAction->forceFill([
-                    'settings' => $settings,
-                    'input_mapping' => [
-                        'article_id' => '{{ payload.article_id }}',
-                        'review_ids' => '{{ payload.review_ids }}',
-                    ],
-                ])->save();
-            }
-        }
-
-        $pending = AutomationRule::query()
-            ->where('code', 'publish-pending-product-reviews-after-article-sync')
-            ->first();
-        if ($pending instanceof AutomationRule) {
-            $pending->loadMissing('actions');
-            foreach ($pending->actions as $action) {
-                if ((string) $action->action_code !== AutomationActionCode::ArticleProductReviewsQueuePending->value) {
-                    continue;
-                }
-                $settings = is_array($action->settings) ? $action->settings : [];
-                $settings = \App\Addons\SeoContentAi\Services\ProductReview\ProductReviewDelaySettings::normalizeSettings($settings);
-                $action->forceFill(['settings' => $settings])->save();
-            }
-        }
-
-        $executeActions = [
-            [
-                'action_code' => AutomationActionCode::WordpressCommentReviewPublish->value,
-                'position' => 0,
-                'is_enabled' => true,
-                'continue_on_failure' => true,
-                'delay_seconds' => 0,
-                'input_mapping' => [
-                    'site_id' => '{{ payload.site_id }}',
-                    'connection_id' => '{{ payload.connection_id }}',
-                    'article_id' => '{{ payload.article_id }}',
-                    'review_id' => '{{ payload.review_id }}',
-                    'wp_post_id' => '{{ payload.wp_post_id }}',
-                    'publish_intent' => '{{ payload.publish_intent }}',
-                ],
-                'settings' => [],
-            ],
+        $deprecated = [
+            'publish-generated-product-reviews-to-wordpress' => 'Deprecated: scheduling owned by SyncArticleToWordPressPipeline (article > wordpress).',
+            'publish-pending-product-reviews-after-article-sync' => 'Deprecated: pending review sync owned by SyncArticleToWordPressPipeline (article > wordpress).',
+            'execute-wordpress-comment-review-publish' => 'Deprecated infrastructure stub — WordPress review create owned by SyncArticleToWordPressPipeline.',
         ];
 
-        $execute = AutomationRule::query()
-            ->where('code', 'execute-wordpress-comment-review-publish')
-            ->first();
-        if (! $execute instanceof AutomationRule) {
-            $this->ruleService->createRule([
-                'code' => 'execute-wordpress-comment-review-publish',
-                'name' => 'Execute WordPress comment review publish',
-                'description' => 'Internal: run wordpress.comment_review.publish after schedule delay.',
-                'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
-                'is_enabled' => true,
-                'priority' => 50,
-                'stop_on_failure' => false,
-                'run_mode' => 'sync',
-                'trigger_type' => AutomationTriggerType::Event->value,
-                'conditions' => null,
-            ], $executeActions);
-
-            return;
-        }
-
-        $execute->forceFill([
-            'is_enabled' => true,
-            'event_name' => BusinessEventName::ArticleProductReviewPublishRequested->value,
-            'run_mode' => 'sync',
-            'trigger_type' => AutomationTriggerType::Event->value,
-        ])->save();
-
-        $execute->loadMissing('actions');
-        $publishAction = $execute->actions->first(
-            static fn ($a): bool => (string) $a->action_code === AutomationActionCode::WordpressCommentReviewPublish->value
-        );
-        if ($publishAction === null) {
-            foreach ($execute->actions as $old) {
-                $old->delete();
+        foreach ($deprecated as $code => $description) {
+            $rule = AutomationRule::query()->where('code', $code)->first();
+            if (! $rule instanceof AutomationRule) {
+                continue;
             }
-            $execute->actions()->create($executeActions[0]);
+
+            $rule->forceFill([
+                'description' => $description,
+                'classification' => AutomationRuleClassification::Deprecated->value,
+                'visibility' => AutomationRuleVisibility::Hidden->value,
+                'is_enabled' => false,
+            ])->save();
         }
     }
 
@@ -453,6 +791,10 @@ final class AutomationDefaultRulesSeeder
             return;
         }
 
-        $this->ruleService->createRule($data, $actions);
+        $rule = $this->ruleService->createRule($data, $actions);
+
+        if ((bool) ($data['is_enabled'] ?? false) && $rule->published_version_id === null) {
+            $this->versionService->publish($rule);
+        }
     }
 }

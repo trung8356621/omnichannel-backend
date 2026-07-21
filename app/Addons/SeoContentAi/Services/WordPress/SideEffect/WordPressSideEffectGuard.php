@@ -40,18 +40,14 @@ final class WordPressSideEffectGuard
         }
 
         if ($context instanceof ManualWordPressContext) {
-            $this->block(
-                UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-                'ManualWordPressContext deprecated — WordPress mutations require AutomationWordPressContext.',
-                $operation,
-                $payload,
-                $context,
-            );
+            $this->assertManual($context, $operation, $payload);
+
+            return;
         }
 
         $this->block(
             UnauthorizedWordPressSideEffectException::ORIGIN_INVALID,
-            'WordPress context origin must be automation.',
+            'WordPress context origin must be automation or manual.',
             $operation,
             $payload,
             $context,
@@ -136,6 +132,7 @@ final class WordPressSideEffectGuard
             $wpMutatingActions = [
                 AutomationActionCode::WordpressArticleSync->value,
                 AutomationActionCode::WordpressCommentReviewPublish->value,
+                AutomationActionCode::ProductReviewSyncWp->value,
             ];
             $manualWp = in_array($manualActionCode, $wpMutatingActions, true);
 

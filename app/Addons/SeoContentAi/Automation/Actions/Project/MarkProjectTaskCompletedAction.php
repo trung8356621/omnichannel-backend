@@ -111,6 +111,7 @@ final class MarkProjectTaskCompletedAction implements BusinessAction
                         'origin' => $context->origin,
                         'actor_id' => $context->actorId,
                         'site_id' => $context->siteId,
+                        'suppress_article_completed_bridge' => $context->origin === 'content_project_run',
                     ],
                     payload: ['article_id' => $articleId > 0 ? $articleId : null],
                 ),

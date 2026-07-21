@@ -38,18 +38,25 @@ final class BusinessHookInvariantTest extends TestCase
         self::assertTrue(class_exists(SyncArticleToWordPressHookAction::class));
     }
 
-    public function test_seeded_rules_disabled_in_seeder_source(): void
+    public function test_seeded_production_wp_rules_enabled_sample_and_notify_disabled(): void
     {
         $seeder = (string) file_get_contents(
             dirname(__DIR__, 2).'/Automation/BusinessHook/Seed/AutomationDefaultRulesSeeder.php',
         );
 
-        foreach (['sync-article-to-wordpress', 'notify-workflow-failure', 'dispatch-publish-request'] as $code) {
+        foreach (['sync-article-to-wordpress', 'dispatch-publish-request'] as $code) {
             self::assertMatchesRegularExpression(
-                "/code:\s*'{$code}'[\s\S]*?'is_enabled'\s*=>\s*false/",
+                "/code:\\s*'{$code}'[\\s\\S]{0,800}'is_enabled'\\s*=>\\s*true/",
                 $seeder,
-                "Expected rule {$code} to be disabled by default.",
+                "Expected production rule {$code} to seed enabled.",
             );
         }
+
+        self::assertMatchesRegularExpression(
+            "/code:\\s*'notify-workflow-failure'[\\s\\S]{0,800}'is_enabled'\\s*=>\\s*true/",
+            $seeder,
+            'notify-workflow-failure is production enabled.',
+        );
+        self::assertStringContainsString('sample: article complete pipeline (graph)', $seeder);
     }
 }

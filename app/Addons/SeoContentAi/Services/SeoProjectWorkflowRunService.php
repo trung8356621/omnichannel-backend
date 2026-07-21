@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Models\SeoProject;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectRunItem;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use Illuminate\Database\Eloquent\Builder;
@@ -35,10 +36,13 @@ final class SeoProjectWorkflowRunService
         private readonly \App\Addons\SeoContentAi\Automation\Migration\ProjectTaskCallerBridge $taskCallerBridge,
         private readonly SeoProjectRunItemService $runItemService,
         private readonly SeoProjectTaskEventRecorder $eventRecorder,
+        private readonly \App\Addons\SeoContentAi\Services\ContentProject\ContentProjectPostRunPipeline $postRunPipeline,
     ) {}
 
-    public function startRun(SeoProject $project, string $mode): SeoProjectRun
+    public function startRun(SeoProject $project, string $mode, ?array $settings = null): SeoProjectRun
     {
+        $snapshot = ContentProjectRunSettings::fromArray($settings)->toArray();
+
         $run = SeoProjectRun::query()->create([
             'project_id' => (int) $project->id,
             'user_id' => (int) auth()->id(),
@@ -48,6 +52,7 @@ final class SeoProjectWorkflowRunService
             'succeeded' => 0,
             'failed' => 0,
             'items' => null,
+            'settings' => $snapshot,
             'started_at' => now(),
         ]);
 
@@ -55,6 +60,14 @@ final class SeoProjectWorkflowRunService
             ->runStarted($run);
 
         return $run;
+    }
+
+    public function updateRunSettings(SeoProjectRun $run, array $settings): SeoProjectRun
+    {
+        $snapshot = ContentProjectRunSettings::fromUserInput($settings)->toArray();
+        $run->update(['settings' => $snapshot]);
+
+        return $run->fresh() ?? $run;
     }
 
     public function prepareRunQueue(SeoProject $project, SeoProjectRun $run, ?int $limit = null): SeoProjectRun
@@ -590,8 +603,17 @@ final class SeoProjectWorkflowRunService
                     }
                 }
 
-                $this->markTaskCompleted($task, $articleId > 0 ? $articleId : (int) ($task->article_id ?? 0));
                 $message = $this->formatRunResultMessage((string) $result['message'], $ranAt, $stepStats);
+
+                if ($articleId > 0) {
+                    $article = SeoArticle::query()->find($articleId);
+                    if ($article instanceof SeoArticle) {
+                        $pipelineResult = $this->postRunPipeline->apply($task, $run, $article, $runItem);
+                        $message = rtrim($message, '.').($pipelineResult['message_suffix'] ?? '');
+                    }
+                }
+
+                $this->markTaskCompleted($task, $articleId > 0 ? $articleId : (int) ($task->article_id ?? 0));
 
                 $this->runItemService->markSuccess(
                     $runItem,
@@ -1173,6 +1195,7 @@ final class SeoProjectWorkflowRunService
             $articleId,
             auth()->id() !== null ? (int) auth()->id() : null,
             (int) ($task->site_id ?? $task->project?->site_id ?? 0),
+            'content_project_run',
         );
     }
 

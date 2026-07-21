@@ -12,6 +12,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 /**
  * @property int $id
  * @property string $code
+ * @property string $classification
+ * @property string $visibility
  * @property string $name
  * @property string|null $description
  * @property string $event_name

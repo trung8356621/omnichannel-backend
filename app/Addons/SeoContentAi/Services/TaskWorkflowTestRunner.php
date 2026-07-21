@@ -1181,7 +1181,34 @@ final class TaskWorkflowTestRunner
         $groups = $this->keywordResearch->keywordGroupsFromState($state);
         $focusPhrase = $this->keywordResearch->resolveFocusPhrase($article, $context);
 
-        return $this->keywordResearch->syncTopicCluster($article, $groups, $focusPhrase);
+        $dispatcher = app(\App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher::class);
+        $actionContext = \App\Addons\SeoContentAi\Automation\Data\ActionContext::fromArray([
+            'origin' => 'workflow.task_test_runner',
+            'actor_id' => auth()->id() !== null ? (int) auth()->id() : null,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ]);
+
+        $vocab = $dispatcher->dispatch(
+            'keyword.vocabulary.save',
+            [
+                'article_id' => (int) $article->id,
+                'keyword_groups' => $groups,
+                'focus_phrase' => $focusPhrase,
+            ],
+            $actionContext,
+        );
+
+        if (! $vocab->success) {
+            throw new \InvalidArgumentException((string) ($vocab->error['message'] ?? 'Vocabulary save failed.'));
+        }
+
+        return [
+            'parent_id' => (int) ($vocab->output['parent_id'] ?? 0),
+            'parent_phrase' => (string) ($vocab->output['parent_phrase'] ?? $focusPhrase ?? ''),
+            'children_count' => (int) ($vocab->output['children_count'] ?? 0),
+            'suggest_count' => (int) ($vocab->output['suggest_count'] ?? 0),
+            'tags_count' => (int) ($vocab->output['tags_count'] ?? 0),
+        ];
     }
 
     /**

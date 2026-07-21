@@ -11,6 +11,7 @@ use App\Addons\SeoContentAi\Services\SeoProjectRunConsolidationService;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Filament\Actions;
+use Filament\Forms;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\Page;
 use Illuminate\Contracts\Support\Htmlable;
@@ -84,14 +85,22 @@ final class ListSeoProjectRuns extends Page
                 ->tooltip(fn (): ?string => $this->canStartWorkflowRun()
                     ? null
                     : __('seo-content-ai::filament.projects.run_workflow_disabled'))
-                ->requiresConfirmation()
-                ->modalHeading(__('seo-content-ai::filament.projects.run_workflow_heading'))
+                ->modalHeading(__('seo-content-ai::filament.projects.run_settings_heading'))
                 ->modalDescription(fn () => SeoProjectResource::runWorkflowModalDescription($this->project))
-                ->action(function (): void {
+                ->form([
+                    Forms\Components\Checkbox::make('generate_post_images')
+                        ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
+                        ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
+                        ->default(false),
+                ])
+                ->action(function (array $data): void {
                     try {
                         $run = SeoProjectResource::createProjectWorkflowRun(
                             $this->project,
                             SeoProjectRun::MODE_FULL,
+                            [
+                                'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                            ],
                         );
                         $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
 
@@ -124,19 +133,25 @@ final class ListSeoProjectRuns extends Page
                 ->tooltip(fn (): ?string => $this->canStartWorkflowRun()
                     ? null
                     : __('seo-content-ai::filament.projects.run_workflow_disabled'))
-                ->requiresConfirmation()
-                ->modalHeading(__('seo-content-ai::filament.projects.test_run_workflow_heading', [
-                    'limit' => SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
-                ]))
+                ->modalHeading(__('seo-content-ai::filament.projects.run_settings_heading'))
                 ->modalDescription(fn () => SeoProjectResource::runWorkflowModalDescription(
                     $this->project,
                     SeoProjectWorkflowRunService::TEST_RUN_LIMIT,
                 ))
-                ->action(function (): void {
+                ->form([
+                    Forms\Components\Checkbox::make('generate_post_images')
+                        ->label(__('seo-content-ai::filament.projects.run_settings_generate_post_images'))
+                        ->helperText(__('seo-content-ai::filament.projects.run_settings_generate_post_images_help'))
+                        ->default(false),
+                ])
+                ->action(function (array $data): void {
                     try {
                         $run = SeoProjectResource::createProjectWorkflowRun(
                             $this->project,
                             SeoProjectRun::MODE_TEST,
+                            [
+                                'generate_post_images' => (bool) ($data['generate_post_images'] ?? false),
+                            ],
                         );
                         $url = SeoProjectResource::getUrl('view-run', ['run' => $run->id]).'?autorun=1';
 

@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoMedia;
 use App\Addons\SeoContentAi\Models\SeoProjectRun;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
+use App\Addons\SeoContentAi\Models\Keyword;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
 
@@ -218,6 +219,7 @@ final class BusinessHookEmitter
             'site_id' => (int) ($article->site_id ?? 0) ?: null,
             'wp_post_id' => $result['wp_post_id'] ?? $article->wp_post_id ?? null,
             'status' => 'synced',
+            'origin' => $result['origin'] ?? $context['origin'] ?? 'automatic',
         ], $context);
     }
 
@@ -298,5 +300,57 @@ final class BusinessHookEmitter
     public function notificationRequested(array $payload, array $context = []): void
     {
         $this->emit(BusinessEventName::NotificationRequested, null, $payload, $context);
+    }
+
+    public function keywordSaved(Keyword $keyword, array $payload = [], array $context = []): void
+    {
+        $this->emit(BusinessEventName::KeywordSaved, $keyword, array_merge([
+            'keyword_id' => (int) $keyword->id,
+            'phrase' => trim((string) ($keyword->phrase ?? '')),
+            'site_id' => (int) ($payload['site_id'] ?? $keyword->resolveSiteId() ?? 0) ?: null,
+        ], $payload), $context);
+    }
+
+    public function articleApproved(SeoArticle $article, array $context = []): void
+    {
+        $this->emit(BusinessEventName::ArticleApproved, $article, [
+            'article_id' => (int) $article->id,
+            'site_id' => (int) ($article->site_id ?? 0) ?: null,
+        ], $context);
+    }
+
+    /**
+     * Outcome emit with stable operation identity (event_uuid dedupe).
+     *
+     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $context
+     */
+    public function wordpressSyncedOnce(
+        SeoArticle $article,
+        string $syncOperationId,
+        array $result = [],
+        array $context = [],
+    ): void {
+        $syncOperationId = trim($syncOperationId);
+        if ($syncOperationId === '') {
+            $this->wordpressSynced($article, $result, $context);
+
+            return;
+        }
+
+        $this->emitOutcomeSafely(
+            BusinessEventName::WordpressSynced,
+            $article,
+            [
+                'article_id' => (int) $article->id,
+                'site_id' => (int) ($article->site_id ?? 0) ?: null,
+                'wp_post_id' => $result['wp_post_id'] ?? $article->wp_post_id ?? null,
+                'status' => 'synced',
+                'origin' => $result['origin'] ?? $context['origin'] ?? 'automatic',
+                'sync_operation_id' => $syncOperationId,
+            ],
+            array_merge($context, ['sync_operation_id' => $syncOperationId]),
+            $syncOperationId,
+        );
     }
 }

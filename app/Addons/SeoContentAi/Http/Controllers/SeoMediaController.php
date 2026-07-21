@@ -14,6 +14,7 @@ use App\Addons\SeoContentAi\Services\SeoImageSplitterService;
 use App\Addons\SeoContentAi\Services\SeoMediaImageEditorResolverService;
 use App\Addons\SeoContentAi\Services\SeoMediaLibraryImageActionService;
 use App\Addons\SeoContentAi\Services\SeoMediaStorageService;
+use App\Addons\SeoContentAi\Services\SeoMediaArticleSlugFixService;
 use App\Addons\SeoContentAi\Services\SeoMediaUrlImportResolverService;
 use App\Addons\SeoContentAi\Services\SeoWpMediaEditedPendingService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
@@ -30,6 +31,7 @@ class SeoMediaController extends Controller
 {
     public function __construct(
         private readonly SeoMediaStorageService $storage,
+        private readonly SeoMediaArticleSlugFixService $slugFix,
         private readonly SeoMediaImageEditorResolverService $imageEditorResolver,
         private readonly SeoMediaLibraryImageActionService $imageActions,
         private readonly SeoImageSplitterService $imageSplitter,
@@ -145,10 +147,22 @@ class SeoMediaController extends Controller
 
         $validated = $request->validate([
             'new_slug' => ['required', 'string', 'regex:/^[a-z0-9\-]+$/i', 'max:200'],
+            'article_id' => ['nullable', 'integer', 'min:1'],
         ]);
 
+        $article = null;
+        $articleId = (int) ($validated['article_id'] ?? 0);
+        if ($articleId > 0) {
+            $candidate = SeoArticle::query()->find($articleId);
+            if ($candidate instanceof SeoArticle) {
+                abort_unless(SeoAccessControl::canAccessArticle($candidate), 403);
+                $article = $candidate;
+            }
+        }
+
         try {
-            $media = $this->storage->renameBySlug($media, (string) $validated['new_slug']);
+            $result = $this->slugFix->renameOne($media, (string) $validated['new_slug'], $article);
+            $media = $result['media'];
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
@@ -160,6 +174,8 @@ class SeoMediaController extends Controller
             'url' => $media->publicUrl(),
             'slug' => $media->slug,
             'id' => (int) $media->id,
+            'replacement' => $result['replacement'] ?? null,
+            'article_updated' => (bool) ($result['article_updated'] ?? false),
         ]);
     }
 
@@ -313,8 +329,17 @@ class SeoMediaController extends Controller
 
         abort_unless($this->canAccessMedia($media), 403);
 
+        $articleForRewrite = null;
+        if ($articleId !== null && $articleId > 0) {
+            $candidate = SeoArticle::query()->find($articleId);
+            if ($candidate instanceof SeoArticle) {
+                $articleForRewrite = $candidate;
+            }
+        }
+
         try {
-            $media = $this->storage->renameBySlug($media, (string) $validated['new_slug']);
+            $result = $this->slugFix->renameOne($media, (string) $validated['new_slug'], $articleForRewrite);
+            $media = $result['media'];
         } catch (\InvalidArgumentException $e) {
             throw ValidationException::withMessages(['new_slug' => $e->getMessage()]);
         } catch (\RuntimeException $e) {
@@ -326,6 +351,8 @@ class SeoMediaController extends Controller
             'id' => (int) $media->id,
             'url' => $media->publicUrl(),
             'slug' => $media->slug,
+            'replacement' => $result['replacement'] ?? null,
+            'article_updated' => (bool) ($result['article_updated'] ?? false),
         ]);
     }
 

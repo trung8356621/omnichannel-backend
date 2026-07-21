@@ -129,12 +129,23 @@
                 <div class="flex w-full flex-wrap items-center justify-between gap-3">
                     <span>{{ __('seo-content-ai::filament.projects.run_items_heading') }}</span>
                     <div class="flex flex-wrap items-center gap-2">
+                        @if ($this->canSyncAllItems())
+                            <button
+                                type="button"
+                                class="inline-flex items-center gap-2 rounded-lg bg-success-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-success-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-success-500 dark:hover:bg-success-400"
+                                x-show="!$store.seoRunQueue.isRunning && !syncAllBusy"
+                                x-on:click="openSyncAllConfirm()"
+                            >
+                                <x-filament::icon icon="heroicon-o-cloud-arrow-up" class="h-4 w-4" />
+                                <span>{{ __('seo-content-ai::filament.projects.run_sync_all') }}</span>
+                            </button>
+                        @endif
                         @if ($this->canRerunAllItems())
                             <button
                                 type="button"
                                 class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-500 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-primary-500 dark:hover:bg-primary-400"
                                 x-show="!$store.seoRunQueue.isRunning"
-                                x-on:click="startRerunAllQueue()"
+                                x-on:click="openRerunSettingsModal()"
                             >
                                 <x-filament::icon icon="heroicon-o-arrow-path" class="h-4 w-4" />
                                 <span>{{ __('seo-content-ai::filament.projects.run_rerun_all') }}</span>
@@ -461,6 +472,52 @@
                 </table>
             </div>
         </x-filament::section>
+
+        {{-- Run settings modal (rerun all) --}}
+        <div
+            x-show="runSettingsOpen"
+            x-cloak
+            class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+        >
+            <div class="absolute inset-0 bg-gray-950/50" x-on:click="runSettingsOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-gray-900">
+                <h3 class="text-lg font-semibold text-gray-950 dark:text-white" x-text="config.labels?.runSettingsHeading ?? 'Run settings'"></h3>
+                <div class="mt-4 space-y-3">
+                    <label class="flex items-start gap-3 cursor-pointer">
+                        <input type="checkbox" class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500" x-model="generatePostImages">
+                        <span>
+                            <span class="block text-sm font-medium text-gray-900 dark:text-gray-100" x-text="config.labels?.runSettingsGeneratePostImages ?? ''"></span>
+                            <span class="mt-1 block text-sm text-gray-500 dark:text-gray-400" x-text="config.labels?.runSettingsGeneratePostImagesHelp ?? ''"></span>
+                        </span>
+                    </label>
+                </div>
+                <div class="mt-6 flex justify-end gap-2">
+                    <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800" x-on:click="runSettingsOpen = false" x-text="config.labels?.runSettingsCancel ?? 'Cancel'"></button>
+                    <button type="button" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-500 disabled:opacity-60" x-bind:disabled="runSettingsSubmitting" x-on:click="confirmRerunSettings()" x-text="config.labels?.runSettingsStart ?? 'Start run'"></button>
+                </div>
+            </div>
+        </div>
+
+        {{-- Sync all confirm modal --}}
+        <div
+            x-show="syncAllOpen"
+            x-cloak
+            class="fixed inset-0 z-[80] flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+        >
+            <div class="absolute inset-0 bg-gray-950/50" x-on:click="syncAllOpen = false"></div>
+            <div class="relative z-10 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl dark:bg-gray-900">
+                <h3 class="text-lg font-semibold text-gray-950 dark:text-white" x-text="config.labels?.syncAllConfirmHeading ?? 'Sync all completed articles?'"></h3>
+                <p class="mt-3 text-sm text-gray-600 dark:text-gray-300" x-text="config.labels?.syncAllConfirmBody ?? ''"></p>
+                <div class="mt-6 flex justify-end gap-2">
+                    <button type="button" class="rounded-lg px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800" x-on:click="syncAllOpen = false" x-text="config.labels?.syncAllCancel ?? 'Cancel'"></button>
+                    <button type="button" class="rounded-lg bg-success-600 px-4 py-2 text-sm font-semibold text-white hover:bg-success-500 disabled:opacity-60" x-bind:disabled="syncAllBusy" x-on:click="confirmSyncAll()" x-text="config.labels?.syncAll ?? 'Sync all'"></button>
+                </div>
+            </div>
+        </div>
     </div>
 
     @push('scripts')

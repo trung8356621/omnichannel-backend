@@ -109,11 +109,18 @@ flowchart TB
 - A disabled rule blocks future automatic executions, not an explicit manual user sync and not necessarily an execution already mid-flight before disable (pending/processing get `cancellation_requested_at`).
 - Content Project and Article completion never dispatch WordPress jobs directly.
 - WordPress automation jobs use `automation-external` (action) / `automation-critical` (rule bootstrap). Legacy manual queue job uses `seo` — not `default`.
-- Manual entry: `WordPressManualSyncService` + `ManualSyncContext` (`manual=true`, `initiated_by` user). Controller `POST .../sync-wp`, EditArticle sync button, List queue resync.
+- Manual entry: `WordPressManualSyncService` → `markQueued` (`wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`) → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. `Cache::lock` + `isActive` chống duplicate sync. Job: `markProcessing`/`markCompleted`/`markFailed`. UI poll `GET .../operation-status` + reload. Controller `POST .../sync-wp`, EditArticle sync button.
 - `ArticleScheduleReconcileService` = Laravel status only — **no** WordPress API.
 - System cron `ScheduledArticlePublishRunner` = due scheduled posts already linked (`wp_post_id>0`); not `article.completed`.
 
-**Trace MCP (inbound callers):** `WordPressManualSyncService` (editor/list), `ScheduledArticlePublishRunner`, Business Hook `wordpress.article.sync`. **Không** từ Content Project run / `PromptTestPublishService.publishArticle` / `ArticleScheduleReconcileService`.
+**Trace MCP (inbound callers):** `WordPressManualSyncService` / `ManualWordPressSyncJob` (editor/list), `ScheduledArticlePublishRunner` (emit only), Business Hook `wordpress.article.sync`. **Không** từ Content Project run / `PromptTestPublishService.publishArticle` / `ArticleScheduleReconcileService`. Product reviews: **cùng** `SyncArticleToWordPressPipeline` (không rule `publish-pending-*` riêng).
+
+| Flow | Manual/Automatic | Entry point | Queue | Requires enabled rule |
+|---|---|---|---|---|
+| Editor sync | Manual | `WordPressManualSyncService` | `seo` | No |
+| Article completed sync | Automatic | `article.completed` → `sync-article-to-wordpress` | `automation-external` | Yes |
+| Scheduled due linked | Automatic | `article.publish_requested` → `dispatch-publish-request` | `automation-external` | Yes |
+| Product review publish | Automatic | review rules | `automation-external` | Yes |
 
 Audit: `php artisan automation:audit-wordpress-coupling [--strict]`
 
@@ -225,7 +232,7 @@ flowchart TB
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.51:** `GET /omi-seo-ai/v1/posts/{id}/comment-reviews` đọc `_omi_seo_virtual_comments` (meta) + merge `wp_comments` — editor Reviews tab dùng endpoint này khi bấm **Làm mới**.
 
-**Product reviews → WP (Automation, ≥ plugin 1.0.59):** local `article_product_reviews` → schedule (`max_delay_time`) → `DispatchScheduledProductReviewPublishJob` (`automation-external`) → `ProductReviewPublishDispatchService` emit `article.product_review_publish_requested` + **chạy execution sync** (rule `execute-wordpress-comment-review-publish`, `run_mode=sync`) → `wordpress.comment_review.publish` (`WordPressCommentReviewPublisher` POST virtual-comments; ACL bypass qua `SeoQueueContext`; SideEffectGuard cho phép action `comment_review.publish`). Rules schedule: `publish-generated-product-reviews-to-wordpress`, `publish-pending-product-reviews-after-article-sync`.
+**Product reviews → WP (linear 3-action):** Rule `article > wordpress` = `wordpress.article.sync` → `product-review.create` → `product-review.sync-wp`. Shared `ProductReviewCreationPolicy` + `WordPressProductReviewStatusService`. **Idempotent create:** `target_count` = duy trì tổng AI reviews (`missing = max(0, target − max(wp_generated, local_generated))`); `block_if_real_reviews_exist` dừng khi có real. Generated WP meta: `source=seo_content_ai` / `generated=true`. Local lifecycle `pending→syncing→reviewed` (cleanup với media). Edit Article: `GET .../product-review-status`. Legacy schedule/queue/publish = deprecated.
 
 **Frontend WP (plugin ≥ 1.0.59):** CusRev (`cr-reviews-ajax-*`) chiếm tab Reviews — `Virtual_Comments::filter_product_review_tab` priority 999 ép callback `render_virtual_reviews_tab` khi có meta; template `single-product-reviews-virtual.php`; save meta purge WP Rocket/LiteSpeed. Format payload không đổi (`author`/`content`/`date`/`rating` + `_omi_*`).
 

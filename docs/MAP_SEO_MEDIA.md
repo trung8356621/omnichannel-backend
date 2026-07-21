@@ -278,12 +278,12 @@ flowchart TB
 ```
 Route: SeoPanelProvider.php prefix api/seo/media.
 Controller: Http/Controllers/SeoMediaController.php.
-Services: SeoMediaStorageService, SeoImageOptimizationService, SeoMediaResizeService, SeoWatermarkService.
+Services: SeoMediaStorageService, SeoImageOptimizationService, SeoMediaResizeService, SeoWatermarkService, **SeoMediaUrlReplacementService**, **SeoMediaArticleSlugFixService**.
 Pipeline: Support/SeoImagePipeline.php + Support/SeoImageResizeMath.php.
 Driver: app/Support/ImageDriverResolver.php (imagick/gd, env IMAGE_DRIVER).
 Model/Query: Models/SeoMedia.php + Models/SeoMediaBuilder.php (meta routing).
 Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx.
-Article Editor local rename: `ArticleImagesTab` không khóa Fix slug khi ảnh còn `/storage/uploads/seo_media`; `SeoArticleEditor` dùng `executeSeoMediaSlugRenamesTwoPhase` để đổi slug local trước sync WP khi cần.
+Article Editor slug fix: `POST /api/seo/articles/{id}/fix-media-slugs` — batch rename + rewrite `article.body`/meta (`SeoMediaArticleSlugFixService`). Single rename (`rename`/`rename-by-url`) nhận `article_id` → rewrite article refs. Fix slug all: backend batch + full page reload (không autosave state cũ).
 Watermark batch: POST /api/seo/watermark/* → SeoWatermarkController.
 Image Optimization Settings: SeoImageOptimizationSetting model + ImageOptimizationSettings page.
 AI Image Processing: ImageProcessingPage.php + /api/seo/media/prepare-editor.
@@ -295,7 +295,7 @@ Dashboard: cảnh báo thiếu Imagick/GD khi mount Filament Dashboard.
 
 | Client module | Endpoints |
 |---------------|-----------|
-| `seoMediaApi.js` | `POST upload` (`source=clipboard` → server random `paste-{hex}`), `import-url` (body `random_filename` → slug `import-{hex}` + cache-bust fetch), `prepare-editor`, `apply-watermark`, `rename-by-url`, `update-meta`, `save-split`, `save-edited`, `rename`, `retry-generation`, `delete-ai-job`; `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
+| `seoMediaApi.js` | `POST upload`, `import-url`, `prepare-editor`, `apply-watermark`, `rename-by-url`, `rename` (optional `article_id`), `update-meta`, `save-split`, `save-edited`, `retry-generation`, `delete-ai-job`; `POST /api/seo/articles/{id}/fix-media-slugs` (`fixArticleMediaSlugs`); `GET splitter-source`, `article/{id}/ai-jobs`, `{media}/status`, `workspace-picker` |
 | `watermarkApi.js` | `POST /api/seo/watermark/*` (settings, batch, save, save-new) |
 
 **Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — tab Images, media picker modal, video generation.

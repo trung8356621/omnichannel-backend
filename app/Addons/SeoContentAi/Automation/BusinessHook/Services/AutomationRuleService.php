@@ -42,6 +42,8 @@ final class AutomationRuleService
                 'code' => (string) $data['code'],
                 'name' => (string) $data['name'],
                 'description' => $data['description'] ?? null,
+                'classification' => (string) ($data['classification'] ?? 'business'),
+                'visibility' => (string) ($data['visibility'] ?? 'user'),
                 'event_name' => (string) $data['event_name'],
                 'is_enabled' => (bool) ($data['is_enabled'] ?? false),
                 'priority' => (int) ($data['priority'] ?? 100),

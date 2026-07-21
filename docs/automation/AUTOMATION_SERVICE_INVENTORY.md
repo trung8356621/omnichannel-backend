@@ -11,11 +11,11 @@
 |---|---|
 | Content Project → Article | Local write (`PromptTestPublishService`, `CreateArticlesFromTaskService`) |
 | Content Project → WordPress **article** publish/sync | **Không** gọi `WordPressArticleSyncService` |
-| Content Project → WordPress **khác** | **Có** qua Automation: `post_comment_review` → local `article_product_reviews` → `wordpress.comment_review.publish` |
-| Article Editor save | Local only (`ArticleEditorPersistService`) |
+| Content Project → WordPress **khác** | **Không** path riêng cho review. Product reviews: AI/UI → local pending `article_product_reviews` → `SyncArticleToWordPressPipeline` (cùng `article > wordpress`) |
+| Article Editor save | `BusinessActionDispatcher` → `article.content.update` / `article.seo_meta.update` |
 | Article Editor sync / queue / scheduled | Outbound WP; status payload **luôn** `publish` |
 | SEO Audit | Đọc + skip meta + tạo `SeoProjectTask`; không sửa/publish article |
-| Keyword vocab / topic cluster | Local DB (+ domain link list); không publish article WP |
+| Keyword vocab / topic cluster | Action Runtime; domain link list = Rule trên `keyword.saved` |
 
 **Rủi ro đặt tên (gây side-effect “ẩn” trong quá khứ / khi design automation):**
 
@@ -79,27 +79,29 @@ Chú thích cột: R=Read DB, W=Write DB, J=Dispatch Job, E=External API, P=Có 
 | Domain/WP inbound | `SyncDomainContentService` | WP bridge push | WP payload | local articles | ✓ | ✓ | ✓ scoring | ✓ inbound | — | Pull WP → Laravel | `wordpress.article.fetch` / import |
 | WP | `WordPressFaqSyncService` | (wrapper) | article | delegates syncForArticle | ✓ | ✓ | — | ✓ | ✓ | Wrapper rộng | deprecate / map sync_outbound (not selectable) |
 | WP | `WordPressLocalMediaSyncService` | Sync prepare/complete | article HTML | media IDs | ✓ | ✓ | — | ✓ | — | | `wordpress.article.update_media` |
-| WP | `WordPressCommentReviewService` / `ArticleProductReviewStoreService` | TaskWorkflowTestRunner, QuickCreate | AI comments | local `article_product_reviews` | ✓ | — | — | via Automation | — | **Outbound chỉ qua** `wordpress.comment_review.publish` | `wordpress.comment_review.publish` |
+| WP | `WordPressProductReviewService` / `ProductReviewLocalBatchCreator` / `ArticleWordPressBusinessSequence` | Linear actions + manual + editor API | AI/UI/batch | local pending | ✓ | — | — | via `product-review.sync-wp` | — | **Outbound** `product-review.sync-wp` | `product-review.create` + `product-review.sync-wp` |
 | Site | Site / connection models + `SeoAccessControl` | mọi nơi | ids | scope | ✓ | — | — | — | — | Cross-DB | `AutomationSiteContextResolver` (không CRUD action) |
 
 ## 4. Call path chi tiết (đã xác nhận code)
 
 ### 4.1 Local article save
 
-`	ext
-UI (React saveDraft localStorage) — không server
-
+```text
 API POST /api/seo/articles/{id}/save
   → ArticleEditorSyncController::save
-    → ArticleEditorPersistService::persistLocal
-      → guard empty body
-      → persistLocalSilent (BundleApply + post images + markLocalEditPending)
-      → SeoArticleScoringQueueService::dispatchForArticle (AnalyzeArticleSeoJob)
+    → BusinessActionDispatcher → article.content.update
+      → UpdateArticleContentAction
+        → ArticleEditorPersistService::persistLocal
+      → emit article.content_updated (Action owns)
   ✗ không WordPressArticleSyncService
   ✗ không enqueue WP queue
+  ✗ PersistService không emit BusinessHook
 
-Livewire EditArticle persistArticleLocal (path cũ) → cùng PersistService
-`
+API POST .../seo-meta
+  → BusinessActionDispatcher → article.seo_meta.update
+    → ArticleEditorSeoMetaService::persist
+    → emit article.seo_meta_updated + article.content_updated
+```
 
 ### 4.2 Editor WP sync (phased / publishForArticle)
 
@@ -229,7 +231,21 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
 
 **CLI:** `automation:migrate [--only-business-hook]`, `automation:seed-rules`, `automation:list-events|list-actions|dispatch|run-rule|retry|diagnose`, `automation:audit-wordpress-coupling [--strict]`.
 
-**Seed rules (default disabled):** `sync-article-to-wordpress`, `notify-workflow-failure`, `dispatch-publish-request`, graph sample `article-complete-pipeline-graph`.
+**Seed rules (business enabled):** `sync-article-to-wordpress`, `dispatch-publish-request`, `seo-analysis-on-content-updated`, `notify-workflow-failure`. Product-review legacy rules (`publish-generated-*`, `publish-pending-*`, `execute-wordpress-comment-review-publish`) = **deprecated + hidden + disabled**. Graph sample stays disabled. List UI default: `classification=business` + `visibility=user`.
+
+**Product Review ownership (2026-07-21 linear 3-action):**
+- Business rule `article > wordpress` (`sync-article-to-wordpress`):
+  1. `wordpress.article.sync` — article/product + media only
+  2. `product-review.create` — idempotent `ProductReviewCreationPolicy` (`target_count` = maintain AI total; `block_if_real_reviews_exist`) → local pending only for `missing`
+  3. `product-review.sync-wp` — idempotent WP create → `reviewed`
+- Manual: `ArticleWordPressBusinessSequence` (same sequence; `sync_product_reviews` option)
+- WordPress = SoT for display (`WordPressProductReviewStatusService` + `GET .../product-review-status`)
+- Generated meta: `source=seo_content_ai`, `generated=true`, `_omi_*`
+- Legacy schedule/queue/publish rules = deprecated+hidden+disabled
+
+- Explicit manual sync: `WordPressManualSyncService` + `ManualSyncContext` + `ManualWordPressSyncJob` → `ArticleWordPressBusinessSequence`.
+
+Cutover detail: [AUTOMATION_CUTOVER_AUDIT.md](AUTOMATION_CUTOVER_AUDIT.md).
 
 **Invariant:** Content Project không sync WP trực tiếp; WP outbound automation chỉ khi rule enabled. Task completed + `article_id` → emit `content_project.task.completed` và `article.completed`.
 
@@ -237,7 +253,7 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
 
 - Automatic WordPress side effects require an enabled published Automation Rule.
 - Disabled rule blocks future automatic executions; pending/processing get `cancellation_requested_at` and cancel at run/bootstrap (no WP side effect).
-- Explicit manual sync (`WordPressManualSyncService`) is allowed while rules disabled (`manual=true`, `initiated_by` user) — does not create automation execution.
+- Explicit manual sync: `WordPressManualSyncService` + `ManualSyncContext` + `ManualWordPressSyncJob` (queue `seo`). Does **not** require enabled Automation Rule. Emits real `wordpress.synced` (`origin=manual`) after success so pending product-review rule can run.
 - Content Project / Article completion never dispatch `SyncArticleToWordPressFromQueueJob` / `WordPressArticleSyncService` directly.
 - `ExecuteAutomationRuleJob` → queue `automation-critical`. WP action nodes → `automation-external`. Legacy manual job → `seo` (not `default`).
 - `ArticleScheduleReconcileService` must not call WordPress.
@@ -274,7 +290,7 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
 **CLI add:** `automation:migrate --only-v2|--only-v3`, `automation:migrate-rule-versions`, `automation:dispatch-scheduled`, `automation:recover-stale`, `automation:health`, `automation:export|import`.
 
 **Release freeze (2026-07-20):** Executions never auto-publish. Graph/versioned rule without `published_version_id` → skip. `ensurePublishedVersion` chỉ cho migrate/admin CLI, không trên execution path.
-**Seed rules remain disabled by default** (incl. graph sample `article-complete-pipeline-graph`).
+**Seed:** production rules enabled+published by `AutomationDefaultRulesSeeder` promote helpers. Graph sample stays disabled. See [AUTOMATION_CUTOVER_AUDIT.md](AUTOMATION_CUTOVER_AUDIT.md).
 
 **UI:** Visual builder `/seo/automation/workflow-builder`, Ops `/seo/automation/operations`.
 

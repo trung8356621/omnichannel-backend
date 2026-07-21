@@ -1,6 +1,6 @@
 # Automation Action Catalog — SeoContentAi
 
-**Status:** Phase 3 Full (adapters + classification) — production callers **chưa** migrate  
+**Status:** Action Runtime cutover 2026-07-21 — production local mutations via `BusinessActionDispatcher` (Migrated=yes)  
 **Updated:** 2026-07-18
 
 ## Classification legend
@@ -37,9 +37,9 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 
 | Action key | classification | selectability | handler | test status | production migrated | remaining risk / note |
 |---|---|---|---|---|---|---|
-| `article.create` | IMPLEMENT | selectable | `CreateArticleAction` | Automation PASS | **wired** default `legacy` (`CreateArticlesFromTaskService` → `ProjectArticleCreateCallerBridge`) | Idempotent theo `origin_type`+`origin_id`. Chưa shadow validated / chưa promoted. |
-| `article.content.update` | IMPLEMENT | selectable | `UpdateArticleContentAction` → `ArticleEditorPersistService` | Automation PASS | **wired** default `legacy` (`PromptTestPublishService` → content bridge); Editor save **not** wired | Conflict: expected_updated_at/hash. Optional `slug`. |
-| `article.seo_meta.update` | IMPLEMENT | selectable | `UpdateArticleSeoMetaAction` | Automation PASS | **wired** default `legacy` (`PromptTestPublishService` → seo meta bridge); Editor saveSeoMeta **not** wired | `dispatch_scoring` optional (false khi project publish). |
+| `article.create` | IMPLEMENT | selectable | `CreateArticleAction` | Automation PASS | **yes** (`CreateArticlesFromTaskService` → bridge, mode=action) | Idempotent `origin_type`+`origin_id`. |
+| `article.content.update` | IMPLEMENT | selectable | `UpdateArticleContentAction` → `ArticleEditorPersistService` | Automation PASS | **yes** — Editor + PromptTest + Manual WP pre-persist | Conflict: expected_updated_at/hash. Event owner = Action. |
+| `article.seo_meta.update` | IMPLEMENT | selectable | `UpdateArticleSeoMetaAction` → `ArticleEditorSeoMetaService::persist` | Automation PASS | **yes** — Editor + PromptTest | Emits `article.seo_meta_updated` + `article.content_updated`. |
 | `article.media.attach` | CATALOG_ONLY | — | — | n/a | no | Cần path media usage rõ + lock article. |
 | `article.media.detach` | CATALOG_ONLY | — | — | n/a | no | |
 | `article.faq.update` | CATALOG_ONLY | — | — | n/a | no | Local FAQ; verify không gọi FaqSync WP. |
@@ -49,7 +49,7 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 | `article.skip_seo_audit.set` | CATALOG_ONLY | — | — | n/a | no | Meta flag local. |
 | `article.schedule.set` | CATALOG_ONLY | — | — | n/a | no | Local schedule; publish cron = WP path riêng. |
 | `article.review.request` | BLOCKED | internal_only | **none** | Automation PASS (handler_missing) | no | Xem blockers. |
-| `article.approve` | CATALOG_ONLY | selectable (dự kiến) | — | n/a | no | `SeoProjectApprovalService` — Phase 4 candidate; không phải request-review. |
+| `article.approve` | IMPLEMENT | selectable | `ApproveArticleAction` → `SeoProjectApprovalService` | architecture | **yes** (`ArticleResource::submitStaffEditingComplete`) | Emits `article.approved`. Idempotent nếu đã approved. |
 
 ### Content Project
 
@@ -87,10 +87,10 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 | `keyword.create` | CATALOG_ONLY | — | — | n/a | no | `KeywordPersistenceService`; observer link list. |
 | `keyword.update` | CATALOG_ONLY | — | — | n/a | no | |
 | `keyword.assign_to_project` | IMPLEMENT | selectable | `AssignKeywordToProjectAction` → **`KeywordProjectAssignmentService`** | Automation PASS | no | Không Filament Resource. CTA blacklist / primary keyword giữ logic service. |
-| `keyword.vocabulary.save` | IMPLEMENT | selectable | `SaveKeywordVocabularyAction` | Automation PASS | no | `WorkflowKeywordResearchService`. |
-| `keyword.topic_cluster.sync` | IMPLEMENT | selectable | `SyncKeywordTopicClusterAction` | Automation PASS | no | |
+| `keyword.vocabulary.save` | IMPLEMENT | selectable | `SaveKeywordVocabularyAction` | Automation PASS | **yes** (`TaskWorkflowTestRunner`) | `WorkflowKeywordResearchService`. |
+| `keyword.topic_cluster.sync` | IMPLEMENT | selectable | `SyncKeywordTopicClusterAction` | Automation PASS | yes (via vocabulary path) | |
 | `keyword.pending_internal_link.create` | CATALOG_ONLY | — | — | n/a | no | `ArticlePendingInternalLinkService`. |
-| `keyword.domain_link_list.sync` | CATALOG_ONLY | selectable (dự kiến) | — | n/a | no | **Capability riêng** — `KeywordLinkListSyncObserver` side effect; không giấu trong action khác. |
+| `keyword.domain_link_list.sync` | IMPLEMENT | selectable | `SyncKeywordDomainLinkListAction` + HookAction | architecture | **yes** — rule on `keyword.saved` | Observer emit only; không gọi sync service. |
 | `keyword.review.set` | CATALOG_ONLY | — | — | n/a | no | |
 
 ### Site / context
@@ -108,7 +108,10 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 |---|---|---|---|---|---|---|
 | `wordpress.article.sync_outbound` | CATALOG_ONLY (legacy) | legacy_not_selectable | none Phase 3 | Automation PASS (blocked workflow) | no | `implies_publish_status=true` |
 | `wordpress.article.publish` | CATALOG_ONLY | internal_only | none | Automation PASS (PublishIntent) | no | critical; cần guard/idempotency trước handler |
-| `wordpress.comment_review.publish` | IMPLEMENT | selectable | `PublishWordPressCommentReviewHookAction` | ProductReviewAutomationPublishTest | yes (rules + sync execute) | virtual meta upsert `_omi_review_id`; delayed job → `ProductReviewPublishDispatchService` + rule `execute-wordpress-comment-review-publish` (`run_mode=sync`); queue ACL via `SeoQueueContext`; SideEffectGuard allows this action |
+| `wordpress.article.sync` | IMPLEMENT | selectable | `SyncArticleToWordPressHookAction` | ProductReviewArticleSyncIsolationTest | yes | article/product+media only; **no** review orchestration |
+| `product-review.create` | IMPLEMENT | selectable | `CreateProductReviewsHookAction` | ProductReviewSyncPipelineTest | yes | Idempotent: `ProductReviewCreationPolicy` maintain `target_count` AI reviews (`missing` only); local pending |
+| `product-review.sync-wp` | IMPLEMENT | selectable | `SyncProductReviewsToWordPressHookAction` | ProductReviewSyncPipelineTest | yes | idempotent WP create → `reviewed`; SideEffectGuard allows |
+| `wordpress.comment_review.publish` | DEPRECATED | hidden | `PublishWordPressCommentReviewHookAction` (no-op) | — | no | replaced by `product-review.sync-wp` |
 
 ---
 

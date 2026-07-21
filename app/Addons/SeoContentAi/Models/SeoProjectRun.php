@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Models;
 
 use App\Addons\SeoContentAi\Models\Concerns\BelongsToOnDefaultConnection;
+use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -37,6 +38,7 @@ class SeoProjectRun extends Model
         'succeeded' => 'integer',
         'failed' => 'integer',
         'items' => 'array',
+        'settings' => 'array',
         'consolidated_into_run_id' => 'integer',
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
@@ -71,5 +73,10 @@ class SeoProjectRun extends Model
     public function isTestMode(): bool
     {
         return $this->mode === self::MODE_TEST;
+    }
+
+    public function runSettings(): ContentProjectRunSettings
+    {
+        return ContentProjectRunSettings::fromRun($this);
     }
 }

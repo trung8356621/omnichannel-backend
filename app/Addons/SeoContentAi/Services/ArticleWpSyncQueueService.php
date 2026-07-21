@@ -46,7 +46,7 @@ final class ArticleWpSyncQueueService
     {
         return [
             'success' => false,
-            'message' => 'Legacy seo queue orchestration removed. Use ManualAutomationDispatcher / WordPressManualSyncService (wordpress.article.sync).',
+            'message' => 'Legacy seo queue orchestration removed. Use WordPressManualSyncService / ManualWordPressSyncJob.',
         ];
     }
 
@@ -54,40 +54,136 @@ final class ArticleWpSyncQueueService
     {
         $payload = $this->readQueueMeta($article);
         if ($payload === []) {
-            return;
+            $payload = [
+                'queued_at' => now()->toIso8601String(),
+                'operation' => 'wordpress_sync',
+            ];
         }
 
         $payload['status'] = self::STATUS_PROCESSING;
+        $payload['stage'] = (string) ($payload['stage'] ?? 'processing');
         $payload['started_at'] = now()->toIso8601String();
         $payload['error'] = null;
+        $payload['error_message'] = null;
 
         $this->writeQueueMeta($article, $payload);
     }
 
     /**
-     * @param  array<string, mixed>  $result
+     * @param  array<string, mixed>  $meta
+     * @return array<string, mixed>
      */
-    public function markCompleted(SeoArticle $article, array $result = []): void
+    public function markQueued(SeoArticle $article, array $meta = []): array
+    {
+        $payload = array_merge([
+            'operation' => 'wordpress_sync',
+            'status' => self::STATUS_PENDING,
+            'stage' => 'queued',
+            'queued_at' => now()->toIso8601String(),
+            'started_at' => null,
+            'finished_at' => null,
+            'error' => null,
+            'error_message' => null,
+            'wordpress_post_id' => null,
+            'wordpress_permalink' => null,
+        ], $meta, [
+            'status' => self::STATUS_PENDING,
+            'stage' => 'queued',
+            'queued_at' => now()->toIso8601String(),
+        ]);
+
+        $this->writeQueueMeta($article, $payload);
+
+        return $payload;
+    }
+
+    public function isActive(SeoArticle $article): bool
+    {
+        $status = (string) ($this->readQueueMeta($article)['status'] ?? '');
+
+        return in_array($status, [self::STATUS_PENDING, self::STATUS_PROCESSING], true);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    public function activeOperation(SeoArticle $article): ?array
     {
         $payload = $this->readQueueMeta($article);
         if ($payload === []) {
-            return;
+            return null;
+        }
+
+        $status = (string) ($payload['status'] ?? '');
+        if ($status === '') {
+            return null;
+        }
+
+        return [
+            'id' => (string) ($payload['request_id'] ?? $payload['correlation_id'] ?? ('wp-sync-'.(int) $article->id)),
+            'article_id' => (int) $article->id,
+            'operation' => (string) ($payload['operation'] ?? 'wordpress_sync'),
+            'type' => (string) ($payload['operation'] ?? 'wordpress_sync'),
+            'status' => $this->mapPublicStatus($status),
+            'raw_status' => $status,
+            'stage' => (string) ($payload['stage'] ?? $status),
+            'error_message' => (string) ($payload['error_message'] ?? $payload['error'] ?? ''),
+            'wordpress_post_id' => (int) ($payload['wordpress_post_id'] ?? 0) ?: null,
+            'wordpress_permalink' => (string) ($payload['wordpress_permalink'] ?? '') ?: null,
+            'queued_at' => $payload['queued_at'] ?? null,
+            'started_at' => $payload['started_at'] ?? null,
+            'finished_at' => $payload['finished_at'] ?? null,
+            'request_id' => $payload['request_id'] ?? null,
+            'correlation_id' => $payload['correlation_id'] ?? null,
+        ];
+    }
+
+    private function mapPublicStatus(string $status): string
+    {
+        return match ($status) {
+            self::STATUS_PENDING => 'queued',
+            self::STATUS_PROCESSING => 'processing',
+            self::STATUS_COMPLETED => 'success',
+            self::STATUS_FAILED => 'failed',
+            default => $status,
+        };
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    public function markCompleted(SeoArticle $article, array $result = [], bool $emitSyncedEvent = true): void
+    {
+        $payload = $this->readQueueMeta($article);
+        if ($payload === []) {
+            $payload = [
+                'operation' => 'wordpress_sync',
+                'queued_at' => now()->toIso8601String(),
+            ];
         }
 
         $payload['status'] = self::STATUS_COMPLETED;
+        $payload['stage'] = 'completed';
         $payload['finished_at'] = now()->toIso8601String();
         $payload['error'] = null;
+        $payload['error_message'] = null;
         $payload['result_message'] = (string) ($result['message'] ?? '');
+        $payload['wordpress_post_id'] = (int) ($result['wp_post_id'] ?? $result['wordpress_post_id'] ?? $article->wp_post_id ?? 0) ?: null;
+        $payload['wordpress_permalink'] = (string) ($result['permalink'] ?? $result['wordpress_permalink'] ?? $article->permalink ?? '') ?: null;
 
         $this->writeQueueMeta($article, $payload);
         $article = $this->bootstrapArticleDatabase($article);
         $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
 
-        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
-            ->wordpressSynced($article, $result);
+        if (! $emitSyncedEvent) {
+            return;
+        }
 
-        app(\App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPostSyncReconciler::class)
-            ->reconcileAfterArticleSynced($article);
+        // Emit only — pending product reviews owned by automation rule on wordpress.synced.
+        $emitResult = is_array($result) ? $result : [];
+        $emitResult['origin'] = $emitResult['origin'] ?? 'legacy_queue';
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->wordpressSynced($article, $emitResult);
     }
 
     public function clearQueueEntry(SeoArticle $article): void
@@ -101,20 +197,27 @@ final class ArticleWpSyncQueueService
         $this->purgeDispatchedJobsForArticle((int) $article->id);
     }
 
-    public function markFailed(SeoArticle $article, string $error): void
+    public function markFailed(SeoArticle $article, string $error, bool $emitFailedEvent = true): void
     {
         $payload = $this->readQueueMeta($article);
         if ($payload === []) {
             $payload = [
                 'queued_at' => now()->toIso8601String(),
+                'operation' => 'wordpress_sync',
             ];
         }
 
         $payload['status'] = self::STATUS_FAILED;
+        $payload['stage'] = 'failed';
         $payload['finished_at'] = now()->toIso8601String();
         $payload['error'] = $error;
+        $payload['error_message'] = $error;
 
         $this->writeQueueMeta($article, $payload);
+
+        if (! $emitFailedEvent) {
+            return;
+        }
 
         app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
             ->wordpressSyncFailed($article, $error);
@@ -137,7 +240,7 @@ final class ArticleWpSyncQueueService
     {
         return [
             'success' => false,
-            'message' => 'Legacy seo queue resync removed. Use ManualAutomationDispatcher (wordpress.article.sync).',
+            'message' => 'Legacy seo queue resync removed. Use WordPressManualSyncService / ManualWordPressSyncJob.',
         ];
     }
 
@@ -378,7 +481,7 @@ final class ArticleWpSyncQueueService
     {
         Log::warning('wordpress.legacy_queue.dispatch_blocked', [
             'article_id' => $articleId,
-            'message' => 'SyncArticleToWordPressFromQueueJob dispatch disabled — use ManualAutomationDispatcher.',
+            'message' => 'SyncArticleToWordPressFromQueueJob dispatch disabled — use WordPressManualSyncService.',
         ]);
 
         return false;

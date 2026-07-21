@@ -114,14 +114,13 @@ final class ArticleEditorMediaAiService
                 $editorBlockId,
             );
 
-            GenerateMediaJob::dispatch(
-                $placeholder->id,
+            $this->dispatchGenerateMediaJob(
+                $placeholder,
                 (int) $prompt->id,
                 $variables,
                 (string) $config['tool_type'],
-            )
-                ->onQueue('media_generation')
-                ->afterResponse();
+                sync: false,
+            );
 
             return [
                 'url' => (string) $placeholder->url,
@@ -142,6 +141,141 @@ final class ArticleEditorMediaAiService
 
             throw new \RuntimeException('Yêu cầu tạo ảnh đang được xử lý, vui lòng thử lại sau vài giây.');
         });
+    }
+
+    /**
+     * Same as generateImage but runs media_generation job synchronously (Content Project Run).
+     *
+     * @return array{url: string, media_type: 'image', seo_media_id: int, status: string}
+     */
+    public function generateImageBlocking(
+        SeoArticle $article,
+        string $selectionText,
+        string $selectionHtml,
+        string $userBrief,
+        string $editorBlockId = '',
+        string $target = 'editor',
+        int $loaiSanPhamCategoryArticleId = 0,
+        string $loaiSanPhamCustom = '',
+    ): array {
+        $target = trim($target);
+        $editorBlockId = $this->resolveEditorBlockIdForTarget($target, $editorBlockId);
+        [$loaiSanPhamCategoryArticleId, $loaiSanPhamCustom] = $this->resolveLoaiSanPhamInputs(
+            $target,
+            $userBrief,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        );
+
+        $lockKey = $this->generationLockKey($article, 'image', $editorBlockId);
+
+        return $this->runWithGenerationLock($lockKey, function () use (
+            $article,
+            $selectionText,
+            $selectionHtml,
+            $userBrief,
+            $editorBlockId,
+            $target,
+            $loaiSanPhamCategoryArticleId,
+            $loaiSanPhamCustom,
+        ): array {
+            $config = $this->resolveEditorMediaConfig($target);
+            $prompt = $config['prompt'];
+
+            $mergeLoai = $this->shouldMergeLoaiSanPham(
+                $prompt,
+                $target,
+                $loaiSanPhamCategoryArticleId,
+                $loaiSanPhamCustom,
+            );
+
+            $variables = $this->attachEditorExecutionVariables(
+                $this->filterVariablesForPrompt(
+                    $prompt,
+                    $this->buildVariables(
+                        $article,
+                        $selectionText,
+                        $selectionHtml,
+                        $userBrief,
+                        $loaiSanPhamCategoryArticleId,
+                        $loaiSanPhamCustom,
+                        $mergeLoai,
+                        $target,
+                    ),
+                ),
+                $config,
+            );
+            $this->reconcileStaleAiMediaJobs((int) $article->id);
+            $this->cancelProcessingJobsForBlock($article, 'image', $editorBlockId);
+
+            $placeholder = $this->createPlaceholderMedia(
+                $article,
+                (string) $config['tool_type'],
+                (int) $prompt->id,
+                $variables,
+                $editorBlockId,
+            );
+
+            $this->dispatchGenerateMediaJob(
+                $placeholder,
+                (int) $prompt->id,
+                $variables,
+                (string) $config['tool_type'],
+                sync: true,
+            );
+
+            $fresh = $placeholder->fresh() ?? $placeholder;
+
+            return [
+                'url' => (string) $fresh->url,
+                'media_type' => 'image',
+                'seo_media_id' => (int) $fresh->id,
+                'status' => (string) $fresh->status,
+            ];
+        }, function () use ($article, $editorBlockId): array {
+            $existing = $this->findReusableProcessingJob($article, 'image', $editorBlockId);
+            if ($existing instanceof SeoMedia) {
+                return [
+                    'url' => (string) $existing->url,
+                    'media_type' => 'image',
+                    'seo_media_id' => (int) $existing->id,
+                    'status' => (string) $existing->status,
+                ];
+            }
+
+            throw new \RuntimeException('Yêu cầu tạo ảnh đang được xử lý, vui lòng thử lại sau vài giây.');
+        });
+    }
+
+    /**
+     * @param  array<string, string>  $variables
+     */
+    private function dispatchGenerateMediaJob(
+        SeoMedia $placeholder,
+        int $promptId,
+        array $variables,
+        string $toolType,
+        bool $sync,
+    ): void {
+        if ($sync) {
+            GenerateMediaJob::dispatchSync(
+                (int) $placeholder->id,
+                $promptId,
+                $variables,
+                $toolType,
+            );
+
+            return;
+        }
+
+        GenerateMediaJob::dispatch(
+            (int) $placeholder->id,
+            $promptId,
+            $variables,
+            $toolType,
+        )
+            ->onQueue('media_generation')
+            ->afterResponse();
     }
 
     /**

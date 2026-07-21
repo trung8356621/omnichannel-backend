@@ -24,7 +24,7 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $result = $service->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
 
         $this->assertFalse($result['success']);
-        $this->assertStringContainsString('ManualAutomationDispatcher', (string) ($result['message'] ?? ''));
+        $this->assertStringContainsString('WordPressManualSyncService', (string) ($result['message'] ?? ''));
         Bus::assertNothingDispatched();
     }
 
@@ -38,7 +38,7 @@ final class ArticleWpSyncQueueServiceTest extends TestCase
         $result = app(ArticleWpSyncQueueService::class)->enqueueFromEditorBundle($article, ['html' => '<p>x</p>']);
 
         $this->assertFalse($result['success']);
-        $this->assertStringContainsString('ManualAutomationDispatcher', (string) ($result['message'] ?? ''));
+        $this->assertStringContainsString('WordPressManualSyncService', (string) ($result['message'] ?? ''));
         Bus::assertNothingDispatched();
     }
 

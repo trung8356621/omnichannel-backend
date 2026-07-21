@@ -15,6 +15,8 @@ use App\Addons\SeoContentAi\Services\SeoProjectArchiveService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemService;
 use App\Addons\SeoContentAi\Services\SeoProjectRunItemsReader;
 use App\Addons\SeoContentAi\Services\SeoProjectWorkflowRunService;
+use App\Addons\SeoContentAi\Services\ContentProject\ContentProjectRunBulkSyncService;
+use App\Addons\SeoContentAi\Support\ContentProjectRunSettings;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoProjectRunErrorFormatter;
 use App\Addons\SeoContentAi\Support\SeoProjectRunItemsDisplayPresenter;
@@ -204,6 +206,8 @@ class ViewSeoProjectRun extends Page
             'taskIds' => $this->getQueueTaskIds(),
             'rerunAllTaskIds' => $this->getRerunAllTaskIds(),
             'canRerunAll' => $this->canRerunAllItems(),
+            'canSyncAll' => $this->canSyncAllItems(),
+            'runSettings' => ContentProjectRunSettings::fromRun($this->projectRun)->toArray(),
             'autorun' => request()->boolean('autorun'),
             'labels' => [
                 'running' => __('seo-content-ai::filament.projects.run_queue_running'),
@@ -214,6 +218,15 @@ class ViewSeoProjectRun extends Page
                 'rerunAll' => __('seo-content-ai::filament.projects.run_rerun_all'),
                 'rerunAllConfirm' => __('seo-content-ai::filament.projects.run_rerun_all_confirm'),
                 'rerunAllRunning' => __('seo-content-ai::filament.projects.run_rerun_all_running'),
+                'runSettingsHeading' => __('seo-content-ai::filament.projects.run_settings_heading'),
+                'runSettingsGeneratePostImages' => __('seo-content-ai::filament.projects.run_settings_generate_post_images'),
+                'runSettingsGeneratePostImagesHelp' => __('seo-content-ai::filament.projects.run_settings_generate_post_images_help'),
+                'runSettingsStart' => __('seo-content-ai::filament.projects.run_settings_start'),
+                'runSettingsCancel' => __('seo-content-ai::filament.projects.run_settings_cancel'),
+                'syncAll' => __('seo-content-ai::filament.projects.run_sync_all'),
+                'syncAllConfirmHeading' => __('seo-content-ai::filament.projects.run_sync_all_confirm_heading'),
+                'syncAllConfirmBody' => __('seo-content-ai::filament.projects.run_sync_all_confirm_body'),
+                'syncAllCancel' => __('seo-content-ai::filament.projects.run_settings_cancel'),
                 'stop' => __('seo-content-ai::filament.projects.run_stop'),
                 'stopping' => __('seo-content-ai::filament.projects.run_stopping'),
                 'retryItemConfirm' => __('seo-content-ai::filament.projects.run_retry_item_confirm'),
@@ -865,6 +878,82 @@ class ViewSeoProjectRun extends Page
         app(SeoProjectWorkflowRunService::class)->markRunCompletedQuietly($this->projectRun);
         $this->projectRun->refresh();
         $this->skipRender();
+    }
+
+    public function canSyncAllItems(): bool
+    {
+        if ($this->projectRun === null) {
+            return false;
+        }
+
+        return SeoAccessControl::canSyncArticlesToWordPress()
+            && SeoAccessControl::canAccessContentProjectRun($this->projectRun->project);
+    }
+
+    /**
+     * @param  array<string, mixed>  $settings
+     */
+    public function updateRunSettingsForRerun(array $settings): array
+    {
+        if ($this->projectRun === null) {
+            return ['success' => false, 'message' => 'Run không tồn tại.'];
+        }
+
+        abort_unless(SeoAccessControl::canRetryProjectRunItem($this->projectRun->project), 403);
+
+        $validated = validator($settings, [
+            'generate_post_images' => ['nullable', 'boolean'],
+        ])->validate();
+
+        $this->projectRun = app(SeoProjectWorkflowRunService::class)
+            ->updateRunSettings($this->projectRun, $validated);
+
+        return [
+            'success' => true,
+            'settings' => ContentProjectRunSettings::fromRun($this->projectRun)->toArray(),
+        ];
+    }
+
+    /**
+     * @return array{success: bool, message: string, queued?: int, skipped?: int}
+     */
+    public function syncAllCompleted(): array
+    {
+        if ($this->projectRun === null) {
+            return ['success' => false, 'message' => 'Run không tồn tại.'];
+        }
+
+        abort_unless($this->canSyncAllItems(), 403);
+
+        $actor = auth()->user();
+        if ($actor === null) {
+            return ['success' => false, 'message' => 'Chưa đăng nhập.'];
+        }
+
+        $result = app(ContentProjectRunBulkSyncService::class)
+            ->dispatchEligibleArticles($this->projectRun, $actor);
+
+        $queued = (int) ($result['queued'] ?? 0);
+        $skipped = (int) ($result['skipped'] ?? 0);
+
+        Notification::make()
+            ->title(__('seo-content-ai::filament.projects.run_sync_all_done_title'))
+            ->body(__('seo-content-ai::filament.projects.run_sync_all_done_body', [
+                'queued' => $queued,
+                'skipped' => $skipped,
+            ]))
+            ->success()
+            ->send();
+
+        return [
+            'success' => true,
+            'message' => __('seo-content-ai::filament.projects.run_sync_all_done_body', [
+                'queued' => $queued,
+                'skipped' => $skipped,
+            ]),
+            'queued' => $queued,
+            'skipped' => $skipped,
+        ];
     }
 
     public function beginRunQueue(): void

@@ -17,6 +17,18 @@
         </p>
     </div>
 @else
+@php
+    $seoActiveArticleOperation = app(\App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::class)
+        ->activeOperation($record);
+    $seoHasActiveArticleOperation = is_array($seoActiveArticleOperation)
+        && in_array((string) ($seoActiveArticleOperation['raw_status'] ?? ''), [
+            \App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::STATUS_PENDING,
+            \App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService::STATUS_PROCESSING,
+        ], true);
+@endphp
+<script>
+    window.__SEO_ACTIVE_ARTICLE_OPERATION__ = @js($seoHasActiveArticleOperation ? $seoActiveArticleOperation : null);
+</script>
 @once
 <script>
         window.__seoArticleHeavyActionOverlay = {
@@ -85,12 +97,12 @@
                 const copy = this.copyForAction(normalized);
                 const title = overlay.querySelector('[data-heavy-action-title]');
                 if (title) {
-                    title.textContent = copy.title;
+                    title.textContent = String(options.title || copy.title);
                 }
 
                 const message = overlay.querySelector('[data-heavy-action-message]');
                 if (message) {
-                    message.textContent = copy.message;
+                    message.textContent = String(options.message || copy.message);
                 }
 
                 document.documentElement.classList.add('seo-article-sync-locked');
@@ -202,6 +214,29 @@
                 articleId,
             });
         };
+
+        (function bootstrapActiveArticleOperationOverlay() {
+            const op = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
+            if (!op || typeof op !== 'object') {
+                return;
+            }
+            const status = String(op.status || '');
+            if (status !== 'queued' && status !== 'processing') {
+                return;
+            }
+            const title = status === 'processing'
+                ? 'Đang đồng bộ bài viết lên WordPress'
+                : 'Đang chờ đồng bộ WordPress';
+            const message = status === 'processing'
+                ? 'Hệ thống đang xử lý nội dung và hình ảnh. Trang sẽ tự tải lại khi hoàn tất.'
+                : 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.';
+            window.__seoArticleHeavyActionOverlay?.show('sync', {
+                persistUntilUnload: true,
+                title,
+                message,
+            });
+            window.__seoArticleAutosaveLock?.set?.('article-operation', true);
+        })();
 </script>
 @endonce
 
@@ -245,11 +280,19 @@
             init() {
                 this.syncFeaturedImageDraft();
                 this.loadPickerCustomTabs();
+                const activeOp = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
+                if (activeOp && typeof activeOp === 'object') {
+                    this.syncPageLocked = true;
+                    this.heavyPageAction = 'sync';
+                    window.__seoArticleOperationTracker?.apply?.(this.articleId, activeOp);
+                    return;
+                }
                 if (window.__seoArticleHeavyActionOverlay?.locked) {
                     this.syncPageLocked = true;
                     this.heavyPageAction = window.__seoArticleHeavyActionOverlay.action ?? 'sync';
                     return;
                 }
+                window.__seoArticleOperationTracker?.bootstrap?.(this.articleId);
             },
             syncFeaturedImageDraft() {
                 const stored = window.__seoFeaturedImageStorage?.load?.(this.articleId);

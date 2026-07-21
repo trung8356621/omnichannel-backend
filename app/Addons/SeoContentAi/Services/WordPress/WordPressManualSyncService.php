@@ -4,27 +4,29 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\WordPress;
 
-use App\Addons\SeoContentAi\Automation\BusinessHook\Enums\AutomationActionCode;
-use App\Addons\SeoContentAi\Automation\BusinessHook\Services\ManualAutomationDispatcher;
+use App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher;
+use App\Addons\SeoContentAi\Automation\Data\ActionContext;
+use App\Addons\SeoContentAi\Jobs\ManualWordPressSyncJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
-use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Models\User;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Manual WordPress UI entry → ManualAutomationDispatcher only.
+ * Manual WordPress UI entry → domain sync (no Automation Rule / AvailabilityGate).
+ * Local persist trước sync đi qua BusinessActionDispatcher (article.content.update).
  */
 final class WordPressManualSyncService
 {
     public function __construct(
-        private readonly ManualAutomationDispatcher $manualDispatcher,
         private readonly ArticleEditorBundleApplyService $bundleApply,
-        private readonly ArticleEditorPersistService $persist,
         private readonly ArticleWpSyncQueueService $syncQueue,
+        private readonly BusinessActionDispatcher $actions,
     ) {}
 
     /**
@@ -43,23 +45,51 @@ final class WordPressManualSyncService
         $this->bundleApply->apply($article, $bundle, $context);
 
         $html = (string) ($bundle['html'] ?? '');
-        $this->persist->persistLocalSilent($article->fresh() ?? $article, $context, $html);
+        $fresh = $article->fresh() ?? $article;
+        $persist = $this->actions->dispatch(
+            'article.content.update',
+            [
+                'article_id' => (int) $fresh->id,
+                'content' => $html,
+                'title' => $context->title,
+                'slug' => $context->slug,
+                'status' => $context->status,
+                'post_type' => $context->postType,
+                'visibility' => $context->visibility,
+                'publish_day' => $context->publishDay,
+                'publish_month' => $context->publishMonth,
+                'publish_year' => $context->publishYear,
+                'publish_hour' => $context->publishHour,
+                'publish_minute' => $context->publishMinute,
+                'seo_meta_description' => $context->seoMetaDescription,
+                'focus_keyword' => $context->focusKeyword,
+            ],
+            ActionContext::fromArray([
+                'origin' => 'manual_wordpress_sync',
+                'correlation_id' => Str::uuid()->toString(),
+                'actor_id' => (int) $actor->id,
+                'site_id' => (int) ($fresh->site_id ?? 0) ?: null,
+            ]),
+        );
 
-        $article = $article->fresh() ?? $article;
+        if (! $persist->success) {
+            return [
+                'success' => false,
+                'status' => 'blocked',
+                'message' => (string) ($persist->error['message'] ?? 'Không lưu được bài trước khi sync WordPress.'),
+            ];
+        }
+
+        $article = $fresh->fresh() ?? $fresh;
         $publishImmediately = (bool) filter_var(
             data_get($bundle, 'publish_box.publish_immediately', false),
             FILTER_VALIDATE_BOOL,
         );
 
-        return $this->dispatchWordpress(
+        return $this->enqueueManual(
             $article,
             $actor,
             $initiatedFrom,
-            [
-                'article_id' => (int) $article->id,
-                'site_id' => (int) ($article->site_id ?? 0),
-                'content_version' => $this->contentVersion($article, $html),
-            ],
             [
                 'mode' => $publishImmediately ? 'publish' : 'sync',
                 'seo_override' => $context->seoPayloadForWordPress(),
@@ -75,17 +105,7 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->dispatchWordpress(
-            $article,
-            $actor,
-            $initiatedFrom,
-            [
-                'article_id' => (int) $article->id,
-                'site_id' => (int) ($article->site_id ?? 0),
-                'content_version' => 'rerun:'.now()->getTimestamp(),
-            ],
-            ['mode' => 'sync'],
-        );
+        return $this->enqueueManual($article, $actor, $initiatedFrom, ['mode' => 'sync']);
     }
 
     /**
@@ -98,15 +118,10 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->dispatchWordpress(
+        return $this->enqueueManual(
             $article,
             $actor,
             $initiatedFrom,
-            [
-                'article_id' => (int) $article->id,
-                'site_id' => (int) ($article->site_id ?? 0),
-                'content_version' => 'publish:'.($article->updated_at?->getTimestamp() ?? time()),
-            ],
             [
                 'mode' => 'publish',
                 'seo_override' => $seoOverride ?? [],
@@ -123,15 +138,10 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->dispatchWordpress(
+        return $this->enqueueManual(
             $article,
             $actor,
             $initiatedFrom,
-            [
-                'article_id' => (int) $article->id,
-                'site_id' => (int) ($article->site_id ?? 0),
-                'content_version' => 'seo_meta:'.md5(json_encode($seoOverride)),
-            ],
             [
                 'mode' => 'seo_meta',
                 'seo_override' => $seoOverride,
@@ -147,15 +157,10 @@ final class WordPressManualSyncService
         abort_unless(SeoAccessControl::canSyncArticlesToWordPress(), 403);
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
 
-        return $this->dispatchWordpress(
+        return $this->enqueueManual(
             $article,
             $actor,
             $initiatedFrom,
-            [
-                'article_id' => (int) $article->id,
-                'site_id' => (int) ($article->site_id ?? 0),
-                'content_version' => 'slug:'.$slug,
-            ],
             [
                 'mode' => 'slug',
                 'slug' => $slug,
@@ -164,35 +169,146 @@ final class WordPressManualSyncService
     }
 
     /**
-     * @param  array<string, mixed>  $input
      * @param  array<string, mixed>  $settings
      * @return array<string, mixed>
      */
-    private function dispatchWordpress(
+    private function enqueueManual(
         SeoArticle $article,
         User $actor,
         string $initiatedFrom,
-        array $input,
         array $settings,
     ): array {
-        $result = $this->manualDispatcher->dispatch(
-            actionCode: AutomationActionCode::WordpressArticleSync->value,
-            subject: $article,
-            actor: $actor,
-            input: $input,
-            settings: $settings,
-            context: [
-                'request_id' => (string) Str::uuid(),
-                'initiated_from' => $initiatedFrom,
-            ],
-            initiatedFrom: $initiatedFrom,
-        );
+        $siteId = (int) ($article->site_id ?? 0);
+        if ($siteId <= 0) {
+            return $this->blocked(
+                'CONNECTION_MISSING',
+                __('seo-content-ai::filament.automation.manual_sync_no_site'),
+            );
+        }
 
-        return $result->toArray();
+        $lockKey = 'manual-wp-sync:'.(int) $article->id;
+        $lock = Cache::lock($lockKey, 120);
+        if (! $lock->get()) {
+            $active = $this->syncQueue->activeOperation($article);
+            if ($active !== null && in_array((string) ($active['raw_status'] ?? ''), [
+                ArticleWpSyncQueueService::STATUS_PENDING,
+                ArticleWpSyncQueueService::STATUS_PROCESSING,
+            ], true)) {
+                return $this->deduplicated($active, $article);
+            }
+
+            return $this->blocked(
+                'SYNC_IN_PROGRESS',
+                __('seo-content-ai::filament.automation.manual_sync_in_progress'),
+            );
+        }
+
+        try {
+            if ($this->syncQueue->isActive($article)) {
+                $active = $this->syncQueue->activeOperation($article);
+
+                return $this->deduplicated($active ?? [], $article);
+            }
+
+            $manual = ManualSyncContext::make(
+                initiatedBy: (int) $actor->getKey(),
+                source: $initiatedFrom !== '' ? $initiatedFrom : 'editor',
+                articleId: (int) $article->id,
+                domainId: $siteId,
+            );
+
+            $queueMeta = $this->syncQueue->markQueued($article, [
+                'operation' => 'wordpress_sync',
+                'request_id' => $manual->requestId,
+                'correlation_id' => $manual->correlationId,
+                'source' => $manual->source,
+                'initiated_by' => $manual->initiatedBy,
+                'domain_id' => $manual->domainId,
+                'mode' => (string) ($settings['mode'] ?? 'sync'),
+            ]);
+
+            ManualWordPressSyncJob::dispatch(
+                articleId: (int) $article->id,
+                userId: $manual->initiatedBy,
+                source: $manual->source,
+                requestId: $manual->requestId,
+                correlationId: $manual->correlationId,
+                domainId: $manual->domainId,
+                requestedAt: $manual->requestedAt,
+                settings: $settings,
+                auditMeta: $manual->toAuditMeta(),
+            );
+
+            Log::info('manual_wordpress_sync.queued', array_merge($manual->toAuditMeta(), [
+                'queue_status' => $queueMeta['status'] ?? null,
+            ]));
+
+            return [
+                'success' => true,
+                'status' => 'dispatched',
+                'queued' => true,
+                'message' => __('seo-content-ai::filament.automation.manual_sync_queued'),
+                'manual' => true,
+                'request_id' => $manual->requestId,
+                'correlation_id' => $manual->correlationId,
+                'source' => $manual->source,
+                'initiated_by' => $manual->initiatedBy,
+                'execution_id' => null,
+                'rule_code' => null,
+                'operation' => $this->syncQueue->activeOperation($article),
+                'notification' => [
+                    'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
+                    'body' => __('seo-content-ai::filament.automation.manual_sync_queued'),
+                    'status' => 'success',
+                ],
+            ];
+        } finally {
+            $lock->release();
+        }
     }
 
-    private function contentVersion(SeoArticle $article, string $html): string
+    /**
+     * @param  array<string, mixed>  $active
+     * @return array<string, mixed>
+     */
+    private function deduplicated(array $active, SeoArticle $article): array
     {
-        return substr(hash('sha256', ((string) ($article->updated_at?->getTimestamp() ?? 0)).'|'.$html), 0, 16);
+        $message = __('seo-content-ai::filament.automation.manual_sync_in_progress');
+
+        return [
+            'success' => true,
+            'status' => 'deduplicated',
+            'queued' => true,
+            'message' => $message,
+            'manual' => true,
+            'operation' => $active !== [] ? $active : $this->syncQueue->activeOperation($article),
+            'request_id' => $active['request_id'] ?? null,
+            'correlation_id' => $active['correlation_id'] ?? null,
+            'notification' => [
+                'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
+                'body' => $message,
+                'status' => 'info',
+            ],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function blocked(string $code, string $message): array
+    {
+        return [
+            'success' => false,
+            'status' => 'blocked',
+            'queued' => false,
+            'message' => $message,
+            'error_code' => $code,
+            'manual' => true,
+            'notification' => [
+                'title' => __('seo-content-ai::filament.automation.manual_sync_blocked_title'),
+                'body' => $message,
+                'status' => 'warning',
+            ],
+        ];
     }
 }

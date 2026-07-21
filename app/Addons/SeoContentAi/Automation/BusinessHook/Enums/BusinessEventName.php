@@ -47,6 +47,10 @@ enum BusinessEventName: string
 
     case NotificationRequested = 'notification.requested';
 
+    case KeywordSaved = 'keyword.saved';
+    case ArticleApproved = 'article.approved';
+    case ArticleSeoMetaUpdated = 'article.seo_meta_updated';
+
     case ScheduleTriggered = 'automation.schedule.triggered';
     case ManualActionRequested = 'automation.manual_action_requested';
 }

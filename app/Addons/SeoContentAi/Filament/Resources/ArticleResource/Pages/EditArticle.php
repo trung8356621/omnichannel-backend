@@ -42,6 +42,7 @@ use App\Addons\SeoContentAi\Services\ArticleQuickPostReviewService;
 use App\Addons\SeoContentAi\Services\ArticleQuickTranslateService;
 use App\Addons\SeoContentAi\Services\ArticleScheduleReconcileService;
 use App\Addons\SeoContentAi\Services\ArticleWordPressSyncFlagService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Services\EditorImageTaskResolverService;
 use App\Addons\SeoContentAi\Services\MediaLibraryAccessScope;
 use App\Addons\SeoContentAi\Services\MediaLibraryArticleResolver;
@@ -231,6 +232,34 @@ class EditArticle extends SeoEditRecord
         $this->articleHeavyActionBusy = false;
         $this->articleHeavyAction = null;
 
+        $activeOp = app(ArticleWpSyncQueueService::class)->activeOperation($this->record);
+        if (
+            is_array($activeOp)
+            && in_array((string) ($activeOp['raw_status'] ?? ''), [
+                ArticleWpSyncQueueService::STATUS_PENDING,
+                ArticleWpSyncQueueService::STATUS_PROCESSING,
+            ], true)
+        ) {
+            $this->articleHeavyActionBusy = true;
+            $this->articleHeavyAction = 'sync';
+            $status = (string) ($activeOp['status'] ?? 'queued');
+            $title = $status === 'processing'
+                ? 'Đang đồng bộ bài viết lên WordPress'
+                : 'Đang chờ đồng bộ WordPress';
+            $message = $status === 'processing'
+                ? 'Hệ thống đang xử lý nội dung và hình ảnh. Trang sẽ tự tải lại khi hoàn tất.'
+                : 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.';
+            $this->js(
+                'window.__seoArticleHeavyActionOverlay?.show("sync", {'
+                .'persistUntilUnload: true,'
+                .'title: '.json_encode($title).','
+                .'message: '.json_encode($message)
+                .'});'
+                .'window.__seoArticleAutosaveLock?.set("article-operation", true);'
+                .'window.__seoArticleOperationTracker?.poll?.('.((int) $this->record->getKey()).');'
+            );
+        }
+
         $restoredMessage = session()->pull('seo_revision_restored');
         if (is_string($restoredMessage) && $restoredMessage !== '') {
             Notification::make()
@@ -314,17 +343,38 @@ class EditArticle extends SeoEditRecord
             $this->articleSlug = Str::slug($slug);
         }
 
-        $result = app(ArticleEditorSeoMetaService::class)->save(
-            $this->record,
-            $this->focusKeyword,
-            $this->seoMetaDescription,
-            $this->articleSlug,
+        $result = app(\App\Addons\SeoContentAi\Automation\Contracts\BusinessActionDispatcher::class)->dispatch(
+            'article.seo_meta.update',
+            [
+                'article_id' => (int) $this->record->id,
+                'focus_keyword' => $this->focusKeyword,
+                'meta_description' => $this->seoMetaDescription,
+                'slug' => $this->articleSlug,
+                'dispatch_scoring' => false,
+            ],
+            \App\Addons\SeoContentAi\Automation\Data\ActionContext::fromArray([
+                'origin' => 'filament.edit_article',
+                'actor_id' => auth()->id() !== null ? (int) auth()->id() : null,
+                'site_id' => (int) ($this->record->site_id ?? 0) ?: null,
+            ]),
         );
 
-        $preview = $result['google_serp_preview'] ?? $this->getGoogleSerpPreview();
+        if (! $result->success) {
+            throw new \RuntimeException((string) ($result->error['message'] ?? 'Không lưu được SEO meta.'));
+        }
+
+        $fresh = $this->record->fresh(['articleMetas', 'site']) ?? $this->record;
+        $payload = app(ArticleEditorSeoMetaService::class)->buildResponse(
+            $fresh,
+            (string) ($result->output['focus_keyword'] ?? $this->focusKeyword),
+            (string) ($result->output['meta_description'] ?? $this->seoMetaDescription),
+            (string) ($result->output['slug'] ?? $this->articleSlug),
+        );
+
+        $preview = $payload['google_serp_preview'] ?? $this->getGoogleSerpPreview();
         $this->dispatch('google-serp-preview-updated', preview: $preview);
 
-        return $result;
+        return $payload;
     }
 
     private function persistArticleSlugFromEditor(bool $silent = false): void
@@ -2767,11 +2817,10 @@ class EditArticle extends SeoEditRecord
             ->success()
             ->send();
 
-        $this->runProductReviewWorkflowAfterApproval();
-
         $this->record->refresh();
     }
 
+    /** @deprecated Reviewed must not auto-create product reviews — WP/automation owns that flow. */
     private function runProductReviewWorkflowAfterApproval(): void
     {
         $article = $this->record->fresh();

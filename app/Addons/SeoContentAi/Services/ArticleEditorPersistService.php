@@ -20,6 +20,9 @@ final class ArticleEditorPersistService
     ) {}
 
     /**
+     * Persist only. Event emission (article.content_updated) là trách nhiệm của caller/Action
+     * (UpdateArticleContentAction) — tránh emit trùng lặp khi service này được gọi qua Action.
+     *
      * @return array{success: bool, message: string, html?: string, faq_extracted?: bool, faq_count?: int}
      */
     public function persistLocal(
@@ -36,12 +39,6 @@ final class ArticleEditorPersistService
                 'success' => false,
                 'message' => 'Editor trả về nội dung rỗng. Hãy thử lại hoặc dùng Lấy từ WordPress / Restore trước khi lưu.',
             ];
-        }
-
-        if ($deferSeoAnalysis) {
-            // Full cutover: không auto SEO score. Emit content_updated → Automation rule.
-            app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
-                ->articleContentUpdated($article->fresh() ?? $article);
         }
 
         $saveBody = 'Content is saved only in SEO system. Use "Sync" to push to WordPress.';

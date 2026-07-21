@@ -33,14 +33,24 @@ final class AutomationAuditDirectBusinessActionsCommand extends Command
             ],
             [
                 'file' => 'Services/WordPress/WordPressManualSyncService.php',
-                'needles' => ['ManualAutomationDispatcher', 'WordpressArticleSync'],
+                'needles' => ['ManualSyncContext', 'ManualWordPressSyncJob'],
                 'forbidden' => [
+                    'ManualAutomationDispatcher',
                     'SyncArticleToWordPressFromQueueJob::dispatch',
                     'use App\\Addons\\SeoContentAi\\Jobs\\SyncArticleToWordPressFromQueueJob',
-                    '->syncForArticle(',
-                    '->publishForArticle(',
+                    'AutomationAvailabilityGate',
                 ],
-                'action' => 'wordpress.article.sync',
+                'action' => 'manual.wordpress.sync',
+                'expect' => 'cutover',
+            ],
+            [
+                'file' => 'Jobs/ManualWordPressSyncJob.php',
+                'needles' => ['ManualWordPressContext', 'wordpressSynced', 'origin'],
+                'forbidden' => [
+                    'ManualAutomationDispatcher',
+                    'ProductReviewPostSyncReconciler',
+                ],
+                'action' => 'manual.wordpress.sync',
                 'expect' => 'cutover',
             ],
             [

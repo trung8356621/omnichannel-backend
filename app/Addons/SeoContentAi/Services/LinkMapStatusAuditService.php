@@ -12,17 +12,12 @@ final class LinkMapStatusAuditService
     public function __construct(
         private readonly LinkAuditCacheService $auditCache,
         private readonly KeywordLinkTargetResolver $targetResolver,
-        private readonly SeoQueueControlService $queueControl,
     ) {}
 
     public function queueLinkMap(SeoLinkMap $linkMap, int $siteId, ?string $resolvedTargetUrl = null): void
     {
         $linkMapId = (int) ($linkMap->id ?? 0);
         if ($linkMapId <= 0 || $siteId <= 0) {
-            return;
-        }
-
-        if ($this->queueControl->isPausedForSite($siteId)) {
             return;
         }
 
@@ -45,7 +40,7 @@ final class LinkMapStatusAuditService
 
     public function queueDomainAudit(int $siteId): int
     {
-        if ($siteId <= 0 || $this->queueControl->isPausedForSite($siteId)) {
+        if ($siteId <= 0) {
             return 0;
         }
 

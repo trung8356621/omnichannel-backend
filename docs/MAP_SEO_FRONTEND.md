@@ -140,7 +140,8 @@ resources/js/
 ├── utils/                          # API clients, storage, TipTap helpers
 │   ├── seoMediaApi.js              # /api/seo/media/*
 │   ├── watermarkApi.js             # /api/seo/watermark/*
-│   ├── articleEditorApi.js         # save / sync-wp
+│   ├── articleEditorApi.js         # save / sync-wp / finishArticleSyncFromApi
+│   ├── articleOperationTracker.js  # overlay poll + reload (WP sync, slug fix)
 │   ├── seoArticleApi.js            # fetch wrapper + CSRF
 │   ├── articleEditorLivewire.js    # callEditArticleLivewire bridge
 │   ├── seoAssistantNavigator.js    # Alpine Assistant Dock (Edit Article sidebar)
@@ -446,8 +447,9 @@ flowchart LR
 |----------|------|------|---------|
 | `saveArticleViaApi` | POST | `/{article}/save` | Filament header Save, `__seoExecuteHeavyArticleAction` |
 | `syncArticleToWordPressViaApi` | POST | `/{article}/sync-wp` | Filament header Sync WP |
+| `fetchArticleOperationStatus` | GET | `/{article}/operation-status` | `articleOperationTracker.js` (poll) |
 
-**Controller:** `ArticleEditorSyncController` · **Wrapper:** `seoArticleApi.js` (tự gắn `X-CSRF-TOKEN` cho POST/PUT/PATCH/DELETE + JSON)
+**Controller:** `ArticleEditorSyncController`, `ArticleEditorOperationController` · **Wrapper:** `seoArticleApi.js` (tự gắn `X-CSRF-TOKEN` cho POST/PUT/PATCH/DELETE + JSON)
 
 ### 5.4 Outline API (inline fetch)
 

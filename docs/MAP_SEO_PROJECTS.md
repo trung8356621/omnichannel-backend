@@ -266,11 +266,11 @@ Lưu kết quả test workflow cho một task. Columns: `task_id` (FK → `seo_t
 |--------|---------|
 | `MarkProjectTaskCompletedAction` / bridge | Emit `project.task_completed` → bridge map `content_project.task.completed` + `article.completed` nếu có `article_id` |
 | `BusinessHookEmitter` | `taskFailed`, `runCompleted`, `taskArchived`, `articleArchived` / `articleRestored` |
-| Rule `sync-article-to-wordpress` | Seed **disabled** — bật mới queue `wordpress.article.sync` trên `automation-external` |
-| `WordPressManualSyncService` | Manual only (`manual=true`); không giả automation |
-| `automation:audit-wordpress-coupling` | Audit automatic/manual callers + conflict rules |
+| Rule `sync-article-to-wordpress` | Seed **enabled+published** (business) — `article.completed` → linear `wordpress.article.sync` → `product-review.create` → `product-review.sync-wp` on `automation-external` |
+| `WordPressManualSyncService` | Manual only (`ManualSyncContext` + `ManualWordPressSyncJob` on `seo`); emit `wordpress.synced` origin=manual; không giả automation |
+| `automation:audit-wordpress-coupling` / `automation:audit-coupling` | Audit automatic/manual callers + ownership collisions |
 
-Invariant: `SeoProjectWorkflowRunService` / `CreateArticlesFromTaskService` / `ArticleScheduleReconcileService` **không** import WP outbound hub. Completion → business event only. Disabled rule = no automatic WP job. Chi tiết: [AUTOMATION_SERVICE_INVENTORY.md §10](automation/AUTOMATION_SERVICE_INVENTORY.md).
+Invariant: `SeoProjectWorkflowRunService` / `CreateArticlesFromTaskService` / `ArticleScheduleReconcileService` **không** import WP outbound hub. Completion → business event only. Chi tiết: [AUTOMATION_CUTOVER_AUDIT.md](automation/AUTOMATION_CUTOVER_AUDIT.md).
 
 **Release freeze (2026-07-20):** Task = business identity; run item = CP execution; Automation execution = workflow (immutable published version). Draft never executes. External WP side effect chỉ khi rule **enabled + published**. `ExecuteAutomationRuleJob` queue = `automation-critical` (không `default`).
 

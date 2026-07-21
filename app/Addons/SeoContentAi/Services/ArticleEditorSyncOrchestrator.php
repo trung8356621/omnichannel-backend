@@ -196,13 +196,13 @@ final class ArticleEditorSyncOrchestrator
         $steps[] = $this->step('finalize', 'done', (string) ($finalize['step_detail'] ?? $syncBody));
 
         $article = $article->fresh() ?? $article;
+        // Emit only — pending product reviews owned by automation rule on wordpress.synced.
         app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
             ->wordpressSynced($article, [
                 'wp_post_id' => (int) ($article->wp_post_id ?? 0) ?: null,
                 'message' => $syncBody,
+                'origin' => 'orchestrator',
             ]);
-        app(\App\Addons\SeoContentAi\Services\ProductReview\ProductReviewPostSyncReconciler::class)
-            ->reconcileAfterArticleSynced($article);
 
         return [
             'success' => true,

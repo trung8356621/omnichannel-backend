@@ -26,7 +26,7 @@
 | **[Google Search Console — API Connections](MAP_SEO_GSC_API_CONNECTIONS.md)** | **OAuth GSC riêng, route `{id}`, master/mapping, gap multi-connection, checklist debug** |
 | [Team & Phân quyền](MAP_SEO_TEAM.md) | SeoAccessControl, RBAC, SEO roles, Team management |
 | [Performance & R&D Hub](MAP_SEO_PERFORMANCE_HUB.md) | `/performance-hub` (submenu Keywords), GSC KPI, rank keyword groups + SERP providers (queue `seo`), Quick Wins; Cannibalization tab `/keywords/cannibalization` |
-| [Business Automation](automation/AUTOMATION_SERVICE_INVENTORY.md) | Action catalog + **Business Hook** V1–V3; [Module SDK](automation/MODULE_SDK.md); [Phase 4](automation/AUTOMATION_PHASE4_ROLLOUT.md), [4B](automation/AUTOMATION_PHASE4B_PREP.md), [SKILL](automation/SKILL_ADD_AUTOMATION_ACTION.md) |
+| [Business Automation](automation/AUTOMATION_SERVICE_INVENTORY.md) | `article > wordpress` = 3 actions (sync + product-review.create + product-review.sync-wp); WP SoT review status; [Cutover audit](automation/AUTOMATION_CUTOVER_AUDIT.md) |
 
 **Luồng chia:** UI editor (React + Alpine) → REST media/outline hoặc Livewire save → `omi_seo_ai` → sync WP qua `WordPressArticleSyncService`.
 
@@ -128,7 +128,7 @@ flowchart TB
 | Article Outline API (`/api/seo/articles/{id}/outline*`) | [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) §2.5 + §5 |
 | Article SEO Audit (`/seo/{connection_hash}/articles/optimal`) | [MAP_SEO_AUDIT.md](MAP_SEO_AUDIT.md) |
 | Content Projects (`/seo/content-projects`) | [MAP_SEO_PROJECTS.md](MAP_SEO_PROJECTS.md) |
-| Queue Jobs (7 jobs, timeout, dispatch) | [FEATURE_MAP_FULL.md](FEATURE_MAP_FULL.md) §Queue Jobs |
+| Queue Jobs (dispatch/worker; Queue Manager UI đã gỡ) | [FEATURE_MAP_FULL.md](FEATURE_MAP_FULL.md) §Queue Jobs / §Queue Manager UI |
 | Hotspots (`SeoMediaBuilder`, `WordPressArticleSyncService`, …) | MCP `search_graph min_degree=20` |
 | Thư mục addon | `app/Addons/SeoContentAi/{Filament,Http,Models,Services,resources}` |
 | MCP trace | `trace_path function_name="syncForArticle" direction=both depth=5` |

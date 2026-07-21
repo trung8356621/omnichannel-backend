@@ -1,0 +1,52 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Addons\SeoContentAi\Tests\Unit;
+
+use App\Addons\SeoContentAi\Services\SeoMediaUrlReplacementService;
+use PHPUnit\Framework\TestCase;
+
+final class SeoMediaUrlReplacementServiceTest extends TestCase
+{
+    public function test_build_variant_map_covers_relative_and_path(): void
+    {
+        $service = new SeoMediaUrlReplacementService();
+        $map = $service->buildVariantMap(
+            '/storage/uploads/seo_media/old-slug.jpg',
+            '/storage/uploads/seo_media/new-slug.jpg',
+        );
+
+        $this->assertSame(
+            '/storage/uploads/seo_media/new-slug.jpg',
+            $map['/storage/uploads/seo_media/old-slug.jpg'] ?? null,
+        );
+        $this->assertSame(
+            'uploads/seo_media/new-slug.jpg',
+            $map['uploads/seo_media/old-slug.jpg'] ?? null,
+        );
+    }
+
+    public function test_replace_in_text_updates_src_and_srcset_fragments(): void
+    {
+        $service = new SeoMediaUrlReplacementService();
+        $html = '<img src="/storage/uploads/seo_media/old-slug.jpg" srcset="/storage/uploads/seo_media/old-slug.jpg 1x">';
+        $next = $service->replaceInText($html, [
+            '/storage/uploads/seo_media/old-slug.jpg' => '/storage/uploads/seo_media/new-slug.jpg',
+        ]);
+
+        $this->assertStringContainsString('/storage/uploads/seo_media/new-slug.jpg', $next);
+        $this->assertStringNotContainsString('/storage/uploads/seo_media/old-slug.jpg', $next);
+    }
+
+    public function test_find_remaining_old_refs(): void
+    {
+        $service = new SeoMediaUrlReplacementService();
+        $remaining = $service->findRemainingOldRefs(
+            '<p><img src="/storage/uploads/seo_media/old-slug.jpg"></p>',
+            ['/storage/uploads/seo_media/old-slug.jpg' => '/storage/uploads/seo_media/new-slug.jpg'],
+        );
+
+        $this->assertSame(['/storage/uploads/seo_media/old-slug.jpg'], $remaining);
+    }
+}

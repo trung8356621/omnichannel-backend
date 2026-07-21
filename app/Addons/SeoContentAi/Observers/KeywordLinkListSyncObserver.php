@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Observers;
 
+use App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter;
 use App\Addons\SeoContentAi\Models\Keyword;
-use App\Addons\SeoContentAi\Services\DomainLinkListKeywordSyncService;
 use App\Addons\SeoContentAi\Services\KeywordPhraseUpdateService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 
+/**
+ * Technical invariants only — domain link list sync owned by Automation Rule
+ * on keyword.saved → keyword.domain_link_list.sync.
+ */
 final class KeywordLinkListSyncObserver
 {
     private ?string $previousPhrase = null;
@@ -32,34 +36,30 @@ final class KeywordLinkListSyncObserver
             app(KeywordPhraseUpdateService::class)->propagate($keyword, $this->previousPhrase);
         }
 
-        if ($keyword->type !== Keyword::TYPE_NORMAL) {
-            $this->previousPhrase = null;
+        $previousPhrase = $this->previousPhrase;
+        $this->previousPhrase = null;
 
+        if ($keyword->type !== Keyword::TYPE_NORMAL) {
             return;
         }
 
-        $service = app(DomainLinkListKeywordSyncService::class);
         $siteId = (int) (SeoAccessControl::globalSiteId() ?? $keyword->resolveSiteId() ?? 0);
-
-        if ($this->previousPhrase !== null && $this->previousPhrase !== '' && $siteId > 0) {
-            $service->removeLinkFromDomainContext($siteId, $this->previousPhrase);
-            $this->previousPhrase = null;
-        }
-
         $phrase = trim((string) ($keyword->phrase ?? ''));
-        $targetUrl = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
-
         if ($siteId <= 0 || $phrase === '') {
             return;
         }
 
-        if ($targetUrl === '') {
-            $service->removeLinkFromDomainContext($siteId, $phrase);
+        $targetUrl = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
+        $operation = $targetUrl === '' ? 'remove' : 'upsert';
 
-            return;
-        }
-
-        $service->upsertLinkInDomainContext($siteId, $phrase, $targetUrl);
+        app(BusinessHookEmitter::class)->keywordSaved($keyword, [
+            'keyword_id' => (int) $keyword->id,
+            'site_id' => $siteId,
+            'phrase' => $phrase,
+            'target_url' => $targetUrl,
+            'previous_phrase' => (string) ($previousPhrase ?? ''),
+            'operation' => $operation,
+        ]);
     }
 
     public function deleted(Keyword $keyword): void
@@ -78,6 +78,13 @@ final class KeywordLinkListSyncObserver
             return;
         }
 
-        app(DomainLinkListKeywordSyncService::class)->removeLinkFromDomainContext($siteId, $phrase);
+        app(BusinessHookEmitter::class)->keywordSaved($keyword, [
+            'keyword_id' => (int) $keyword->id,
+            'site_id' => $siteId,
+            'phrase' => $phrase,
+            'target_url' => '',
+            'previous_phrase' => '',
+            'operation' => 'remove',
+        ]);
     }
 }
