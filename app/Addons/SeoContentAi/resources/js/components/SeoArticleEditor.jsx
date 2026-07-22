@@ -119,8 +119,9 @@ import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import {
-    ARTICLE_EDITOR_DRAFT_VERSION,
     clearDraft,
+    draftNeedsRestore,
+    hashContent,
     loadDraft,
     saveDraft,
 } from '../utils/articleEditorStorage';
@@ -2122,6 +2123,9 @@ export default function SeoArticleEditor({
     initialSupplementalImages = [],
     initialPostType = '',
     contentRevision = '',
+    connectionHash = '',
+    expectedUpdatedAt = '',
+    expectedContentHash = '',
     supportsProductGallery = false,
     productCategoryOptions = [],
     initialProductGallery = [],
@@ -2132,8 +2136,12 @@ export default function SeoArticleEditor({
     mediaPickerUrl = '',
     initialLoaiSanPham = '',
     initialGalleryDescription = '',
+    perfDebug = false,
 }) {
     const historyStep = editorSettings?.history_step ?? 20;
+    const connectionHashRef = useRef(connectionHash);
+    connectionHashRef.current = connectionHash;
+    const perfDebugEnabled = Boolean(perfDebug || editorSettings?.perf_debug);
 
     useEffect(() => {
         window.__SEO_ARTICLE_MEDIA_PICKER_ENDPOINT__ = mediaPickerUrl;
@@ -2142,6 +2150,23 @@ export default function SeoArticleEditor({
             delete window.__SEO_ARTICLE_MEDIA_PICKER_ENDPOINT__;
         };
     }, [mediaPickerUrl]);
+
+    useEffect(() => {
+        if (!perfDebugEnabled || typeof performance === 'undefined' || typeof performance.mark !== 'function') {
+            return;
+        }
+        performance.mark('seo-article-editor-react-ready');
+        try {
+            performance.measure(
+                'seo-article-editor-mount-to-react-ready',
+                'seo-article-editor-mount-start',
+                'seo-article-editor-react-ready',
+            );
+        } catch {
+            // Marks có thể thiếu nếu component remount qua livewire:navigated — bỏ qua.
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const [blocks, setBlocks] = useState([]);
     const [activeBlockId, setActiveBlockId] = useState(null);
@@ -2153,6 +2178,29 @@ export default function SeoArticleEditor({
         image: null,
         reviews: null,
     });
+    // Perf Phase 1 (J): panel nào đã được người dùng mở ít nhất 1 lần —
+    // Images/Reviews tab (nặng) chỉ mount nội dung thật khi đã "activated".
+    const [activatedPanels, setActivatedPanels] = useState(() => new Set());
+    useEffect(() => {
+        const onSwitchPanel = (event) => {
+            const panel = String(event?.detail?.panel ?? event?.detail?.widgetId ?? '').trim();
+            if (!panel) {
+                return;
+            }
+            setActivatedPanels((prev) => {
+                if (prev.has(panel)) {
+                    return prev;
+                }
+                const next = new Set(prev);
+                next.add(panel);
+                return next;
+            });
+        };
+
+        window.addEventListener('seo-assistant-switch-panel', onSwitchPanel);
+
+        return () => window.removeEventListener('seo-assistant-switch-panel', onSwitchPanel);
+    }, []);
     const [virtualReviews, setVirtualReviews] = useState(() =>
         Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
     );
@@ -2195,8 +2243,11 @@ export default function SeoArticleEditor({
     const [reviewsLoadWarning, setReviewsLoadWarning] = useState(null);
     const [reviewsLoading, setReviewsLoading] = useState(false);
     const productReviewsLoadOnceRef = useRef(false);
+    const reviewsPanelActive = activatedPanels.has('reviews');
     useEffect(() => {
-        if (!showReviewsTab || !isProductPost || !articleId || productReviewsLoadOnceRef.current) {
+        // Perf Phase 1 (H): defer — chỉ gọi WordPress product reviews khi panel Reviews
+        // đã được người dùng mở (không fetch ngay lúc mount trang).
+        if (!showReviewsTab || !isProductPost || !articleId || !reviewsPanelActive || productReviewsLoadOnceRef.current) {
             return undefined;
         }
         productReviewsLoadOnceRef.current = true;
@@ -2236,7 +2287,7 @@ export default function SeoArticleEditor({
         return () => {
             cancelled = true;
         };
-    }, [articleId, isProductPost, showReviewsTab]);
+    }, [articleId, isProductPost, showReviewsTab, reviewsPanelActive]);
 
     const refreshVirtualReviews = useCallback(async () => {
         if (!articleId || !isProductPost) {
@@ -2325,13 +2376,20 @@ export default function SeoArticleEditor({
     const featuredSnippetTargetRef = useRef(null);
 
     useEffect(() => {
+        // Perf Phase 1 (I): defer — không gọi /outline ngay lúc mount. Chỉ tải khi outline
+        // rail vào viewport, hoặc người dùng tương tác với outline (mở rail / sửa heading).
         if (!articleId) {
             return undefined;
         }
 
         let cancelled = false;
+        let triggered = false;
 
         const loadOutlineStatus = async () => {
+            if (triggered) {
+                return;
+            }
+            triggered = true;
             try {
                 const response = await fetch(`/api/seo/articles/${articleId}/outline`, {
                     headers: { Accept: 'application/json' },
@@ -2348,10 +2406,18 @@ export default function SeoArticleEditor({
             }
         };
 
-        void loadOutlineStatus();
+        // Không IntersectionObserver / không fetch khi rail chỉ đang hiện trong layout —
+        // chỉ khi user chủ động mở/tương tác outline (event).
+        const onOutlineOpened = () => {
+            void loadOutlineStatus();
+        };
+        window.addEventListener('seo-outline-rail-opened', onOutlineOpened);
+        window.addEventListener('seo-outline-interact', onOutlineOpened);
 
         return () => {
             cancelled = true;
+            window.removeEventListener('seo-outline-rail-opened', onOutlineOpened);
+            window.removeEventListener('seo-outline-interact', onOutlineOpened);
         };
     }, [articleId]);
 
@@ -2916,6 +2982,13 @@ export default function SeoArticleEditor({
         return panelFaqsRef.current;
     }, []);
 
+    // Perf Phase 1 (D): SEO analyze không còn chạy tự động theo mỗi keystroke (150ms debounce
+    // cũ là nguồn giật khi gõ). `seoStale` đánh dấu nội dung đã đổi từ lần analyze gần nhất;
+    // `analyzedBlocksRef` giữ tham chiếu blocks đã được analyze để so khớp (tránh nhấp nháy khi
+    // các luồng khác vừa setBlocks() vừa gọi requestAnalyze() trong cùng 1 lượt).
+    const analyzedBlocksRef = useRef(null);
+    const [seoStale, setSeoStale] = useState(false);
+
     const runLocalSeoAnalysis = useCallback(() => {
         if (!tempMergeRef.current) {
             blockFlushRef.current?.();
@@ -2959,27 +3032,35 @@ export default function SeoArticleEditor({
 
     const requestAnalyze = useCallback(() => {
         runLocalSeoAnalysis();
+        analyzedBlocksRef.current = blocksRef.current;
+        setSeoStale(false);
     }, [runLocalSeoAnalysis]);
 
+    const autosaveIntervalSecondsRaw = Number(editorSettings?.autosave_interval_seconds);
+    const autosaveIntervalSeconds = Number.isFinite(autosaveIntervalSecondsRaw)
+        ? Math.max(0, Math.min(30, autosaveIntervalSecondsRaw))
+        : 2;
+    const draftSaveDisabled = autosaveIntervalSeconds === 0;
+    const draftSaveDelayMs = Math.max(1, autosaveIntervalSeconds || 2) * 1000;
+
     const { debounced: debouncedLocalSave } = useDebouncedCallback(() => {
-        if (!articleId) return;
+        if (!articleId || draftSaveDisabled) return;
         setSaveStatus('saving');
-        saveDraft(articleId, {
-            blocks: blocksRef.current,
-            html: getExportHtml(),
+        saveDraft(articleId, connectionHashRef.current, {
+            content: getExportHtml(),
         });
         setSaveStatus('saved');
-    }, 2000);
+    }, draftSaveDelayMs);
 
-    const { debounced: debouncedAnalyze } = useDebouncedCallback(() => {
-        runLocalSeoAnalysis();
-    }, 150);
-
+    // scheduleAutosave chỉ lo lưu nháp local — KHÔNG còn gọi SEO analyze (đó là nguồn lag khi gõ).
+    // Analyze giờ chỉ chạy khi requestAnalyze() được gọi rõ ràng (nút Phân tích / sau hành động cụ thể).
     const scheduleAutosave = useCallback(() => {
+        if (draftSaveDisabled) {
+            return;
+        }
         setSaveStatus('pending');
         debouncedLocalSave();
-        debouncedAnalyze();
-    }, [debouncedLocalSave, debouncedAnalyze]);
+    }, [debouncedLocalSave, draftSaveDisabled]);
 
     const skipNextAutosave = useRef(true);
     const loadedArticleIdRef = useRef(null);
@@ -3065,6 +3146,11 @@ export default function SeoArticleEditor({
         };
     }, [undo, redo, canUndo, canRedo, requestAnalyze]);
 
+    // Perf Phase 1 (E): draft là content HTML thuần (schema_version 2) — không còn so khớp
+    // theo contentRevision/parserVersion/số ảnh. Nếu draft khác nội dung server hiện tại,
+    // KHÔNG tự áp — hỏi người dùng qua modal (Khôi phục / Bỏ nháp / Giữ server).
+    const [draftRestoreOffer, setDraftRestoreOffer] = useState(null);
+
     useEffect(() => {
         if (!articleId) return;
         if (loadedArticleIdRef.current === articleId) return;
@@ -3074,46 +3160,74 @@ export default function SeoArticleEditor({
         skipNextAutosave.current = true;
         clearTempMerge();
 
-        const draft = loadDraft(articleId);
-        const serverRevision = String(contentRevision ?? '').trim();
-        const draftRevision = String(draft?.contentRevision ?? '').trim();
-        const draftParserVersion = Number(draft?.parserVersion ?? 0);
-        const acceptsLegacyDraft =
-            !requiresClassicInlineRegroup(initialHtml) ||
-            draftParserVersion >= ARTICLE_EDITOR_DRAFT_VERSION;
-        const serverImageCount = countImagesFromHtml(initialHtml).withSrc;
-        const draftHtmlForCount =
-            typeof draft?.html === 'string' && draft.html.trim() !== ''
-                ? draft.html
-                : exportBlocksToHtml(Array.isArray(draft?.blocks) ? draft.blocks : []);
-        const draftImageCount = countImagesFromHtml(draftHtmlForCount).withSrc;
-        const draftMissingServerImages = serverImageCount > draftImageCount;
-        const canUseDraft =
-            draft &&
-            acceptsLegacyDraft &&
-            !draftMissingServerImages &&
-            (serverRevision === '' || draftRevision === serverRevision);
-        let parsed = [];
-        if (canUseDraft && draft?.blocks?.length) {
-            parsed = hoistInlineImagesFromTextBlocks(normalizeBlocks(draft.blocks));
-        } else if (canUseDraft && draft?.html) {
-            parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(draft.html));
+        const connHash = connectionHashRef.current;
+        const draft = loadDraft(articleId, connHash);
+        const serverBodyHash = hashContent(initialHtml);
+        const serverContentHash = String(expectedContentHash ?? '').trim() || serverBodyHash;
+        const serverBlocks = enrichBlocksWithPostImages(
+            parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml)),
+            postImagesRef.current,
+        );
+
+        setBlocks(serverBlocks);
+        analyzedBlocksRef.current = null;
+
+        if (draft && draftNeedsRestore(draft, {
+            content_hash: serverBodyHash || serverContentHash,
+            expected_content_hash: serverContentHash,
+        })) {
+            setDraftRestoreOffer({ draft, serverBlocks });
         } else {
-            parsed = parseHtmlToBlocks(stripLeadingH1FromHtml(initialHtml));
-        }
-        let nextBlocks = enrichBlocksWithPostImages(parsed, postImagesRef.current);
-        setBlocks(nextBlocks);
-        if (articleId && nextBlocks.length > 0) {
-            saveDraft(articleId, {
-                blocks: nextBlocks,
-                html: exportBlocksToHtml(nextBlocks),
-                contentRevision: serverRevision,
+            setDraftRestoreOffer(null);
+            saveDraft(articleId, connHash, {
+                content: exportBlocksToHtml(serverBlocks),
+                base_updated_at: expectedUpdatedAt || null,
+                base_content_hash: serverContentHash,
+                dirty_fields: [],
             });
         }
 
+        // Hydrate stale marker từ payload SEO nhẹ (bootstrap): score/analysis đã cache
+        // theo analyzed_content_hash — nếu khác content hiện tại thì gắn stale, KHÔNG auto-analyze.
+        const analyzedContentHash = String(initialSeo?.analyzed_content_hash ?? '').trim();
+        setSeoStale(
+            analyzedContentHash !== ''
+            && serverBodyHash !== ''
+            && analyzedContentHash !== serverBodyHash,
+        );
+
         setActiveBlockId(null);
         setGlobalEditor(null);
-    }, [articleId, initialHtml, initialPostImages, contentRevision, clearTempMerge]);
+    }, [articleId, initialHtml, initialPostImages, expectedUpdatedAt, expectedContentHash, clearTempMerge]);
+
+    const applyDraftRestore = useCallback(() => {
+        if (!draftRestoreOffer) return;
+        const restoredBlocks = enrichBlocksWithPostImages(
+            parseHtmlToBlocks(stripLeadingH1FromHtml(String(draftRestoreOffer.draft?.content ?? ''))),
+            postImagesRef.current,
+        );
+        setBlocks(restoredBlocks);
+        setDraftRestoreOffer(null);
+        setSeoStale(true);
+    }, [draftRestoreOffer]);
+
+    const discardDraftRestore = useCallback(() => {
+        clearDraft(articleId, connectionHashRef.current);
+        if (draftRestoreOffer?.serverBlocks) {
+            saveDraft(articleId, connectionHashRef.current, {
+                content: exportBlocksToHtml(draftRestoreOffer.serverBlocks),
+                base_updated_at: expectedUpdatedAt || null,
+                base_content_hash: String(expectedContentHash ?? '').trim(),
+                dirty_fields: [],
+            });
+        }
+        setDraftRestoreOffer(null);
+    }, [articleId, draftRestoreOffer, expectedUpdatedAt, expectedContentHash]);
+
+    const keepServerOverDraft = useCallback(() => {
+        // Giữ nội dung server hiện tại trong editor; KHÔNG xóa nháp — người dùng có thể quay lại sau.
+        setDraftRestoreOffer(null);
+    }, []);
 
     useEffect(() => {
         if (!initialSeo || hasHydratedSeoFromServerRef.current) {
@@ -3157,10 +3271,6 @@ export default function SeoArticleEditor({
             );
         }
     }, [initialSeo]);
-
-    useEffect(() => {
-        runLocalSeoAnalysis();
-    }, [runLocalSeoAnalysis]);
 
     const reconcileImagesTabWithBlocks = useCallback((nextBlocks) => {
         setSupplementalImages((prev) => reconcileSupplementalImagesWithBlocks(prev, nextBlocks));
@@ -3290,9 +3400,8 @@ export default function SeoArticleEditor({
             blocksRef.current = nextBlocks;
             setBlocks(nextBlocks);
             if (articleId) {
-                saveDraft(articleId, {
-                    blocks: nextBlocks,
-                    html: exportBlocksToHtml(nextBlocks),
+                saveDraft(articleId, connectionHashRef.current, {
+                    content: exportBlocksToHtml(nextBlocks),
                 });
                 setSaveStatus('saved');
             }
@@ -4154,7 +4263,7 @@ export default function SeoArticleEditor({
 
                 // Xóa draft cũ — tránh hydrate lại src trước rename (404).
                 // Server đã rewrite body (WP + local); reload lấy HTML + content_revision mới.
-                clearDraft(articleId);
+                clearDraft(articleId, connectionHashRef.current);
 
                 showArticleOperationOverlay('success', 'media_slug_fix');
                 scheduleArticleEditorReload(articleId, { delayMs: 500 });
@@ -4166,7 +4275,7 @@ export default function SeoArticleEditor({
                 );
                 // Partial WP rename có thể đã ghi DB — reload để đọc trạng thái thật.
                 if (totalWpRenames > 0) {
-                    clearDraft(articleId);
+                    clearDraft(articleId, connectionHashRef.current);
                     scheduleArticleEditorReload(articleId, { delayMs: 1500 });
                 } else {
                     setArticleAutosaveLock('quick-fix-slug-all', false);
@@ -4924,9 +5033,8 @@ export default function SeoArticleEditor({
                 }
 
                 if (articleId) {
-                    saveDraft(articleId, {
-                        blocks: nextBlocks,
-                        html: exportBlocksToHtml(nextBlocks),
+                    saveDraft(articleId, connectionHashRef.current, {
+                        content: exportBlocksToHtml(nextBlocks),
                     });
                     setSaveStatus('saved');
                 }
@@ -6347,9 +6455,8 @@ export default function SeoArticleEditor({
 
                     if (articleId) {
                         setSaveStatus('saving');
-                        saveDraft(articleId, {
-                            blocks: blocksRef.current,
-                            html: getExportHtml(),
+                        saveDraft(articleId, connectionHashRef.current, {
+                            content: getExportHtml(),
                         });
                         setSaveStatus('saved');
                     }
@@ -7255,8 +7362,9 @@ export default function SeoArticleEditor({
             setActiveBlockId(null);
             setGlobalEditor(null);
             setBlocks(enrichBlocksWithPostImages(parseHtmlToBlocks(html), postImagesRef.current));
-            saveDraft(articleId, { blocks: parseHtmlToBlocks(html), html });
+            saveDraft(articleId, connectionHashRef.current, { content: html });
             setSaveStatus('saved');
+            setSeoStale(true);
         };
 
         const onRevisionRestore = (event) => {
@@ -7272,8 +7380,9 @@ export default function SeoArticleEditor({
             setGlobalEditor(null);
             const parsedBlocks = parseHtmlToBlocks(html);
             setBlocks(enrichBlocksWithPostImages(parsedBlocks, postImagesRef.current));
-            saveDraft(articleId, { blocks: parsedBlocks, html });
+            saveDraft(articleId, connectionHashRef.current, { content: html });
             setSaveStatus('saved');
+            setSeoStale(true);
         };
 
         const onCollectEditorHtml = (event) => {
@@ -7579,9 +7688,8 @@ export default function SeoArticleEditor({
             reconcileImagesTabWithBlocks(nextBlocks);
 
             if (articleId) {
-                saveDraft(articleId, {
-                    blocks: nextBlocks,
-                    html: exportBlocksToHtml(nextBlocks),
+                saveDraft(articleId, connectionHashRef.current, {
+                    content: exportBlocksToHtml(nextBlocks),
                 });
                 setSaveStatus('saved');
             }
@@ -8015,14 +8123,19 @@ export default function SeoArticleEditor({
     ]);
 
     useEffect(() => {
+        // Perf Phase 1 (D): không analyze tự động khi blocks đổi (kể cả lần hydrate đầu tiên) —
+        // chỉ đánh dấu seoStale nếu blocks hiện tại khác lần analyze gần nhất (so theo tham chiếu,
+        // tránh nhấp nháy khi 1 hành động vừa setBlocks() vừa gọi requestAnalyze() cùng lượt).
         if (blocks.length === 0) return;
         if (skipNextAutosave.current) {
             skipNextAutosave.current = false;
-            requestAnalyze();
             return;
         }
+        if (blocks !== analyzedBlocksRef.current) {
+            setSeoStale(true);
+        }
         scheduleAutosave();
-    }, [blocks, scheduleAutosave, requestAnalyze]);
+    }, [blocks, scheduleAutosave]);
 
     useEffect(() => {
         const onGenerateImage = (event) => {
@@ -8560,6 +8673,7 @@ export default function SeoArticleEditor({
             return;
         }
 
+        window.dispatchEvent(new CustomEvent('seo-outline-rail-opened'));
         rail.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' });
         rail.classList.add('is-pulse');
         window.setTimeout(() => rail.classList.remove('is-pulse'), 1200);
@@ -8577,6 +8691,7 @@ export default function SeoArticleEditor({
             }
 
             syncOutlineFocusFromBlock(headingBlock, 'focus');
+            window.dispatchEvent(new CustomEvent('seo-outline-interact'));
             outlineRailRef.current?.scrollIntoView({
                 behavior: 'smooth',
                 block: 'nearest',
@@ -9299,6 +9414,16 @@ export default function SeoArticleEditor({
                         <Redo2 size={15} />
                     </button>
                     <span className="seo-autosave-status">{saveLabel}</span>
+                    {seoStale && (
+                        <button
+                            type="button"
+                            className="seo-analyze-stale-hint"
+                            onClick={requestAnalyze}
+                            title={t('editor_seo_stale')}
+                        >
+                            {t('editor_seo_stale')}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -9725,6 +9850,8 @@ export default function SeoArticleEditor({
                               seoRuleMessages={scoringMessages}
                               loading={false}
                               analyzing={analyzing}
+                              stale={seoStale}
+                              onAnalyzeClick={requestAnalyze}
                           />
                       </ArticleAssistantWidget>,
                       assistantPortalRoots.seo,
@@ -9741,32 +9868,38 @@ export default function SeoArticleEditor({
                           defaultCollapsed={false}
                           className="seo-assistant-widget--images"
                       >
-                          <ArticleImagesTab
-                              key={imagesReloadKey}
-                              blocks={blocks}
-                              extraImages={supplementalImages}
-                              siteId={siteId}
-                              articleId={articleId}
-                              jumpTarget={imagesTabJumpTarget}
-                              focusKeyword={focusKeyword}
-                              articleTitle={articleTitle}
-                              onPatchImage={patchImageInBlocks}
-                              onFocusBlock={focusImageBlock}
-                              onQuickFixSlugAll={quickFixSlugAllImages}
-                              quickFixSlugAllBusy={quickFixSlugAllBusy}
-                              onQuickFixSlugOne={quickFixSlugSingleImage}
-                              onQuickFixAltTitleAll={quickFixAltTitleAllImages}
-                              onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
-                              onRemoveImage={removeImageBlock}
-                              onRemoveSupplementalImage={removeSupplementalImage}
-                              onAltTitleChange={handleImageAltTitleChange}
-                              onMakeFeatured={makeImageFeatured}
-                              onNotify={(payload) => {
-                                  window.dispatchEvent(
-                                      new CustomEvent('seo-article-editor-notify', { detail: payload }),
-                                  );
-                              }}
-                          />
+                          {activatedPanels.has('images') ? (
+                              <ArticleImagesTab
+                                  key={imagesReloadKey}
+                                  blocks={blocks}
+                                  extraImages={supplementalImages}
+                                  siteId={siteId}
+                                  articleId={articleId}
+                                  jumpTarget={imagesTabJumpTarget}
+                                  focusKeyword={focusKeyword}
+                                  articleTitle={articleTitle}
+                                  onPatchImage={patchImageInBlocks}
+                                  onFocusBlock={focusImageBlock}
+                                  onQuickFixSlugAll={quickFixSlugAllImages}
+                                  quickFixSlugAllBusy={quickFixSlugAllBusy}
+                                  onQuickFixSlugOne={quickFixSlugSingleImage}
+                                  onQuickFixAltTitleAll={quickFixAltTitleAllImages}
+                                  onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
+                                  onRemoveImage={removeImageBlock}
+                                  onRemoveSupplementalImage={removeSupplementalImage}
+                                  onAltTitleChange={handleImageAltTitleChange}
+                                  onMakeFeatured={makeImageFeatured}
+                                  onNotify={(payload) => {
+                                      window.dispatchEvent(
+                                          new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                                      );
+                                  }}
+                              />
+                          ) : (
+                              <div className="seo-assistant-widget__lazy-placeholder">
+                                  {t('editor_panel_lazy_placeholder')}
+                              </div>
+                          )}
                       </ArticleAssistantWidget>,
                       assistantPortalRoots.image,
                   )
@@ -9782,21 +9915,63 @@ export default function SeoArticleEditor({
                           defaultCollapsed
                           className="seo-assistant-widget--reviews"
                       >
-                          <ArticleReviewsTab
-                              articleId={articleId}
-                              initialReviews={virtualReviews}
-                              onRefresh={refreshVirtualReviews}
-                              loading={reviewsLoading}
-                              warning={reviewsLoadWarning}
-                              canQuickCreate={canQuickCreateReviews}
-                              showConfigureReviews={showConfigureReviewsLink}
-                              quickCreateConfigUrl={quickCreateReviewsConfigUrl}
-                              onQuickCreate={canQuickCreateReviews ? generateQuickPostReviews : undefined}
-                          />
+                          {activatedPanels.has('reviews') ? (
+                              <ArticleReviewsTab
+                                  articleId={articleId}
+                                  initialReviews={virtualReviews}
+                                  onRefresh={refreshVirtualReviews}
+                                  loading={reviewsLoading}
+                                  warning={reviewsLoadWarning}
+                                  canQuickCreate={canQuickCreateReviews}
+                                  showConfigureReviews={showConfigureReviewsLink}
+                                  quickCreateConfigUrl={quickCreateReviewsConfigUrl}
+                                  onQuickCreate={canQuickCreateReviews ? generateQuickPostReviews : undefined}
+                              />
+                          ) : (
+                              <div className="seo-assistant-widget__lazy-placeholder">
+                                  {t('editor_panel_lazy_placeholder')}
+                              </div>
+                          )}
                       </ArticleAssistantWidget>,
                       assistantPortalRoots.reviews,
                   )
                 : null}
+
+            {draftRestoreOffer ? (
+                <div className="seo-draft-restore-overlay" role="dialog" aria-modal="true">
+                    <div className="seo-draft-restore-modal">
+                        <h3 className="seo-draft-restore-modal__title">
+                            {t('editor_draft_restore_title')}
+                        </h3>
+                        <p className="seo-draft-restore-modal__body">
+                            {t('editor_draft_restore_body')}
+                        </p>
+                        <div className="seo-draft-restore-modal__actions">
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--primary"
+                                onClick={applyDraftRestore}
+                            >
+                                {t('editor_draft_restore_action_restore')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn"
+                                onClick={keepServerOverDraft}
+                            >
+                                {t('editor_draft_restore_action_keep_server')}
+                            </button>
+                            <button
+                                type="button"
+                                className="seo-draft-restore-modal__btn seo-draft-restore-modal__btn--danger"
+                                onClick={discardDraftRestore}
+                            >
+                                {t('editor_draft_restore_action_discard')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            ) : null}
         </div>
     );
 }

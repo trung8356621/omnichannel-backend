@@ -28,6 +28,8 @@ export default function SeoScorePanel({
     seoRuleMessages = {},
     loading,
     analyzing,
+    stale = false,
+    onAnalyzeClick,
 }) {
     const [passedOpen, setPassedOpen] = useState(true);
     const rules = Array.isArray(seoScoringRules) && seoScoringRules.length > 0
@@ -64,6 +66,16 @@ export default function SeoScorePanel({
             <p className="seo-assistant-score__hint">
                 {analyzing ? t('seo_score_analyzing') : t('seo_score_updated_by_content')}
             </p>
+
+            {stale && !analyzing ? (
+                <button
+                    type="button"
+                    className="seo-assistant-score__stale-hint"
+                    onClick={onAnalyzeClick}
+                >
+                    {t('editor_seo_stale')}
+                </button>
+            ) : null}
 
             {focusKeyword ? (
                 <p className="seo-assistant-score__keyword">

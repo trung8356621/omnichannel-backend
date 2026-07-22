@@ -26,6 +26,32 @@ import {
     loadExcludedLinkSuggestions,
     saveExcludedLinkSuggestions,
 } from '../utils/articleExcludedLinkSuggestionsStorage';
+import { csrfToken, seoArticleApiFetch } from '../utils/seoArticleApi';
+
+/**
+ * On-demand full SEO/links payload (not part of editor bootstrap).
+ * @param {number} articleId
+ */
+async function fetchEditorSeoPayload(articleId) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        return null;
+    }
+
+    const { response, data } = await seoArticleApiFetch(`/api/seo/articles/${id}/editor-seo-payload`, {
+        method: 'GET',
+        headers: {
+            Accept: 'application/json',
+            ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+        },
+    });
+
+    if (!response.ok || data?.success === false) {
+        return null;
+    }
+
+    return data?.data && typeof data.data === 'object' ? data.data : null;
+}
 
 /**
  * @typedef {{ href?: string, text: string, offset?: number, is_nofollow?: boolean, is_suggestion?: boolean, target_url?: string|null, can_insert?: boolean, keyword_id?: number, occurrence_count?: number }} ExtractedLink
@@ -636,6 +662,44 @@ export default function ArticleLinksSidebar({
         window.addEventListener('seo-assistant-link-section', onLinkSection);
 
         return () => window.removeEventListener('seo-assistant-link-section', onLinkSection);
+    }, []);
+
+    // Perf Phase 1: Links mount đã deferred — lúc mount mới fetch full SEO/link catalogs.
+    useEffect(() => {
+        const { articleId } = articleMetaRef.current;
+        let cancelled = false;
+
+        void (async () => {
+            try {
+                const payload = await fetchEditorSeoPayload(articleId);
+                if (cancelled || !payload) {
+                    return;
+                }
+
+                window.dispatchEvent(
+                    new CustomEvent('seo-editor-seo-payload-updated', { detail: payload }),
+                );
+                window.dispatchEvent(
+                    new CustomEvent('seo-editor-links-updated', {
+                        detail: {
+                            internal: payload.extracted_links?.internal ?? [],
+                            external: payload.extracted_links?.external ?? [],
+                            suggested_internal: payload.suggested_internal_links ?? [],
+                            suggested_internal_links_catalog: payload.suggested_internal_links_catalog ?? [],
+                            suggested_external_links: payload.suggested_external_links ?? [],
+                            suggested_external_links_catalog: payload.suggested_external_links_catalog ?? [],
+                            domain_link_list_catalog: payload.domain_link_list_catalog ?? [],
+                        },
+                    }),
+                );
+            } catch {
+                // Panel vẫn mở với bootstrap rỗng; user có thể refresh sau.
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
     }, []);
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
     const allDomainLinksRef = useRef(

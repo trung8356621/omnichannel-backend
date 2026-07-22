@@ -287,7 +287,14 @@ export function createSeoAssistantNavigator() {
         },
 
         selectChip(panelId) {
-            this.switchPanel(panelId);
+            // Dispatch trước — _onSwitchPanel (listener chính nó) sẽ gọi switchPanel().
+            // Nhờ vậy React (SeoArticleEditor) cũng biết panel nào vừa được người dùng mở
+            // (mount lazy Images/Reviews/Links — Phase 1 perf).
+            window.dispatchEvent(
+                new CustomEvent('seo-assistant-switch-panel', {
+                    detail: { panel: panelId },
+                }),
+            );
         },
 
         onSearchInput() {

@@ -1,4 +1,28 @@
 import { csrfToken, seoArticleApiFetch } from './seoArticleApi.js';
+import { clearDraft, hashContent, loadDraft } from './articleEditorStorage.js';
+
+/**
+ * Token conflict hiện tại (expected_updated_at / expected_content_hash) — bootstrap từ
+ * meta server (article-editor.jsx), cập nhật lại sau mỗi lần save thành công.
+ * @returns {{ expected_updated_at: string|null, expected_content_hash: string|null }}
+ */
+export function getEditorConflictTokens() {
+    const tokens = window.__SEO_EDITOR_CONFLICT__;
+
+    return tokens && typeof tokens === 'object'
+        ? tokens
+        : { expected_updated_at: null, expected_content_hash: null };
+}
+
+/**
+ * @param {{ expected_updated_at?: string|null, expected_content_hash?: string|null }} tokens
+ */
+export function setEditorConflictTokens(tokens) {
+    window.__SEO_EDITOR_CONFLICT__ = {
+        expected_updated_at: tokens?.expected_updated_at ?? null,
+        expected_content_hash: tokens?.expected_content_hash ?? null,
+    };
+}
 
 /**
  * @param {object|null|undefined} wire Livewire snapshot (read-only properties, không gọi method)
@@ -60,6 +84,8 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
         typeof window.__seoCollectArticleFaqs === 'function' ? window.__seoCollectArticleFaqs() : null;
     const faqsFromBundle = Array.isArray(editorBundle?.faqs) ? editorBundle.faqs : null;
 
+    const conflictTokens = getEditorConflictTokens();
+
     return {
         html: String(editorBundle?.html ?? ''),
         seo_analysis: editorBundle?.seoAnalysis ?? null,
@@ -69,6 +95,8 @@ export function buildArticleEditorApiPayload(editorBundle, wire) {
         featured_image: featured,
         product_album: productAlbum,
         faqs: Array.isArray(faqsFromEditor) ? faqsFromEditor : faqsFromBundle,
+        expected_updated_at: conflictTokens.expected_updated_at,
+        expected_content_hash: conflictTokens.expected_content_hash,
     };
 }
 
@@ -85,6 +113,14 @@ export async function saveArticleViaApi(articleId, payload) {
         },
         body: JSON.stringify(payload),
     });
+
+    if (response.status === 409) {
+        const error = new Error(data?.message ?? 'Nội dung đã bị thay đổi ở nơi khác — không lưu.');
+        error.conflict = true;
+        error.data = data;
+
+        throw error;
+    }
 
     if (!response.ok || data.success === false) {
         throw new Error(data.message ?? 'Không lưu được bài viết.');
@@ -547,9 +583,15 @@ function resetEditArticleHeavyActionBusyOnWire() {
 /**
  * Hoàn tất Save — không reload, không Livewire.
  *
+ * Perf Phase 1 (F+G): sau khi save thành công, cập nhật lại token conflict
+ * (expected_updated_at/expected_content_hash) theo nội dung VỪA lưu, và chỉ xóa nháp
+ * local nếu nháp hiện tại (localStorage) trùng đúng nội dung vừa lưu — tránh mất nháp
+ * của 1 lượt gõ mới hơn xảy ra trong lúc request save đang chạy.
+ *
  * @param {{ patch?: Record<string, unknown>, notification?: Record<string, string> }} result
+ * @param {{ articleId?: number, connectionHash?: string, savedHtml?: string }} [context]
  */
-export function finishArticleSaveFromApi(result) {
+export function finishArticleSaveFromApi(result, context = {}) {
     if (result.patch) {
         applyArticleEditorSavePatch(result.patch);
     }
@@ -558,9 +600,50 @@ export function finishArticleSaveFromApi(result) {
         showArticleEditorFilamentToast(result.notification);
     }
 
+    const { articleId, connectionHash, savedHtml } = context;
+    if (typeof savedHtml === 'string') {
+        const savedContentHash = hashContent(savedHtml);
+        setEditorConflictTokens({
+            expected_updated_at: result.patch?.article?.updated_at ?? getEditorConflictTokens().expected_updated_at,
+            expected_content_hash: savedContentHash,
+        });
+
+        if (articleId) {
+            const draft = loadDraft(articleId, connectionHash);
+            if (draft && draft.content_hash === savedContentHash) {
+                clearDraft(articleId, connectionHash);
+            }
+        }
+    }
+
     window.__seoEndArticleHeavyActionClient?.();
     resetEditArticleHeavyActionBusyOnWire();
     window.dispatchEvent(new CustomEvent('article-editor-save-finished'));
+}
+
+/**
+ * Xử lý khi save trả 409 (conflict) — KHÔNG reload, KHÔNG clearDraft. Dispatch event để
+ * UI (SeoArticleEditor) hiển thị modal/alert cho người dùng quyết định.
+ *
+ * @param {Error & { conflict?: boolean, data?: Record<string, unknown> }} error
+ */
+export function handleArticleSaveConflict(error) {
+    window.__seoEndArticleHeavyActionClient?.();
+    resetEditArticleHeavyActionBusyOnWire();
+
+    const notification = error?.data?.notification ?? {
+        title: 'Xung đột khi lưu',
+        body: error?.message ?? 'Nội dung đã bị thay đổi ở nơi khác.',
+        status: 'warning',
+    };
+    showArticleEditorFilamentToast(notification);
+
+    window.dispatchEvent(
+        new CustomEvent('seo-article-save-conflict', {
+            detail: { conflict: error?.data?.conflict ?? null, message: error?.message ?? '' },
+        }),
+    );
+    window.dispatchEvent(new CustomEvent('article-editor-save-finished', { detail: { conflict: true } }));
 }
 
 /**

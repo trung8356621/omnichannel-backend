@@ -21,10 +21,12 @@ import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
     finishArticleEditorApiAction,
+    finishArticleSaveFromApi,
+    handleArticleSaveConflict,
     patchPermalinkDisplay,
-    saveArticleViaApi,
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
+import { saveArticleViaApiSingleFlight } from './utils/articleEditorSaveQueue';
 import {
     loadFeaturedImage,
     persistFeaturedImageDraftToServer,
@@ -145,19 +147,44 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
                 : 0,
         );
 
-        const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
-
         if (normalizedAction === 'sync') {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
                 'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
             );
+            const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
-            const result = await saveArticleViaApi(articleId, apiPayload);
-            finishArticleEditorApiAction(result, articleId, siteId, 'save');
-            window.__seoResetPublishTabPrimed?.();
+            try {
+                const result = await saveArticleViaApiSingleFlight(articleId, async () => {
+                    const freshCollect = window.__seoCollectEditorHeavyBundle;
+                    let bundle = editorBundle;
+                    if (typeof freshCollect === 'function') {
+                        try {
+                            bundle = await freshCollect({ renameImagesBeforeWpSync: false });
+                        } catch {
+                            bundle = editorBundle;
+                        }
+                    }
+
+                    return buildArticleEditorApiPayload(bundle, wire);
+                });
+                finishArticleSaveFromApi(result, {
+                    articleId,
+                    connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
+                    savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? editorBundle.html ?? ''),
+                });
+                window.__seoResetPublishTabPrimed?.();
+            } catch (error) {
+                if (error?.conflict) {
+                    handleArticleSaveConflict(error);
+
+                    return;
+                }
+
+                throw error;
+            }
         }
     } catch (error) {
         window.__seoEndArticleHeavyActionClient?.();
@@ -219,8 +246,38 @@ async function runArticleEditorApiAction(action, wire, editorDetail = {}) {
             finishArticleEditorApiAction(result, articleId, siteId, 'sync');
         } else {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.('Đang lưu bài viết…');
-            const result = await saveArticleViaApi(articleId, apiPayload);
-            finishArticleEditorApiAction(result, articleId, siteId, 'save');
+            try {
+                const result = await saveArticleViaApiSingleFlight(articleId, async () => {
+                    const freshHtml = String(
+                        typeof window.__seoCollectEditorHeavyBundle === 'function'
+                            ? (await window.__seoCollectEditorHeavyBundle({ renameImagesBeforeWpSync: false }))?.html
+                                ?? apiPayload.html
+                            : apiPayload.html,
+                    );
+
+                    return buildArticleEditorApiPayload(
+                        {
+                            articleId,
+                            html: freshHtml,
+                            seoAnalysis: editorDetail.seoAnalysis ?? null,
+                        },
+                        wire,
+                    );
+                });
+                finishArticleSaveFromApi(result, {
+                    articleId,
+                    connectionHash: window.__SEO_EDITOR_CONNECTION_HASH__ ?? '',
+                    savedHtml: String(window.__SEO_EDITOR_LAST_SAVE_HTML__ ?? apiPayload.html ?? ''),
+                });
+            } catch (error) {
+                if (error?.conflict) {
+                    handleArticleSaveConflict(error);
+
+                    return;
+                }
+
+                throw error;
+            }
         }
     } catch (error) {
         window.__seoEndArticleHeavyActionClient?.();
@@ -488,6 +545,9 @@ function readArticleEditorBootstrap() {
     let articleTitle = '';
     let articlePostType = '';
     let contentRevision = '';
+    let connectionHash = '';
+    let expectedUpdatedAt = '';
+    let expectedContentHash = '';
     let supportsProductGallery = false;
     let productCategoryOptions = [];
     let initialProductGallery = [];
@@ -548,6 +608,9 @@ function readArticleEditorBootstrap() {
             articleTitle = meta?.title ?? '';
             articlePostType = String(meta?.post_type ?? '').trim();
             contentRevision = String(meta?.content_revision ?? '').trim();
+            connectionHash = String(meta?.seo_connection_hash ?? '').trim();
+            expectedUpdatedAt = String(meta?.expected_updated_at ?? '').trim();
+            expectedContentHash = String(meta?.expected_content_hash ?? '').trim();
             supportsProductGallery = Boolean(meta?.supports_product_gallery);
             productCategoryOptions = Array.isArray(meta?.product_category_options)
                 ? meta.product_category_options
@@ -589,6 +652,9 @@ function readArticleEditorBootstrap() {
         articleTitle,
         articlePostType,
         contentRevision,
+        connectionHash,
+        expectedUpdatedAt,
+        expectedContentHash,
         supportsProductGallery,
         productCategoryOptions,
         initialProductGallery,
@@ -619,6 +685,9 @@ function mountArticleEditorPage() {
         articleTitle,
         articlePostType,
         contentRevision,
+        connectionHash,
+        expectedUpdatedAt,
+        expectedContentHash,
         supportsProductGallery,
         productCategoryOptions,
         initialProductGallery,
@@ -629,6 +698,17 @@ function mountArticleEditorPage() {
         initialLoaiSanPham,
         initialGalleryDescription,
     } = bootstrap;
+
+    window.__SEO_EDITOR_CONFLICT__ = {
+        expected_updated_at: expectedUpdatedAt || null,
+        expected_content_hash: expectedContentHash || null,
+    };
+    window.__SEO_EDITOR_CONNECTION_HASH__ = connectionHash || '';
+
+    const perfDebugEnabled = Boolean(window.__SEO_ARTICLE_EDITOR_PERF_DEBUG__ || editorSettings?.perf_debug);
+    if (perfDebugEnabled && typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+        performance.mark('seo-article-editor-mount-start');
+    }
 
     if (articleId && initialProductGallery.length > 0) {
         saveProductAlbum(articleId, mergeProductAlbumBootstrap(initialProductGallery, articleId));
@@ -659,6 +739,9 @@ function mountArticleEditorPage() {
             initialSupplementalImages={initialSupplementalImages}
             initialPostType={articlePostType}
             contentRevision={contentRevision}
+            connectionHash={connectionHash}
+            expectedUpdatedAt={expectedUpdatedAt}
+            expectedContentHash={expectedContentHash}
             supportsProductGallery={supportsProductGallery}
             productCategoryOptions={productCategoryOptions}
             initialProductGallery={initialProductGallery}
@@ -669,20 +752,48 @@ function mountArticleEditorPage() {
             mediaPickerUrl={mediaPickerUrl}
             initialLoaiSanPham={initialLoaiSanPham}
             initialGalleryDescription={initialGalleryDescription}
+            perfDebug={perfDebugEnabled}
         />,
     );
 
+    if (perfDebugEnabled && typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+        performance.mark('seo-article-editor-mount-end');
+        try {
+            performance.measure(
+                'seo-article-editor-mount',
+                'seo-article-editor-mount-start',
+                'seo-article-editor-mount-end',
+            );
+        } catch {
+            // measure API có thể ném lỗi nếu mark thiếu — bỏ qua, không chặn mount.
+        }
+    }
+
     const showLinkWidgets = editorSettings?.show_link_widgets !== false;
 
+    // Perf Phase 1: Links sidebar + AI chat panel đều nặng (network + nhiều state) —
+    // chỉ mount React khi người dùng thật sự mở panel tương ứng, không mount lúc mở trang.
     const linksRoot = document.getElementById('seo-article-links-root');
-    if (showLinkWidgets && linksRoot) {
-        getOrCreateReactRoot(linksRoot).render(
-            <ArticleLinksSidebar
-                initialDomainLinkList={initialSeo?.domain_link_list ?? []}
-                initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
-                initialDomainCtaList={initialSeo?.domain_cta_list ?? []}
-            />,
-        );
+    if (showLinkWidgets && linksRoot && !linksRoot.__seoDeferredMountBound) {
+        linksRoot.__seoDeferredMountBound = true;
+        const mountLinksSidebar = () => {
+            getOrCreateReactRoot(linksRoot).render(
+                <ArticleLinksSidebar
+                    initialDomainLinkList={initialSeo?.domain_link_list ?? []}
+                    initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
+                    initialDomainCtaList={initialSeo?.domain_cta_list ?? []}
+                />,
+            );
+        };
+        const onSwitchPanelForLinks = (event) => {
+            const panel = String(event?.detail?.panel ?? event?.detail?.widgetId ?? '').trim();
+            if (panel !== 'links' && panel !== 'faq' && panel !== 'cta') {
+                return;
+            }
+            mountLinksSidebar();
+            window.removeEventListener('seo-assistant-switch-panel', onSwitchPanelForLinks);
+        };
+        window.addEventListener('seo-assistant-switch-panel', onSwitchPanelForLinks);
     }
 
     const launcherRoot = document.getElementById('seo-article-ai-launcher-root');
@@ -691,15 +802,23 @@ function mountArticleEditorPage() {
     }
 
     const chatRoot = document.getElementById('seo-article-ai-chat-root');
-    if (chatRoot) {
-        getOrCreateReactRoot(chatRoot).render(
-            <ArticleAiChatPanel
-                articleId={articleId}
-                aiDebug={aiDebug}
-                canGenerateImage={editorSettings?.can_generate_image !== false}
-                canGenerateVideo={editorSettings?.can_generate_video === true}
-            />,
-        );
+    if (chatRoot && !chatRoot.__seoDeferredMountBound) {
+        chatRoot.__seoDeferredMountBound = true;
+        const mountAiChatPanel = () => {
+            getOrCreateReactRoot(chatRoot).render(
+                <ArticleAiChatPanel
+                    articleId={articleId}
+                    aiDebug={aiDebug}
+                    canGenerateImage={editorSettings?.can_generate_image !== false}
+                    canGenerateVideo={editorSettings?.can_generate_video === true}
+                />,
+            );
+        };
+        const onAiChatOpen = () => {
+            mountAiChatPanel();
+            window.removeEventListener('seo-article-ai-chat-open', onAiChatOpen);
+        };
+        window.addEventListener('seo-article-ai-chat-open', onAiChatOpen);
     }
 
     const faqRoot = document.getElementById('seo-article-faq-root');
