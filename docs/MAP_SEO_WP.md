@@ -315,4 +315,4 @@ Missed schedule UI: views/welcome.php + includes/class-missed-schedule-fixer.php
 Admin: /wp-admin/admin.php?page=omi-seo-ai.
 ```
 
-**Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — `executeHeavyArticleAction`, `syncArticleToWordPress`, `renameAttachmentSlugsOnWordPress`, `updateAttachmentMetaOnWordPress`, Livewire collect HTML.
+**Liên quan editor:** [MAP_SEO_EDITOR.md](MAP_SEO_EDITOR.md) — `executeHeavyArticleAction`, `syncArticleToWordPress`, `renameAttachmentSlugsOnWordPress`, `updateAttachmentMetaOnWordPress`, Livewire collect HTML. **Phase 1 perf:** `EditArticle::mount` **không** gọi remote WP HTTP (title/categories/FAQ/heal taxonomy); Sync-from-WP / explicit refresh vẫn dùng service HTTP.

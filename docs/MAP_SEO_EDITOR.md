@@ -152,12 +152,14 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 
 | Nguồn                        | Method                  | Dữ liệu                           |
 | ---------------------------- | ----------------------- | --------------------------------- |
-| `EditArticle::mount()`       | `hydrateArticleState()` | `$editorHtml`, slug, gallery, SEO |
-| `getEditorSeoPayload()`      |                         | serp preview, focus keyword       |
+| `EditArticle::mount()`       | `hydrateArticleState()` local only | **No** remote WP HTTP; `wordpressMetadataStale` nếu có `wp_post_id` |
+| `getBootstrapEditorHtml()`   | protected bootstrap     | Initial HTML once — **not** Livewire public snapshot |
+| `getEditorSeoPayload()`      | `forEditorBootstrap()`  | Cached score/keyword/serp; catalogs rỗng |
+| `GET .../editor-seo-payload` | `forArticle()` on-demand | Full link suggestions khi mở Links |
 | `getEditorImagesPayload()`   |                         | post images                       |
-| `getEditorMetaPayload()`     |                         | articleId, siteId, supplemental   |
+| `getEditorMetaPayload()`     |                         | id, conflict tokens, empty reviews |
 | `getEditorFaqsPayload()`     |                         | FAQ rows                          |
-| `getEditorSettingsPayload()` |                         | autosave, permissions             |
+| `getEditorSettingsPayload()` |                         | local draft interval, `perf_debug` |
 | `getEditorAiDebugPayload()`  |                         | AI debug data (markdown import)   |
 
 
@@ -212,7 +214,9 @@ sequenceDiagram
 
 **Overlay system (JS):** Blade `__seoArticleHeavyActionOverlay` (guard timer, keyboard blocker, `inert`, `persistUntilUnload`, custom `title`/`message`). **`articleOperationTracker.js`** — poll `GET /api/seo/articles/{id}/operation-status` 2.5s; lock autosave (`article-operation`); terminal: `success`/`failed`/`cancelled`/`stale` (timeout overlay 5 phút + Retry); reload khi success/cancelled/stale. Bootstrap F5: `__SEO_ACTIVE_ARTICLE_OPERATION__` (Blade) + `EditArticle::mount` + `installArticleOperationTracker()`.
 
-**Autosave client:** `saveDraft()` → `localStorage` (`seo_article_draft_{id}`) — lưu `blocks` (gồm `image.excludeQuickFix` / `data-exclude-quick-fix` trên HTML), không hit server mỗi keystroke. **Lock:** `articleAutosaveLock.js` — `quick-fix-slug-all`, `article-operation`, `article-heavy-action`.
+**Autosave / local draft (Phase 1 perf):** React → debounce (`autosave_interval_seconds`, 0–30s, default 2) → `localStorage` key `seo-editor:draft:{connection_hash}:{article_id}` schema v2 (`content` HTML canonical + hashes). **Không** Livewire / server. Restore: modal explicit (Khôi phục / Giữ server / Bỏ nháp). SEO analyze: **stale flag** when typing; full `runLocalSeoAnalysis` only on Analyze. Manual Save: REST + single-flight queue + `expected_updated_at`/`expected_content_hash` (409 giữ draft). **Lock:** `articleAutosaveLock.js` — `quick-fix-slug-all`, `article-operation`, `article-heavy-action`.
+
+**Deferred modules:** Links/AI chat mount on panel open; Images/Reviews tab body after activation; product reviews WP fetch only when Reviews active; outline API only on `seo-outline-rail-opened` / interact — not on editor open.
 
 **Tab Hình ảnh — Quick fix & Except** (`ArticleImagesTab.jsx` → handlers trong `SeoArticleEditor.jsx`, utils `articleImagesUtils.js`):
 
