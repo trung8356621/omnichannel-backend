@@ -37,6 +37,8 @@ final class ArticleEditorActionRequest extends FormRequest
             'article_meta.focus_keyword' => ['nullable', 'string'],
             'category_ids' => ['nullable', 'array'],
             'category_ids.*' => ['integer'],
+            'expected_updated_at' => ['nullable', 'string'],
+            'expected_content_hash' => ['nullable', 'string'],
             'featured_image' => ['nullable', 'array'],
             'product_album' => ['nullable', 'array'],
             'faqs' => ['nullable', 'array'],

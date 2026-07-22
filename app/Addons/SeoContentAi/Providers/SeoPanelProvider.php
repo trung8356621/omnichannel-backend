@@ -326,6 +326,9 @@ class SeoPanelProvider extends PanelProvider
                 Route::post('/{article}/seo-meta', [ArticleEditorSyncController::class, 'saveSeoMeta'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.seo-meta');
+                Route::get('/{article}/editor-seo-payload', [ArticleEditorSyncController::class, 'seoPayload'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.seo-payload');
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.sync-wp');

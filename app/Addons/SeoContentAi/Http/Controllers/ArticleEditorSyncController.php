@@ -12,6 +12,7 @@ use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSavePatchService;
 use App\Addons\SeoContentAi\Services\ArticleEditorSeoMetaService;
+use App\Addons\SeoContentAi\Services\ArticleEditorSeoPayloadService;
 use App\Addons\SeoContentAi\Services\WordPress\WordPressManualSyncService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -59,7 +60,21 @@ final class ArticleEditorSyncController extends Controller
         );
 
         if (! $result->success) {
+            $code = (string) ($result->error['code'] ?? '');
             $message = (string) ($result->error['message'] ?? 'Không lưu được bài viết.');
+
+            if (in_array($code, ['conflict_updated_at', 'conflict_content_hash'], true)) {
+                return response()->json([
+                    'success' => false,
+                    'message' => $message,
+                    'conflict' => $result->error,
+                    'notification' => [
+                        'title' => 'Xung đột khi lưu',
+                        'body' => $message,
+                        'status' => 'warning',
+                    ],
+                ], 409);
+            }
 
             return response()->json([
                 'success' => false,
@@ -137,6 +152,20 @@ final class ArticleEditorSyncController extends Controller
         return response()->json($result, $statusCode);
     }
 
+    /**
+     * Full SEO + link catalogs — on-demand when Links panel opens / Refresh.
+     * Not used for initial editor bootstrap (see forEditorBootstrap).
+     */
+    public function seoPayload(SeoArticle $article): JsonResponse
+    {
+        abort_unless(SeoAccessControl::canAccessArticle($article), 403);
+
+        return response()->json([
+            'success' => true,
+            'data' => app(ArticleEditorSeoPayloadService::class)->forArticle($article),
+        ]);
+    }
+
     public function saveSeoMeta(ArticleEditorSeoMetaRequest $request, SeoArticle $article): JsonResponse
     {
         abort_unless(SeoAccessControl::canAccessArticle($article), 403);
@@ -204,6 +233,12 @@ final class ArticleEditorSyncController extends Controller
         foreach (['status', 'post_type', 'visibility', 'publish_day', 'publish_month', 'publish_year', 'publish_hour', 'publish_minute'] as $field) {
             if (array_key_exists($field, $publishBox)) {
                 $input[$field] = (string) $publishBox[$field];
+            }
+        }
+
+        foreach (['expected_updated_at', 'expected_content_hash'] as $field) {
+            if (array_key_exists($field, $bundle) && $bundle[$field] !== null && $bundle[$field] !== '') {
+                $input[$field] = (string) $bundle[$field];
             }
         }
 
