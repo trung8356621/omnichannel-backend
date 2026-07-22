@@ -69,6 +69,8 @@ use App\Addons\SeoContentAi\Services\WorkflowParserService;
 use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
+use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
+use App\Addons\SeoContentAi\Support\ArticleEditorPerfDebug;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
@@ -179,7 +181,10 @@ class EditArticle extends SeoEditRecord
     /** @var array<string, mixed>|null Cache post WP fetch trong một request mount. */
     private ?array $cachedWordPressPostPayload = null;
 
-    public string $editorHtml = '';
+    protected string $bootstrapEditorHtml = '';
+
+    /** True when article linked to WP but mount skipped remote refresh (Phase 1 perf). */
+    public bool $wordpressMetadataStale = false;
 
     public ?int $reviewsCountForEditor = null;
 
@@ -224,11 +229,15 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
-        $this->syncTitleFromWordPressWhenAllowed();
+        // Phase 1 perf: no remote WordPress HTTP on editor open — explicit Sync-from-WP flows use private sync* methods.
+        $perf = app(ArticleEditorPerfDebug::class);
+        $perf->start('edit_article_mount');
         $this->hydrateArticleState();
-        $this->syncWordPressCategoriesOnLoad();
-        $this->importFaqsFromWordPressOnLoad();
         $this->syncReviewedStatusFromExistingReviews();
+
+        if ((int) ($this->record->wp_post_id ?? 0) > 0) {
+            $this->wordpressMetadataStale = true;
+        }
 
         $this->articleHeavyActionBusy = false;
         $this->articleHeavyAction = null;
@@ -269,6 +278,9 @@ class EditArticle extends SeoEditRecord
                 ->success()
                 ->send();
         }
+
+        $perf->stop('edit_article_mount');
+        $perf->logSummary('edit_article_mount', ['article_id' => (int) $this->record->getKey()]);
     }
 
     public function pollEditorReadiness(): void
@@ -287,11 +299,14 @@ class EditArticle extends SeoEditRecord
 
         $this->editorPreparing = false;
         $this->editorPreparingMessage = '';
-        $this->syncTitleFromWordPressWhenAllowed();
+        // Same as mount: hydrate from local DB only, no remote WP HTTP.
         $this->hydrateArticleState();
-        $this->syncWordPressCategoriesOnLoad();
-        $this->importFaqsFromWordPressOnLoad();
         $this->syncReviewedStatusFromExistingReviews();
+
+        if ((int) ($this->record->wp_post_id ?? 0) > 0) {
+            $this->wordpressMetadataStale = true;
+        }
+
         $this->articleHeavyActionBusy = false;
         $this->articleHeavyAction = null;
     }
@@ -634,7 +649,7 @@ class EditArticle extends SeoEditRecord
             if (! $this->articleHasStoredWordPressFaqs($this->record)) {
                 $post = $this->fetchWordPressPostPayload(importFaqs: false);
                 $this->record->refresh();
-                $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
+                $this->bootstrapEditorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
             }
         }
 
@@ -643,13 +658,13 @@ class EditArticle extends SeoEditRecord
         }
 
         $result = app(ArticleFaqWordPressImportService::class)
-            ->importWhenPanelEmpty($this->record, $this->editorHtml);
+            ->importWhenPanelEmpty($this->record, $this->bootstrapEditorHtml);
 
         if ($result['imported'] && ($result['faq_count'] ?? 0) > 0) {
             $this->record->load('faqs');
-            $editorHtml = (string) ($result['editor_html'] ?? $this->editorHtml);
+            $editorHtml = (string) ($result['editor_html'] ?? $this->bootstrapEditorHtml);
             if ($editorHtml !== '') {
-                $this->editorHtml = $editorHtml;
+                $this->bootstrapEditorHtml = $editorHtml;
             }
 
             $this->dispatch(
@@ -760,8 +775,6 @@ class EditArticle extends SeoEditRecord
     protected function hydrateArticleState(): void
     {
         $service = app(WordPressArticleContentService::class);
-        $service->healTaxonomyMetaFromWordPress($this->record);
-        $this->record->refresh();
         $this->restoreArticleBodyFromWordPressCacheIfMissing();
         app(ArticleScheduleReconcileService::class)->reconcileForEditor($this->record);
         $this->record->refresh();
@@ -780,7 +793,7 @@ class EditArticle extends SeoEditRecord
         if ($this->supportsProductGallery()) {
             $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
         }
-        $this->editorHtml = app(ArticleCtaPlaceholderService::class)->highlightBlankPlaceholdersInHtml(
+        $this->bootstrapEditorHtml = app(ArticleCtaPlaceholderService::class)->highlightBlankPlaceholdersInHtml(
             $service->resolveEditorHtml($this->record),
             (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
         );
@@ -2865,7 +2878,7 @@ class EditArticle extends SeoEditRecord
 
         $seoResult = app(SeoAnalyzerService::class)->analyzePreview(
             $this->record,
-            trim((string) ($this->record->body ?? $this->editorHtml)),
+            trim((string) ($this->record->body ?? $this->bootstrapEditorHtml)),
             trim($this->articleTitle),
             $this->articleSlug !== '' ? $this->articleSlug : trim((string) ($this->record->slug ?? '')),
             trim($this->seoMetaDescription) !== '' ? trim($this->seoMetaDescription) : null,
@@ -2892,7 +2905,7 @@ class EditArticle extends SeoEditRecord
 
         if ($syncedHtml !== '') {
             app(ArticlePostImagesService::class)->syncFromHtml($this->record, $syncedHtml);
-            $this->editorHtml = $syncedHtml;
+            $this->bootstrapEditorHtml = $syncedHtml;
         }
 
         $this->featuredImageUrl = app(WordPressArticleContentService::class)->resolveFeaturedImageUrl($this->record);
@@ -2906,7 +2919,7 @@ class EditArticle extends SeoEditRecord
         $this->dispatch(
             'article-faqs-extracted',
             faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
-            editorHtml: $syncedHtml !== '' ? $syncedHtml : $this->editorHtml,
+            editorHtml: $syncedHtml !== '' ? $syncedHtml : $this->bootstrapEditorHtml,
         );
         $this->dispatch('article-post-images-synced', images: $this->getEditorImagesPayload());
         $this->dispatch('article-supplemental-images-synced', images: $this->getEditorSupplementalImagesPayload());
@@ -3287,7 +3300,7 @@ class EditArticle extends SeoEditRecord
             $this->seoMetaDescription = $metaDescription;
         }
 
-        $this->editorHtml = $html;
+        $this->bootstrapEditorHtml = $html;
         $this->persistArticleLocalSilent($html);
 
         if ($h1Title !== '' || $metaDescription !== '') {
@@ -3392,14 +3405,14 @@ class EditArticle extends SeoEditRecord
         $faqCount = app(ArticleFaqEditorService::class)->saveFromEditor($this->record, $faqs);
         app(ArticleFaqExtractDebugService::class)->clear($this->record);
 
-        $baseHtml = trim($this->editorHtml);
+        $baseHtml = trim($this->bootstrapEditorHtml);
         if ($baseHtml === '') {
             $baseHtml = trim((string) ($this->record->body ?? ''));
         }
 
         $newHtml = app(ArticleContentFaqService::class)->injectFaqPlaceholderInEditorHtml($baseHtml);
         if ($newHtml !== '') {
-            $this->editorHtml = $newHtml;
+            $this->bootstrapEditorHtml = $newHtml;
             $this->persistArticleLocalSilent($newHtml);
         }
 
@@ -3435,18 +3448,31 @@ class EditArticle extends SeoEditRecord
         $this->dispatch('article-faq-extract-debug', debug: $debug);
     }
 
+    public function getBootstrapEditorHtml(): string
+    {
+        return $this->bootstrapEditorHtml;
+    }
+
     /**
      * @return array<string, mixed>
      */
     public function getEditorSeoPayload(): array
     {
-        return array_merge(
-            app(ArticleEditorSeoPayloadService::class)->forArticle($this->record),
+        $perf = app(ArticleEditorPerfDebug::class);
+        $perf->start('editor_seo_bootstrap');
+
+        $payload = array_merge(
+            app(ArticleEditorSeoPayloadService::class)->forEditorBootstrap($this->record),
             [
                 'article_slug' => trim($this->articleSlug),
                 'permalink_suffix' => $this->getPermalinkSuffix(),
             ],
         );
+
+        $perf->stop('editor_seo_bootstrap');
+        $perf->logSummary('editor_seo_bootstrap', ['article_id' => (int) $this->record->getKey()]);
+
+        return $payload;
     }
 
     public function analyzeSeoDraft(string $html): void
@@ -3492,7 +3518,7 @@ class EditArticle extends SeoEditRecord
     {
         $this->record->unsetRelation('articleMetas');
 
-        $html = trim((string) ($html ?? $this->editorHtml));
+        $html = trim((string) ($html ?? $this->bootstrapEditorHtml));
         if ($html === '') {
             $html = app(ArticleKeywordLinkReconcileService::class)->resolveArticleContent($this->record);
         }
@@ -3556,6 +3582,7 @@ class EditArticle extends SeoEditRecord
             'can_generate_image' => $this->canGenerateEditorImage(),
             'can_generate_video' => $this->canGenerateEditorVideo(),
             'prompt_hooks' => $this->getPromptHooksEditorPayload(),
+            'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
         ];
     }
 
@@ -3614,10 +3641,11 @@ class EditArticle extends SeoEditRecord
     public function getEditorMetaPayload(): array
     {
         $siteId = (int) $this->record->site_id;
+        $conflictGuard = app(ArticleContentConflictGuard::class);
         $projectRunRevision = (string) ($this->record->articleMetas()
             ->where('meta_key', 'content_project_run')
             ->value('meta_value') ?? '');
-        $bodyHash = hash('sha256', trim($this->editorHtml));
+        $bodyHash = $conflictGuard->contentHash($this->bootstrapEditorHtml);
         $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
         $productCategoryOptions = $siteId > 0
             ? app(\App\Addons\SeoContentAi\Services\PromptLoaiSanPhamOptionsService::class)
@@ -3629,10 +3657,12 @@ class EditArticle extends SeoEditRecord
             'site_id' => $siteId,
             'seo_connection_hash' => SeoConnectionContext::hash(),
             'content_revision' => hash('sha256', $contentRevisionSource),
+            'expected_updated_at' => $this->record->updated_at?->toIso8601String(),
+            'expected_content_hash' => $bodyHash,
             'media_picker_url' => route('seo.articles.media-picker', ['article' => $this->record->id]),
             'title' => (string) $this->articleTitle,
             'post_type' => SeoProjectTask::normalizePostType($this->articlePostType),
-            'virtual_reviews' => $this->getVirtualReviewsPayload(),
+            'virtual_reviews' => [],
             'supports_product_gallery' => $this->supportsProductGallery(),
             'product_category_options' => collect($productCategoryOptions)
                 ->map(static fn (string $label, int $id): array => [
@@ -4060,13 +4090,13 @@ class EditArticle extends SeoEditRecord
             $restore = app(ArticleFaqWordPressRestoreService::class)->restoreWhenFaqsCleared($this->record);
 
             if ($restore['restored'] && filled($restore['editor_html'] ?? null)) {
-                $this->editorHtml = (string) $restore['editor_html'];
+                $this->bootstrapEditorHtml = (string) $restore['editor_html'];
                 $this->record->refresh();
 
                 $this->dispatch(
                     'article-faqs-extracted',
                     faqs: [],
-                    editorHtml: $this->editorHtml,
+                    editorHtml: $this->bootstrapEditorHtml,
                 );
 
                 if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
@@ -4115,13 +4145,13 @@ class EditArticle extends SeoEditRecord
             $restore = app(ArticleFaqWordPressRestoreService::class)->restoreAfterFaqRemoved($this->record, $faqs);
 
             if ($restore['restored'] && filled($restore['editor_html'] ?? null)) {
-                $this->editorHtml = (string) $restore['editor_html'];
+                $this->bootstrapEditorHtml = (string) $restore['editor_html'];
                 $this->record->refresh();
 
                 $this->dispatch(
                     'article-faqs-extracted',
                     faqs: app(ArticleFaqEditorService::class)->payloadForArticle($this->record),
-                    editorHtml: $this->editorHtml,
+                    editorHtml: $this->bootstrapEditorHtml,
                 );
 
                 if ($allowCollectContinuation && $this->pendingEditorCollectTarget !== null) {
@@ -4422,7 +4452,7 @@ class EditArticle extends SeoEditRecord
 
             $html = (string) ($result['editor_html'] ?? '');
             if ($html !== '') {
-                $this->editorHtml = $html;
+                $this->bootstrapEditorHtml = $html;
             }
 
             $this->record->refresh();
@@ -4911,7 +4941,7 @@ class EditArticle extends SeoEditRecord
         if ($renamed !== []) {
             $this->rewriteArticleUrlsAfterWpAttachmentRename($items, $renamed);
             $this->record->refresh();
-            $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
+            $this->bootstrapEditorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
         }
 
         if ($result['success']) {
