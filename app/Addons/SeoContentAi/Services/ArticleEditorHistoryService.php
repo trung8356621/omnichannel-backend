@@ -12,7 +12,8 @@ class ArticleEditorHistoryService
 
     public const DEFAULT_HISTORY_STEP = 20;
 
-    public const DEFAULT_AUTOSAVE_INTERVAL_SECONDS = 60;
+    /** Local browser draft interval (localStorage) — not server/database autosave. */
+    public const DEFAULT_AUTOSAVE_INTERVAL_SECONDS = 2;
 
     /** @var list<string> */
     public const DEFAULT_WIKI_TRUST_DOMAINS = [
@@ -45,7 +46,7 @@ class ArticleEditorHistoryService
 
         return [
             'history_step' => max(1, min(100, $steps)),
-            'autosave_interval_seconds' => max(0, min(600, $autosave)),
+            'autosave_interval_seconds' => max(0, min(30, $autosave)),
             'wiki_trust_domains' => $this->normalizeWikiTrustDomains($data['wiki_trust_domains'] ?? null),
         ];
     }
@@ -99,7 +100,7 @@ class ArticleEditorHistoryService
 
         WpOption::set(self::OPTION_KEY, [
             'history_step' => max(1, min(100, $steps)),
-            'autosave_interval_seconds' => max(0, min(600, $autosave)),
+            'autosave_interval_seconds' => max(0, min(30, $autosave)),
             'wiki_trust_domains' => $wikiTrustDomains,
         ], 'no');
     }

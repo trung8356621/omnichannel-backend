@@ -69,7 +69,7 @@ class SeoSettingsEditor extends Page implements HasForms
                             ->helperText(__('seo-content-ai::filament.settings_editor.autosave_interval_hint'))
                             ->numeric()
                             ->minValue(0)
-                            ->maxValue(600)
+                            ->maxValue(30)
                             ->required()
                             ->default(ArticleEditorHistoryService::DEFAULT_AUTOSAVE_INTERVAL_SECONDS)
                             ->suffix(__('seo-content-ai::filament.settings_editor.seconds_suffix')),

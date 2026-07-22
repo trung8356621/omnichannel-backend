@@ -1743,7 +1743,7 @@
                     </div>
                 </div>
 
-                <script type="application/json" id="seo-article-initial-html">@json($editorHtml)</script>
+                <script type="application/json" id="seo-article-initial-html">@json($this->getBootstrapEditorHtml())</script>
                 <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
                 <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
                 <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>

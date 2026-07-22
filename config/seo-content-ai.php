@@ -127,4 +127,7 @@ return [
         /** Run item status=processing older than this (minutes) may be reclaimed. */
         'run_item_stale_minutes' => (int) env('SEO_CONTENT_PROJECT_RUN_ITEM_STALE_MINUTES', 30),
     ],
+
+    /** Log Article Editor mount/SEO bootstrap timings (no body/tokens). */
+    'article_editor_perf_debug' => (bool) env('ARTICLE_EDITOR_PERF_DEBUG', false),
 ];
