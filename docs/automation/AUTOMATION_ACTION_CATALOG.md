@@ -109,7 +109,7 @@ Canonical IDs: `team_id?`, `site_id`, `connection_id`, `article_id`, `wp_post_id
 | `wordpress.article.sync_outbound` | CATALOG_ONLY (legacy) | legacy_not_selectable | none Phase 3 | Automation PASS (blocked workflow) | no | `implies_publish_status=true` |
 | `wordpress.article.publish` | CATALOG_ONLY | internal_only | none | Automation PASS (PublishIntent) | no | critical; cần guard/idempotency trước handler |
 | `wordpress.article.sync` | IMPLEMENT | selectable | `SyncArticleToWordPressHookAction` | ProductReviewArticleSyncIsolationTest | yes | article/product+media only; **no** review orchestration |
-| `product-review.create` | IMPLEMENT | selectable | `CreateProductReviewsHookAction` | ProductReviewSyncPipelineTest | yes | Idempotent: `ProductReviewCreationPolicy` maintain `target_count` AI reviews (`missing` only); local pending |
+| `product-review.create` | IMPLEMENT | selectable | `CreateProductReviewsHookAction` | ProductReviewSyncPipelineTest | yes | Idempotent: `ProductReviewCreationPolicy` + `ProductReviewAutomationSettingsResolver` (rule `target_count`); Manual Sync/editor dùng cùng settings |
 | `product-review.sync-wp` | IMPLEMENT | selectable | `SyncProductReviewsToWordPressHookAction` | ProductReviewSyncPipelineTest | yes | idempotent WP create → `reviewed`; SideEffectGuard allows |
 | `wordpress.comment_review.publish` | DEPRECATED | hidden | `PublishWordPressCommentReviewHookAction` (no-op) | — | no | replaced by `product-review.sync-wp` |
 

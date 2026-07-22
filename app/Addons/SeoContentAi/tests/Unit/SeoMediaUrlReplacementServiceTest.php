@@ -39,6 +39,22 @@ final class SeoMediaUrlReplacementServiceTest extends TestCase
         $this->assertStringNotContainsString('/storage/uploads/seo_media/old-slug.jpg', $next);
     }
 
+    public function test_replace_in_text_updates_wordpress_sized_variants(): void
+    {
+        $service = new SeoMediaUrlReplacementService();
+        $html = '<img src="https://example.com/wp-content/uploads/2026/05/old-slug.jpg" '
+            .'srcset="https://example.com/wp-content/uploads/2026/05/old-slug-1024x768.jpg 1024w">';
+        $next = $service->replaceInText($html, [
+            'https://example.com/wp-content/uploads/2026/05/old-slug.jpg'
+                => 'https://example.com/wp-content/uploads/2026/05/new-slug.jpg',
+        ]);
+
+        $this->assertStringContainsString('new-slug.jpg', $next);
+        $this->assertStringContainsString('new-slug-1024x768.jpg', $next);
+        $this->assertStringNotContainsString('old-slug.jpg', $next);
+        $this->assertStringNotContainsString('old-slug-1024x768.jpg', $next);
+    }
+
     public function test_find_remaining_old_refs(): void
     {
         $service = new SeoMediaUrlReplacementService();

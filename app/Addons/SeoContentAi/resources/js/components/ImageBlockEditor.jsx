@@ -14,6 +14,7 @@ import ImageMetaEditForm from './imageMeta/ImageMetaEditForm';
 import { applyWordPressImageSize, detectWordPressImageSize } from '../utils/wordpressImageSize';
 import { resolveWordPressBaseUrl, resolveFullWordPressImageUrl } from '../utils/wordpressImageUrl';
 import { slugFromUrl } from '../utils/articleImagesUtils';
+import { installBrokenImageGuard } from '../utils/brokenImageGuard';
 
 const ALIGN_OPTIONS = [
     { id: 'left', icon: AlignLeft, title: t('toolbar_align_left') },
@@ -195,6 +196,9 @@ export default function ImageBlockEditor({
     const [pickerInteractionReady, setPickerInteractionReady] = useState(false);
     const toolbarRef = useRef(null);
     const emptyFrameRef = useRef(null);
+    const previewHtmlRef = useRef(null);
+    const activeHtmlRef = useRef(null);
+    const brokenSrcKeysRef = useRef(new Set());
 
     const image = useMemo(() => {
         if (block.image) return block.image;
@@ -203,6 +207,20 @@ export default function ImageBlockEditor({
     const isVideo = isVideoMedia(image);
 
     const figureHtml = image ? (isVideo ? renderVideoFigure(image) : renderImageFigure(image)) : block.content;
+
+    useLayoutEffect(() => {
+        const cleanups = [];
+        if (previewHtmlRef.current) {
+            cleanups.push(installBrokenImageGuard(previewHtmlRef.current, brokenSrcKeysRef.current));
+        }
+        if (activeHtmlRef.current) {
+            cleanups.push(installBrokenImageGuard(activeHtmlRef.current, brokenSrcKeysRef.current));
+        }
+
+        return () => {
+            cleanups.forEach((cleanup) => cleanup());
+        };
+    }, [figureHtml, isActive, image?.src]);
 
     const commitImage = (nextImage) => {
         const normalized = isVideoMedia(nextImage) ? nextImage : withDefaultImageInsertAlign(nextImage);
@@ -556,6 +574,7 @@ export default function ImageBlockEditor({
     if (!isActive) {
         return (
             <div
+                ref={previewHtmlRef}
                 className="seo-block-preview seo-wp-content seo-block-image-preview-wrap p-3 -mx-1 rounded border border-transparent hover:border-gray-200 dark:hover:border-slate-600 hover:bg-gray-50/80 dark:hover:bg-slate-800/40 transition-all cursor-pointer"
                 dangerouslySetInnerHTML={{ __html: figureHtml }}
                 onClick={handlePreviewClick}
@@ -765,7 +784,11 @@ export default function ImageBlockEditor({
                             <Trash2 size={18} strokeWidth={1.75} />
                         </button>
                     </div>
-                    <div className="seo-block-image-figure-host" dangerouslySetInnerHTML={{ __html: figureHtml }} />
+                    <div
+                        ref={activeHtmlRef}
+                        className="seo-block-image-figure-host"
+                        dangerouslySetInnerHTML={{ __html: figureHtml }}
+                    />
                 </div>
             </div>
 

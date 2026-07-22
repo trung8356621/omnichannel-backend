@@ -2103,12 +2103,12 @@
     border: none;
 }
 
-.seo-wp-content figure.seo-ai-media-loading {
-    position: relative;
-    padding: 12px;
-    border: 1px dashed #c3c4c7;
-    border-radius: 8px;
-    background: #f6f7f7;
+.seo-wp-content img.seo-img-broken,
+.seo-article-images-thumb.seo-img-broken {
+    opacity: 0.85;
+    filter: grayscale(0.2);
+    object-fit: contain;
+    background: #f3f4f6;
 }
 
 .seo-wp-content figure.seo-ai-media-loading img {
@@ -9618,7 +9618,7 @@ section[data-seo-section-id].is-outline-jump-highlight {
 .dark .seo-keyword-review-popover__option:hover {
     background: #1e293b;
 }
-/* —— HTML inspector (View HTML) —— */
+/* ï¿½ï¿½ HTML inspector (View HTML) ï¿½ï¿½ */
 .seo-toolbar-btn__label {
     margin-left: 0.25rem;
     font-size: 11px;

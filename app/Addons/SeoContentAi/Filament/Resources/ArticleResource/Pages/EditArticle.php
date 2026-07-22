@@ -61,6 +61,7 @@ use App\Addons\SeoContentAi\Services\TaskWorkflowTestRunner;
 use App\Addons\SeoContentAi\Services\VirtualCommentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleContentService;
 use App\Addons\SeoContentAi\Services\WordPressArticleSyncService;
+use App\Addons\SeoContentAi\Services\SeoMediaUrlReplacementService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentMetaUpdateService;
 use App\Addons\SeoContentAi\Services\WordPressAttachmentRenameService;
 use App\Addons\SeoContentAi\Services\WordPressMediaLibraryService;
@@ -4906,6 +4907,13 @@ class EditArticle extends SeoEditRecord
         $renamed = is_array($result['renamed'] ?? null) ? $result['renamed'] : [];
         $renamed = $this->enrichAttachmentRenameResultsWithRequestMeta($items, $renamed);
 
+        // WP đã đổi file + post_content; Laravel body/featured/gallery vẫn URL cũ → rewrite trước reload.
+        if ($renamed !== []) {
+            $this->rewriteArticleUrlsAfterWpAttachmentRename($items, $renamed);
+            $this->record->refresh();
+            $this->editorHtml = app(WordPressArticleContentService::class)->resolveEditorHtml($this->record);
+        }
+
         if ($result['success']) {
             $this->dispatch('seo-attachment-slugs-rename-finished', success: true, renamed: $renamed, message: $result['message']);
 
@@ -4929,6 +4937,103 @@ class EditArticle extends SeoEditRecord
                 ->danger()
                 ->send();
         }
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $requestItems
+     * @param  array<int, array<string, mixed>>  $renamed
+     */
+    private function rewriteArticleUrlsAfterWpAttachmentRename(array $requestItems, array $renamed): void
+    {
+        $urlMap = [];
+
+        foreach ($renamed as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+
+            $oldUrl = trim((string) ($row['old_url'] ?? ''));
+            $newUrl = trim((string) ($row['new_url'] ?? ''));
+            $newSlug = trim((string) ($row['new_slug'] ?? ''));
+
+            if ($oldUrl === '') {
+                continue;
+            }
+
+            if ($newUrl === '' && $newSlug !== '') {
+                $newUrl = $this->replaceAttachmentUrlSlug($oldUrl, $newSlug);
+            }
+
+            if ($newUrl === '' || $oldUrl === $newUrl) {
+                continue;
+            }
+
+            $urlMap[$oldUrl] = $newUrl;
+        }
+
+        // Recovery: WP báo renamed thiếu new_url — dựng map từ queue request.
+        foreach ($requestItems as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $oldUrl = trim((string) ($item['old_url'] ?? $item['oldUrl'] ?? $item['src'] ?? ''));
+            $newSlug = trim((string) ($item['new_slug'] ?? $item['slug'] ?? ''));
+            if ($oldUrl === '' || $newSlug === '') {
+                continue;
+            }
+
+            $computed = $this->replaceAttachmentUrlSlug($oldUrl, $newSlug);
+            if ($computed === '' || $computed === $oldUrl || isset($urlMap[$oldUrl])) {
+                continue;
+            }
+
+            $urlMap[$oldUrl] = $computed;
+        }
+
+        if ($urlMap === []) {
+            return;
+        }
+
+        app(SeoMediaUrlReplacementService::class)->rewriteArticleReferences($this->record, $urlMap);
+    }
+
+    private function replaceAttachmentUrlSlug(string $url, string $newSlug): string
+    {
+        $url = trim($url);
+        $newSlug = trim($newSlug);
+        if ($url === '' || $newSlug === '') {
+            return $url;
+        }
+
+        $parts = parse_url($url);
+        $path = is_array($parts) ? (string) ($parts['path'] ?? '') : '';
+        if ($path === '') {
+            return $url;
+        }
+
+        $dirname = pathinfo($path, PATHINFO_DIRNAME);
+        $extension = pathinfo($path, PATHINFO_EXTENSION);
+        $filename = $extension !== '' ? $newSlug.'.'.$extension : $newSlug;
+        $nextPath = ($dirname === '/' || $dirname === '\\' || $dirname === '.' ? '' : rtrim($dirname, '/'))
+            .'/'.$filename;
+
+        $rebuilt = '';
+        if (isset($parts['scheme'], $parts['host'])) {
+            $rebuilt = $parts['scheme'].'://'.$parts['host'];
+            if (isset($parts['port'])) {
+                $rebuilt .= ':'.$parts['port'];
+            }
+        }
+        $rebuilt .= $nextPath;
+        if (! empty($parts['query'])) {
+            $rebuilt .= '?'.$parts['query'];
+        }
+        if (! empty($parts['fragment'])) {
+            $rebuilt .= '#'.$parts['fragment'];
+        }
+
+        return $rebuilt !== '' ? $rebuilt : $url;
     }
 
     /**

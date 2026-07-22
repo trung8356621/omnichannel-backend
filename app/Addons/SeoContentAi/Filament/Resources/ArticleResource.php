@@ -238,13 +238,16 @@ class ArticleResource extends SeoPanelResource
                         ArticleWpSyncQueueService::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
                         ArticleWpSyncQueueService::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
                         ArticleWpSyncQueueService::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+                        ArticleWpSyncQueueService::STATUS_CANCELLED => __('seo-content-ai::filament.article_list.queue_status_cancelled'),
+                        ArticleWpSyncQueueService::STATUS_STALE => __('seo-content-ai::filament.article_list.queue_status_stale'),
                         default => $state ?: '—',
                     })
                     ->color(fn (?string $state): string => match ((string) $state) {
                         ArticleWpSyncQueueService::STATUS_PENDING => 'warning',
                         ArticleWpSyncQueueService::STATUS_PROCESSING => 'info',
                         ArticleWpSyncQueueService::STATUS_COMPLETED => 'success',
-                        ArticleWpSyncQueueService::STATUS_FAILED => 'danger',
+                        ArticleWpSyncQueueService::STATUS_FAILED, ArticleWpSyncQueueService::STATUS_STALE => 'danger',
+                        ArticleWpSyncQueueService::STATUS_CANCELLED => 'gray',
                         default => 'gray',
                     })
                     ->visible(fn ($livewire): bool => $livewire instanceof Pages\ListArticles
@@ -881,13 +884,16 @@ class ArticleResource extends SeoPanelResource
                         ArticleWpSyncQueueService::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
                         ArticleWpSyncQueueService::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
                         ArticleWpSyncQueueService::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+                        ArticleWpSyncQueueService::STATUS_CANCELLED => __('seo-content-ai::filament.article_list.queue_status_cancelled'),
+                        ArticleWpSyncQueueService::STATUS_STALE => __('seo-content-ai::filament.article_list.queue_status_stale'),
                         default => $state ?: '—',
                     })
                     ->color(fn (?string $state): string => match ((string) $state) {
                         ArticleWpSyncQueueService::STATUS_PENDING => 'warning',
                         ArticleWpSyncQueueService::STATUS_PROCESSING => 'info',
                         ArticleWpSyncQueueService::STATUS_COMPLETED => 'success',
-                        ArticleWpSyncQueueService::STATUS_FAILED => 'danger',
+                        ArticleWpSyncQueueService::STATUS_FAILED, ArticleWpSyncQueueService::STATUS_STALE => 'danger',
+                        ArticleWpSyncQueueService::STATUS_CANCELLED => 'gray',
                         default => 'gray',
                     }),
                 Tables\Columns\TextColumn::make('wp_sync_queue_queued_at')
@@ -962,6 +968,16 @@ class ArticleResource extends SeoPanelResource
 
     public static function resolveWpSyncQueueStatus(SeoArticle $record): ?string
     {
+        // Heal meta mồ côi khi list/badge đọc status (không chỉ chờ watchdog).
+        try {
+            app(\App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService::class)
+                ->healArticleOrphanMeta($record);
+            $record->unsetRelation('articleMetas');
+            unset($record->wp_sync_queue_meta);
+        } catch (\Throwable) {
+            // ignore heal failures in list rendering
+        }
+
         $status = (string) (static::resolveWpSyncQueuePayload($record)['status'] ?? '');
 
         return $status !== '' ? $status : null;
@@ -1096,7 +1112,13 @@ class ArticleResource extends SeoPanelResource
                 ->tooltip(__('seo-content-ai::filament.article_list.queue_resync'))
                 ->visible(fn (SeoArticle $record): bool => in_array(
                     static::resolveWpSyncQueueStatus($record),
-                    [ArticleWpSyncQueueService::STATUS_PENDING, ArticleWpSyncQueueService::STATUS_FAILED, ArticleWpSyncQueueService::STATUS_PROCESSING],
+                    [
+                        ArticleWpSyncQueueService::STATUS_PENDING,
+                        ArticleWpSyncQueueService::STATUS_FAILED,
+                        ArticleWpSyncQueueService::STATUS_PROCESSING,
+                        ArticleWpSyncQueueService::STATUS_STALE,
+                        ArticleWpSyncQueueService::STATUS_CANCELLED,
+                    ],
                     true,
                 ))
                 ->action(function (SeoArticle $record, Pages\ListArticles|Pages\ListArticleSyncQueue $livewire): void {
@@ -1114,6 +1136,7 @@ class ArticleResource extends SeoPanelResource
                         ArticleWpSyncQueueService::STATUS_FAILED,
                         ArticleWpSyncQueueService::STATUS_PROCESSING,
                         ArticleWpSyncQueueService::STATUS_COMPLETED,
+                        ArticleWpSyncQueueService::STATUS_STALE,
                     ],
                     true,
                 ))

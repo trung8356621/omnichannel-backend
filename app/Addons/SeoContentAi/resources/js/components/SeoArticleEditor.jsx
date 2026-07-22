@@ -32,6 +32,9 @@ import { isCtaPlainTextType } from '../utils/ctaLinkFormat';
 import { SEO_EDITOR_LINK_CLASS } from '../utils/articleEditorTransientMarkup';
 import {
     filterSuggestedInternalLinks,
+    isInternalHrefForSite,
+    isSpecialOrContactHref,
+    mergeSuggestionCatalog,
     normalizeHrefForCompare,
     normalizeLinkLabel,
 } from '../utils/articleLinkSuggestionFilter';
@@ -86,6 +89,8 @@ import {
     resetSupplementalImagesAfterSlugRename,
     resolveWpRenameOldUrl,
     resolveImageRefIds,
+    resolveArticleImageRemoveTarget,
+    articleImageRowsShareIdentity,
     shouldRenameSlugOnWordPress,
     syncProductAlbumUrlsFromBlockImages,
     slugFromUrl,
@@ -115,6 +120,7 @@ import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
 import {
     ARTICLE_EDITOR_DRAFT_VERSION,
+    clearDraft,
     loadDraft,
     saveDraft,
 } from '../utils/articleEditorStorage';
@@ -2423,12 +2429,26 @@ export default function SeoArticleEditor({
     const hasHydratedSeoFromServerRef = useRef(false);
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
-    const [extractedLinks, setExtractedLinks] = useState(
-        initialSeo?.extracted_links ?? { internal: [], external: [] },
-    );
+    const [extractedLinks, setExtractedLinks] = useState(() => {
+        const source = initialSeo?.extracted_links ?? { internal: [], external: [] };
+
+        return {
+            internal: Array.isArray(source.internal) ? source.internal : [],
+            external: (Array.isArray(source.external) ? source.external : []).filter(
+                (item) => !isSpecialOrContactHref(item?.href),
+            ),
+        };
+    });
     const [suggestedInternalLinks, setSuggestedInternalLinks] = useState(() =>
         filterSuggestedInternalLinks(
             initialSeo?.suggested_internal_links ?? [],
+            initialSeo?.extracted_links?.internal ?? [],
+            initialSeo?.extracted_links?.external ?? [],
+        ),
+    );
+    const [suggestedExternalLinks, setSuggestedExternalLinks] = useState(() =>
+        filterSuggestedInternalLinks(
+            initialSeo?.suggested_external_links ?? [],
             initialSeo?.extracted_links?.internal ?? [],
             initialSeo?.extracted_links?.external ?? [],
         ),
@@ -2441,6 +2461,13 @@ export default function SeoArticleEditor({
             ? initialSeo.suggested_internal_links_catalog
             : [],
     );
+    const suggestionExternalCatalogRef = useRef(
+        mergeSuggestionCatalog(
+            initialSeo?.suggested_external_links_catalog ?? [],
+            initialSeo?.suggested_external_links ?? [],
+        ),
+    );
+    const siteDomainRef = useRef(String(initialSeo?.site_domain ?? '').trim());
 
     const mainKeyword = useMemo(() => {
         const fromFocus = String(focusKeyword ?? '').trim();
@@ -2575,30 +2602,42 @@ export default function SeoArticleEditor({
 
         return {
             internal: withCounts(source.internal),
-            external: withCounts(source.external),
+            external: withCounts(source.external).filter((item) => !isSpecialOrContactHref(item?.href)),
         };
     }, []);
 
-    const publishExtractedLinks = useCallback((links, suggestedInternal = suggestedInternalLinks) => {
+    const publishExtractedLinks = useCallback((links, suggestedInternal = suggestedInternalLinks, suggestedExternal = suggestedExternalLinks) => {
         const enrichedLinks = enrichLinksWithOccurrences(links);
         const filteredSuggested = filterSuggestedInternalLinks(
             suggestedInternal,
             enrichedLinks.internal ?? [],
             enrichedLinks.external ?? [],
         );
+        const filteredExternalSuggested = filterSuggestedInternalLinks(
+            suggestedExternal,
+            enrichedLinks.internal ?? [],
+            enrichedLinks.external ?? [],
+        ).filter((item) => {
+            const href = String(item?.href ?? item?.target_url ?? '').trim();
+
+            return href !== '' && !isSpecialOrContactHref(href);
+        });
         const articlePlainText = htmlToPlainText(exportBlocksToHtml(blocksRef.current));
         window.dispatchEvent(
             new CustomEvent('seo-editor-links-updated', {
                 detail: {
                     links: enrichedLinks,
                     suggested_internal: filteredSuggested,
+                    suggested_external: filteredExternalSuggested,
                     article_plain_text: articlePlainText,
+                    site_domain: siteDomainRef.current,
                     domain_link_list_catalog: domainLinkCatalogRef.current,
                     suggested_internal_links_catalog: suggestionKeywordCatalogRef.current,
+                    suggested_external_links_catalog: suggestionExternalCatalogRef.current,
                 },
             }),
         );
-    }, [suggestedInternalLinks, enrichLinksWithOccurrences]);
+    }, [suggestedInternalLinks, suggestedExternalLinks, enrichLinksWithOccurrences]);
 
     const blocksRef = useRef(blocks);
     blocksRef.current = blocks;
@@ -2838,8 +2877,30 @@ export default function SeoArticleEditor({
                     payload.extracted_links.internal ?? [],
                     payload.extracted_links.external ?? [],
                 );
-                setExtractedLinks(payload.extracted_links);
-                publishExtractedLinks(payload.extracted_links, filteredSuggested);
+                setSuggestedExternalLinks((prevExternalSuggested) => {
+                    const filteredExternalSuggested = filterSuggestedInternalLinks(
+                        prevExternalSuggested,
+                        payload.extracted_links.internal ?? [],
+                        payload.extracted_links.external ?? [],
+                    ).filter((item) => {
+                        const href = String(item?.href ?? item?.target_url ?? '').trim();
+
+                        return href !== '' && !isSpecialOrContactHref(href);
+                    });
+                    setExtractedLinks({
+                        internal: payload.extracted_links.internal ?? [],
+                        external: (payload.extracted_links.external ?? []).filter(
+                            (item) => !isSpecialOrContactHref(item?.href),
+                        ),
+                    });
+                    publishExtractedLinks(
+                        payload.extracted_links,
+                        filteredSuggested,
+                        filteredExternalSuggested,
+                    );
+
+                    return filteredExternalSuggested;
+                });
 
                 return filteredSuggested;
             });
@@ -3062,7 +3123,12 @@ export default function SeoArticleEditor({
         hasHydratedSeoFromServerRef.current = true;
         setFocusKeyword(initialSeo.focus_keyword ?? null);
         setAnalysis(initialSeo.analysis ?? null);
-        setExtractedLinks(initialSeo.extracted_links ?? { internal: [], external: [] });
+        setExtractedLinks({
+            internal: initialSeo.extracted_links?.internal ?? [],
+            external: (initialSeo.extracted_links?.external ?? []).filter(
+                (item) => !isSpecialOrContactHref(item?.href),
+            ),
+        });
         setSuggestedInternalLinks(
             filterSuggestedInternalLinks(
                 initialSeo.suggested_internal_links ?? [],
@@ -3070,6 +3136,26 @@ export default function SeoArticleEditor({
                 initialSeo.extracted_links?.external ?? [],
             ),
         );
+        setSuggestedExternalLinks(
+            filterSuggestedInternalLinks(
+                initialSeo.suggested_external_links ?? [],
+                initialSeo.extracted_links?.internal ?? [],
+                initialSeo.extracted_links?.external ?? [],
+            ).filter((item) => {
+                const href = String(item?.href ?? item?.target_url ?? '').trim();
+
+                return href !== '' && !isSpecialOrContactHref(href);
+            }),
+        );
+        if (String(initialSeo.site_domain ?? '').trim() !== '') {
+            siteDomainRef.current = String(initialSeo.site_domain).trim();
+        }
+        if (Array.isArray(initialSeo.suggested_external_links_catalog)) {
+            suggestionExternalCatalogRef.current = mergeSuggestionCatalog(
+                initialSeo.suggested_external_links_catalog,
+                initialSeo.suggested_external_links ?? [],
+            );
+        }
     }, [initialSeo]);
 
     useEffect(() => {
@@ -4066,6 +4152,10 @@ export default function SeoArticleEditor({
                     'success',
                 );
 
+                // Xóa draft cũ — tránh hydrate lại src trước rename (404).
+                // Server đã rewrite body (WP + local); reload lấy HTML + content_revision mới.
+                clearDraft(articleId);
+
                 showArticleOperationOverlay('success', 'media_slug_fix');
                 scheduleArticleEditorReload(articleId, { delayMs: 500 });
             } catch (error) {
@@ -4076,6 +4166,7 @@ export default function SeoArticleEditor({
                 );
                 // Partial WP rename có thể đã ghi DB — reload để đọc trạng thái thật.
                 if (totalWpRenames > 0) {
+                    clearDraft(articleId);
                     scheduleArticleEditorReload(articleId, { delayMs: 1500 });
                 } else {
                     setArticleAutosaveLock('quick-fix-slug-all', false);
@@ -4844,8 +4935,10 @@ export default function SeoArticleEditor({
                     const current = prev && typeof prev === 'object'
                         ? prev
                         : { internal: [], external: [] };
-                    const internal = Array.isArray(current.internal) ? current.internal : [];
-                    const alreadyAdded = internal.some(
+                    const isInternal = isInternalHrefForSite(href, siteDomainRef.current);
+                    const bucketKey = isInternal ? 'internal' : 'external';
+                    const bucket = Array.isArray(current[bucketKey]) ? current[bucketKey] : [];
+                    const alreadyAdded = bucket.some(
                         (item) =>
                             normalizeLinkLabel(item?.text) === normalizeLinkLabel(text) ||
                             normalizeHrefForCompare(item?.href) === normalizeHrefForCompare(href),
@@ -4855,10 +4948,13 @@ export default function SeoArticleEditor({
                         ? current
                         : {
                               ...current,
-                              internal: [...internal, { text, href, occurrence_count: 1 }],
+                              [bucketKey]: [...bucket, { text, href, occurrence_count: 1 }],
                           };
                 });
                 setSuggestedInternalLinks((prev) =>
+                    filterSuggestedInternalLinks(prev, [{ text, href }]),
+                );
+                setSuggestedExternalLinks((prev) =>
                     filterSuggestedInternalLinks(prev, [{ text, href }]),
                 );
                 window.dispatchEvent(
@@ -5178,8 +5274,8 @@ export default function SeoArticleEditor({
     }, [blocks, siteDomain]);
 
     useEffect(() => {
-        publishExtractedLinks(extractedLinks, suggestedInternalLinks);
-    }, [extractedLinks, suggestedInternalLinks, publishExtractedLinks]);
+        publishExtractedLinks(extractedLinks, suggestedInternalLinks, suggestedExternalLinks);
+    }, [extractedLinks, suggestedInternalLinks, suggestedExternalLinks, publishExtractedLinks]);
 
     useEffect(() => {
         const onScrollToLink = (event) => {
@@ -5298,11 +5394,26 @@ export default function SeoArticleEditor({
 
     const removeImageBlock = useCallback(
         (row) => {
-            const blockId = String(row?.blockId || '').trim();
-            if (!blockId) {
+            const target = resolveArticleImageRemoveTarget(
+                row,
+                blocksRef.current,
+                supplementalImagesRef.current,
+            );
+            if (!target || target.kind !== 'block') {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('image_tab_remove_no_block'),
+                            body: t('image_tab_remove_unmatched_404'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
                 return;
             }
 
+            const blockId = target.blockId;
             if (blocksRef.current.length <= 1) {
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
@@ -5323,44 +5434,67 @@ export default function SeoArticleEditor({
             }
 
             deleteBlock(blockId, { skipConfirm: true });
+
+            // Dọn supplemental orphan cùng identity — tránh hàng 404 còn lại trên tab Images.
+            setSupplementalImages((prev) =>
+                (Array.isArray(prev) ? prev : []).filter((item) => {
+                    if (String(item?.blockId ?? item?.block_id ?? '').trim() === blockId) {
+                        return false;
+                    }
+
+                    return !articleImageRowsShareIdentity(row, item);
+                }),
+            );
+            setImagesReloadKey((key) => key + 1);
+            queueMicrotask(() => publishEditorImagesCatalogRef.current?.(true));
         },
         [deleteBlock],
     );
 
     const removeSupplementalImage = useCallback(
         (row) => {
-            const src = String(row?.src ?? '').trim();
-            if (!src) {
+            const target = resolveArticleImageRemoveTarget(
+                row,
+                blocksRef.current,
+                supplementalImagesRef.current,
+            );
+            if (!target) {
+                window.dispatchEvent(
+                    new CustomEvent('seo-article-editor-notify', {
+                        detail: {
+                            title: t('image_tab_remove_no_block'),
+                            body: t('image_tab_remove_unmatched_404'),
+                            status: 'warning',
+                        },
+                    }),
+                );
+
                 return;
             }
 
-            const origin = String(row?.origin ?? '').trim();
-            const blockId = String(row?.blockId || row?.block_id || '').trim();
-            if (blockId) {
+            if (target.kind === 'block') {
                 removeImageBlock(row);
 
                 return;
             }
 
+            const src = String(target.src ?? row?.src ?? '').trim();
+            const origin = String(target.origin ?? row?.origin ?? '').trim();
+            if (!src) {
+                return;
+            }
+
             setSupplementalImages((prev) =>
                 (Array.isArray(prev) ? prev : []).filter((item) => {
-                    const itemSrc = String(item?.src ?? '').trim();
-                    const itemOrigin = String(item?.origin ?? '').trim();
                     const itemBlockId = String(item?.blockId || item?.block_id || '').trim();
-
                     if (itemBlockId) {
                         return true;
                     }
 
-                    if (itemSrc !== src) {
-                        return true;
-                    }
-
-                    if (origin && itemOrigin && itemOrigin !== origin) {
-                        return true;
-                    }
-
-                    return false;
+                    return !articleImageRowsShareIdentity(
+                        { ...row, src, origin },
+                        item,
+                    );
                 }),
             );
 

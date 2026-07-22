@@ -17,7 +17,8 @@ return new class extends Migration
         if (! $schema->hasTable('business_events')) {
             $schema->create('business_events', function (Blueprint $table): void {
                 $table->id();
-                $table->uuid('event_uuid')->unique();
+                // SHA-256 sync_operation_id (64) dùng làm event_uuid cho wordpress.synced dedupe.
+                $table->string('event_uuid', 64)->unique();
                 $table->string('event_name', 191)->index();
                 $table->string('subject_type', 191)->nullable()->index();
                 $table->unsignedBigInteger('subject_id')->nullable()->index();

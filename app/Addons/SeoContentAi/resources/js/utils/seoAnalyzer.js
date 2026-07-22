@@ -114,18 +114,27 @@ function countH2Tags(html) {
 
 function isSpecialSchemeLink(href) {
     const lower = String(href ?? '').trim().toLowerCase();
+    if (lower === '') {
+        return false;
+    }
+
     if (lower.startsWith('javascript:')) {
         return true;
     }
 
     const match = lower.match(/^([a-z][a-z0-9+.-]*):/i);
-    if (!match) {
-        return false;
+    if (match) {
+        return ['tel', 'mailto', 'sms', 'fax', 'callto', 'geo', 'skype', 'whatsapp', 'viber', 'data', 'cid'].includes(
+            match[1].toLowerCase(),
+        );
     }
 
-    return ['tel', 'mailto', 'sms', 'fax', 'callto', 'geo', 'skype', 'whatsapp', 'viber', 'data', 'cid'].includes(
-        match[1].toLowerCase(),
-    );
+    const raw = String(href ?? '').trim();
+    if (/^[+]?[\d\s().-]{6,}$/u.test(raw)) {
+        return true;
+    }
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(raw);
 }
 
 function isInternalLink(href, domain) {

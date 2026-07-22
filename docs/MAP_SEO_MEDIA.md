@@ -282,8 +282,8 @@ Services: SeoMediaStorageService, SeoImageOptimizationService, SeoMediaResizeSer
 Pipeline: Support/SeoImagePipeline.php + Support/SeoImageResizeMath.php.
 Driver: app/Support/ImageDriverResolver.php (imagick/gd, env IMAGE_DRIVER).
 Model/Query: Models/SeoMedia.php + Models/SeoMediaBuilder.php (meta routing).
-Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx.
-Article Editor slug fix: `POST /api/seo/articles/{id}/fix-media-slugs` — batch rename + rewrite `article.body`/meta (`SeoMediaArticleSlugFixService`). Single rename (`rename`/`rename-by-url`) nhận `article_id` → rewrite article refs. Fix slug all: backend batch + full page reload (không autosave state cũ).
+Frontend: seoMediaApi.js, components/ArticleImagesTab.jsx, ImageBlockEditor.jsx, `utils/brokenImageGuard.js` (404 → placeholder tĩnh, không retry), `resolveArticleImageRemoveTarget` (disable Xóa khi ảnh stale không khớp).
+Article Editor slug fix: `POST /api/seo/articles/{id}/fix-media-slugs` — batch rename + rewrite `article.body`/meta (`SeoMediaArticleSlugFixService`). Single rename (`rename`/`rename-by-url`) nhận `article_id` → rewrite article refs. **WP Fix slug:** `renameAttachmentSlugsOnWordPress` cũng rewrite Laravel refs qua `SeoMediaUrlReplacementService` (stem + `-WxH`). Fix slug all: rewrite server + `clearDraft` + full page reload.
 Watermark batch: POST /api/seo/watermark/* → SeoWatermarkController.
 Image Optimization Settings: SeoImageOptimizationSetting model + ImageOptimizationSettings page.
 AI Image Processing: ImageProcessingPage.php + /api/seo/media/prepare-editor.

@@ -27,6 +27,7 @@ final class KeywordLinkTargetResolver
         string $phrase,
         SeoArticle $currentArticle,
         bool $sameLanguageOnly = false,
+        bool $internalOnly = false,
     ): ?array {
         $phrase = trim($phrase);
         if ($siteId <= 0 || $phrase === '') {
@@ -50,7 +51,7 @@ final class KeywordLinkTargetResolver
             ->values();
 
         foreach ($keywords as $keyword) {
-            $href = $this->resolveForKeyword($keyword, $currentArticle, $sameLanguageOnly);
+            $href = $this->resolveForKeyword($keyword, $currentArticle, $sameLanguageOnly, $internalOnly);
             if ($href !== null && $href !== '') {
                 return [
                     'href' => $href,
@@ -68,19 +69,25 @@ final class KeywordLinkTargetResolver
         return $this->resolveForKeyword($keyword, $currentArticle);
     }
 
-    public function resolveForKeyword(Keyword $keyword, SeoArticle $currentArticle, bool $sameLanguageOnly = false): ?string
+    public function resolveForKeyword(Keyword $keyword, SeoArticle $currentArticle, bool $sameLanguageOnly = false, bool $internalOnly = false): ?string
     {
         $siteId = (int) ($currentArticle->site_id ?? 0);
         $currentLang = $this->articleLanguage($currentArticle);
+        $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost(
+            (string) ($currentArticle->site?->domain ?? $currentArticle->loadMissing('site')->site?->domain ?? ''),
+        );
+
         $explicit = trim((string) ($keyword->targetUrlForSite($siteId) ?? ''));
         if ($explicit !== '') {
-            if (! $sameLanguageOnly || $this->urlMatchesArticleLanguage($siteId, $explicit, $currentLang)) {
+            $explicitAllowed = ! $sameLanguageOnly || $this->urlMatchesArticleLanguage($siteId, $explicit, $currentLang);
+            $explicitInternal = $this->isHrefInternalForSite($explicit, $siteDomain, $siteId);
+            if ($explicitAllowed && (! $internalOnly || $explicitInternal)) {
                 return $explicit;
             }
         }
 
         if (Keyword::isNormalType($keyword->type)) {
-            $fromLinks = $this->resolveFromInternalKeywordLinks($keyword, $currentArticle, $sameLanguageOnly);
+            $fromLinks = $this->resolveFromInternalKeywordLinks($keyword, $currentArticle, $sameLanguageOnly, $internalOnly);
             if ($fromLinks !== null) {
                 return $fromLinks;
             }
@@ -89,6 +96,7 @@ final class KeywordLinkTargetResolver
         $mainArticle = $keyword->mainArticles()
             ->where('articles.id', '!=', (int) $currentArticle->id)
             ->when($sameLanguageOnly, static fn ($query) => $query->where('articles.language', $currentLang))
+            ->when($internalOnly, static fn ($query) => $query->where('articles.site_id', $siteId))
             ->first();
 
         if ($mainArticle instanceof SeoArticle) {
@@ -96,6 +104,27 @@ final class KeywordLinkTargetResolver
         }
 
         return null;
+    }
+
+    private function isHrefInternalForSite(string $href, string $siteDomain, int $siteId): bool
+    {
+        $href = trim($href);
+        if ($href === '') {
+            return false;
+        }
+
+        if (str_starts_with($href, '/')) {
+            return true;
+        }
+
+        $host = SeoLinkMapLinkTypeClassifier::resolveHost($href);
+        if ($host !== '' && $siteDomain !== '' && $host === $siteDomain) {
+            return true;
+        }
+
+        $targetArticle = $this->resolveArticleFromUrl($siteId, $href);
+
+        return $targetArticle instanceof SeoArticle && (int) ($targetArticle->site_id ?? 0) === $siteId;
     }
 
     public function resolveArticlePublicUrl(SeoArticle $article): ?string
@@ -229,9 +258,13 @@ final class KeywordLinkTargetResolver
         Keyword $keyword,
         SeoArticle $currentArticle,
         bool $sameLanguageOnly = false,
+        bool $internalOnly = false,
     ): ?string {
         $siteId = (int) ($currentArticle->site_id ?? 0);
         $currentLang = $this->articleLanguage($currentArticle);
+        $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost(
+            (string) ($currentArticle->site?->domain ?? ''),
+        );
         $currentPermalink = $this->normalizeUrlForCompare(
             $this->resolveArticlePublicUrl($currentArticle) ?? '',
         );
@@ -255,6 +288,10 @@ final class KeywordLinkTargetResolver
             }
 
             if ($sameLanguageOnly && ! $this->urlMatchesArticleLanguage($siteId, $trimmed, $currentLang)) {
+                continue;
+            }
+
+            if ($internalOnly && ! $this->isHrefInternalForSite($trimmed, $siteDomain, $siteId)) {
                 continue;
             }
 

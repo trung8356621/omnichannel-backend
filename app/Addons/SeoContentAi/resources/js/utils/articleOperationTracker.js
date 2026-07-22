@@ -1,10 +1,13 @@
 /**
  * Shared Article Editor operation lock + polling (WordPress sync, media slug fix).
+ * Lease-aware: timeout overlay, terminal cancelled/stale, retry.
  */
 
 import { setArticleAutosaveLock } from './articleAutosaveLock';
 
 const POLL_MS = 2500;
+const MAX_POLL_ERRORS = 8;
+const CLIENT_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** @type {ReturnType<typeof setInterval>|null} */
 let pollTimer = null;
@@ -12,6 +15,14 @@ let pollTimer = null;
 let trackedArticleId = 0;
 /** @type {boolean} */
 let reloadScheduled = false;
+/** @type {number} */
+let pollErrorCount = 0;
+/** @type {number} */
+let pollStartedAt = 0;
+/** @type {object|null} */
+let lastOperation = null;
+
+const TERMINAL_STATUSES = new Set(['success', 'failed', 'cancelled', 'stale', 'completed']);
 
 function csrfToken() {
     return (
@@ -21,10 +32,26 @@ function csrfToken() {
     );
 }
 
+function elapsedLabel(startedAtIso) {
+    if (!startedAtIso) {
+        if (!pollStartedAt) {
+            return '';
+        }
+        const sec = Math.max(0, Math.floor((Date.now() - pollStartedAt) / 1000));
+        return `${sec}s`;
+    }
+    const started = Date.parse(String(startedAtIso));
+    if (!Number.isFinite(started)) {
+        return '';
+    }
+    const sec = Math.max(0, Math.floor((Date.now() - started) / 1000));
+    return `${sec}s`;
+}
+
 /**
- * @param {'queued'|'processing'|'success'|'failed'|string} status
+ * @param {'queued'|'processing'|'success'|'failed'|'cancelled'|'stale'|string} status
  * @param {'wordpress_sync'|'media_slug_fix'|string} operation
- * @param {{ stage?: string, error_message?: string }} [extra]
+ * @param {{ stage?: string, error_message?: string, attempts?: number, worker_id?: string, started_at?: string, queued_at?: string }} [extra]
  */
 export function showArticleOperationOverlay(status, operation = 'wordpress_sync', extra = {}) {
     const overlay = window.__seoArticleHeavyActionOverlay;
@@ -33,13 +60,17 @@ export function showArticleOperationOverlay(status, operation = 'wordpress_sync'
     }
 
     const copy = operationCopy(operation, status, extra);
+    const persist =
+        status === 'queued'
+        || status === 'processing'
+        || status === 'success';
+
     overlay.show(operation === 'media_slug_fix' ? 'sync' : 'sync', {
-        persistUntilUnload: status === 'queued' || status === 'processing' || status === 'success',
+        persistUntilUnload: persist,
         title: copy.title,
         message: copy.message,
     });
 
-    // Prefer custom title/message when overlay supports options.
     const el = document.getElementById(overlay.id);
     const titleEl = el?.querySelector?.('[data-heavy-action-title]');
     const messageEl = el?.querySelector?.('[data-heavy-action-message]');
@@ -50,7 +81,9 @@ export function showArticleOperationOverlay(status, operation = 'wordpress_sync'
         messageEl.textContent = copy.message;
     }
 
-    setArticleAutosaveLock('article-operation', true);
+    ensureRetryButton(el, status, operation);
+
+    setArticleAutosaveLock('article-operation', status === 'queued' || status === 'processing');
     window.dispatchEvent(
         new CustomEvent('article-wordpress-sync-lock', {
             detail: { action: operation, status },
@@ -59,9 +92,46 @@ export function showArticleOperationOverlay(status, operation = 'wordpress_sync'
 }
 
 /**
+ * @param {Element|null|undefined} overlayEl
+ * @param {string} status
+ * @param {string} operation
+ */
+function ensureRetryButton(overlayEl, status, operation) {
+    if (!overlayEl || operation !== 'wordpress_sync') {
+        return;
+    }
+
+    let btn = overlayEl.querySelector('[data-wp-sync-retry]');
+    if (status !== 'failed' && status !== 'stale' && status !== 'cancelled') {
+        btn?.remove();
+        return;
+    }
+
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-wp-sync-retry', '1');
+        btn.className = 'mt-4 inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-primary-500';
+        btn.textContent = 'Retry Sync WP';
+        btn.addEventListener('click', () => {
+            window.__seoEndArticleHeavyActionClient?.();
+            setArticleAutosaveLock('article-operation', false);
+            stopArticleOperationPolling();
+            window.dispatchEvent(new CustomEvent('article-wordpress-sync-retry'));
+            const syncBtn = document.querySelector('[data-seo-sync-wp], [wire\\:click*="requestSyncToWordPress"]');
+            if (syncBtn instanceof HTMLElement) {
+                syncBtn.click();
+            }
+        });
+        const messageEl = overlayEl.querySelector('[data-heavy-action-message]');
+        (messageEl?.parentElement || overlayEl).appendChild(btn);
+    }
+}
+
+/**
  * @param {'wordpress_sync'|'media_slug_fix'|string} operation
  * @param {string} status
- * @param {{ stage?: string, error_message?: string }} extra
+ * @param {{ stage?: string, error_message?: string, attempts?: number, worker_id?: string, started_at?: string, queued_at?: string }} extra
  */
 function operationCopy(operation, status, extra = {}) {
     if (operation === 'media_slug_fix') {
@@ -84,19 +154,29 @@ function operationCopy(operation, status, extra = {}) {
         };
     }
 
+    const attempt = Number(extra.attempts || 0);
+    const worker = String(extra.worker_id || '').trim();
+    const elapsed = elapsedLabel(extra.started_at || extra.queued_at);
+    const metaBits = [
+        attempt > 0 ? `Attempt ${attempt}` : '',
+        worker ? `Worker ${worker.slice(0, 8)}` : '',
+        elapsed ? `Elapsed ${elapsed}` : '',
+    ].filter(Boolean);
+    const metaLine = metaBits.length > 0 ? `\n${metaBits.join(' · ')}` : '';
+
     if (status === 'queued') {
         return {
             title: 'Đang chờ đồng bộ WordPress',
-            message: 'Yêu cầu đã được đưa vào hàng đợi. Vui lòng không chỉnh sửa bài viết trong lúc đồng bộ.',
+            message: `Yêu cầu đã vào hàng đợi. Không chỉnh sửa trong lúc đồng bộ.${metaLine}`,
         };
     }
     if (status === 'processing') {
         const stage = String(extra.stage || '').trim();
         return {
             title: 'Đang đồng bộ bài viết lên WordPress',
-            message: stage !== '' && stage !== 'processing' && stage !== 'queued'
+            message: `${stage !== '' && stage !== 'processing' && stage !== 'queued'
                 ? stage
-                : 'Hệ thống đang xử lý nội dung và hình ảnh. Trang sẽ tự tải lại khi hoàn tất.',
+                : 'Hệ thống đang xử lý nội dung và hình ảnh.'}${metaLine}`,
         };
     }
     if (status === 'success') {
@@ -108,13 +188,25 @@ function operationCopy(operation, status, extra = {}) {
     if (status === 'failed') {
         return {
             title: 'Đồng bộ WordPress thất bại',
-            message: String(extra.error_message || 'Đang tải lại trang để đọc trạng thái mới nhất…'),
+            message: String(extra.error_message || 'Có lỗi khi đồng bộ. Bấm Retry để thử lại.'),
+        };
+    }
+    if (status === 'cancelled') {
+        return {
+            title: 'Đã hủy đồng bộ WordPress',
+            message: String(extra.error_message || 'Job đã bị cancel. Trang sẽ tải lại.'),
+        };
+    }
+    if (status === 'stale') {
+        return {
+            title: 'Đồng bộ WordPress bị gián đoạn',
+            message: String(extra.error_message || 'Worker mất heartbeat. Có thể Retry.'),
         };
     }
 
     return {
         title: 'Đang đồng bộ với WordPress',
-        message: 'Vui lòng chờ — không chỉnh sửa cho đến khi hoàn tất.',
+        message: `Vui lòng chờ — không chỉnh sửa cho đến khi hoàn tất.${metaLine}`,
     };
 }
 
@@ -170,6 +262,11 @@ export function scheduleArticleEditorReload(articleId, options = {}) {
     }, delay);
 }
 
+function unlockOverlayClient() {
+    window.__seoEndArticleHeavyActionClient?.();
+    setArticleAutosaveLock('article-operation', false);
+}
+
 /**
  * @param {number} articleId
  * @param {object|null|undefined} operation
@@ -181,6 +278,7 @@ export function applyArticleOperationState(articleId, operation, options = {}) {
         return;
     }
 
+    lastOperation = op;
     const status = String(op.status || op.raw_status || '').trim();
     const type = String(op.type || op.operation || 'wordpress_sync').trim() || 'wordpress_sync';
     const publicStatus =
@@ -193,6 +291,10 @@ export function applyArticleOperationState(articleId, operation, options = {}) {
         showArticleOperationOverlay(publicStatus, type, {
             stage: String(op.stage || ''),
             error_message: String(op.error_message || ''),
+            attempts: Number(op.attempts || 0),
+            worker_id: String(op.worker_id || ''),
+            started_at: String(op.started_at || ''),
+            queued_at: String(op.queued_at || ''),
         });
         startArticleOperationPolling(articleId);
 
@@ -213,8 +315,20 @@ export function applyArticleOperationState(articleId, operation, options = {}) {
     if (publicStatus === 'failed') {
         showArticleOperationOverlay('failed', type, {
             error_message: String(op.error_message || ''),
+            attempts: Number(op.attempts || 0),
+            worker_id: String(op.worker_id || ''),
         });
-        scheduleArticleEditorReload(articleId, { delayMs: 2500 });
+        unlockOverlayClient();
+        stopArticleOperationPolling();
+
+        return;
+    }
+
+    if (publicStatus === 'cancelled' || publicStatus === 'stale') {
+        showArticleOperationOverlay(publicStatus, type, {
+            error_message: String(op.error_message || ''),
+        });
+        scheduleArticleEditorReload(articleId, { delayMs: 1200 });
     }
 }
 
@@ -229,6 +343,10 @@ export function startArticleOperationPolling(articleId) {
 
     trackedArticleId = id;
     stopArticleOperationPolling();
+    pollErrorCount = 0;
+    if (!pollStartedAt) {
+        pollStartedAt = Date.now();
+    }
 
     const tick = async () => {
         if (reloadScheduled || trackedArticleId !== id) {
@@ -237,18 +355,36 @@ export function startArticleOperationPolling(articleId) {
             return;
         }
 
+        if (Date.now() - pollStartedAt > CLIENT_TIMEOUT_MS) {
+            stopArticleOperationPolling();
+            showArticleOperationOverlay('failed', 'wordpress_sync', {
+                error_message: 'Hết thời gian chờ đồng bộ (5 phút). Bấm Retry hoặc Reset queue.',
+                attempts: Number(lastOperation?.attempts || 0),
+                worker_id: String(lastOperation?.worker_id || ''),
+            });
+            unlockOverlayClient();
+
+            return;
+        }
+
         try {
             const data = await fetchArticleOperationStatus(id);
+            pollErrorCount = 0;
             const op = data.operation ?? null;
             if (!op) {
                 return;
             }
 
+            lastOperation = op;
             const status = String(op.status || '').trim();
             if (status === 'queued' || status === 'processing') {
                 showArticleOperationOverlay(status, String(op.type || 'wordpress_sync'), {
                     stage: String(op.stage || ''),
                     error_message: String(op.error_message || ''),
+                    attempts: Number(op.attempts || 0),
+                    worker_id: String(op.worker_id || ''),
+                    started_at: String(op.started_at || ''),
+                    queued_at: String(op.queued_at || ''),
                 });
 
                 return;
@@ -257,7 +393,14 @@ export function startArticleOperationPolling(articleId) {
             stopArticleOperationPolling();
             applyArticleOperationState(id, op);
         } catch {
-            // keep polling; transient network errors
+            pollErrorCount += 1;
+            if (pollErrorCount >= MAX_POLL_ERRORS) {
+                stopArticleOperationPolling();
+                showArticleOperationOverlay('failed', 'wordpress_sync', {
+                    error_message: 'Mất kết nối khi theo dõi đồng bộ. Bấm Retry.',
+                });
+                unlockOverlayClient();
+            }
         }
     };
 
@@ -283,20 +426,39 @@ export async function bootstrapArticleOperationLock(articleId) {
             return;
         }
 
+        pollStartedAt = Date.now();
         applyArticleOperationState(id, data.operation);
     } catch {
         // ignore bootstrap failures
     }
 }
 
+/**
+ * @param {number} articleId
+ * @param {object} operation
+ */
+export function apply(articleId, operation) {
+    applyArticleOperationState(articleId, operation);
+}
+
+/**
+ * @param {number} articleId
+ */
+export function poll(articleId) {
+    startArticleOperationPolling(articleId);
+}
+
 export function installArticleOperationTracker() {
     window.__seoArticleOperationTracker = {
-        show: showArticleOperationOverlay,
-        poll: startArticleOperationPolling,
-        stop: stopArticleOperationPolling,
-        bootstrap: bootstrapArticleOperationLock,
         apply: applyArticleOperationState,
-        reload: scheduleArticleEditorReload,
-        fetchStatus: fetchArticleOperationStatus,
+        poll: startArticleOperationPolling,
+        bootstrap: bootstrapArticleOperationLock,
+        stop: stopArticleOperationPolling,
+        show: showArticleOperationOverlay,
     };
+
+    const bootId = Number(window.__SEO_ACTIVE_ARTICLE_OPERATION__?.article_id || 0);
+    if (bootId > 0) {
+        void bootstrapArticleOperationLock(bootId);
+    }
 }

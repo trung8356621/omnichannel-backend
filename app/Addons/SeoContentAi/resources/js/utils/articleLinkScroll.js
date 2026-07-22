@@ -477,7 +477,12 @@ const SPECIAL_LINK_SCHEMES = new Set([
 
 function isSpecialSchemeLink(href) {
     const value = String(href ?? '').trim();
-    if (value.toLowerCase().startsWith('javascript:')) {
+    if (value === '') {
+        return false;
+    }
+
+    const lower = value.toLowerCase();
+    if (lower.startsWith('javascript:')) {
         return true;
     }
 
@@ -485,10 +490,18 @@ function isSpecialSchemeLink(href) {
         const url = new URL(value, 'https://placeholder.local');
         const scheme = String(url.protocol || '').replace(/:$/, '').toLowerCase();
 
-        return scheme !== '' && scheme !== 'http' && scheme !== 'https' && SPECIAL_LINK_SCHEMES.has(scheme);
+        if (scheme !== '' && scheme !== 'http' && scheme !== 'https' && SPECIAL_LINK_SCHEMES.has(scheme)) {
+            return true;
+        }
     } catch {
-        return false;
+        // fall through
     }
+
+    if (/^[+]?[\d\s().-]{6,}$/u.test(value)) {
+        return true;
+    }
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
 }
 
 function normalizeDomainHost(host) {

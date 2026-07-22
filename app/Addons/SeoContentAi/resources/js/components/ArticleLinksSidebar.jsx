@@ -14,10 +14,12 @@ import {
     buildVisibleInternalSuggestions,
     filterDomainLinksInArticleContent,
     filterSuggestedInternalLinks,
+    isSpecialOrContactHref,
     isSuggestionExcluded,
     mergeSuggestionCatalog,
     normalizeHrefForCompare,
     normalizeLinkLabel,
+    partitionSuggestionCatalogBySite,
 } from '../utils/articleLinkSuggestionFilter';
 import {
     clearExcludedLinkSuggestions,
@@ -150,7 +152,9 @@ function DomainInsertableList({
 }
 
 const applyDomainLinkFilters = (allLinks, articlePlainText, internalLinks, externalLinks = []) => {
-    const inArticle = filterDomainLinksInArticleContent(allLinks, articlePlainText);
+    const inArticle = filterDomainLinksInArticleContent(allLinks, articlePlainText).filter(
+        (item) => !isSpecialOrContactHref(item?.href ?? item?.target_url),
+    );
 
     return filterSuggestedInternalLinks(inArticle, internalLinks, externalLinks).map((item) => ({
         ...item,
@@ -208,7 +212,7 @@ function occurrenceCount(item) {
 }
 
 /**
- * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', hideTitle?: boolean, interactive?: boolean, hiddenRowKeys?: Set<string>, reviewLoadingKey?: string, reviewPopoverItemKey?: string, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onReviewWarning?: Function, onReviewDanger?: Function }} props
+ * @param {{ items: Array<ExtractedLink|FaqLinkItem>, title: string, activeKey: string, target: 'editor'|'faq', variant?: 'default'|'suggestion', suggestionKind?: 'internal'|'external', hideTitle?: boolean, interactive?: boolean, hiddenRowKeys?: Set<string>, reviewLoadingKey?: string, reviewPopoverItemKey?: string, onKeywordClick: Function, onInsertSuggestion?: Function, onCopyKeyword?: Function, onRemoveInternalLink?: Function, onReviewWarning?: Function, onReviewDanger?: Function }} props
  */
 function KeywordList({
     items,
@@ -216,6 +220,7 @@ function KeywordList({
     activeKey,
     target,
     variant = 'default',
+    suggestionKind = 'internal',
     hideTitle = false,
     interactive = true,
     hiddenRowKeys,
@@ -252,7 +257,12 @@ function KeywordList({
                     const hint =
                         variant === 'suggestion'
                             ? insertable
-                                ? t('links_suggestion_insert_ready', { label })
+                                ? t(
+                                      suggestionKind === 'external'
+                                          ? 'links_suggestion_insert_external_ready'
+                                          : 'links_suggestion_insert_ready',
+                                      { label },
+                                  )
                                 : t('links_suggestion_insert_missing', { label })
                             : target === 'faq'
                               ? t('links_find_in_faq', { label })
@@ -295,12 +305,22 @@ function KeywordList({
                                     className="wp-article-links-insert-btn"
                                     aria-label={
                                         insertable
-                                            ? t('links_insert_internal_for', { label })
+                                            ? t(
+                                                  suggestionKind === 'external'
+                                                      ? 'links_insert_external_for'
+                                                      : 'links_insert_internal_for',
+                                                  { label },
+                                              )
                                             : t('links_missing_target_url')
                                     }
                                     title={
                                         insertable
-                                            ? t('links_insert_internal_for_label', { label })
+                                            ? t(
+                                                  suggestionKind === 'external'
+                                                      ? 'links_insert_external_for_label'
+                                                      : 'links_insert_internal_for_label',
+                                                  { label },
+                                              )
                                             : t('links_missing_target_mapping')
                                     }
                                     disabled={!insertable}
@@ -526,7 +546,14 @@ function readArticleMetaIds() {
 function readSuggestionCatalogBootstrap() {
     const data = readEditorSeoBootstrap();
 
-    return Array.isArray(data?.domain_link_list_catalog) ? data.domain_link_list_catalog : [];
+    return {
+        domainCatalog: Array.isArray(data?.domain_link_list_catalog) ? data.domain_link_list_catalog : [],
+        externalCatalog: mergeSuggestionCatalog(
+            data?.suggested_external_links_catalog ?? [],
+            data?.suggested_external_links ?? [],
+        ),
+        siteDomain: String(data?.site_domain ?? '').trim(),
+    };
 }
 
 export default function ArticleLinksSidebar({
@@ -539,19 +566,33 @@ export default function ArticleLinksSidebar({
     const [reviewLoadingKey, setReviewLoadingKey] = useState('');
     const [reviewedKeywordIds, setReviewedKeywordIds] = useState(() => new Set());
     const editorSeoBootstrap = useRef(readEditorSeoBootstrap());
-    const keywordCatalogRef = useRef(
+    const suggestionBootstrap = useRef(readSuggestionCatalogBootstrap());
+    const siteDomainRef = useRef(suggestionBootstrap.current.siteDomain);
+    const bootPartitioned = partitionSuggestionCatalogBySite(
         mergeSuggestionCatalog(
             editorSeoBootstrap.current?.suggested_internal_links_catalog ?? [],
             editorSeoBootstrap.current?.suggested_internal_links ?? [],
         ),
+        suggestionBootstrap.current.siteDomain,
     );
-    const domainCatalogRef = useRef(readSuggestionCatalogBootstrap());
+    const keywordCatalogRef = useRef(bootPartitioned.internal);
+    const externalKeywordCatalogRef = useRef(
+        mergeSuggestionCatalog(
+            suggestionBootstrap.current.externalCatalog,
+            bootPartitioned.external,
+        ),
+    );
+    const domainCatalogRef = useRef(suggestionBootstrap.current.domainCatalog);
     const [catalogVersion, setCatalogVersion] = useState(0);
     const stableSuggestionsRef = useRef([]);
     const stableSuggestionsKeyRef = useRef('');
+    const stableExternalSuggestionsRef = useRef([]);
+    const stableExternalSuggestionsKeyRef = useRef('');
     const [links, setLinks] = useState(() => ({
         internal: editorSeoBootstrap.current?.extracted_links?.internal ?? [],
-        external: editorSeoBootstrap.current?.extracted_links?.external ?? [],
+        external: (editorSeoBootstrap.current?.extracted_links?.external ?? []).filter(
+            (item) => !isSpecialOrContactHref(item?.href),
+        ),
         faq: [],
     }));
     const [articlePlainText, setArticlePlainText] = useState('');
@@ -715,7 +756,9 @@ export default function ArticleLinksSidebar({
                 setLinks((prev) => ({
                     ...prev,
                     internal: Array.isArray(payload.internal) ? payload.internal : [],
-                    external: Array.isArray(payload.external) ? payload.external : [],
+                    external: (Array.isArray(payload.external) ? payload.external : []).filter(
+                        (item) => !isSpecialOrContactHref(item?.href),
+                    ),
                 }));
                 setCycleByKey({});
                 setHiddenRowKeys(new Set());
@@ -740,20 +783,57 @@ export default function ArticleLinksSidebar({
             const incomingKeywordCatalog = Array.isArray(event.detail?.suggested_internal_links_catalog)
                 ? event.detail.suggested_internal_links_catalog
                 : [];
+            const incomingExternalSuggested = Array.isArray(event.detail?.suggested_external)
+                ? event.detail.suggested_external
+                : Array.isArray(event.detail?.suggested_external_links)
+                  ? event.detail.suggested_external_links
+                  : [];
+            const incomingExternalCatalog = Array.isArray(event.detail?.suggested_external_links_catalog)
+                ? event.detail.suggested_external_links_catalog
+                : [];
             const incomingCatalog = Array.isArray(event.detail?.domain_link_list_catalog)
                 ? event.detail.domain_link_list_catalog
                 : [];
+            const incomingSiteDomain = String(event.detail?.site_domain ?? '').trim();
+            if (incomingSiteDomain !== '') {
+                siteDomainRef.current = incomingSiteDomain;
+            }
 
             if (incomingKeywordCatalog.length > 0) {
+                const partitioned = partitionSuggestionCatalogBySite(
+                    mergeSuggestionCatalog(incomingKeywordCatalog, incomingSuggested),
+                    siteDomainRef.current,
+                );
                 keywordCatalogRef.current = mergeSuggestionCatalog(
                     keywordCatalogRef.current,
-                    incomingKeywordCatalog,
-                    incomingSuggested,
+                    partitioned.internal,
+                );
+                externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                    externalKeywordCatalogRef.current,
+                    partitioned.external,
+                    incomingExternalCatalog,
+                    incomingExternalSuggested,
                 );
             } else if (incomingSuggested.length > 0) {
+                const partitioned = partitionSuggestionCatalogBySite(
+                    incomingSuggested,
+                    siteDomainRef.current,
+                );
                 keywordCatalogRef.current = mergeSuggestionCatalog(
                     keywordCatalogRef.current,
-                    incomingSuggested,
+                    partitioned.internal,
+                );
+                externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                    externalKeywordCatalogRef.current,
+                    partitioned.external,
+                );
+            }
+
+            if (incomingExternalCatalog.length > 0 || incomingExternalSuggested.length > 0) {
+                externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                    externalKeywordCatalogRef.current,
+                    incomingExternalCatalog,
+                    incomingExternalSuggested,
                 );
             }
 
@@ -855,11 +935,11 @@ export default function ArticleLinksSidebar({
 
     const suggestedInternal = useMemo(() => {
         const plain = articlePlainText.trim();
-        const domainPool =
-            plain !== ''
-                ? filterDomainLinksInArticleContent(domainCatalogRef.current, plain)
-                : domainCatalogRef.current;
-        const pool = mergeSuggestionCatalog(keywordCatalogRef.current, domainPool);
+        const partitioned = partitionSuggestionCatalogBySite(
+            keywordCatalogRef.current,
+            siteDomainRef.current,
+        );
+        const pool = partitioned.internal;
         const internalSignature = (internal ?? [])
             .map((item) => {
                 const label = normalizeLinkLabel(item?.text);
@@ -876,7 +956,7 @@ export default function ArticleLinksSidebar({
                 return `${label}|${href}`;
             })
             .join(';');
-        const poolKey = `${catalogVersion}:${internalSignature}:${externalSignature}:${plain}`;
+        const poolKey = `${catalogVersion}:${internalSignature}:${externalSignature}:${plain}:internal`;
 
         if (stableSuggestionsKeyRef.current !== poolKey) {
             stableSuggestionsKeyRef.current = poolKey;
@@ -890,6 +970,49 @@ export default function ArticleLinksSidebar({
         }
 
         return stableSuggestionsRef.current.filter((item) => {
+            const keywordId = Number(item?.keyword_id ?? 0);
+            if (keywordId > 0 && reviewedKeywordIds.has(keywordId)) {
+                return false;
+            }
+
+            return !isSuggestionExcluded(String(item?.text ?? ''), excludedSuggestionLabels);
+        });
+    }, [internal, external, excludedSuggestionLabels, reviewedKeywordIds, articlePlainText, catalogVersion]);
+
+    const suggestedExternal = useMemo(() => {
+        const plain = articlePlainText.trim();
+        const fromKeywords = partitionSuggestionCatalogBySite(
+            keywordCatalogRef.current,
+            siteDomainRef.current,
+        ).external;
+        const fromExternalCatalog = externalKeywordCatalogRef.current;
+        const pool = mergeSuggestionCatalog(fromExternalCatalog, fromKeywords);
+        const internalSignature = (internal ?? [])
+            .map((item) => `${normalizeLinkLabel(item?.text)}|${normalizeHrefForCompare(item?.href)}`)
+            .join(';');
+        const externalSignature = (external ?? [])
+            .map((item) => `${normalizeLinkLabel(item?.text)}|${normalizeHrefForCompare(item?.href)}`)
+            .join(';');
+        const poolKey = `${catalogVersion}:${internalSignature}:${externalSignature}:${plain}:external`;
+
+        if (stableExternalSuggestionsKeyRef.current !== poolKey) {
+            stableExternalSuggestionsKeyRef.current = poolKey;
+            stableExternalSuggestionsRef.current = buildVisibleInternalSuggestions({
+                catalog: pool,
+                internal,
+                external,
+                excludedLabels: [],
+                skipContentFilter: true,
+                maxSlots: Number.MAX_SAFE_INTEGER,
+            });
+        }
+
+        return stableExternalSuggestionsRef.current.filter((item) => {
+            const href = String(item?.href ?? item?.target_url ?? '').trim();
+            if (href === '' || isSpecialOrContactHref(href)) {
+                return false;
+            }
+
             const keywordId = Number(item?.keyword_id ?? 0);
             if (keywordId > 0 && reviewedKeywordIds.has(keywordId)) {
                 return false;
@@ -1192,17 +1315,55 @@ export default function ArticleLinksSidebar({
                     onToggle={() => setExternalCollapsed((value) => !value)}
                     sectionKey="links"
                 >
-                    <KeywordList
-                        items={external}
-                        title={t('links_external_title', { count: external.length })}
-                        activeKey={activeKey}
-                        target="editor"
-                        hideTitle
-                        onKeywordClick={(item, index, itemKey) =>
-                            scrollToKeyword(item, 'external', index, itemKey)
-                        }
-                        onCopyKeyword={copyKeyword}
-                    />
+                    <div className="wp-article-links-group">
+                        <h3 className="wp-article-links-group__title">
+                            {t('links_external_title', { count: external.length })}
+                        </h3>
+                        {external.length > 0 ? (
+                            <KeywordList
+                                items={external}
+                                title=""
+                                activeKey={activeKey}
+                                target="editor"
+                                hideTitle
+                                onKeywordClick={(item, index, itemKey) =>
+                                    scrollToKeyword(item, 'external', index, itemKey)
+                                }
+                                onCopyKeyword={copyKeyword}
+                            />
+                        ) : (
+                            <p className="wp-article-links-empty">{t('links_external_empty')}</p>
+                        )}
+                        {suggestedExternal.length > 0 ? (
+                            <KeywordList
+                                items={suggestedExternal}
+                                title={t('links_external_suggestion_title', {
+                                    count: suggestedExternal.length,
+                                })}
+                                activeKey={activeKey}
+                                target="editor"
+                                variant="suggestion"
+                                suggestionKind="external"
+                                hideTitle
+                                hiddenRowKeys={hiddenRowKeys}
+                                reviewLoadingKey={reviewLoadingKey}
+                                reviewPopoverItemKey={reviewPopover?.itemKey ?? ''}
+                                onKeywordClick={(item, index, itemKey) =>
+                                    scrollToKeyword(item, 'external', index, itemKey, {
+                                        searchPlainText: true,
+                                    })
+                                }
+                                onInsertSuggestion={insertSuggestedLink}
+                                onCopyKeyword={copyKeyword}
+                                onReviewWarning={(item, _index, itemKey, anchorEl) =>
+                                    openReviewPopover(item, itemKey, 'warning', anchorEl)
+                                }
+                                onReviewDanger={(item, _index, itemKey, anchorEl) =>
+                                    openReviewPopover(item, itemKey, 'danger', anchorEl)
+                                }
+                            />
+                        ) : null}
+                    </div>
                 </LinkAssistantSection>
 
                 <LinkAssistantSection

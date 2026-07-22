@@ -227,7 +227,7 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
 | `BusinessHookEmitter` | Emit từ archive / WP queue / run complete / task fail | `.../Support/BusinessHookEmitter.php` |
 | `SyncArticleToWordPressHookAction` | `wordpress.article.sync` wrap `WordPressArticleSyncService` | `.../Actions/SyncArticleToWordPressHookAction.php` |
 
-**Tables (`omi_seo_ai`):** `business_events`, `automation_rules` (+`version`), `automation_rule_actions`, `automation_executions`, `automation_action_executions`.
+**Tables (`omi_seo_ai`):** `business_events` (`event_uuid` VARCHAR(64) — nhận cả UUID 36 và sha256 hex 64 từ `wordpressSyncedOnce` / HookAction idempotency), `automation_rules` (+`version`), `automation_rule_actions`, `automation_executions`, `automation_action_executions`.
 
 **CLI:** `automation:migrate [--only-business-hook]`, `automation:seed-rules`, `automation:list-events|list-actions|dispatch|run-rule|retry|diagnose`, `automation:audit-wordpress-coupling [--strict]`.
 
@@ -238,12 +238,14 @@ Event → Rule → Conditions → Ordered Actions → Queue → Execution logs. 
   1. `wordpress.article.sync` — article/product + media only
   2. `product-review.create` — idempotent `ProductReviewCreationPolicy` (`target_count` = maintain AI total; `block_if_real_reviews_exist`) → local pending only for `missing`
   3. `product-review.sync-wp` — idempotent WP create → `reviewed`
+- Settings: `ProductReviewAutomationSettingsResolver` (rule action `product-review.create`, prefer `sync-article-to-wordpress`) — Manual Sync + editor API cùng nguồn
 - Manual: `ArticleWordPressBusinessSequence` (same sequence; `sync_product_reviews` option)
 - WordPress = SoT for display (`WordPressProductReviewStatusService` + `GET .../product-review-status`)
+- Reviewed article: `deleteLocalForArticle` xóa local; **không** auto-run `ArticleQuickPostReviewService`
 - Generated meta: `source=seo_content_ai`, `generated=true`, `_omi_*`
 - Legacy schedule/queue/publish rules = deprecated+hidden+disabled
 
-- Explicit manual sync: `WordPressManualSyncService` + `ManualSyncContext` + `ManualWordPressSyncJob` → `ArticleWordPressBusinessSequence`.
+- Explicit manual sync: `WordPressManualSyncService` + `ManualSyncContext` + `ManualWordPressSyncJob` → `ArticleWordPressBusinessSequence` (+ resolver settings).
 
 Cutover detail: [AUTOMATION_CUTOVER_AUDIT.md](AUTOMATION_CUTOVER_AUDIT.md).
 

@@ -31,6 +31,115 @@ export function normalizeHrefForCompare(href) {
     }
 }
 
+const SPECIAL_LINK_SCHEMES = new Set([
+    'tel',
+    'mailto',
+    'sms',
+    'fax',
+    'callto',
+    'geo',
+    'skype',
+    'whatsapp',
+    'viber',
+    'data',
+    'cid',
+]);
+
+/** tel/mailto/… + số ĐT/email trần — không tính internal/external. */
+export function isSpecialOrContactHref(href) {
+    const value = String(href ?? '').trim();
+    if (value === '') {
+        return false;
+    }
+
+    const lower = value.toLowerCase();
+    if (lower.startsWith('javascript:')) {
+        return true;
+    }
+
+    const schemeMatch = lower.match(/^([a-z][a-z0-9+.-]*):/i);
+    if (schemeMatch && SPECIAL_LINK_SCHEMES.has(schemeMatch[1].toLowerCase())) {
+        return true;
+    }
+
+    if (/^[+]?[\d\s().-]{6,}$/u.test(value)) {
+        return true;
+    }
+
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+}
+
+export function normalizeDomainHost(host) {
+    return String(host ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/^www\./, '');
+}
+
+/** Relative path hoặc host trùng domain site → internal. */
+export function isInternalHrefForSite(href, siteDomain) {
+    const value = String(href ?? '').trim();
+    if (value === '') {
+        return false;
+    }
+
+    if (value.startsWith('/')) {
+        return true;
+    }
+
+    if (isSpecialOrContactHref(value)) {
+        return false;
+    }
+
+    let resolved = value;
+    if (resolved.startsWith('//')) {
+        resolved = `https:${resolved}`;
+    }
+
+    try {
+        const url = new URL(resolved, 'https://placeholder.local');
+        const host = normalizeDomainHost(url.hostname);
+        const domain = normalizeDomainHost(siteDomain);
+
+        return host !== '' && domain !== '' && host === domain;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Chia catalog gợi ý: internal (cùng site) / external (http ngoài) / bỏ tel-mail.
+ *
+ * @param {Array<{ text?: string, href?: string, target_url?: string }>} catalog
+ * @param {string} siteDomain
+ * @returns {{ internal: Array, external: Array }}
+ */
+export function partitionSuggestionCatalogBySite(catalog, siteDomain) {
+    const internal = [];
+    const external = [];
+
+    (Array.isArray(catalog) ? catalog : []).forEach((item) => {
+        const href = String(item?.href ?? item?.target_url ?? '').trim();
+        if (href === '') {
+            internal.push(item);
+            return;
+        }
+
+        if (isSpecialOrContactHref(href)) {
+            return;
+        }
+
+        if (isInternalHrefForSite(href, siteDomain)) {
+            internal.push(item);
+            return;
+        }
+
+        external.push(item);
+    });
+
+    return { internal, external };
+}
+
 function labelsOverlap(left, right) {
     const a = normalizeLinkLabel(left);
     const b = normalizeLinkLabel(right);

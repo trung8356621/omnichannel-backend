@@ -95,6 +95,21 @@ final class WordPressArticleSyncService
             ];
         }
 
+        $syncKey = \App\Addons\SeoContentAi\Models\SeoArticleWpSyncJob::makeIdempotencyKey(
+            (int) ($article->site_id ?? 0),
+            (int) $article->id,
+        );
+        $linked = $this->linkExistingWordPressPostByArticleMeta(
+            $article,
+            $sideEffect,
+            $base,
+            $writeToken,
+            $syncKey,
+        );
+        if ($linked !== null) {
+            return $linked;
+        }
+
         $resolvedPostType = ArticlePostTypeResolver::resolve($article);
         $postType = $resolvedPostType === SeoProjectTask::POST_TYPE_PRODUCT ? 'product' : 'post';
 
@@ -105,6 +120,10 @@ final class WordPressArticleSyncService
                 'slug' => $this->resolveSlugForNewPost($article),
                 ...$this->resolveWordPressStatusPayload($article),
                 'post_type' => $postType,
+                'teamvia_article_id' => (int) $article->id,
+                '_teamvia_article_id' => (int) $article->id,
+                'teamvia_sync_key' => $syncKey,
+                '_teamvia_sync_key' => $syncKey,
             ];
             if (is_array($editorPayload)) {
                 foreach (['post_content', 'faqs', 'seo', 'category_ids'] as $field) {
@@ -192,6 +211,77 @@ final class WordPressArticleSyncService
                 'message' => 'Không kết nối được WordPress: '.$e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Idempotency: tìm post WP theo _teamvia_article_id / sync key trước khi create.
+     *
+     * @return array{success: bool, message: string, wp_post_id?: int, permalink?: string}|null
+     */
+    private function linkExistingWordPressPostByArticleMeta(
+        SeoArticle $article,
+        WordPressExecutionContext $sideEffect,
+        string $base,
+        string $writeToken,
+        string $syncKey,
+    ): ?array {
+        try {
+            $response = $this->gateway->getJson(
+                $sideEffect,
+                'article.find_post_by_meta',
+                $base.'/wp-json/omi-seo-ai/v1/posts/find-by-article',
+                $writeToken,
+                self::EDITOR_SYNC_HTTP_TIMEOUT_SECONDS,
+                [
+                    'article_id' => (int) $article->id,
+                    'sync_key' => $syncKey,
+                ],
+                (int) $article->id,
+                (int) ($article->site_id ?? 0),
+            );
+        } catch (Throwable $e) {
+            Log::warning('WordPress find-by-article failed', [
+                'article_id' => $article->id,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        if (! $response->successful()) {
+            return null;
+        }
+
+        $decoded = $response->json();
+        if (! is_array($decoded) || ! ($decoded['found'] ?? false)) {
+            return null;
+        }
+
+        $wpPostId = (int) ($decoded['wp_post_id'] ?? 0);
+        if ($wpPostId <= 0) {
+            return null;
+        }
+
+        $permalink = trim((string) ($decoded['permalink'] ?? ''));
+        $remoteSlug = trim((string) ($decoded['slug'] ?? ''));
+        $article->update(array_filter([
+            'wp_post_id' => $wpPostId,
+            'slug' => $remoteSlug !== '' ? $remoteSlug : null,
+        ], static fn (mixed $value): bool => $value !== null));
+
+        if ($permalink !== '') {
+            $article->articleMetas()->updateOrCreate(
+                ['meta_key' => 'wp_permalink'],
+                ['meta_value' => $permalink],
+            );
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Đã liên kết bài WordPress hiện có (idempotent).',
+            'wp_post_id' => $wpPostId,
+            'permalink' => $permalink,
+        ];
     }
 
     /**

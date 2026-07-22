@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services;
 
+use App\Addons\SeoContentAi\Enums\WpSyncJobStatus;
+use App\Addons\SeoContentAi\Jobs\ManualWordPressSyncJob;
 use App\Addons\SeoContentAi\Jobs\SyncArticleToWordPressFromQueueJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Models\SeoArticleWpSyncJob;
 use App\Addons\SeoContentAi\Services\WordPress\SideEffect\ManualWordPressContext;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
@@ -32,10 +35,15 @@ final class ArticleWpSyncQueueService
 
     public const STATUS_FAILED = 'failed';
 
+    public const STATUS_CANCELLED = 'cancelled';
+
+    public const STATUS_STALE = 'stale';
+
     public function __construct(
         private readonly ArticleEditorBundleApplyService $bundleApply,
         private readonly ArticleEditorPersistService $persist,
         private readonly SeoDatabaseConnectionService $databaseConnection,
+        private readonly ArticleWpSyncLeaseService $lease,
     ) {}
 
     /**
@@ -52,21 +60,10 @@ final class ArticleWpSyncQueueService
 
     public function markProcessing(SeoArticle $article): void
     {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            $payload = [
-                'queued_at' => now()->toIso8601String(),
-                'operation' => 'wordpress_sync',
-            ];
+        $job = $this->lease->activeJobForArticle((int) $article->id);
+        if ($job instanceof SeoArticleWpSyncJob && $job->status === WpSyncJobStatus::Pending) {
+            $this->lease->claim((int) $job->id);
         }
-
-        $payload['status'] = self::STATUS_PROCESSING;
-        $payload['stage'] = (string) ($payload['stage'] ?? 'processing');
-        $payload['started_at'] = now()->toIso8601String();
-        $payload['error'] = null;
-        $payload['error_message'] = null;
-
-        $this->writeQueueMeta($article, $payload);
     }
 
     /**
@@ -75,33 +72,39 @@ final class ArticleWpSyncQueueService
      */
     public function markQueued(SeoArticle $article, array $meta = []): array
     {
-        $payload = array_merge([
-            'operation' => 'wordpress_sync',
-            'status' => self::STATUS_PENDING,
-            'stage' => 'queued',
-            'queued_at' => now()->toIso8601String(),
-            'started_at' => null,
-            'finished_at' => null,
-            'error' => null,
-            'error_message' => null,
-            'wordpress_post_id' => null,
-            'wordpress_permalink' => null,
-        ], $meta, [
-            'status' => self::STATUS_PENDING,
-            'stage' => 'queued',
-            'queued_at' => now()->toIso8601String(),
-        ]);
+        $job = $this->lease->enqueue(
+            article: $article,
+            source: (string) ($meta['source'] ?? 'editor'),
+            initiatedBy: (int) ($meta['initiated_by'] ?? 0),
+            requestId: (string) ($meta['request_id'] ?? ''),
+            correlationId: (string) ($meta['correlation_id'] ?? ''),
+            settings: [
+                'mode' => (string) ($meta['mode'] ?? 'sync'),
+            ],
+            auditMeta: $meta,
+        );
 
-        $this->writeQueueMeta($article, $payload);
-
-        return $payload;
+        return $this->lease->toOperationPayload($job);
     }
 
     public function isActive(SeoArticle $article): bool
     {
-        $status = (string) ($this->readQueueMeta($article)['status'] ?? '');
+        $job = $this->lease->activeJobForArticle((int) $article->id);
+        if ($job instanceof SeoArticleWpSyncJob) {
+            if ($this->lease->isLeaseExpired($job)) {
+                $this->lease->markStale($job, 'Active lease expired on isActive check');
+                $this->lease->releaseArticleCacheLocks((int) $article->id);
 
-        return in_array($status, [self::STATUS_PENDING, self::STATUS_PROCESSING], true);
+                return false;
+            }
+
+            return true;
+        }
+
+        // Meta cũ processing/pending không có lease → heal thành stale, không khóa sync.
+        $this->lease->healArticleOrphanMeta($article);
+
+        return false;
     }
 
     /**
@@ -109,111 +112,82 @@ final class ArticleWpSyncQueueService
      */
     public function activeOperation(SeoArticle $article): ?array
     {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            return null;
+        $job = $this->lease->activeJobForArticle((int) $article->id);
+        if ($job instanceof SeoArticleWpSyncJob && $this->lease->isLeaseExpired($job)) {
+            $this->lease->markStale($job, 'Active lease expired on activeOperation poll');
+            $this->lease->releaseArticleCacheLocks((int) $article->id);
+            $job = $job->fresh();
+
+            return $job instanceof SeoArticleWpSyncJob
+                ? $this->lease->toOperationPayload($job)
+                : null;
         }
 
-        $status = (string) ($payload['status'] ?? '');
-        if ($status === '') {
-            return null;
+        $healed = $this->lease->healArticleOrphanMeta($article);
+        $job = $this->lease->activeJobForArticle((int) $article->id);
+        if ($job instanceof SeoArticleWpSyncJob) {
+            return $this->lease->toOperationPayload($job);
         }
 
-        return [
-            'id' => (string) ($payload['request_id'] ?? $payload['correlation_id'] ?? ('wp-sync-'.(int) $article->id)),
-            'article_id' => (int) $article->id,
-            'operation' => (string) ($payload['operation'] ?? 'wordpress_sync'),
-            'type' => (string) ($payload['operation'] ?? 'wordpress_sync'),
-            'status' => $this->mapPublicStatus($status),
-            'raw_status' => $status,
-            'stage' => (string) ($payload['stage'] ?? $status),
-            'error_message' => (string) ($payload['error_message'] ?? $payload['error'] ?? ''),
-            'wordpress_post_id' => (int) ($payload['wordpress_post_id'] ?? 0) ?: null,
-            'wordpress_permalink' => (string) ($payload['wordpress_permalink'] ?? '') ?: null,
-            'queued_at' => $payload['queued_at'] ?? null,
-            'started_at' => $payload['started_at'] ?? null,
-            'finished_at' => $payload['finished_at'] ?? null,
-            'request_id' => $payload['request_id'] ?? null,
-            'correlation_id' => $payload['correlation_id'] ?? null,
-        ];
+        if (is_array($healed)) {
+            $status = WpSyncJobStatus::tryFrom((string) ($healed['status'] ?? '')) ?? WpSyncJobStatus::Stale;
+
+            return [
+                'id' => (string) ($healed['request_id'] ?? ('wp-sync-meta-'.(int) $article->id)),
+                'job_id' => (int) ($healed['job_id'] ?? $healed['sync_job_id'] ?? 0) ?: null,
+                'article_id' => (int) $article->id,
+                'operation' => 'wordpress_sync',
+                'type' => 'wordpress_sync',
+                'status' => $status->toPublicStatus(),
+                'raw_status' => $status->value,
+                'stage' => (string) ($healed['stage'] ?? $status->value),
+                'error_message' => (string) ($healed['error_message'] ?? $healed['error'] ?? ''),
+                'wordpress_post_id' => (int) ($healed['wordpress_post_id'] ?? 0) ?: null,
+                'wordpress_permalink' => (string) ($healed['wordpress_permalink'] ?? '') ?: null,
+                'queued_at' => $healed['queued_at'] ?? null,
+                'started_at' => $healed['started_at'] ?? null,
+                'finished_at' => $healed['finished_at'] ?? null,
+                'worker_id' => null,
+                'attempts' => (int) ($healed['attempts'] ?? 0),
+                'request_id' => $healed['request_id'] ?? null,
+                'correlation_id' => $healed['correlation_id'] ?? null,
+            ];
+        }
+
+        $this->databaseConnection->bootstrapLegacySharedConnection();
+        try {
+            $latest = SeoArticleWpSyncJob::query()
+                ->where('article_id', (int) $article->id)
+                ->orderByDesc('id')
+                ->first();
+        } catch (Throwable) {
+            $latest = null;
+        }
+
+        return $latest instanceof SeoArticleWpSyncJob
+            ? $this->lease->toOperationPayload($latest)
+            : null;
     }
 
     private function mapPublicStatus(string $status): string
     {
-        return match ($status) {
-            self::STATUS_PENDING => 'queued',
-            self::STATUS_PROCESSING => 'processing',
-            self::STATUS_COMPLETED => 'success',
-            self::STATUS_FAILED => 'failed',
-            default => $status,
-        };
+        $enum = WpSyncJobStatus::tryFrom($status);
+
+        return $enum?->toPublicStatus() ?? $status;
     }
 
     /**
      * @param  array<string, mixed>  $result
      */
-    public function markCompleted(SeoArticle $article, array $result = [], bool $emitSyncedEvent = true): void
-    {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            $payload = [
-                'operation' => 'wordpress_sync',
-                'queued_at' => now()->toIso8601String(),
-            ];
-        }
-
-        $payload['status'] = self::STATUS_COMPLETED;
-        $payload['stage'] = 'completed';
-        $payload['finished_at'] = now()->toIso8601String();
-        $payload['error'] = null;
-        $payload['error_message'] = null;
-        $payload['result_message'] = (string) ($result['message'] ?? '');
-        $payload['wordpress_post_id'] = (int) ($result['wp_post_id'] ?? $result['wordpress_post_id'] ?? $article->wp_post_id ?? 0) ?: null;
-        $payload['wordpress_permalink'] = (string) ($result['permalink'] ?? $result['wordpress_permalink'] ?? $article->permalink ?? '') ?: null;
-
-        $this->writeQueueMeta($article, $payload);
-        $article = $this->bootstrapArticleDatabase($article);
-        $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
-
-        if (! $emitSyncedEvent) {
-            return;
-        }
-
-        // Emit only — pending product reviews owned by automation rule on wordpress.synced.
-        $emitResult = is_array($result) ? $result : [];
-        $emitResult['origin'] = $emitResult['origin'] ?? 'legacy_queue';
-        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
-            ->wordpressSynced($article, $emitResult);
-    }
-
-    public function clearQueueEntry(SeoArticle $article): void
-    {
-        if ($this->readQueueMeta($article) === []) {
-            return;
-        }
-
-        $article = $this->bootstrapArticleDatabase($article);
-        $article->articleMetas()->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])->delete();
-        $this->purgeDispatchedJobsForArticle((int) $article->id);
-    }
-
     public function markFailed(SeoArticle $article, string $error, bool $emitFailedEvent = true): void
     {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            $payload = [
-                'queued_at' => now()->toIso8601String(),
-                'operation' => 'wordpress_sync',
-            ];
+        $job = $this->resolveJobForArticle($article);
+        if ($job instanceof SeoArticleWpSyncJob) {
+            $this->lease->fail($job, $error);
+        } else {
+            // Không có lease job — vẫn bắt buộc update meta wp_sync_queue → failed.
+            $this->writeTerminalMetaFallback($article, self::STATUS_FAILED, $error);
         }
-
-        $payload['status'] = self::STATUS_FAILED;
-        $payload['stage'] = 'failed';
-        $payload['finished_at'] = now()->toIso8601String();
-        $payload['error'] = $error;
-        $payload['error_message'] = $error;
-
-        $this->writeQueueMeta($article, $payload);
 
         if (! $emitFailedEvent) {
             return;
@@ -223,10 +197,79 @@ final class ArticleWpSyncQueueService
             ->wordpressSyncFailed($article, $error);
     }
 
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    public function markCompleted(SeoArticle $article, array $result = [], bool $emitSyncedEvent = true): void
+    {
+        $job = $this->resolveJobForArticle($article);
+        if ($job instanceof SeoArticleWpSyncJob) {
+            $this->lease->complete($job, $result);
+        } else {
+            $this->writeTerminalMetaFallback(
+                $article,
+                self::STATUS_COMPLETED,
+                null,
+                $result,
+            );
+        }
+
+        $article = $this->bootstrapArticleDatabase($article);
+        $article->articleMetas()->where('meta_key', self::BUNDLE_META_KEY)->delete();
+
+        if (! $emitSyncedEvent) {
+            return;
+        }
+
+        $emitResult = is_array($result) ? $result : [];
+        $emitResult['origin'] = $emitResult['origin'] ?? 'legacy_queue';
+        app(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\BusinessHookEmitter::class)
+            ->wordpressSynced($article, $emitResult);
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     */
+    private function writeTerminalMetaFallback(
+        SeoArticle $article,
+        string $status,
+        ?string $error,
+        array $result = [],
+    ): void {
+        $article = $this->bootstrapArticleDatabase($article);
+        $payload = $this->readQueueMeta($article);
+        $now = now()->toIso8601String();
+        $payload = array_merge($payload !== [] ? $payload : [
+            'operation' => 'wordpress_sync',
+            'queued_at' => $now,
+        ], [
+            'status' => $status,
+            'stage' => $status,
+            'finished_at' => $now,
+            'error' => $error,
+            'error_message' => $error,
+            'worker_id' => null,
+            'locked_until' => null,
+            'heartbeat_at' => null,
+            'wordpress_post_id' => (int) ($result['wp_post_id'] ?? $result['wordpress_post_id'] ?? $article->wp_post_id ?? 0) ?: null,
+            'wordpress_permalink' => (string) ($result['permalink'] ?? $result['wordpress_permalink'] ?? '') ?: null,
+        ]);
+
+        $this->writeQueueMeta($article, $payload);
+    }
+
+    public function clearQueueEntry(SeoArticle $article): void
+    {
+        $this->lease->resetArticle($article, 'Queue entry cleared');
+        // reset xóa meta; nếu vẫn còn orphan (reset không thấy active job) → heal.
+        $this->lease->healArticleOrphanMeta($article);
+        $this->purgeDispatchedJobsForArticle((int) $article->id);
+    }
+
     public function retry(SeoArticle $article): bool
     {
         $status = (string) ($this->readQueueMeta($article)['status'] ?? '');
-        if ($status !== self::STATUS_FAILED) {
+        if ($status !== self::STATUS_FAILED && $status !== self::STATUS_STALE && $status !== self::STATUS_CANCELLED) {
             return false;
         }
 
@@ -246,26 +289,26 @@ final class ArticleWpSyncQueueService
 
     public function cancel(SeoArticle $article): bool
     {
-        $payload = $this->readQueueMeta($article);
-        if ($payload === []) {
-            return false;
+        $this->lease->forceUnlockArticle($article, 'Cancelled manually');
+        $this->purgeDispatchedJobsForArticle((int) $article->id);
+
+        return true;
+    }
+
+    private function resolveJobForArticle(SeoArticle $article): ?SeoArticleWpSyncJob
+    {
+        $active = $this->lease->activeJobForArticle((int) $article->id);
+        if ($active instanceof SeoArticleWpSyncJob) {
+            return $active;
         }
 
-        $status = (string) ($payload['status'] ?? '');
-        if (! in_array($status, [self::STATUS_PENDING, self::STATUS_FAILED, self::STATUS_PROCESSING, self::STATUS_COMPLETED], true)) {
-            return false;
+        $jobId = (int) ($article->wp_sync_job_id ?? 0);
+        if ($jobId <= 0) {
+            $meta = $this->readQueueMeta($article);
+            $jobId = (int) ($meta['job_id'] ?? $meta['sync_job_id'] ?? 0);
         }
 
-        $article = $this->bootstrapArticleDatabase($article);
-        $deleted = $article->articleMetas()
-            ->whereIn('meta_key', [self::META_KEY, self::BUNDLE_META_KEY])
-            ->delete();
-
-        if ($deleted > 0) {
-            $this->purgeDispatchedJobsForArticle((int) $article->id);
-        }
-
-        return $deleted > 0;
+        return $jobId > 0 ? $this->lease->find($jobId) : null;
     }
 
     /**
@@ -312,6 +355,8 @@ final class ArticleWpSyncQueueService
             self::STATUS_PROCESSING => __('seo-content-ai::filament.article_list.queue_status_processing'),
             self::STATUS_COMPLETED => __('seo-content-ai::filament.article_list.queue_status_completed'),
             self::STATUS_FAILED => __('seo-content-ai::filament.article_list.queue_status_failed'),
+            self::STATUS_CANCELLED => __('seo-content-ai::filament.article_list.queue_status_cancelled'),
+            self::STATUS_STALE => __('seo-content-ai::filament.article_list.queue_status_stale'),
             default => $status,
         };
     }
@@ -463,7 +508,10 @@ final class ArticleWpSyncQueueService
                 DB::connection($connection)
                     ->table('jobs')
                     ->select(['id', 'payload'])
-                    ->where('payload', 'like', '%SyncArticleToWordPressFromQueueJob%')
+                    ->where(function ($query): void {
+                        $query->where('payload', 'like', '%ManualWordPressSyncJob%')
+                            ->orWhere('payload', 'like', '%SyncArticleToWordPressFromQueueJob%');
+                    })
                     ->cursor() as $job
             ) {
                 if ($this->extractArticleIdFromJobPayload((string) ($job->payload ?? '')) !== $articleId) {
@@ -487,14 +535,24 @@ final class ArticleWpSyncQueueService
         return false;
     }
 
-    private function hasPendingWpSyncJob(int $articleId): bool
+    /**
+     * Job đang chờ trong bảng `jobs` (queue `seo`) cho article — Manual hoặc legacy.
+     */
+    public function hasPendingWpSyncJob(int $articleId): bool
     {
+        if ($articleId <= 0) {
+            return false;
+        }
+
         try {
             $jobs = DB::connection($this->jobsConnection())
                 ->table('jobs')
                 ->select(['payload'])
                 ->where('queue', self::QUEUE_NAME)
-                ->where('payload', 'like', '%SyncArticleToWordPressFromQueueJob%')
+                ->where(function ($query): void {
+                    $query->where('payload', 'like', '%ManualWordPressSyncJob%')
+                        ->orWhere('payload', 'like', '%SyncArticleToWordPressFromQueueJob%');
+                })
                 ->get();
 
             foreach ($jobs as $job) {
@@ -503,6 +561,7 @@ final class ArticleWpSyncQueueService
                 }
             }
         } catch (Throwable) {
+            // Không inspect được jobs → coi như còn job để tránh clear nhầm.
             return true;
         }
 
@@ -527,7 +586,15 @@ final class ArticleWpSyncQueueService
             return null;
         }
 
-        $job = @unserialize($command, ['allowed_classes' => [SyncArticleToWordPressFromQueueJob::class]]);
+        $job = @unserialize($command, [
+            'allowed_classes' => [
+                ManualWordPressSyncJob::class,
+                SyncArticleToWordPressFromQueueJob::class,
+            ],
+        ]);
+        if ($job instanceof ManualWordPressSyncJob) {
+            return $job->articleId > 0 ? $job->articleId : null;
+        }
         if ($job instanceof SyncArticleToWordPressFromQueueJob) {
             return $job->articleId > 0 ? $job->articleId : null;
         }

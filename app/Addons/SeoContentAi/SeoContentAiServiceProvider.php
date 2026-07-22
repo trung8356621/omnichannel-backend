@@ -138,6 +138,8 @@ class SeoContentAiServiceProvider extends ServiceProvider
 
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleMatcher::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationExecutionService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationSettingsService::class);
+        $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\ExecutionCleanupService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\BusinessEventDispatcher::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Services\AutomationRuleService::class);
         $this->app->singleton(\App\Addons\SeoContentAi\Automation\BusinessHook\Support\AutomationGraphValidator::class);
@@ -237,11 +239,13 @@ class SeoContentAiServiceProvider extends ServiceProvider
                 \App\Addons\SeoContentAi\Console\AutomationMigrateCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationDispatchScheduledCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationRecoverStaleCommand::class,
+                \App\Addons\SeoContentAi\Console\AutomationCleanupExecutionLogsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationMigrateLinearToGraphCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationMigrateRuleVersionsCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationExportCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationImportCommand::class,
                 \App\Addons\SeoContentAi\Console\AutomationHealthCommand::class,
+                \App\Addons\SeoContentAi\Console\WordpressSyncLeaseWatchdogCommand::class,
             ]);
         }
     }
@@ -314,6 +318,28 @@ class SeoContentAiServiceProvider extends ServiceProvider
                     ->command(\App\Addons\SeoContentAi\Console\AutomationRecoverStaleCommand::class)
                     ->everyFiveMinutes()
                     ->name($automationRecoverName)
+                    ->withoutOverlapping();
+            }
+
+            $automationCleanupName = 'seo-content-ai:automation-cleanup-execution-logs';
+            $automationCleanupRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $automationCleanupName);
+            if (! $automationCleanupRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\AutomationCleanupExecutionLogsCommand::class)
+                    ->dailyAt('02:20')
+                    ->name($automationCleanupName)
+                    ->withoutOverlapping();
+            }
+
+            $wpSyncWatchdogName = 'seo-content-ai:wordpress-sync-lease-watchdog';
+            $wpSyncWatchdogRegistered = collect($schedule->events())
+                ->contains(static fn ($event): bool => $event->description === $wpSyncWatchdogName);
+            if (! $wpSyncWatchdogRegistered) {
+                $schedule
+                    ->command(\App\Addons\SeoContentAi\Console\WordpressSyncLeaseWatchdogCommand::class)
+                    ->everyMinute()
+                    ->name($wpSyncWatchdogName)
                     ->withoutOverlapping();
             }
         });

@@ -158,6 +158,15 @@ export function loadDraft(articleId) {
     }
 }
 
+export function clearDraft(articleId) {
+    if (!articleId) return;
+    try {
+        localStorage.removeItem(draftKey(articleId));
+    } catch {
+        // ignore quota / private mode
+    }
+}
+
 export function saveDraft(articleId, payload) {
     if (!articleId) return;
     const updatedAt = Date.now();

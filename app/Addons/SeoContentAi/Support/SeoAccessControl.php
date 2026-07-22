@@ -677,6 +677,25 @@ final class SeoAccessControl
         return self::canExecuteAutomationTest();
     }
 
+    public static function canClearAutomationLogs(): bool
+    {
+        if (! self::canAccessManagerFeatures()) {
+            return false;
+        }
+
+        // Core admin browsing SEO panel is otherwise read-only; Clear Logs is an explicit ops action.
+        if (self::isSeoPanelAdminViewer()) {
+            return true;
+        }
+
+        return self::canMutateInSeoPanel();
+    }
+
+    public static function canManageAutomationSettings(): bool
+    {
+        return self::canClearAutomationLogs();
+    }
+
     public static function guardAutomationEdit(): void
     {
         abort_unless(self::canEditAutomation(), 403);
@@ -700,5 +719,10 @@ final class SeoAccessControl
     public static function guardAutomationCancel(): void
     {
         abort_unless(self::canCancelAutomationExecution(), 403);
+    }
+
+    public static function guardAutomationClearLogs(): void
+    {
+        abort_unless(self::canClearAutomationLogs(), 403);
     }
 }

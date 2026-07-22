@@ -102,14 +102,14 @@ flowchart TB
     REG -.->|"manifest version, download URL"| CONTENT
 ```
 
-**Business Hook:** `article.completed` (từ task completed) chỉ gọi `wordpress.article.sync` khi rule **enabled + published** (seed mặc định disabled). Action: `SyncArticleToWordPressHookAction` via `WordPressAutomationModuleProvider` — queue `automation-external`. Rule disabled → event vẫn ghi, **0** execution side effect (pending job cancel khi disable).
+**Business Hook:** `article.completed` (từ task completed) chỉ gọi `wordpress.article.sync` khi rule **enabled + published** (seed mặc định disabled). Action: `SyncArticleToWordPressHookAction` via `WordPressAutomationModuleProvider` — queue `automation-external`. Rule disabled → event vẫn ghi, **0** execution side effect (pending job cancel khi disable). Outcome `wordpress.synced` dedupe: `event_uuid` = `sync_operation_id` (ManualJob = requestId UUID; HookAction = sha256 64 hex) → cột `business_events.event_uuid` VARCHAR(64) (`2026_07_22_120000_widen_business_events_event_uuid`).
 
 **Invariant (cutover 2026-07-20):**
 - Automatic WordPress side effects require an enabled published Automation Rule.
 - A disabled rule blocks future automatic executions, not an explicit manual user sync and not necessarily an execution already mid-flight before disable (pending/processing get `cancellation_requested_at`).
 - Content Project and Article completion never dispatch WordPress jobs directly.
 - WordPress automation jobs use `automation-external` (action) / `automation-critical` (rule bootstrap). Legacy manual queue job uses `seo` — not `default`.
-- Manual entry: `WordPressManualSyncService` → `markQueued` (`wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`) → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. `Cache::lock` + `isActive` chống duplicate sync. Job: `markProcessing`/`markCompleted`/`markFailed`. UI poll `GET .../operation-status` + reload. Controller `POST .../sync-wp`, EditArticle sync button.
+- Manual entry: `WordPressManualSyncService` → `ArticleWpSyncLeaseService::enqueue` (`seo_article_wp_sync_jobs` + meta `wp_sync_queue`) → `ManualWordPressSyncJob` (queue `seo`, `syncJobId`) → claim/heartbeat → `ArticleWordPressBusinessSequence`. **Không** cần Automation Rule. `Cache::lock` + `isActive` (force-stale expired). Terminal: complete/fail/cancel/stale. Watchdog `seo:wordpress-sync-lease-watchdog`. Idempotency create: WP meta `_teamvia_article_id` / `_teamvia_sync_key` + `GET .../posts/find-by-article`. UI poll `GET .../operation-status` + reload/Retry. Controller `POST .../sync-wp`, EditArticle sync button.
 - `ArticleScheduleReconcileService` = Laravel status only — **no** WordPress API.
 - System cron `ScheduledArticlePublishRunner` = due scheduled posts already linked (`wp_post_id>0`); not `article.completed`.
 
@@ -184,7 +184,7 @@ Core hub đọc `services.config.external_plugins`. Trong addon: `GeneralDomain.
 **Service:** `WordPressArticleAttachmentService.php`
 
 Các Livewire methods trong `EditArticle`:
-- `renameAttachmentSlugsOnWordPress(array)` — `WordPressAttachmentRenameService::renameBatch` → WP `POST …/attachments/rename`; response `renamed[]` gồm `attachment_id`, `old_url`, `new_url`, `new_slug` (slug thực tế trên đĩa, có thể ≠ `new_slug` request nếu WP dedupe). Livewire enrich `block_id` từ request trước event `seo-attachment-slugs-rename-finished`.
+- `renameAttachmentSlugsOnWordPress(array)` — `WordPressAttachmentRenameService::renameBatch` → WP `POST …/attachments/rename`; response `renamed[]` gồm `attachment_id`, `old_url`, `new_url`, `new_slug` (slug thực tế trên đĩa, có thể ≠ `new_slug` request nếu WP dedupe). Livewire enrich `block_id` từ request; **sau rename thành công** gọi `SeoMediaUrlReplacementService::rewriteArticleReferences` (body + featured/gallery, kèm variant sized WP) rồi refresh `editorHtml`. Event `seo-attachment-slugs-rename-finished`. Fix slug all client: `clearDraft` trước reload.
 - **Plugin ≥ 1.0.54** — `includes/class-attachment-renamer.php` `resolve_attachment_id()`: nếu `attachment_id` request stale (post đã xóa/reimport) → tìm lại theo `old_url` (`attachment_url_to_postid`) hoặc basename `_wp_attached_file` trước khi rename.
 - `updateAttachmentMetaOnWordPress(array)` — cập nhật alt text + title của WP media
 
@@ -232,7 +232,7 @@ flowchart TB
 
 **Plugin `omi-seo-ai-bridge` ≥ 1.0.51:** `GET /omi-seo-ai/v1/posts/{id}/comment-reviews` đọc `_omi_seo_virtual_comments` (meta) + merge `wp_comments` — editor Reviews tab dùng endpoint này khi bấm **Làm mới**.
 
-**Product reviews → WP (linear 3-action):** Rule `article > wordpress` = `wordpress.article.sync` → `product-review.create` → `product-review.sync-wp`. Shared `ProductReviewCreationPolicy` + `WordPressProductReviewStatusService`. **Idempotent create:** `target_count` = duy trì tổng AI reviews (`missing = max(0, target − max(wp_generated, local_generated))`); `block_if_real_reviews_exist` dừng khi có real. Generated WP meta: `source=seo_content_ai` / `generated=true`. Local lifecycle `pending→syncing→reviewed` (cleanup với media). Edit Article: `GET .../product-review-status`. Legacy schedule/queue/publish = deprecated.
+**Product reviews → WP (linear 3-action):** Rule `article > wordpress` = `wordpress.article.sync` → `product-review.create` → `product-review.sync-wp`. Shared `ProductReviewCreationPolicy` + `WordPressProductReviewStatusService`. **Idempotent create:** `target_count` = duy trì tổng AI reviews (`missing = max(0, target − max(wp_generated, local_generated))`); `block_if_real_reviews_exist` dừng khi có real. **Settings source:** `ProductReviewAutomationSettingsResolver` đọc `target_count` từ action `product-review.create` (ưu tiên rule `sync-article-to-wordpress`) — Manual Sync / editor API dùng chung, không hardcode 10. Generated WP meta: `source=seo_content_ai` / `generated=true`. Local lifecycle `pending→syncing→reviewed`. **Reviewed article:** `ProductReviewPendingRepository::deleteLocalForArticle` xóa toàn bộ local review (WP SoT); `approveArticle` **không** chạy `ArticleQuickPostReviewService`. Edit Article: `GET .../product-review-status`. Legacy schedule/queue/publish = deprecated.
 
 **Frontend WP (plugin ≥ 1.0.59):** CusRev (`cr-reviews-ajax-*`) chiếm tab Reviews — `Virtual_Comments::filter_product_review_tab` priority 999 ép callback `render_virtual_reviews_tab` khi có meta; template `single-product-reviews-virtual.php`; save meta purge WP Rocket/LiteSpeed. Format payload không đổi (`author`/`content`/`date`/`rating` + `_omi_*`).
 
@@ -276,10 +276,11 @@ Widget quản lý release của WP plugin `omi-seo-ai-bridge`:
 ### Push bài / media lên WP
 
 ```
-Hub: Services/WordPressArticleSyncService.php → syncForArticle().
-Queue enqueue: Services/ArticleWpSyncQueueService.php (`QUEUE_NAME=seo`, dispatchWpSyncJob purge+verify).
-Jobs: Jobs/SyncArticleToWordPressFromQueueJob.php, Jobs/SyncArticleBodyMediaToWordPressJob.php (queue `seo`).
-HTTP: Services/WordPressArticleContentService.php (buildEditorSyncUrl).
+Hub: Services/WordPressArticleSyncService.php → syncForArticle() / createForArticle (find-by-article idempotent).
+Lease: Services/ArticleWpSyncLeaseService.php + Models/SeoArticleWpSyncJob.php; meta projection ArticleWpSyncQueueService.php (`QUEUE_NAME=seo`).
+Jobs: Jobs/ManualWordPressSyncJob.php (queue `seo`); legacy SyncArticleToWordPressFromQueueJob disabled.
+Watchdog: Console/WordpressSyncLeaseWatchdogCommand.php (`seo:wordpress-sync-lease-watchdog`).
+HTTP: Services/WordPressArticleContentService.php (buildEditorSyncUrl); Gateway getJson/postJson + WpSyncLeaseHeartbeat.
 Media: Services/WordPressLocalMediaSyncService.php, ArticleMediaLocalService.php.
 Upload encode: Services/SeoImageOptimizationService.php (prepareWordPressUploadFile, fallback 100KB).
 Plugin binary replace: wp-seo-ai/includes/class-attachment-binary-replacer.php (≥ 1.0.50).

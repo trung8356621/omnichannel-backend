@@ -75,7 +75,80 @@ final class SeoMediaUrlReplacementService
             $text = str_replace($old, $new, $text);
         }
 
+        // WP sized variants (-1024x768) còn sót sau khi đổi basename.
+        foreach ($urlMap as $oldUrl => $newUrl) {
+            $text = $this->replaceWordPressUploadStemVariants($text, (string) $oldUrl, (string) $newUrl);
+        }
+
         return $text;
+    }
+
+    /**
+     * Đổi stem filename trong đường dẫn wp-content/uploads (kèm biến thể -WxH).
+     */
+    public function replaceWordPressUploadStemVariants(string $text, string $oldUrl, string $newUrl): string
+    {
+        $oldUrl = trim($oldUrl);
+        $newUrl = trim($newUrl);
+        if ($text === '' || $oldUrl === '' || $newUrl === '' || $oldUrl === $newUrl) {
+            return $text;
+        }
+
+        if (! str_contains($oldUrl, 'wp-content/uploads/') || ! str_contains($newUrl, 'wp-content/uploads/')) {
+            return $text;
+        }
+
+        $oldStem = $this->uploadFilenameStem($oldUrl);
+        $newStem = $this->uploadFilenameStem($newUrl);
+        if ($oldStem === '' || $newStem === '' || strcasecmp($oldStem, $newStem) === 0) {
+            return $text;
+        }
+
+        $pattern = '#(wp-content/uploads/[^\"\'\s<>]*/)'
+            .preg_quote($oldStem, '#')
+            .'(-\\d+x\\d+)?(\\.(?:jpe?g|png|gif|webp))#i';
+        $replaced = preg_replace_callback(
+            $pattern,
+            static function (array $matches) use ($newStem): string {
+                return $matches[1].$newStem.($matches[2] ?? '').$matches[3];
+            },
+            $text,
+        );
+
+        return is_string($replaced) ? $replaced : $text;
+    }
+
+    public function uploadFilenameStem(string $url): string
+    {
+        $filename = $this->uploadFilename($url);
+        if ($filename === '') {
+            return '';
+        }
+
+        $dot = strrpos($filename, '.');
+        $stem = $dot === false ? $filename : substr($filename, 0, $dot);
+        $stem = (string) preg_replace('/-\d+x\d+$/i', '', $stem);
+
+        return is_string($stem) ? $stem : '';
+    }
+
+    private function uploadFilename(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+
+        $path = $url;
+        if (str_starts_with($url, 'http://') || str_starts_with($url, 'https://')) {
+            $parsed = parse_url($url, PHP_URL_PATH);
+            $path = is_string($parsed) ? $parsed : '';
+        }
+
+        $path = rawurldecode(trim((string) preg_replace('/[?#].*$/', '', $path)));
+        $basename = basename($path);
+
+        return is_string($basename) ? $basename : '';
     }
 
     /**

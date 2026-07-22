@@ -94,6 +94,134 @@ export function hasArticleImageBlockId(row) {
     return String(row?.blockId ?? row?.block_id ?? '').trim() !== '';
 }
 
+/**
+ * Src không phải URL ảnh thật (placeholder / data-uri) — không dùng để match xóa.
+ */
+export function isNonPersistentArticleImageSrc(src) {
+    const value = String(src ?? '').trim();
+    if (!value) {
+        return true;
+    }
+
+    if (value.startsWith('data:')) {
+        return true;
+    }
+
+    if (value.includes('placeholder-loading')) {
+        return true;
+    }
+
+    return false;
+}
+
+function articleImageIdentityOverlap(row, image) {
+    const rowWp = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+    const imageWp = Number(image?.wpAttachmentId ?? image?.wp_attachment_id ?? 0);
+    if (rowWp > 0 && imageWp > 0) {
+        return rowWp === imageWp;
+    }
+
+    const rowSeo = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+    const imageSeo = Number(image?.seoMediaId ?? image?.seo_media_id ?? 0);
+    if (rowSeo > 0 && imageSeo > 0) {
+        return rowSeo === imageSeo;
+    }
+
+    const rowKeys = [
+        normalizeSrcKey(String(row?.src ?? '').trim()),
+        normalizeSrcKey(String(row?.wpSrc ?? row?.wp_url ?? '').trim()),
+        normalizeSrcKey(String(row?.localSrc ?? row?.local_src ?? '').trim()),
+    ].filter(Boolean);
+
+    const imageKeys = [
+        normalizeSrcKey(String(image?.src ?? '').trim()),
+        normalizeSrcKey(String(image?.wpSrc ?? image?.wp_url ?? '').trim()),
+        normalizeSrcKey(String(image?.localSrc ?? image?.local_src ?? '').trim()),
+    ].filter(Boolean);
+
+    return rowKeys.some((key) => imageKeys.includes(key));
+}
+
+/**
+ * Chỉ cho xóa khi còn match được block editor hoặc supplemental thật.
+ * Ảnh 404 stale (blockId lệch / src không còn) → null → disable nút Xóa.
+ *
+ * @returns {{ kind: 'block', blockId: string } | { kind: 'supplemental', src: string, origin: string } | null}
+ */
+export function resolveArticleImageRemoveTarget(row, blocks = [], supplementalRows = []) {
+    if (!row) {
+        return null;
+    }
+
+    const blockId = String(row?.blockId ?? row?.block_id ?? '').trim();
+    if (blockId) {
+        const block = (Array.isArray(blocks) ? blocks : []).find(
+            (item) => String(item?.id ?? '').trim() === blockId && item?.type === 'image',
+        );
+        if (!block) {
+            return null;
+        }
+
+        const image = block.image ?? parseImageFromBlockContent(block.content);
+        if (!image?.src || isNonPersistentArticleImageSrc(image.src)) {
+            return null;
+        }
+
+        if (!articleImageIdentityOverlap(row, image)) {
+            return null;
+        }
+
+        return { kind: 'block', blockId };
+    }
+
+    const src = String(row?.src ?? '').trim();
+    if (isNonPersistentArticleImageSrc(src)) {
+        return null;
+    }
+
+    const origin = String(row?.origin ?? '').trim();
+    const rowWp = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
+    const rowSeo = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
+    const srcKey = normalizeSrcKey(src);
+
+    const matched = (Array.isArray(supplementalRows) ? supplementalRows : []).find((item) => {
+        if (String(item?.blockId ?? item?.block_id ?? '').trim() !== '') {
+            return false;
+        }
+
+        const itemWp = Number(item?.wpAttachmentId ?? item?.wp_attachment_id ?? 0);
+        if (rowWp > 0 && itemWp > 0 && rowWp === itemWp) {
+            return true;
+        }
+
+        const itemSeo = Number(item?.seoMediaId ?? item?.seo_media_id ?? 0);
+        if (rowSeo > 0 && itemSeo > 0 && rowSeo === itemSeo) {
+            return true;
+        }
+
+        const itemSrcKey = normalizeSrcKey(String(item?.src ?? '').trim());
+        if (srcKey && itemSrcKey && srcKey === itemSrcKey) {
+            if (origin && String(item?.origin ?? '').trim() && String(item.origin).trim() !== origin) {
+                return false;
+            }
+
+            return true;
+        }
+
+        return false;
+    });
+
+    if (!matched) {
+        return null;
+    }
+
+    return {
+        kind: 'supplemental',
+        src: String(matched.src ?? src).trim(),
+        origin: String(matched.origin ?? origin).trim(),
+    };
+}
+
 export function articleImageIdentityKey(row) {
     const wpId = Number(row?.wpAttachmentId ?? row?.wp_attachment_id ?? 0);
     const seoId = Number(row?.seoMediaId ?? row?.seo_media_id ?? 0);
@@ -112,6 +240,20 @@ export function articleImageIdentityKey(row) {
     }
 
     return '';
+}
+
+export function articleImageRowsShareIdentity(left, right) {
+    if (!left || !right) {
+        return false;
+    }
+
+    const leftKey = articleImageIdentityKey(left);
+    const rightKey = articleImageIdentityKey(right);
+    if (leftKey && rightKey && leftKey === rightKey) {
+        return true;
+    }
+
+    return articleImageIdentityOverlap(left, right);
 }
 
 /** Ẩn ảnh đại diện/album trùng identity với ảnh đã có trong block (tránh 404 sau Fix slug all). */

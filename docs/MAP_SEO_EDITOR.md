@@ -210,7 +210,7 @@ sequenceDiagram
 - **Path cũ:** Alpine event `editor-html-collected` → Livewire `persistArticleLocal` / `syncArticleToWordPress`
 - **Path mới (keyboard shortcut):** JS function `__seoExecuteHeavyArticleAction` → `wire.executeHeavyArticleAction()` — dùng cho Ctrl+S / Ctrl+Shift+S
 
-**Overlay system (JS):** Blade `__seoArticleHeavyActionOverlay` (guard timer, keyboard blocker, `inert`, `persistUntilUnload`, custom `title`/`message`). **`articleOperationTracker.js`** — poll `GET /api/seo/articles/{id}/operation-status` 2.5s; lock autosave (`article-operation`); reload trang khi terminal (`success`/`failed`). Bootstrap F5: `__SEO_ACTIVE_ARTICLE_OPERATION__` (Blade) + `EditArticle::mount` + `installArticleOperationTracker()`.
+**Overlay system (JS):** Blade `__seoArticleHeavyActionOverlay` (guard timer, keyboard blocker, `inert`, `persistUntilUnload`, custom `title`/`message`). **`articleOperationTracker.js`** — poll `GET /api/seo/articles/{id}/operation-status` 2.5s; lock autosave (`article-operation`); terminal: `success`/`failed`/`cancelled`/`stale` (timeout overlay 5 phút + Retry); reload khi success/cancelled/stale. Bootstrap F5: `__SEO_ACTIVE_ARTICLE_OPERATION__` (Blade) + `EditArticle::mount` + `installArticleOperationTracker()`.
 
 **Autosave client:** `saveDraft()` → `localStorage` (`seo_article_draft_{id}`) — lưu `blocks` (gồm `image.excludeQuickFix` / `data-exclude-quick-fix` trên HTML), không hit server mỗi keystroke. **Lock:** `articleAutosaveLock.js` — `quick-fix-slug-all`, `article-operation`, `article-heavy-action`.
 
@@ -219,12 +219,12 @@ sequenceDiagram
 
 | Nút                       | Phạm vi                                            | Hành vi                                                                                                                                                                                                                                                                                                                                               |
 | ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Lock overlay + autosave. WP: `renameAttachmentSlugsOnWordPress` (Livewire). Local batch: `POST /api/seo/articles/{id}/fix-media-slugs` → `SeoMediaArticleSlugFixService` (disk + `seo_media` + rewrite `article.body`/featured/gallery trong transaction). **Không** patch DOM/autosave state cũ — toast rồi `location.reload()`. |
+| **Fix slug all**          | Ảnh trong block (không Except) + supplemental-only | Lock overlay + autosave. WP: `renameAttachmentSlugsOnWordPress` (Livewire) — sau rename WP **rewrite** `article.body`/featured/gallery qua `SeoMediaUrlReplacementService` (kèm variant `-WxH`). Local batch: `POST /api/seo/articles/{id}/fix-media-slugs` → `SeoMediaArticleSlugFixService`. Trước `location.reload()`: `clearDraft(articleId)` (tránh hydrate `src` cũ → 404). |
 | **Fix slug** (1 ảnh)      | Một dòng                                           | Ảnh local đổi slug local ngay; ảnh WP confirm rồi `renameAttachmentSlugsOnWordPress` (toast Filament). Không gate “phải Sync WP trước” trên ảnh local. |
 | **Fix alt/title all**     | Ảnh không Except                                   | `alt`+`title`=focus keyword. **Gộp batch:** 1 `updateSeoMediaMeta(items)` + tối đa 1 `updateAttachmentMetaOnWordPress` (chỉ WP chưa sync qua SEO media) → **1 toast** tổng (không spam từng ảnh). |
 | **Fix alt/title** (1 ảnh) | Một dòng                                           | Confirm rồi patch block/supplemental + `pushAltTitleMetaToStores` (1 toast). |
 | **Except**                | Ảnh có `blockId`                                   | Toggle `excludeQuickFix` trên block image → lưu `localStorage` draft + `data-exclude-quick-fix="1"` trên `<img>`/`<figure>`. **Tự động Except** khi chọn ảnh tab **Gốc (WP)** (`pickerTab === 'original'`, `withWpPickerExcludeQuickFix` trong `onEditorBlockImageSelected`). Ảnh Except: disable Fix slug/alt; không tính slug `-N`; không bị `finalizeBlocksAfterWpRename` ghi đè.                                                                                                    |
-| **UI hàng ảnh**           | Mỗi dòng trong tab                                 | Chỉ nút **Except** hiển thị trực tiếp; các thao tác còn lại (Fix slug, Fix alt/title, Xóa, Chỉnh sửa, Đóng dấu, Tách lưới) gom menu `⋯` (`.seo-article-images-more-*` trong `ArticleImagesTab.jsx` + `article-editor.css`). Cần `npm run build` bundle `article-editor` sau đổi JS/CSS. |
+| **UI hàng ảnh**           | Mỗi dòng trong tab                                 | Chỉ nút **Except** hiển thị trực tiếp; thao tác còn lại gom menu `⋯`. **Xóa:** `resolveArticleImageRemoveTarget` — disable nếu ảnh 404/stale không khớp block/supplemental (`image_tab_remove_unmatched_404`). Xóa block → dọn supplemental orphan cùng identity. **404 load:** `brokenImageGuard.js` + thumb `onError` → placeholder tĩnh (không retry). |
 
 **Mở đầu — không chèn ảnh:** `BlockInsertMenuBar` (`BlockInsertMenu.jsx`) nhận `imageInsertDisabled={section.isIntro}` cho menu **trước** và **sau** block (`SeoArticleEditor.jsx`). `ImageBlockEditor` `imagesLocked` khi block thuộc section intro.
 
@@ -319,7 +319,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 |------------|------|---------|
 | Host + slots | `edit-article.blade.php` | `.seo-assistant-host` — mỗi widget có `data-assistant-widget`, `data-assistant-widget-id`, `data-assistant-tab-label` |
 | Navigator | `seoAssistantNavigator.js` | `discoverWidgets()`, `switchPanel()`, search, badge; **không** scroll-to-widget |
-| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`). Gợi ý keyword: 2 nút **Cảnh báo** / **Nguy hiểm** → `KeywordReviewPopover.jsx` → `POST /api/seo/keywords/{id}/review` (`KeywordReviewController`, `source=article_suggestion`, không bắt buộc link map). Keyword `review_status` warning/danger bị loại khỏi gợi ý server (`ArticleInternalLinkSuggestionService`). |
+| Links filter | `ArticleLinksSidebar.jsx` | `linkSectionFilter` qua event `seo-assistant-link-section` (`links` / `faq` / `cta` / `all`). Gợi ý keyword: 2 nút **Cảnh báo** / **Nguy hiểm** → `KeywordReviewPopover.jsx` → `POST /api/seo/keywords/{id}/review` (`KeywordReviewController`, `source=article_suggestion`, không bắt buộc link map). Keyword `review_status` warning/danger bị loại khỏi gợi ý server (`ArticleInternalLinkSuggestionService`). **Gợi ý Links:** internal chỉ URL cùng `site_id`/domain bài (`suggested_internal_links` + catalog); external/wiki → dưới External (`suggested_external_links` + catalog, `ArticleEditorSeoPayloadService` / `SeoAnalyzerService`); `tel`/`mailto`/số ĐT/email trần không đếm external (`isSpecialOrContactHref` / `partitionSuggestionCatalogBySite` trong `articleLinkSuggestionFilter.js`). Domain catalog không merge vào gợi ý internal. |
 | Keywords dictionary tabs | `ListKeywords.php` + `KeywordResource::getReviewedDictionaryQuery()` | Thẻ **Cần tối ưu** / **Không hiệu quả** lọc `review_status` warning/danger; scope site qua `forSite` hoặc `keyword_review_histories.article_id` (keyword đánh dấu từ editor chưa có link map vẫn hiện). |
 | Portals React | `SeoArticleEditor.jsx` | `createPortal` → `#seo-article-seo-assistant-root`, `#seo-article-image-assistant-root`, `#seo-article-links-root`, … |
 
@@ -357,13 +357,15 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 
 | Thành phần | File | Vai trò |
 |------------|------|---------|
-| UI panel | `ArticleReviewsTab.jsx` | Status panel (real/generated/pending/reviewed) + Refresh / Create / Sync; Quick create AI riêng |
-| Policy | `ProductReviewCreationPolicy` | Shared decide create; reasons: `not_product`, `wordpress_real_reviews_exist`, `target_count_reached`, … |
+| UI panel | `ArticleReviewsTab.jsx` | Status: real/generated/pending/reviewed + **Target count** / **Missing**; Refresh / Create / Sync |
+| Policy | `ProductReviewCreationPolicy` | Idempotent: maintain `target_count` AI reviews; reasons: `not_product`, `wordpress_real_reviews_exist`, `target_count_reached`, … |
+| Settings | `ProductReviewAutomationSettingsResolver` | Đọc `target_count` từ Automation Rule action; Manual Sync + editor API dùng chung |
 | Status | `WordPressProductReviewStatusService` + `GET .../product-review-status` | WP SoT; real vs generated từ meta `source=seo_content_ai` / `generated` |
 | Create/Sync API | `POST .../product-reviews/create` + `.../sync` | Backend re-check policy; `ArticleWordPressBusinessSequence` |
 | Automation | `product-review.create` + `product-review.sync-wp` | Linear trên rule `article > wordpress` (sau `wordpress.article.sync`) |
 | Store | `ArticleProductReviewStoreService` / `ProductReviewLocalBatchCreator` | Local pending only; lifecycle `pending→syncing→reviewed` |
-| Livewire | `EditArticle::generateQuickPostReviews()` | `ArticleQuickPostReviewService` (AI workflow → local pending) |
+| Reviewed cleanup | `ProductReviewPendingRepository::deleteLocalForArticle` | `markArticleReviewed` xóa **toàn bộ** local review; không auto-gen |
+| Livewire | `EditArticle::generateQuickPostReviews()` | `ArticleQuickPostReviewService` (manual quick create only — **không** gọi sau Reviewed) |
 | WP plugin | `Virtual_Comments` + REST (≥ 1.0.59) | Meta `_omi_seo_virtual_comments`; generated metadata `_omi_*` |
 | Legacy | schedule/queue/publish rules + delayed job | deprecated + hidden + no-op |
 
@@ -375,11 +377,13 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 
 | Thành phần | File | Hành vi |
 |------------|------|---------|
-| Queue meta | `ArticleWpSyncQueueService` (`article_meta.wp_sync_queue`) | `pending` → `processing` → `completed` / `failed`; `markQueued` / `markProcessing` / `markCompleted` / `markFailed`; `activeOperation()` cho UI |
-| Manual job | `ManualWordPressSyncJob` | Queue `seo`; `ArticleWordPressBusinessSequence`; ghi queue meta; emit `wordpress.synced` (`origin=manual`) |
-| Enqueue | `WordPressManualSyncService` | `Cache::lock` + `isActive` chống duplicate; dedupe trả active run |
+| Lease SoT | `seo_article_wp_sync_jobs` + `ArticleWpSyncLeaseService` | Claim TX ngắn → `processing` + `locked_until` (+2m); heartbeat qua `WpSyncLeaseHeartbeat` / `WordPressGateway`; terminal: `completed`/`failed`/`cancelled`/`stale`; article `wp_sync_status`/`wp_sync_job_id` |
+| Queue meta (projection) | `ArticleWpSyncQueueService` (`article_meta.wp_sync_queue`) | Mirror lease; heal orphan pending/processing không có lease / lease hết hạn / pending không còn row `jobs` |
+| Manual job | `ManualWordPressSyncJob` | Queue `seo` + `syncJobId`; claim → heartbeat → complete/fail; `failed()` nhả lease |
+| Watchdog | `seo:wordpress-sync-lease-watchdog` (`WordpressSyncLeaseWatchdogCommand`) | Schedule mỗi phút; `--article=` / `--force`; stale lease + orphan meta + `cache_locks` |
+| Enqueue | `WordPressManualSyncService` | `Cache::lock` + `isActive` (force-stale expired); dedupe theo `request_id` |
 | API | `ArticleEditorSyncController::syncWp` | Save trước → enqueue; `queued: true`; overlay giữ + poll |
-| Operation UI | `articleOperationTracker.js` + `finishArticleSyncFromApi` | Poll `operation-status`; reload khi `success`/`failed` |
+| Operation UI | `articleOperationTracker.js` + `finishArticleSyncFromApi` | Poll `operation-status`; attempt/worker/elapsed; Retry khi failed/stale |
 | Tab Publish | `publish-sync-panel.blade.php` | Checkbox **Đăng ngay** → Laravel `published` + sync WP `publish` (không +5 phút / không WP schedule); lịch tùy chỉnh khi uncheck chỉ ảnh hưởng Laravel |
 | Nút đồng bộ CSS | `article-editor.css` → `.seo-publish-sync-btn` | Primary full-width; dark mode `.dark .wp-article-edit …` (không dùng Tailwind utility trong Blade) |
 | Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`) |
@@ -388,16 +392,18 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed; `is_reviewed = 0` |
 | Queue table | `ArticleResource::queueTable()` | Cột: tiêu đề, domain, trạng thái, queued/started/finished, lỗi; filter trạng thái; retry / cancel / edit |
 
-**Luồng queue meta (`wp_sync_queue`):**
+**Luồng lease + meta (`wp_sync_queue`):**
 
 | Trạng thái | Ý nghĩa |
 |------------|---------|
-| `pending` | Đã enqueue, chờ worker |
-| `processing` | Job đang chạy |
+| `pending` | Đã enqueue, chờ worker claim |
+| `processing` | Đã claim; heartbeat gia hạn `locked_until` |
 | `completed` | Đồng bộ xong (meta giữ lại để theo dõi) |
-| `failed` | Lỗi — retry từ submenu Queue |
+| `failed` | Lỗi — Retry / queue list |
+| `cancelled` | User Reset/Cancel — article idle |
+| `stale` | Watchdog / heal: worker chết, pending không có `jobs` row, orphan meta |
 
-**Client sau enqueue:** `finishArticleSyncFromApi` — **giữ** overlay (`persistUntilUnload`), poll `operation-status`, reload khi terminal. Event `article-wordpress-sync-queued` (không unlock).
+**Client sau enqueue:** `finishArticleSyncFromApi` — **giữ** overlay (`persistUntilUnload`), poll `operation-status`, reload khi terminal (trừ failed giữ Retry). Event `article-wordpress-sync-queued` (không unlock).
 
 ```mermaid
 flowchart LR
@@ -659,7 +665,7 @@ Sau sync thành công: `body` Laravel có thể set `null` (nội dung authorita
 
 | Livewire method | Service | Khi dùng |
 |-----------------|---------|----------|
-| `renameAttachmentSlugsOnWordPress` | `WordPressAttachmentRenameService` | Fix slug all (`silent`) / từng ảnh — enrich `renamed[]` với `block_id`/`old_url` |
+| `renameAttachmentSlugsOnWordPress` | `WordPressAttachmentRenameService` + `SeoMediaUrlReplacementService` | Fix slug all (`silent`) / từng ảnh — enrich `renamed[]` với `block_id`/`old_url`; **rewrite Laravel body/meta** theo `old_url→new_url` (stem WP `-WxH`) trước event finished |
 | `updateAttachmentMetaOnWordPress` | `WordPressAttachmentMetaUpdateService` | Fix alt/title — bulk 1 lần / batch; `$silent` khi client tự toast |
 
 ### 2.6.6 Entry points khác (ngoài editor)
@@ -675,7 +681,7 @@ Sau sync thành công: `body` Laravel có thể set `null` (nội dung authorita
 
 ```
 Sync hub: Services/WordPressArticleSyncService.php (syncForArticle, prepareEditorSyncPayload, executeEditorSyncRequest, completeEditorSyncResponse).
-Queue: ArticleWpSyncQueueService (`QUEUE_NAME=seo`) + SyncArticleToWordPressFromQueueJob + SyncArticleBodyMediaToWordPressJob; POST sync-wp enqueue (ArticleEditorSyncController).
+Queue: ArticleWpSyncLeaseService + `seo_article_wp_sync_jobs` (SoT) + ArticleWpSyncQueueService (`QUEUE_NAME=seo`, meta projection) + ManualWordPressSyncJob; watchdog `seo:wordpress-sync-lease-watchdog`; POST sync-wp enqueue (ArticleEditorSyncController).
 UI: publish-sync-panel.blade.php (.seo-publish-sync-btn trong article-editor.css); submenu ListArticleSyncQueue /seo/articles/queue.
 Scheduled cron: Console/PublishScheduledArticlesCommand.php + Services/ScheduledArticlePublishRunner.php.
 HTML/media: WordPressLocalMediaSyncService, ArticleMediaLocalService, SeoImageOptimizationService.

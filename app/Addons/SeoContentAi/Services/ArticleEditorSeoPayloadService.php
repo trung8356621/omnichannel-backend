@@ -42,6 +42,18 @@ final class ArticleEditorSeoPayloadService
             $internalLinks,
             $externalLinks,
         );
+        $suggestedExternalLinks = $suggestionService->suggestExternal(
+            $article,
+            $bodyHtml,
+            $internalLinks,
+            $externalLinks,
+        );
+        $suggestedExternalLinksCatalog = $suggestionService->suggestExternalCatalog(
+            $article,
+            $bodyHtml,
+            $internalLinks,
+            $externalLinks,
+        );
         $contentBonus = $this->contentBonus->resolveForArticle($article);
 
         $skipSeoScore = ! $article->countsTowardSeoScore();
@@ -81,6 +93,8 @@ final class ArticleEditorSeoPayloadService
             'extracted_links' => $extractedLinks,
             'suggested_internal_links' => $suggestedInternalLinks,
             'suggested_internal_links_catalog' => $suggestedInternalLinksCatalog,
+            'suggested_external_links' => $suggestedExternalLinks,
+            'suggested_external_links_catalog' => $suggestedExternalLinksCatalog,
             'google_serp_preview' => $googleSerpPreview,
             'article_slug' => trim((string) ($article->slug ?? '')),
             'permalink_base' => $article->site

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Services\WordPress\SideEffect;
 
+use App\Addons\SeoContentAi\Services\WordPress\WpSyncLeaseHeartbeat;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
@@ -17,6 +18,53 @@ final class WordPressGateway
         private readonly WordPressSideEffectGuard $guard,
         private readonly WordPressSideEffectLedger $ledger,
     ) {}
+
+    /**
+     * @param  array<string, string>  $headers
+     * @param  array<string, mixed>  $query
+     */
+    public function getJson(
+        ?WordPressExecutionContext $context,
+        string $operation,
+        string $url,
+        string $bearerToken,
+        int $timeoutSeconds,
+        array $query = [],
+        ?int $articleId = null,
+        ?int $siteId = null,
+    ): Response {
+        $this->guard->assertAllowed($context, $operation, [
+            'article_id' => $articleId ?? $context?->articleId(),
+            'site_id' => $siteId ?? $context?->siteId(),
+            'url_host' => parse_url($url, PHP_URL_HOST),
+            'url_path' => parse_url($url, PHP_URL_PATH),
+        ]);
+
+        assert($context instanceof WordPressExecutionContext);
+
+        $attemptId = $this->ledger->begin($operation, $context);
+
+        try {
+            $response = Http::timeout($timeoutSeconds)
+                ->acceptJson()
+                ->withToken($bearerToken)
+                ->get($url, $query);
+
+            WpSyncLeaseHeartbeat::touch();
+
+            if ($response->successful()) {
+                $this->ledger->complete($attemptId, null);
+            } else {
+                $this->ledger->fail($attemptId, 'HTTP '.$response->status());
+            }
+
+            return $response;
+        } catch (\Throwable $e) {
+            WpSyncLeaseHeartbeat::touch();
+            $this->ledger->fail($attemptId, $e->getMessage());
+            throw $e;
+        }
+    }
 
     /**
      * @param  array<string, mixed>  $body
@@ -49,6 +97,8 @@ final class WordPressGateway
                 ->withToken($bearerToken)
                 ->post($url, $body);
 
+            \App\Addons\SeoContentAi\Services\WordPress\WpSyncLeaseHeartbeat::touch();
+
             if ($response->successful()) {
                 $decoded = $response->json();
                 $remoteId = is_array($decoded) ? (int) ($decoded['wp_post_id'] ?? 0) : 0;
@@ -59,6 +109,7 @@ final class WordPressGateway
 
             return $response;
         } catch (\Throwable $e) {
+            \App\Addons\SeoContentAi\Services\WordPress\WpSyncLeaseHeartbeat::touch();
             $this->ledger->fail($attemptId, $e->getMessage());
             throw $e;
         }

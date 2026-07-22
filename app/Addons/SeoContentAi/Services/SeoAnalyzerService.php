@@ -128,7 +128,7 @@ class SeoAnalyzerService
                 $this->buildScoreResult([SeoScoringRulesRegistry::KEY_MISSING_FOCUS_KEYWORD]),
                 [
                     'extracted_links' => $emptyLinks,
-                    'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+                    ...$this->buildLinkSuggestionPayload(
                         $article,
                         $content,
                         $emptyLinks['internal'] ?? [],
@@ -155,7 +155,7 @@ class SeoAnalyzerService
         return array_merge($computed['scoreData'], [
             'extracted_links' => $extractedLinks,
             'content_bonus' => $contentBonus,
-            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+            ...$this->buildLinkSuggestionPayload(
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
@@ -212,7 +212,7 @@ class SeoAnalyzerService
         return array_merge($persisted, [
             'extracted_links' => $extractedLinks,
             'content_bonus' => app(ArticleContentSeoBonusService::class)->resolveFromContent($article, $content),
-            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+            ...$this->buildLinkSuggestionPayload(
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
@@ -232,7 +232,8 @@ class SeoAnalyzerService
      *   warnings:array<int,string>,
      *   extracted_links:array{internal:array<int,mixed>,external:array<int,mixed>},
      *   content_bonus:array<string,mixed>|null,
-     *   suggested_internal_links:array<int,mixed>
+     *   suggested_internal_links:array<int,mixed>,
+     *   suggested_external_links:array<int,mixed>
      * }
      */
     public function persistClientAnalysis(SeoArticle $article, string $content, array $payload): array
@@ -249,7 +250,7 @@ class SeoAnalyzerService
         return array_merge($persisted, [
             'extracted_links' => $extractedLinks,
             'content_bonus' => $contentBonus,
-            'suggested_internal_links' => app(ArticleInternalLinkSuggestionService::class)->suggest(
+            ...$this->buildLinkSuggestionPayload(
                 $article,
                 $content,
                 $extractedLinks['internal'] ?? [],
@@ -857,10 +858,44 @@ class SeoAnalyzerService
     }
 
     /**
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
+     * @return array{
+     *     suggested_internal_links: list<array<string, mixed>>,
+     *     suggested_external_links: list<array<string, mixed>>
+     * }
+     */
+    private function buildLinkSuggestionPayload(
+        SeoArticle $article,
+        string $content,
+        array $internalLinks,
+        array $externalLinks,
+    ): array {
+        $service = app(ArticleInternalLinkSuggestionService::class);
+
+        return [
+            'suggested_internal_links' => $service->suggest(
+                $article,
+                $content,
+                $internalLinks,
+                $externalLinks,
+            ),
+            'suggested_external_links' => $service->suggestExternal(
+                $article,
+                $content,
+                $internalLinks,
+                $externalLinks,
+            ),
+        ];
+    }
+
+    /**
      * Link không phải HTTP(S) — bỏ qua khi đếm internal/external (tel:, mailto:, …).
+     * Số ĐT / email trần cũng bỏ qua.
      */
     private function isSpecialSchemeLink(string $href): bool
     {
+        $href = trim($href);
         $lower = strtolower($href);
 
         if (str_starts_with($lower, 'javascript:')) {
@@ -868,23 +903,27 @@ class SeoAnalyzerService
         }
 
         $scheme = parse_url($href, PHP_URL_SCHEME);
-        if (! is_string($scheme) || $scheme === '') {
-            return false;
+        if (is_string($scheme) && $scheme !== '') {
+            return in_array(strtolower($scheme), [
+                'tel',
+                'mailto',
+                'sms',
+                'fax',
+                'callto',
+                'geo',
+                'skype',
+                'whatsapp',
+                'viber',
+                'data',
+                'cid',
+            ], true);
         }
 
-        return in_array(strtolower($scheme), [
-            'tel',
-            'mailto',
-            'sms',
-            'fax',
-            'callto',
-            'geo',
-            'skype',
-            'whatsapp',
-            'viber',
-            'data',
-            'cid',
-        ], true);
+        if (preg_match('/^[+]?[\d\s().-]{6,}$/u', $href) === 1) {
+            return true;
+        }
+
+        return preg_match('/^[^\s@]+@[^\s@]+\.[^\s@]+$/u', $href) === 1;
     }
 
     private function isInternalLink(string $href, string $domain): bool

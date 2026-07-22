@@ -19,6 +19,7 @@ import {
     hasTrustedWordPressUrl,
     isImageReadyForWpSlugFix,
     mergeArticleImageRow,
+    resolveArticleImageRemoveTarget,
 } from '../utils/articleImagesUtils';
 import { SLUG_RENAME_WARNING } from '../utils/imageSlugRenameConfirm';
 import { t } from '../utils/i18n';
@@ -32,6 +33,7 @@ import {
     retryAiMediaGeneration,
     testOptimizeLocalWebp,
 } from '../utils/seoMediaApi';
+import { BROKEN_IMAGE_PLACEHOLDER } from '../utils/brokenImageGuard';
 
 const LOCAL_MEDIA_PATH = '/storage/uploads/seo_media/';
 /** Poll danh sách job AI tối đa 1 lần / phút khi còn job đang xử lý. */
@@ -246,6 +248,8 @@ function ImageRow({
     row,
     siteId,
     articleId,
+    blocks = [],
+    supplementalImages = [],
     onPatch,
     onFocusBlock,
     onQuickFixSlug,
@@ -264,9 +268,21 @@ function ImageRow({
     const [makingFeatured, setMakingFeatured] = useState(false);
     const [webpTestResult, setWebpTestResult] = useState(null);
     const [moreOpen, setMoreOpen] = useState(false);
+    const [thumbBroken, setThumbBroken] = useState(false);
     const moreMenuRef = useRef(null);
     const canPatchInEditor = Boolean(row.blockId);
-    const canRemove = canPatchInEditor || Boolean(onRemoveSupplementalImage);
+    const removeTarget = useMemo(
+        () => resolveArticleImageRemoveTarget(row, blocks, supplementalImages),
+        [row, blocks, supplementalImages],
+    );
+    const canRemove = Boolean(removeTarget) && (
+        removeTarget.kind === 'block'
+            ? Boolean(onRemoveImage)
+            : Boolean(onRemoveSupplementalImage)
+    );
+    const removeDisabledReason = !canRemove
+        ? (thumbBroken ? t('image_tab_remove_unmatched_404') : t('image_tab_remove_no_block'))
+        : (canPatchInEditor ? t('image_tab_remove_hint') : t('image_tab_remove_supplemental_hint'));
     const slugText = (row.slug || '').trim();
     const showActions = canProcessArticleImage(row);
     const busy = openingEditor || applyingWatermark || optimizingWebp || makingFeatured;
@@ -300,6 +316,10 @@ function ImageRow({
     useEffect(() => {
         setAlt(row.alt ?? '');
     }, [row.alt, row.src]);
+
+    useEffect(() => {
+        setThumbBroken(false);
+    }, [row.src]);
 
     useEffect(() => {
         if (!moreOpen) {
@@ -475,9 +495,10 @@ function ImageRow({
                 >
                     <img
                         key={`${row.blockId}-${row.src}`}
-                        src={row.src}
+                        src={thumbBroken ? BROKEN_IMAGE_PLACEHOLDER : row.src}
                         alt={(alt || row.title || '').trim()}
-                        className="seo-article-images-thumb"
+                        className={`seo-article-images-thumb${thumbBroken ? ' seo-img-broken' : ''}`}
+                        onError={() => setThumbBroken(true)}
                     />
                 </button>
                 <p className="seo-article-images-slug" title={slugText || t('image_slug_placeholder')}>
@@ -708,9 +729,13 @@ function ImageRow({
                                         className="seo-article-images-more-item seo-article-images-more-item--danger"
                                         role="menuitem"
                                         disabled={busy || !canRemove}
+                                        title={removeDisabledReason}
                                         onClick={() => {
+                                            if (!canRemove || !removeTarget) {
+                                                return;
+                                            }
                                             setMoreOpen(false);
-                                            if (canPatchInEditor) {
+                                            if (removeTarget.kind === 'block') {
                                                 onRemoveImage?.(row);
                                                 return;
                                             }
@@ -762,14 +787,23 @@ function ImageRow({
                             ) : null}
                         </div>
                     </div>
-                ) : canPatchInEditor ? (
+                ) : canRemove ? (
                     <div className="seo-article-images-actions">
                         <button
                             type="button"
                             className="seo-article-images-delete-btn"
                             disabled={busy}
-                            onClick={() => onRemoveImage?.(row)}
-                            title={t('image_tab_remove_hint')}
+                            onClick={() => {
+                                if (!removeTarget) {
+                                    return;
+                                }
+                                if (removeTarget.kind === 'block') {
+                                    onRemoveImage?.(row);
+                                    return;
+                                }
+                                onRemoveSupplementalImage?.(row);
+                            }}
+                            title={removeDisabledReason}
                         >
                             <Trash2 size={14} />
                             {t('remove_image')}
@@ -1056,6 +1090,8 @@ export default function ArticleImagesTab({
                         row={row}
                         siteId={siteId}
                         articleId={articleId}
+                        blocks={blocks}
+                        supplementalImages={extraImages}
                         onPatch={onPatchImage}
                         onFocusBlock={onFocusBlock}
                         onQuickFixSlug={onQuickFixSlugOne}

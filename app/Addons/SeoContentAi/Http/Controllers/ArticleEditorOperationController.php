@@ -25,15 +25,22 @@ final class ArticleEditorOperationController extends Controller
 
         $active = $this->syncQueue->activeOperation($article);
 
+        $rawStatus = (string) ($active['raw_status'] ?? '');
+        $publicStatus = (string) ($active['status'] ?? '');
+
         return response()->json([
             'success' => true,
             'article_id' => (int) $article->id,
             'operation' => $active,
+            // activeOperation() map pending → queued; so sánh raw + public.
             'has_active_operation' => $active !== null
-                && in_array((string) ($active['status'] ?? ''), [
-                    ArticleWpSyncQueueService::STATUS_PENDING,
-                    ArticleWpSyncQueueService::STATUS_PROCESSING,
-                ], true),
+                && (
+                    in_array($rawStatus, [
+                        ArticleWpSyncQueueService::STATUS_PENDING,
+                        ArticleWpSyncQueueService::STATUS_PROCESSING,
+                    ], true)
+                    || in_array($publicStatus, ['queued', 'processing'], true)
+                ),
         ]);
     }
 

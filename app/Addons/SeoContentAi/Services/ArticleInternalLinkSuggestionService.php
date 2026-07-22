@@ -10,6 +10,7 @@ use App\Addons\SeoContentAi\Models\Keyword;
 use App\Addons\SeoContentAi\Models\KeywordMeta;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Support\KeywordPhraseMatcher;
+use App\Addons\SeoContentAi\Support\SeoLinkMapLinkTypeClassifier;
 
 final class ArticleInternalLinkSuggestionService
 {
@@ -17,12 +18,15 @@ final class ArticleInternalLinkSuggestionService
 
     private const MAX_SUGGESTION_DISPLAY = 10;
 
+    private const MAX_EXTERNAL_SUGGESTION_DISPLAY = 10;
+
     public function __construct(
         private readonly KeywordLinkTargetResolver $linkTargetResolver,
     ) {}
 
     /**
      * Gợi ý từ khóa focus có trong bài nhưng chưa là link nội bộ (khi số link nội bộ &lt; 10).
+     * Chỉ URL trùng site_id bài viết (relative path hoặc host = domain site).
      *
      * @param  array<int, array<string, mixed>>  $internalLinks
      * @param  array<int, array<string, mixed>>  $externalLinks
@@ -35,14 +39,14 @@ final class ArticleInternalLinkSuggestionService
         }
 
         return array_slice(
-            $this->collectCandidates($article, $content, $internalLinks, $externalLinks),
+            $this->collectCandidates($article, $content, $internalLinks, $externalLinks)['internal'],
             0,
             self::MAX_SUGGESTION_DISPLAY,
         );
     }
 
     /**
-     * Toàn bộ từ khóa trong bài có thể gợi ý (không giới hạn số dòng hiển thị).
+     * Toàn bộ từ khóa trong bài có thể gợi ý internal (không giới hạn số dòng hiển thị).
      * Dùng cho client exclude / refill danh sách gợi ý.
      *
      * @param  array<int, array<string, mixed>>  $internalLinks
@@ -51,7 +55,23 @@ final class ArticleInternalLinkSuggestionService
      */
     public function suggestCatalog(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
     {
-        return $this->collectCandidates($article, $content, $internalLinks, $externalLinks);
+        return $this->collectCandidates($article, $content, $internalLinks, $externalLinks)['internal'];
+    }
+
+    /**
+     * Gợi ý chèn external / wiki-trust (không gồm tel/mailto/…).
+     *
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
+     * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
+     */
+    public function suggestExternal(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
+    {
+        return array_slice(
+            $this->collectCandidates($article, $content, $internalLinks, $externalLinks)['external'],
+            0,
+            self::MAX_EXTERNAL_SUGGESTION_DISPLAY,
+        );
     }
 
     /**
@@ -59,17 +79,34 @@ final class ArticleInternalLinkSuggestionService
      * @param  array<int, array<string, mixed>>  $externalLinks
      * @return list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
      */
+    public function suggestExternalCatalog(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
+    {
+        return $this->collectCandidates($article, $content, $internalLinks, $externalLinks)['external'];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
+     * @return array{
+     *     internal: list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>,
+     *     external: list<array{text: string, keyword_id: int, href: string|null, target_url: string|null, can_insert: bool, is_suggestion: true}>
+     * }
+     */
     private function collectCandidates(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
     {
+        $empty = ['internal' => [], 'external' => []];
         $siteId = (int) ($article->site_id ?? 0);
         if ($siteId <= 0) {
-            return [];
+            return $empty;
         }
 
         $plainText = $this->plainTextFromHtml($content);
         if ($plainText === '') {
-            return [];
+            return $empty;
         }
+
+        $article->loadMissing('site');
+        $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost((string) ($article->site?->domain ?? ''));
 
         $linkedContext = $this->collectLinkedContext(array_merge($internalLinks, $externalLinks));
         $linkedLabels = $linkedContext['labels'];
@@ -99,7 +136,8 @@ final class ArticleInternalLinkSuggestionService
 
         $keywords = $keywordsQuery->get(['id', 'phrase']);
 
-        $suggestions = [];
+        $internalSuggestions = [];
+        $externalSuggestions = [];
 
         foreach ($keywords as $keyword) {
             $phrase = trim((string) $keyword->phrase);
@@ -119,25 +157,58 @@ final class ArticleInternalLinkSuggestionService
                 continue;
             }
 
-            $resolved = $this->linkTargetResolver->resolveForPhraseOnSite($siteId, $phrase, $article, sameLanguageOnly: true);
-            $href = $resolved['href'] ?? null;
-            $keywordId = (int) ($resolved['keyword_id'] ?? $keyword->id);
+            $resolvedInternal = $this->linkTargetResolver->resolveForPhraseOnSite(
+                $siteId,
+                $phrase,
+                $article,
+                sameLanguageOnly: true,
+                internalOnly: true,
+            );
+            $resolvedAny = $resolvedInternal ?? $this->linkTargetResolver->resolveForPhraseOnSite(
+                $siteId,
+                $phrase,
+                $article,
+                sameLanguageOnly: true,
+                internalOnly: false,
+            );
+            $href = is_array($resolvedAny) && is_string($resolvedAny['href'] ?? null)
+                ? trim((string) $resolvedAny['href'])
+                : '';
+            $keywordId = (int) ((is_array($resolvedAny) ? ($resolvedAny['keyword_id'] ?? null) : null) ?? $keyword->id);
 
-            if ($href !== null && $href !== '' && $this->isHrefAlreadyLinked($href, $linkedHrefs)) {
+            if ($href !== '' && $this->isSpecialSchemeOrContactHref($href)) {
                 continue;
             }
 
-            $suggestions[] = [
+            if ($href !== '' && $this->isHrefAlreadyLinked($href, $linkedHrefs)) {
+                continue;
+            }
+
+            $bucket = $this->suggestionBucketForHref($href, $siteDomain, $siteId);
+            if ($bucket === null) {
+                continue;
+            }
+
+            $item = [
                 'text' => $phrase,
                 'keyword_id' => $keywordId,
-                'href' => $href,
-                'target_url' => $href,
-                'can_insert' => $href !== null && $href !== '',
+                'href' => $href !== '' ? $href : null,
+                'target_url' => $href !== '' ? $href : null,
+                'can_insert' => $href !== '',
                 'is_suggestion' => true,
             ];
 
+            if ($bucket === 'external') {
+                if ($href === '') {
+                    continue;
+                }
+                $externalSuggestions[] = $item;
+            } else {
+                $internalSuggestions[] = $item;
+            }
+
             $linkedLabels[] = mb_strtolower($phrase);
-            if ($href !== null && $href !== '') {
+            if ($href !== '') {
                 $normalizedHref = $this->normalizeHrefForCompare($href);
                 if ($normalizedHref !== '') {
                     $linkedHrefs[] = $normalizedHref;
@@ -145,7 +216,96 @@ final class ArticleInternalLinkSuggestionService
             }
         }
 
-        return $suggestions;
+        return [
+            'internal' => $internalSuggestions,
+            'external' => $externalSuggestions,
+        ];
+    }
+
+    /**
+     * @return 'internal'|'external'|null null = bỏ (tel/mail/…)
+     */
+    private function suggestionBucketForHref(string $href, string $siteDomain, int $siteId): ?string
+    {
+        if ($href === '') {
+            // Chưa map URL — vẫn gợi ý dưới internal (từ khóa site, chờ gán bài đích nội bộ).
+            return 'internal';
+        }
+
+        if ($this->isSpecialSchemeOrContactHref($href)) {
+            return null;
+        }
+
+        if ($this->isInternalHrefForSite($href, $siteDomain, $siteId)) {
+            return 'internal';
+        }
+
+        return 'external';
+    }
+
+    private function isInternalHrefForSite(string $href, string $siteDomain, int $siteId): bool
+    {
+        $href = trim($href);
+        if ($href === '') {
+            return false;
+        }
+
+        if (str_starts_with($href, '/')) {
+            return true;
+        }
+
+        $host = SeoLinkMapLinkTypeClassifier::resolveHost($href);
+        if ($host !== '' && $siteDomain !== '' && $host === $siteDomain) {
+            return true;
+        }
+
+        $targetArticle = $this->linkTargetResolver->resolveArticleFromUrl($siteId, $href);
+        if ($targetArticle instanceof SeoArticle && (int) ($targetArticle->site_id ?? 0) === $siteId) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isSpecialSchemeOrContactHref(string $href): bool
+    {
+        $href = trim($href);
+        if ($href === '') {
+            return false;
+        }
+
+        $lower = mb_strtolower($href);
+        if (str_starts_with($lower, 'javascript:')) {
+            return true;
+        }
+
+        $scheme = parse_url($href, PHP_URL_SCHEME);
+        if (is_string($scheme) && $scheme !== '') {
+            return in_array(strtolower($scheme), [
+                'tel',
+                'mailto',
+                'sms',
+                'fax',
+                'callto',
+                'geo',
+                'skype',
+                'whatsapp',
+                'viber',
+                'data',
+                'cid',
+            ], true);
+        }
+
+        // Số điện thoại / email trần (không scheme) — không tính external.
+        if (preg_match('/^[+]?[\d\s().-]{6,}$/u', $href) === 1) {
+            return true;
+        }
+
+        if (preg_match('/^[^\s@]+@[^\s@]+\.[^\s@]+$/u', $href) === 1) {
+            return true;
+        }
+
+        return false;
     }
 
     private function plainTextFromHtml(string $html): string

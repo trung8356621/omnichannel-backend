@@ -78,7 +78,7 @@ Canonical context IDs: xem `AUTOMATION_BOUNDARIES.md` § Canonical IDs. Dùng `s
 | `wordpress.article_created` | article | `wp_post_id` | createForArticle |
 | `wordpress.article_updated` | article | fingerprint | sync_outbound hub |
 | `wordpress.article_published` | article | `wp_post_id`, `publish_intent` | publish* |
-| `wordpress.synced` | article | `sync_operation_id`, `origin` | ManualJob / SyncArticleToWordPressHookAction (dedupe by event_uuid) |
+| `wordpress.synced` | article | `sync_operation_id`, `origin` | ManualJob / SyncArticleToWordPressHookAction (dedupe by `event_uuid` = `sync_operation_id`; HookAction dùng sha256 64 hex → cột `business_events.event_uuid` VARCHAR(64), migration `2026_07_22_120000_widen_business_events_event_uuid`) |
 | `wordpress.comment_review_published` | article/review | `review_id`, `wp_comment_id`, `deduplicated` | PublishWordPressCommentReviewHookAction |
 | `wordpress.comment_review_publish_failed` | article/review | `review_id`, `error_code` | PublishWordPressCommentReviewHookAction |
 | `article.product_reviews_generated` | article | `review_ids`, `review_count`, `connection_id` | ArticleProductReviewStoreService |

@@ -9,6 +9,7 @@ use App\Addons\SeoContentAi\Automation\Data\ActionContext;
 use App\Addons\SeoContentAi\Jobs\ManualWordPressSyncJob;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorBundleApplyService;
+use App\Addons\SeoContentAi\Services\ArticleWpSyncLeaseService;
 use App\Addons\SeoContentAi\Services\ArticleWpSyncQueueService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
@@ -26,6 +27,7 @@ final class WordPressManualSyncService
     public function __construct(
         private readonly ArticleEditorBundleApplyService $bundleApply,
         private readonly ArticleWpSyncQueueService $syncQueue,
+        private readonly ArticleWpSyncLeaseService $lease,
         private readonly BusinessActionDispatcher $actions,
     ) {}
 
@@ -189,12 +191,9 @@ final class WordPressManualSyncService
         $lockKey = 'manual-wp-sync:'.(int) $article->id;
         $lock = Cache::lock($lockKey, 120);
         if (! $lock->get()) {
-            $active = $this->syncQueue->activeOperation($article);
-            if ($active !== null && in_array((string) ($active['raw_status'] ?? ''), [
-                ArticleWpSyncQueueService::STATUS_PENDING,
-                ArticleWpSyncQueueService::STATUS_PROCESSING,
-            ], true)) {
-                return $this->deduplicated($active, $article);
+            // isActive() tự clear meta mồ côi (pending không có job).
+            if ($this->syncQueue->isActive($article)) {
+                return $this->deduplicated($this->syncQueue->activeOperation($article) ?? [], $article);
             }
 
             return $this->blocked(
@@ -217,15 +216,19 @@ final class WordPressManualSyncService
                 domainId: $siteId,
             );
 
-            $queueMeta = $this->syncQueue->markQueued($article, [
-                'operation' => 'wordpress_sync',
-                'request_id' => $manual->requestId,
-                'correlation_id' => $manual->correlationId,
-                'source' => $manual->source,
-                'initiated_by' => $manual->initiatedBy,
-                'domain_id' => $manual->domainId,
-                'mode' => (string) ($settings['mode'] ?? 'sync'),
-            ]);
+            $syncJob = $this->lease->enqueue(
+                article: $article,
+                source: $manual->source,
+                initiatedBy: $manual->initiatedBy,
+                requestId: $manual->requestId,
+                correlationId: $manual->correlationId,
+                settings: $settings,
+                auditMeta: $manual->toAuditMeta(),
+            );
+
+            if ((string) $syncJob->request_id !== $manual->requestId) {
+                return $this->deduplicated($this->lease->toOperationPayload($syncJob), $article);
+            }
 
             ManualWordPressSyncJob::dispatch(
                 articleId: (int) $article->id,
@@ -235,12 +238,14 @@ final class WordPressManualSyncService
                 correlationId: $manual->correlationId,
                 domainId: $manual->domainId,
                 requestedAt: $manual->requestedAt,
+                syncJobId: (int) $syncJob->id,
                 settings: $settings,
                 auditMeta: $manual->toAuditMeta(),
             );
 
             Log::info('manual_wordpress_sync.queued', array_merge($manual->toAuditMeta(), [
-                'queue_status' => $queueMeta['status'] ?? null,
+                'sync_job_id' => (int) $syncJob->id,
+                'queue_status' => $syncJob->status?->value ?? null,
             ]));
 
             return [
@@ -255,7 +260,8 @@ final class WordPressManualSyncService
                 'initiated_by' => $manual->initiatedBy,
                 'execution_id' => null,
                 'rule_code' => null,
-                'operation' => $this->syncQueue->activeOperation($article),
+                'sync_job_id' => (int) $syncJob->id,
+                'operation' => $this->lease->toOperationPayload($syncJob),
                 'notification' => [
                     'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
                     'body' => __('seo-content-ai::filament.automation.manual_sync_queued'),
@@ -263,7 +269,11 @@ final class WordPressManualSyncService
                 ],
             ];
         } finally {
-            $lock->release();
+            try {
+                $lock->release();
+            } catch (\Throwable) {
+                // lock may already be released
+            }
         }
     }
 
