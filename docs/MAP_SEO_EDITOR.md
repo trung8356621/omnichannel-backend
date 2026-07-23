@@ -44,10 +44,11 @@
 
 | Vai trò          | File                                           | Ghi chú                                                                                          |
 | ---------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **Vite entry**   | `resources/js/article-editor.jsx`              | Bundle `article-editor`. `mountArticleEditorPage()` mount nhiều React root.                      |
-| **Editor chính** | `resources/js/components/SeoArticleEditor.jsx` | Hub ~8.3k dòng, `out_degree: 112`. Props từ bootstrap JSON.                                      |
-| **Blade host**   | `resources/views/.../edit-article.blade.php`   | `#seo-article-editor-root` (`wire:ignore`) + JSON scripts initial data.                          |
-| **Backend page** | `Filament/.../EditArticle.php`                 | Livewire `/seo/articles/{record}/edit`. SSR data + save qua `$wire` / `callEditArticleLivewire`. |
+| **Vite entry**   | `resources/js/article-editor.jsx`              | Bundle `article-editor`. Phase 3: **1 main React root** (+ optional light AI launcher root). |
+| **Editor chính** | `resources/js/components/SeoArticleEditor.jsx` | Core TipTap + editor-hosted heavy modules (seo/images/reviews) one-at-a-time via `activeHeavyModule`. |
+| **Module host**  | `resources/js/components/ArticleEditorModuleHost.jsx` | Links / FAQ / CTA / AI Chat — dynamic import + portal + AbortController. |
+| **Blade host**   | `resources/views/.../edit-article.blade.php`   | `#seo-article-editor-root` (`wire:ignore`) + `#seo-article-core-bootstrap`. |
+| **Backend page** | `Filament/.../EditArticle.php`                 | Livewire `/seo/articles/{record}/edit`. SSR core bootstrap + lazy `/editor/*`. |
 
 **Image block picker:** `ImageBlockPickerBox` chờ 2×`requestAnimationFrame` mới enable nút. `handleClickOutside` giữ block active khi click trong slot block đang chọn; guard ~360ms sau activate/insert image; whitelist outline rail, media/generate modal. Outline focus clear khi click ra ngoài heading (`headingCommand.action=clear`).
 
@@ -84,46 +85,70 @@ flowchart LR
 
 
 
-### 2.5.2 Cây component React (mount graph)
+### 2.5.2 Cây component React (mount graph) — Phase 3 + post-Phase-4 stabilization
 
-`article-editor.jsx` mount **6 React root**:
+**Roots:** 1 main (`#seo-article-editor-root` = `SeoArticleEditor` + `ArticleEditorModuleHost`) + 1 light optional (`#seo-article-ai-launcher-root` = FAB). Không còn `createRoot` riêng cho Links / FAQ / AI Chat.
+
+**Policy:** tối đa **1** heavy sidebar module mounted. Switch = unmount + cleanup (không giữ React tree bằng CSS hide). **Một SEO widget** (`SeoModule` trong SEO Assistant portal). CTA = cùng `LinksModule` (`domain_cta_list` từ `/editor/links`).
+
+**Google Preview:** paint từ `#seo-article-core-bootstrap` (title/slug/metaDescription/permalink*) + local field state — **không** chờ `/editor/seo-summary`.
+
+**Adapters:** `utils/articleEditorPayloadAdapters.js` — `normalizeSeoSummary` / `normalizeFaqPayload` / `normalizeLinksPayload` / `normalizeCtaPayload` / `normalizeReviewStatus`.
 
 ```mermaid
 flowchart TB
     ENTRY["article-editor.jsx"]
+    ENTRY --> MAIN["Main root<br/>SeoArticleEditor + ModuleHost"]
+    ENTRY --> FAB["AI Launcher root<br/>light only"]
 
-    ENTRY --> EDITOR["SeoArticleEditor<br/>#seo-article-editor-root"]
-    ENTRY --> FAQ["ArticleFaqEditor<br/>#seo-article-faq-root"]
-    ENTRY --> LINKS["ArticleLinksSidebar"]
-    ENTRY --> WIDGETS["ArticleDomainWidgetsSidebar"]
-    ENTRY --> LAUNCHER["ArticleAiFloatingLauncher"]
-    ENTRY --> CHAT["ArticleAiChatPanel"]
+    MAIN --> CORE["TipTap core editor"]
+    MAIN --> PREVIEW["Google Preview<br/>core + local"]
+    MAIN --> HOST["ArticleEditorModuleHost"]
+    MAIN --> PORTALS["createPortal shells<br/>seo / images / reviews"]
 
-    subgraph SE["SeoArticleEditor — left rail"]
-        SERP["ArticleGoogleSerpPreview"]
-        OUTLINE["ArticleOutlineTab"]
-    end
+    HOST -->|active=links or cta| L["lazy LinksModule"]
+    HOST -->|active=faq| F["lazy FaqModule"]
+    HOST -->|active=ai-chat| A["lazy AiChatModule"]
 
-    subgraph TABS["editorTabs"]
-        TAB_ED["editor → BlockEditor"]
-        TAB_IMG["images → ArticleImagesTab"]
-        TAB_REV["reviews → ArticleReviewsTab"]
-        TAB_SEO["seo → SeoScorePanel<br/>xem MAP_SEO_EDITOR_SCORING"]
-    end
-
-    EDITOR --> SERP & OUTLINE & TABS
+    PORTALS -->|activeHeavy=seo| S["lazy SeoModule"]
+    PORTALS -->|activeHeavy=images| I["lazy ImagesModule"]
+    PORTALS -->|activeHeavy=reviews| R["lazy ReviewsModule"]
 ```
 
+| Module | Chunk | Mount when | Fetch | Unmount |
+| --- | --- | --- | --- | --- |
+| SEO | `modules/SeoModule.jsx` | default + panel SEO | `/editor/seo-summary` (+ settings); loading always ends | leave panel |
+| Images | `modules/ImagesModule.jsx` | panel Images | `/editor/images` + `/meta` + AbortController | leave → abort |
+| Reviews | `modules/ReviewsModule.jsx` | panel Reviews | WP reviews + `product-review-status` when active | leave → clear list |
+| Links / CTA | `modules/LinksModule.jsx` | links/cta | `/editor/links`; suggestions on button | leave → unmount |
+| FAQ | `modules/FaqModule.jsx` | `article-editor:module-open` (+ compat `seo-faq-panel-activate`) | `/editor/faqs` → normalize `{cached,items,count}` — never null | leave → drop rows |
+| AI Chat | `modules/AiChatModule.jsx` | FAB open | module-owned | close → unmount |
+| Publishing | Blade/Alpine | open publishing | `$wire.getPublishCategoryOptions` | N/A React |
 
+**Events (official):** `seo-assistant-switch-panel`, `seo-editor-active-module`, `seo-faq-panel-activate`, `seo-assistant-link-section`, `seo-editor-seo-summary-loaded`, `seo-editor-links-updated`.
 
+**Guards:** `__seoArticleEditorNavigatedBound`, `__seoArticleLivewireBridgeRegistered`, `__seoMountedLivewireId`, `pageCleanups` abort idle fetches.
 
-| Tab id    | Component                                                         | Điều kiện                    |
-| --------- | ----------------------------------------------------------------- | ---------------------------- |
-| `editor`  | `BlockEditor` / `ActiveBlockEditor` (TipTap) / `ImageBlockEditor` | Luôn có                      |
-| `images`  | `ArticleImagesTab`                                                | Luôn có                      |
-| `reviews` | `ArticleReviewsTab` — quick create + refresh qua `articleEditorLivewire.js` | product + `show_reviews_tab` |
-| `seo`     | `SeoScorePanel`                                                   | Luôn có                      |
+**Regression matrix:** `docs/audits/ARTICLE_EDITOR_POST_PHASE4_REGRESSIONS.md`.
 
+### 2.5.2b Phase 4 — client utilities
+
+**Canonical document (session):** editor `blocks[]` (per-block HTML). TipTap instance per active block. Full HTML chỉ tại boundary: local draft flush, Save, Preview, Sync WP (`getExportHtml`).
+
+**Utility scheduler:** `utils/articleEditorUtilityScheduler.js` — `schedule` / `cancel` / `cancelAll` / version gate; stale task bỏ kết quả.
+
+| Utility | Source | When | Server? | Debounce |
+| --- | --- | --- | --- | --- |
+| Outline display/nav | `buildClientOutlineTree(blocks)` | heading fingerprint đổi | **No** GET | 400ms idle |
+| Outline AI / duplicate check | existing API | explicit button | Yes | — |
+| Word count (section) | `countWordsFromHtmlLight` | section stats | No | via stats memo |
+| Find/Replace | block plain-text scan | toolbar | No | 350ms |
+| SERP preview | local title/slug/meta | field edit | No (save SEO riêng) | local |
+| Content hash | `hashContent` = SHA-256(trim HTML) | draft/save only | No | draft interval |
+
+**Outline:** `ArticleOutlineTab` `preferClientSource` + `clientOutline`. Jump dùng `block_id` / `client:{blockId}`. Endpoint `/outline` **giữ** cho generate / check-duplicates / compare bài khác — không gọi lúc mở editor.
+
+**Local draft:** schema v2 HTML-only (không lưu blocks + TipTap JSON trùng).
 
 **Modal tạo ảnh AI (**`.seo-generate-image-modal`**):** `GenerateImageModal.jsx` — mở qua event `seo-open-generate-image-modal` (`target: 'product-gallery'` từ album sidebar). Chế độ product gallery: layout 2 cột (form + preview).
 
@@ -139,29 +164,77 @@ flowchart TB
 
 Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.md) — `/seo/media-image-editor`.
 
-**FAQ:** `ArticleFaqEditor` mount riêng `#seo-article-faq-root` — `__seoCollectArticleFaqs`, events `save-article-faqs`, `generate-article-faqs`. Ngoài ra còn có `renewArticleFaq` (regenerate 1 item), `checkFaqQuestionDuplicate`, `extractFaqsFromSelection`, FAQ extract debug. **Extract FAQ** nằm trên FAQ bar (cùng Generate / Import / Add); disable đến khi có selection (`seo-editor-text-selection`).
+**FAQ manager vs content:** block `[omi_faq]` trong TipTap = compact shortcode card (count / Create|Edit). Không placeholder «FAQ chưa tải» dưới editor. `ArticleFaqEditor` lazy qua ModuleHost khi: click shortcode / SEO action Generate FAQ (`article-editor:module-open`). Count nhẹ từ core `faqCount` hoặc `GET .../editor/faqs/count` — không fetch full FAQ rows lúc mount. FAQ đã bỏ khỏi assistant tags và Links accordion.
+
+**SEO idle auto-analysis:** content đổi → `seoStale` → debounce **4000ms** (`seo-idle-analyze` qua utility scheduler). Gõ tiếp = cancel prior (same task id). Single-flight + document version guard. Không loop 150ms. Module SEO đóng vẫn cập nhật summary (score/violations) vì analysis sống ở `SeoArticleEditor`.
+
+**SEO violation action map:** `utils/seoViolationActions.js` — `faq_missing` → Generate FAQ (flow `generate-article-faqs` cũ); `featured_snippet_missing` → Create prompt (`FeaturedSnippetPromptModal`, hook `article.featured_snippet.generate`). Không hardcode action rải JSX.
+
+**Existing links vs suggestions:** client scan document (`existingLinkScanner` + debounce 750ms). Links base/suggestions **không** ghi đè existing links (`source: links-base|links-suggestions`). Domain catalog riêng — chưa insert thì không tính internal.
 
 **FAQ heading detection:** source of truth = `SeoOverviewSettingsService::KEY_FAQ_CATCH_KEYWORDS` (`faq_catch_keywords`, UI SeoSettingsEditor → Nhận diện FAQ). Matcher canonical: `Support/FaqHeadingMatcher` (`keywords()`, `matches()`) qua `faqHeadingMatcher()`. `WorkflowParserService` dùng matcher cho mọi path (Markdown/HTML extract, `[omi_faq]` strip/cut). Normalize match-only (UTF-8 lower, trim, collapse space, decode entity, bỏ emphasis / prefix số / trailing `:`); token-boundary tránh false positive. Trong khối FAQ: bóc `Q:` / bullet+bold / `ul>li` / H3+; đóng block ở heading cùng cấp hoặc cao hơn. Default song ngữ VI+EN khi setting trống — không ghi đè giá trị đã lưu.
 
-**FAB:** `ArticleAiFloatingLauncher` — click mở thẳng AI images & videos (`seo-article-ai-chat-open`); không còn menu phụ (Extract FAQ đã chuyển sang FAQ bar).
+**FAB:** `ArticleAiFloatingLauncher` — light; mở AI → ModuleHost dynamic import `AiChatModule`.
 
 ### 2.5.3 Backend phục vụ EditArticleExcept
 
-**A. Load (SSR)**
+**A. Load (SSR) — Phase 2: core bootstrap + lazy `/editor/*` endpoints**
 
+Blade **chỉ** embed `#seo-article-core-bootstrap` = `EditArticle::getEditorCoreBootstrap()` (identity + `content` + conflict tokens + `endpoints` map + `faqCount` + settings tối thiểu — **không** scoring rules/messages). Không còn script `initial-html` / `initial-seo` / `editor-settings` / `meta` / `initial-images` / `initial-faqs` trên render shell. `#seo-article-faq-root` rỗng — không placeholder «Tải FAQ». Media picker chỉ còn `window.__SEO_ARTICLE_MEDIA_PICKER__` minimal.
 
-| Nguồn                        | Method                  | Dữ liệu                           |
-| ---------------------------- | ----------------------- | --------------------------------- |
-| `EditArticle::mount()`       | `hydrateArticleState()` local only | **No** remote WP HTTP; `wordpressMetadataStale` nếu có `wp_post_id` |
-| `getBootstrapEditorHtml()`   | protected bootstrap     | Initial HTML once — **not** Livewire public snapshot |
-| `getEditorSeoPayload()`      | `forEditorBootstrap()`  | Cached score/keyword/serp; catalogs rỗng |
-| `GET .../editor-seo-payload` | `forArticle()` on-demand | Full link suggestions khi mở Links |
-| `getEditorImagesPayload()`   |                         | post images                       |
-| `getEditorMetaPayload()`     |                         | id, conflict tokens, empty reviews |
-| `getEditorFaqsPayload()`     |                         | FAQ rows                          |
-| `getEditorSettingsPayload()` |                         | local draft interval, `perf_debug` |
-| `getEditorAiDebugPayload()`  |                         | AI debug data (markdown import)   |
+| Nguồn                                  | Method                                          | Dữ liệu                           |
+| --------------------------------------- | ------------------------------------------------ | --------------------------------- |
+| `EditArticle::mount()`                  | `hydrateArticleState()` local only                | **No** remote WP HTTP; body/featured từ meta; `productGallery=[]`; `wordpressMetadataStale` nếu có `wp_post_id` |
+| `#seo-article-core-bootstrap` (SSR duy nhất) | `getEditorCoreBootstrap()`                   | `articleId`, `connectionHash`, `siteId`, `title`, `slug`, `content`, `status`, `postType`, conflict tokens, `featuredImageUrl`, `faqCount`, `endpoints.*`, `settings` (autosave/permission flags — không rules) |
+| `getBootstrapEditorHtml()`              | protected bootstrap                               | Initial HTML once — **not** Livewire public snapshot |
+| `GET .../editor/seo-summary`            | `ArticleEditorSeoPayloadService::forEditorSeoSummary()` | score/focus keyword/title/desc — meta score only, không SERP, không catalogs |
+| `GET .../editor/links`                  | `ArticleEditorLinksPayloadService::base()`        | domain/CTA catalogs — existing links từ **client document scan** |
+| `GET .../editor/links/suggestions`      | `ArticleEditorLinksPayloadService::withSuggestions()` | chỉ khi bấm «Tạo gợi ý liên kết» |
+| `GET .../editor/images` + `/editor/meta`| post images + product gallery/supplemental        | fetch **khi mở Images panel** |
+| `GET .../editor/faqs`                   | FAQ rows `{cached,items,count,can_generate}`      | fetch **khi mở FAQ module** (tab / shortcode / SEO action) |
+| `GET .../editor/faqs/count`             | light count only                                  | shortcode badge khi cần |
+| `GET .../editor/settings`               | scoring rules/messages                            | idle sau mount (cùng SEO summary) |
+| `GET .../editor/media-picker-config`    | minimal picker config                             | full picker config on demand |
+| `GET .../editor-seo-payload` (legacy)   | `forArticle()`                                    | Links **không** dùng path này |
+| `ArticleMetaMap`                        | request meta index                                | 1 load `articleMetas`, reuse |
+| `ArticleEditorPerfDebug`                | bootstrap + Livewire snapshot estimate            | khi `ARTICLE_EDITOR_PERF_DEBUG=true` |
 
+**Sizes (fixture, xem [ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md](audits/ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md)):** core bootstrap (trừ `content`) ≈ **1.5 KB** so với tổng script Phase 1 (trừ `content`) ≈ **25.2 KB** → giảm ~94%. Production: `storage/logs/article_editor_bootstrap_sizes.json` + log `article_editor_livewire_snapshot_estimate` trên channel **web_app**.
+
+### 2.5.3b Web vs cron logging
+
+**Vấn đề production:** cron/root sở hữu `storage/logs/laravel.log` (+ `queue-cron.log`, `watchdog.log`). PHP-FPM (`www`) ghi `laravel.log` → `Permission denied` (vd. Save SEO fields).
+
+**Giải pháp:** channel HTTP riêng — **không** đổi cron, **không** `chown` / rename log root.
+
+| Runtime | Channel | File thực tế |
+|---------|---------|--------------|
+| HTTP / PHP-FPM (editor, SEO panel, REST, Livewire, API trình duyệt) | `web_app` | `storage/logs/web-app-YYYY-MM-DD.log` (daily; user `www` tạo lần đầu) |
+| CLI / cron / queue / watchdog | `logging.default` (`stack` → `single`) | `laravel.log`, `queue-cron.log`, `watchdog.log` — **giữ nguyên** |
+
+| Symbol / path | Vai trò |
+|---------------|---------|
+| `config/logging.php` → `channels.web_app` | `daily`, path `web-app.log`, `WEB_APP_LOG_LEVEL` / `WEB_APP_LOG_DAYS` |
+| `App\Support\RuntimeLogger` | HTTP → `web_app`; console → default; `error`/`warning`/`info`/`debug`/`report`; không fallback sang `laravel.log` |
+| `bootstrap/app.php` `withExceptions` | HTTP: `RuntimeLogger::report` rồi `return false` (chặn default log) |
+| `ArticleEditorSyncController` | SEO meta catch → `RuntimeLogger::report` |
+| `ArticleEditorLazyPayloadController` | editor meta catch → `RuntimeLogger::report` |
+| `KeywordReviewController`, `GlobalAiChatController` | web catch → `RuntimeLogger::report` |
+| `ArticleEditorPerfDebug` / `ArticleEditorBootstrapSizer` | perf (khi `ARTICLE_EDITOR_PERF_DEBUG`) → `RuntimeLogger` |
+
+**Env (production):**
+
+```env
+WEB_APP_LOG_LEVEL=warning
+WEB_APP_LOG_DAYS=14
+# Không đổi LOG_CHANNEL vì cron/queue
+```
+
+**Context log (nhẹ):** `user_id`, `route`, `path`, `method`, `request_id`, `article_id`. Không log body bài, token, cookie, Authorization, WP credentials.
+
+**Ops:** xem lỗi editor → `tail -f storage/logs/web-app-$(date +%F).log`. Cron vẫn đọc `laravel.log` / `queue-cron.log` / `watchdog.log`.
+
+**Test:** `tests/Unit/RuntimeLoggerWebAppChannelTest.php`.
 
 **B. Save — Livewire** (`articleEditorLivewire.js`)
 
@@ -180,8 +253,16 @@ Split toàn trang (eraser/splitter tab): [MAP_SEO_MEDIA.md §2.2](MAP_SEO_MEDIA.
 | Assign keyword → Content Project | `mountAction('assignKeywordAnchorToContentProject')` (`LinkEditBubble`) → `completeKeywordAnchorContentProjectAssign()` → `ArticlePendingInternalLinkService::assignFromEditor()` |
 | Pending internal link event      | `pending-internal-link-ready` → chèn placeholder `#hash` vào anchor đã bôi đen                                      |
 | Reviews                          | `generateQuickPostReviews`, `refreshVirtualReviewsForEditor` → event `virtual-reviews-updated`                       |
-| Keyboard shortcuts               | `requestSaveArticle`, `requestSyncToWordPress` (bridge → collect HTML → action); UI panel `article-editor-shortcuts-rail.blade.php` dưới Outline (`mountShortcutsBelowOutline`) — Prev/Next đổi nhóm shortcut |
-| Page action bar (Edit Article)   | Partial `article-editor-page-actions.blade.php`: primary **Save → Sync WP → Preview (split WP/nội bộ) → Approve**; More `...` = History, Prompts, Assign/Open project, Restore (sync from WP), Debug MD import (icon+chữ), Delete. `EditArticle::getHeaderActions()` trống — UI More Blade; `articleEditorHeaderActions.js` mount Debug MD + dedupe |
+| Keyboard shortcuts               | Logic JS `articleEditorShortcuts.js` (`articleShortcutActionFromEvent` → Save/Sync/Preview/SEO) vẫn hoạt động; **UI panel shortcuts đã gỡ** (không còn `article-editor-shortcuts-rail` / `mountShortcutsBelowOutline`) |
+| Sticky action header (Edit Article) | `data-seo-sticky-editor-header` trong `edit-article.blade.php`: Back + save status + actions. Partial `article-editor-page-actions.blade.php`: **Save → Sync WP → Preview → Approve → More → Help**. Help luôn visible (`seo-article-editor-help-btn`, label `Help`), dispatch `article-editor:help-open` `{ topic: 'article-editor.overview' }` — không phụ thuộc permission / React mount |
+| Filament topbar (Edit Article only) | `EditArticle::getExtraBodyAttributes()` → body class `article-editor-page`; CSS `body.article-editor-page .fi-topbar { display:none }` trong `article-edit-page.css`. Không ẩn topbar trang Filament khác |
+| Global Help modal                | `ArticleEditorHelpModal.jsx` mount 1 lần trong `article-editor.jsx`; marker `data-article-editor-help-modal` (host khi đóng); registry `help/articleEditorHelpTopics.js`; Esc đóng |
+| FAQ entry point                  | Shortcode / Edit FAQ → `article-editor:module-open` `{ module:'faq' }`. Compat: `seo-faq-panel-activate`. **Không** assistant tag FAQ; **không** accordion FAQ trong Links. Runtime FAQ = Vite `public/build` (`FaqModule` + `article-editor`); source JSX alone không đủ |
+| Existing links scanner           | Pre-refactor `extractLinksFromBlocks` (`articleLinkScroll.js`) → `existingLinkScanner.scanExistingLinksCompat` + debounce 750ms + `seo-editor-links-rescan-request`. Source = editor blocks, không DB body |
+| Save conflict / force overwrite  | `ArticleContentConflictGuard`: `updated_at` lệch nhưng `expected_content_hash` khớp body → cho qua. `SeoAccessControl::canForceArticleContentOverwrite()` — `actualRole` rank > `content_manager` (Owner/Admin map manager). `UpdateArticleContentAction` bỏ conflict khi force. `ArticleEditorSyncController::save` ghi content trước, `bundleApply` sau |
+| Article Information author       | `publish-sidebar.blade.php`: Author từ `articles.user_id`; badge «Bạn» nếu trùng auth. Core bootstrap: `authorName` / `authorUserId` / `authorIsCurrentUser` |
+| SEO keyword in meta              | `seoAnalyzer.js` + `SeoScoringEngine`: lowercase keyword trước so `meta_description` (`keyword_missing_in_meta`) |
+| Page action bar (Edit Article)   | Cùng partial sticky header — **không** còn action bar trùng trong content. More = History, Prompts, Assign/Open project, Restore, Debug MD, Delete (+ Preview/Approve compact ≤1024px). `getHeaderActions()` trống; `articleEditorHeaderActions.js` dedupe |
 | Polylang                         | `quickTranslateLinkedArticle`, `importMissingTranslation`, `requestTranslationGeneration`                            |
 | WP Attachment meta               | `renameAttachmentSlugsOnWordPress($items, $silent=false)`, `updateAttachmentMetaOnWordPress($items, $silent=false)` — bulk Fix all dùng `$silent` + 1 toast client; sửa 1 ảnh giữ toast Filament |
 | Gallery picker                   | `confirmGallerySelectionFromPicker` (multi-select → album)                                                           |
@@ -327,7 +408,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Keywords dictionary tabs | `ListKeywords.php` + `KeywordResource::getReviewedDictionaryQuery()` | Thẻ **Cần tối ưu** / **Không hiệu quả** lọc `review_status` warning/danger; scope site qua `forSite` hoặc `keyword_review_histories.article_id` (keyword đánh dấu từ editor chưa có link map vẫn hiện). |
 | Portals React | `SeoArticleEditor.jsx` | `createPortal` → `#seo-article-seo-assistant-root`, `#seo-article-image-assistant-root`, `#seo-article-links-root`, … |
 
-**Tabs:** auto-discover từ DOM; chip ảo **FAQ** / **CTA** inject sau tab **Links** (cùng slot `links`, filter section).
+**Tabs:** auto-discover từ DOM; chip ảo **CTA** inject sau tab **Links** (cùng slot `links`, filter section). **FAQ không còn chip** — mở từ shortcode `[omi_faq]` / `article-editor:module-open`.
 
 **Chế độ hiển thị:**
 
@@ -349,7 +430,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Event | Publisher | Subscriber |
 |-------|-----------|------------|
 | `seo-assistant-switch-panel` | `SeoArticleEditor` (mở tab ảnh), … | `seoAssistantNavigator` → `switchPanel()` |
-| `seo-assistant-navigator-badges` | `SeoArticleEditor`, `ArticleLinksSidebar` | Cập nhật badge tab (SEO, Images, **Reviews** `{count}` kể cả 0, Links, FAQ, CTA) |
+| `seo-assistant-navigator-badges` | `SeoArticleEditor`, `ArticleLinksSidebar` | Cập nhật badge tab (SEO, Images, **Reviews** `{count}` kể cả 0, Links, CTA) — **không** badge FAQ |
 | `virtual-reviews-updated` | `EditArticle::generateQuickPostReviews`, `refreshVirtualReviewsForEditor` | `ArticleReviewsTab`, `SeoArticleEditor` — đồng bộ danh sách + count |
 | `seo-assistant-link-section` | `seoAssistantNavigator` | `ArticleLinksSidebar` filter section |
 | `seo-assistant-widget-control` | `seoAssistantNavigator` | React widgets (`set-collapsed`) |
@@ -390,7 +471,7 @@ Cột phải `edit-article.blade.php` dùng **Alpine-only** (không Livewire rou
 | Operation UI | `articleOperationTracker.js` + `finishArticleSyncFromApi` | Poll `operation-status`; attempt/worker/elapsed; Retry khi failed/stale |
 | Tab Publish | `publish-sync-panel.blade.php` | Checkbox **Đăng ngay** → Laravel `published` + sync WP `publish` (không +5 phút / không WP schedule); lịch tùy chỉnh khi uncheck chỉ ảnh hưởng Laravel |
 | Nút đồng bộ CSS | `article-editor.css` → `.seo-publish-sync-btn` | Primary full-width; dark mode `.dark .wp-article-edit …` (không dùng Tailwind utility trong Blade) |
-| Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`) |
+| Widget Xuất bản | `publish-sidebar.blade.php` | Bỏ UI lên lịch; icon sync chỉ mở tab Publish (`seo-sidebar-open-publish-tab`). **Article Information** hiện Author (`articles.user_id`) + badge «Bạn» nếu trùng auth |
 | Shortcut | `Ctrl+Shift+S` | `seo-publish-tab-request-sync` → tab Publish + queue sync |
 | Submenu Articles | `ListArticleSyncQueue` (`/seo/{connection_hash}/articles/queue`) | Sidebar **Articles → Hàng đợi** |
 | Tab nhanh list | `ListArticles::TAB_QUEUE` (`?tab=queue`) | Chỉ pending / processing / failed; `is_reviewed = 0` |
@@ -487,7 +568,17 @@ Parser lấy số nguyên đầu tiên trong chuỗi setting (`SeoPromptSettings
 
 ## 5. Frontend cluster: React Editor
 
+### 5.0 Sticky header + Help (Edit Article only)
 
+| Mục | Chi tiết |
+|-----|----------|
+| Body class | `article-editor-page` via `EditArticle::getExtraBodyAttributes()` (+ page class) |
+| Ẩn Filament topbar | Chỉ `body.article-editor-page .fi-topbar` — domain/user/lang/notify ẩn trên editor |
+| Sticky header | `seo-article-editor-sticky-header` / `data-seo-sticky-editor-header` — `position:sticky; top:0; z-index:40` |
+| Save status | Event `article-editor:save-status` từ `SeoArticleEditor` → `articleEditorStickyHeader.js` |
+| Help modal | `ArticleEditorHelpModal` + registry `ARTICLE_EDITOR_HELP_TOPICS`; event `article-editor:help-open` |
+| Shortcuts UI | Đã gỡ panel; giữ `articleEditorShortcuts.js` |
+| Test | `tests/Unit/ArticleEditorStickyHeaderHelpTest.php` |
 
 ### 5.1 Cây component (cluster 528 members)
 

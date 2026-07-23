@@ -829,22 +829,15 @@ class ArticleResource extends SeoPanelResource
                 ->from('article_meta')
                 ->where('meta_key', ArticleWpSyncQueueService::META_KEY)
                 ->where(function ($statusQuery): void {
-                    $statusQuery
-                        ->where('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PENDING.'"%')
-                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_PROCESSING.'"%')
-                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_FAILED.'"%')
-                        ->orWhere('meta_value', 'like', '%"status":"'.ArticleWpSyncQueueService::STATUS_COMPLETED.'"%');
+                    ArticleWpSyncQueueService::applyUnfinishedMetaStatusConstraints($statusQuery);
                 });
         });
     }
 
     public static function applyWpSyncQueueListScope(Builder $query): Builder
     {
-        return static::applyWpSyncQueueUnreviewedScope($query)->whereIn('articles.id', function ($subQuery): void {
-            $subQuery->select('article_id')
-                ->from('article_meta')
-                ->where('meta_key', ArticleWpSyncQueueService::META_KEY);
-        });
+        // Dedicated /articles/queue page — same unfinished definition as list tab badge.
+        return static::applyWpSyncQueueScope($query);
     }
 
     public static function applyWpSyncQueueUnreviewedScope(Builder $query): Builder

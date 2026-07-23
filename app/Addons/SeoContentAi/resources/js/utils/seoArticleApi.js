@@ -12,6 +12,26 @@ export function readSeoArticleApiContext() {
             ? window.__SEO_CONNECTION_HASH__.trim()
             : '';
 
+    // Phase 2+: prefer core bootstrap (meta/initial-seo embeds removed).
+    try {
+        const coreEl = document.getElementById('seo-article-core-bootstrap');
+        const rawCore = coreEl?.textContent?.trim();
+        if (rawCore) {
+            const core = JSON.parse(rawCore);
+            const parsedSiteId = Number.parseInt(String(core?.siteId ?? core?.site_id ?? ''), 10);
+            if (Number.isFinite(parsedSiteId) && parsedSiteId > 0) {
+                siteId = parsedSiteId;
+            }
+            const coreHash = String(core?.connectionHash ?? core?.seo_connection_hash ?? '').trim();
+            if (coreHash !== '') {
+                connectionHash = coreHash;
+            }
+        }
+    } catch {
+        /* ignore invalid core bootstrap */
+    }
+
+    // Legacy fallback for older cached HTML.
     try {
         const metaEl = document.getElementById('seo-article-meta');
         const rawMeta = metaEl?.textContent?.trim();
@@ -20,13 +40,15 @@ export function readSeoArticleApiContext() {
         }
 
         const meta = JSON.parse(rawMeta);
-        const parsedSiteId = Number.parseInt(String(meta?.site_id ?? ''), 10);
-        if (Number.isFinite(parsedSiteId) && parsedSiteId > 0) {
-            siteId = parsedSiteId;
+        if (siteId === null) {
+            const parsedSiteId = Number.parseInt(String(meta?.site_id ?? ''), 10);
+            if (Number.isFinite(parsedSiteId) && parsedSiteId > 0) {
+                siteId = parsedSiteId;
+            }
         }
 
         const metaHash = String(meta?.seo_connection_hash ?? '').trim();
-        if (metaHash !== '') {
+        if (connectionHash === '' && metaHash !== '') {
             connectionHash = metaHash;
         }
     } catch {

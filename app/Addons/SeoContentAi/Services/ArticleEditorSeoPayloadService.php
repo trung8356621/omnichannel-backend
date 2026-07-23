@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Services;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
+use App\Addons\SeoContentAi\Support\ArticleMetaMap;
 use App\Addons\SeoContentAi\Support\SeoRuleViolationsResolver;
 use App\Addons\SeoContentAi\Support\SeoScoringRulesRegistry;
 use App\Addons\SeoContentAi\Support\WordPressPermalinkBuilder;
@@ -30,31 +31,18 @@ final class ArticleEditorSeoPayloadService
         $bodyHtml = (string) ($article->body ?? '');
         $internalLinks = $extractedLinks['internal'] ?? [];
         $externalLinks = $extractedLinks['external'] ?? [];
-        $suggestionService = app(ArticleInternalLinkSuggestionService::class);
-        $suggestedInternalLinks = $suggestionService->suggest(
+        // Phase 2 perf: one collectCandidates() pass instead of 4 (suggest/suggestCatalog/
+        // suggestExternal/suggestExternalCatalog each re-ran the same keyword scan).
+        $suggestionBundle = app(ArticleInternalLinkSuggestionService::class)->suggestBundle(
             $article,
             $bodyHtml,
             $internalLinks,
             $externalLinks,
         );
-        $suggestedInternalLinksCatalog = $suggestionService->suggestCatalog(
-            $article,
-            $bodyHtml,
-            $internalLinks,
-            $externalLinks,
-        );
-        $suggestedExternalLinks = $suggestionService->suggestExternal(
-            $article,
-            $bodyHtml,
-            $internalLinks,
-            $externalLinks,
-        );
-        $suggestedExternalLinksCatalog = $suggestionService->suggestExternalCatalog(
-            $article,
-            $bodyHtml,
-            $internalLinks,
-            $externalLinks,
-        );
+        $suggestedInternalLinks = $suggestionBundle['internal'];
+        $suggestedInternalLinksCatalog = $suggestionBundle['internal_catalog'];
+        $suggestedExternalLinks = $suggestionBundle['external'];
+        $suggestedExternalLinksCatalog = $suggestionBundle['external_catalog'];
         $contentBonus = $this->contentBonus->resolveForArticle($article);
 
         $skipSeoScore = ! $article->countsTowardSeoScore();
@@ -189,6 +177,55 @@ final class ArticleEditorSeoPayloadService
             'domain_cta_list' => [],
             'content_bonus' => null,
             'bootstrap_mode' => 'light',
+        ];
+    }
+
+    /**
+     * Minimal SEO summary for editor first paint / lazy refresh — score, focus keyword,
+     * title/description, permalink base only. No link catalogs, no SERP preview rebuild,
+     * no domain lists (Phase 2: those live in ArticleEditorLinksPayloadService + settings).
+     *
+     * @return array<string, mixed>
+     */
+    public function forEditorSeoSummary(SeoArticle $article): array
+    {
+        $article->loadMissing(['articleMetas', 'site']);
+
+        $metaMap = ArticleMetaMap::for($article);
+        $violations = SeoRuleViolationsResolver::forArticle($article);
+        $score = SeoRuleViolationsResolver::scoreForArticle($article);
+        $skipSeoScore = ! $article->countsTowardSeoScore();
+        $bodyHtml = (string) ($article->body ?? '');
+
+        $seoTitle = trim((string) ($article->title ?? ''));
+        $seoDescription = trim((string) $metaMap->getAny(['seo_meta_description', 'meta_description'], ''));
+
+        $wpContent = app(WordPressArticleContentService::class);
+        $cachedPermalink = trim((string) $metaMap->get('wp_permalink', ''));
+        $localPermalink = app(WordPressPermalinkBuilder::class)->resolve(
+            $article,
+            $cachedPermalink,
+            $wpContent->resolveSlug($article),
+        );
+
+        return [
+            'score' => $skipSeoScore ? null : $score,
+            'status' => 'cached',
+            'stale' => false,
+            'skip_seo_score' => $skipSeoScore,
+            'analyzed_content_hash' => $this->resolveAnalyzedContentHash($article, $bodyHtml),
+            'focus_keyword' => app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($article),
+            'seo_title' => $seoTitle,
+            'meta_description' => $seoDescription,
+            'content_hash' => hash('sha256', trim($bodyHtml)),
+            'updated_at' => $article->updated_at?->toIso8601String(),
+            'site_domain' => trim((string) ($article->site?->domain ?? '')),
+            'article_slug' => trim((string) ($article->slug ?? '')),
+            'permalink_base' => $article->site
+                ? rtrim($wpContent->getPermalinkBase($article->site), '/')
+                : '',
+            'permalink' => $localPermalink,
+            'violations' => $violations,
         ];
     }
 

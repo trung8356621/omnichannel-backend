@@ -1,0 +1,45 @@
+---
+description: HTTP logging — web_app only, never laravel.log
+alwaysApply: true
+---
+
+# Logging — web vs cron (production)
+
+Production: `storage/logs/laravel.log` (và `queue-cron.log` / `watchdog.log`) thường **root-owned** từ cron. PHP-FPM (`www`) ghi `laravel.log` → `Permission denied` / Internal Server Error.
+
+Docs: `docs/MAP_SEO_EDITOR.md` §2.5.3b, `docs/audits/ARTICLE_EDITOR_PERFORMANCE_AUDIT.md`.
+
+## Bắt buộc
+
+| Runtime | Dùng | File |
+|---------|------|------|
+| HTTP / Livewire / Filament / REST / editor | `App\Support\RuntimeLogger` hoặc `Log::channel('web_app')` | `storage/logs/web-app-YYYY-MM-DD.log` |
+| CLI / cron / queue / artisan | `Log::` default / channel riêng job | `laravel.log`, `queue-cron.log`, … |
+
+## Cấm trên HTTP path
+
+- `Log::info/warning/error/debug(...)` (default channel → `laravel.log`)
+- `logger()->...`
+- `report($e)` trực tiếp trên controller/editor web — dùng `RuntimeLogger::report($e)`
+- Đổi `LOG_CHANNEL=web_app` trong `.env` (phá cron)
+- `chown` / xóa / rename `laravel.log` của root để “sửa tạm”
+- Fallback từ `web_app` sang `single` / `laravel.log` khi ghi lỗi
+
+## Đúng
+
+```php
+use App\Support\RuntimeLogger;
+
+RuntimeLogger::warning('seo.editor.save_failed', ['article_id' => $id]);
+RuntimeLogger::report($exception, ['endpoint' => 'seo-meta']);
+```
+
+Exception HTTP: `bootstrap/app.php` đã `RuntimeLogger::report` + `return false` (không ghi default).
+
+`AppServiceProvider` boot HTTP set `logging.default = web_app` — vẫn ưu tiên gọi `RuntimeLogger` rõ ràng trong code mới.
+
+## Ops
+
+```bash
+tail -f storage/logs/web-app-$(date +%F).log
+```

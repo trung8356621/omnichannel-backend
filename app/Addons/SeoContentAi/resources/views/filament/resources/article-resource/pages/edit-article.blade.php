@@ -3,9 +3,79 @@
         'app/Addons/SeoContentAi/resources/js/article-media-picker-cache-bootstrap.js',
         'app/Addons/SeoContentAi/resources/css/article-edit-page.css',
     ])
+    {{-- Inline fallback: topbar hide không phụ thuộc hashed CSS nếu Vite stale --}}
+    <style id="article-editor-ui-revision-style">
+        body.article-editor-page .fi-topbar,
+        html.article-editor-page .fi-topbar,
+        body:has(.article-editor-page) .fi-topbar,
+        body:has([data-article-editor-runtime-marker="sticky-help-v1"]) .fi-topbar {
+            display: none !important;
+        }
+        body.article-editor-page .fi-main,
+        body:has(.article-editor-page) .fi-main,
+        body:has(.seo-article-edit-page) .fi-main {
+            padding-inline: 0 !important;
+            padding-top: 0 !important;
+        }
+        .seo-article-editor-sticky-header {
+            position: sticky;
+            top: 0;
+            z-index: 40;
+            width: 100%;
+            margin: 0;
+            border-radius: 0;
+            border: 0;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 0.55rem 1rem;
+            box-sizing: border-box;
+            background: rgb(255 255 255 / 97%);
+        }
+        .wp-article-edit-layout {
+            padding-inline: 0.75rem;
+            padding-top: 0.75rem;
+            box-sizing: border-box;
+        }
+        .seo-article-editor-sticky-header__title,
+        .seo-article-editor-sticky-header__meta {
+            display: none !important;
+        }
+        .seo-article-editor-help-btn {
+            display: inline-flex !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            flex-shrink: 0 !important;
+        }
+        .seo-article-editor-help-btn .seo-editor-toolbar-btn__label {
+            display: inline !important;
+        }
+    </style>
 @endpush
 
-<x-filament-panels::page @class(['seo-article-edit-page'])>
+@push('scripts')
+<script>
+    (function () {
+        document.body.classList.add('article-editor-page');
+        document.documentElement.classList.add('article-editor-page');
+        window.__ARTICLE_EDITOR_UI_REVISION__ = 'sticky-help-v1';
+        window.__ARTICLE_EDITOR_HELP__ = window.__ARTICLE_EDITOR_HELP__ || { revision: 'sticky-help-v1' };
+        document.addEventListener('livewire:navigated', function () {
+            if (!document.querySelector('[data-article-editor-runtime-marker="sticky-help-v1"], .seo-article-edit-page')) {
+                document.body.classList.remove('article-editor-page');
+                document.documentElement.classList.remove('article-editor-page');
+            }
+        });
+    })();
+</script>
+@endpush
+
+<x-filament-panels::page @class(['seo-article-edit-page', 'article-editor-page']) data-article-editor-page>
+{{-- Runtime revision marker: sticky-help-v1 — single root: phải nằm TRONG page component --}}
+<meta name="article-editor-ui-revision" content="sticky-help-v1">
+<div
+    data-article-editor-runtime-marker="sticky-help-v1"
+    style="display:none"
+    aria-hidden="true"
+></div>
 @if ($this->editorPreparing)
     <div class="mx-auto flex max-w-xl flex-col items-center gap-4 py-20 text-center" wire:poll.3s="pollEditorReadiness">
         <x-filament::loading-indicator class="h-10 w-10" />
@@ -1689,23 +1759,37 @@
             </div>
         @endif
 
+        <div
+            class="seo-article-edit-back seo-article-editor-sticky-header"
+            data-seo-sticky-editor-header
+            data-article-editor-ui-revision="sticky-help-v1"
+        >
+            <div class="seo-article-editor-sticky-header__left">
+                <a
+                    href="{{ \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index') }}"
+                    class="seo-article-edit-back-link seo-article-edit-back-link--icon"
+                    title="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
+                    aria-label="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
+                    </svg>
+                </a>
+                <span
+                    class="seo-article-editor-sticky-header__save-status"
+                    data-seo-sticky-save-status
+                    data-status="saved"
+                    aria-live="polite"
+                ></span>
+            </div>
+            <div class="seo-article-editor-sticky-header__right">
+                @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
+            </div>
+        </div>
+
         <div class="wp-article-edit-layout">
             {{-- Cột chính (giống WP post editor) --}}
             <div class="wp-article-edit-main space-y-4">
-                <div class="seo-article-edit-back">
-                    <a
-                        href="{{ \App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index') }}"
-                        class="seo-article-edit-back-link seo-article-edit-back-link--icon"
-                        title="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
-                        aria-label="{{ __('seo-content-ai::filament.article_list.back_to_articles') }}"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
-                        </svg>
-                    </a>
-                    @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-slot')
-                </div>
-
                 <div class="wp-postbox">
                     <div class="wp-postbox-title-toolbar">
                         <input
@@ -1743,23 +1827,19 @@
                     </div>
                 </div>
 
-                <script type="application/json" id="seo-article-initial-html">@json($this->getBootstrapEditorHtml())</script>
-                <script type="application/json" id="seo-article-initial-seo">@json($this->getEditorSeoPayload())</script>
-                <script type="application/json" id="seo-article-initial-images">@json($this->getEditorImagesPayload())</script>
-                <script type="application/json" id="seo-article-editor-settings">@json($this->getEditorSettingsPayload())</script>
-                <script type="application/json" id="seo-article-meta">@json($this->getEditorMetaPayload())</script>
-                <script type="application/json" id="seo-article-initial-faqs">@json($this->getEditorFaqsPayload())</script>
-                <script type="application/json" id="seo-article-faq-config">@json(['can_generate_faq' => $this->canGenerateArticleFaqs(), 'can_import_markdown_faq' => \App\Addons\SeoContentAi\Support\SeoAccessControl::canAccessManagerFeatures()])</script>
-                <script type="application/json" id="seo-article-faq-extract-debug">@json($this->getFaqExtractDebugPayload())</script>
+                {{-- Phase 2: single core bootstrap only (identity + content + endpoints + minimal settings). --}}
+                <script type="application/json" id="seo-article-core-bootstrap">@json($this->getEditorCoreBootstrap())</script>
                 <script>
                     window.__SEO_I18N_LOCALE__ = @js(app()->getLocale());
-                    window.__SEO_ARTICLE_MEDIA_PICKER__ = @json($this->getArticleMediaPickerPayload());
+                    window.__SEO_ARTICLES_LIST_URL__ = @js(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index'));
+                    window.__SEO_ARTICLES_SYNC_QUEUE_URL__ = @js(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource::getUrl('index').'?tab=queue');
+                    {{-- Minimal picker config — no focus-keyword DB resolve, no i18n bulk from server beyond static keys in JS fallback --}}
+                    window.__SEO_ARTICLE_MEDIA_PICKER__ = @json($this->getArticleMediaPickerMinimalPayload());
                     window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ = @js($this->getId());
+                    window.__SEO_ARTICLE_EDITOR_PERF_DEBUG__ = @js((bool) config('seo-content-ai.article_editor_perf_debug', false));
                 </script>
 
                 <div wire:ignore id="seo-article-editor-root" class="w-full seo-article-editor-compact min-w-0"></div>
-
-                @include('seo-content-ai::filament.resources.article-resource.pages.partials.article-editor-shortcuts-rail')
 
                 <button
                     type="button"
@@ -2103,7 +2183,7 @@
                                                 data-assistant-widget-id="article"
                                                 data-assistant-tab-label="Article"
                                                 data-assistant-widget-label="Article Information"
-                                                data-assistant-search-keywords="article,info,slug,status,schedule"
+                                                data-assistant-search-keywords="article,info,slug,status,schedule,author,tác giả"
                                                 x-show="isWidgetVisible('article')"
                                                 x-bind:class="{ 'is-active': panelFilterActive && activePanel === 'article' }"
                                             >

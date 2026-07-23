@@ -15,6 +15,7 @@ use App\Addons\SeoContentAi\Services\WordPress\ManualSyncContext;
 use App\Addons\SeoContentAi\Services\WordPress\WpSyncLeaseHeartbeat;
 use App\Addons\SeoContentAi\Support\SeoQueueContext;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -26,7 +27,7 @@ use Throwable;
 /**
  * Manual WordPress sync — claim lease → heartbeat → terminal (complete/fail). Không để processing kẹt.
  */
-final class ManualWordPressSyncJob implements ShouldQueue
+final class ManualWordPressSyncJob implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable;
     use InteractsWithQueue;
@@ -36,6 +37,9 @@ final class ManualWordPressSyncJob implements ShouldQueue
     public int $tries = 2;
 
     public int $timeout = 600;
+
+    /** Prevent duplicate concurrent sync jobs for the same article. */
+    public int $uniqueFor = 900;
 
     /**
      * @param  array<string, mixed>  $settings
@@ -54,6 +58,12 @@ final class ManualWordPressSyncJob implements ShouldQueue
         public readonly array $auditMeta = [],
     ) {
         $this->onQueue(ArticleWpSyncQueueService::QUEUE_NAME);
+    }
+
+    public function uniqueId(): string
+    {
+        // Per lease row — stale/dead worker must not block a new enqueue for same article.
+        return 'manual-wp-sync:'.$this->articleId.':'.$this->syncJobId;
     }
 
     public function handle(

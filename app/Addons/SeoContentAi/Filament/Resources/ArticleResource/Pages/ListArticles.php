@@ -47,6 +47,9 @@ class ListArticles extends ListRecords
         parent::mount();
 
         $tab = request()->query('tab', self::TAB_POSTS);
+        if ($tab === 'sync-queue') {
+            $tab = self::TAB_QUEUE;
+        }
         if (is_string($tab) && in_array($tab, [
             self::TAB_POSTS,
             self::TAB_CATEGORIES,
@@ -130,6 +133,18 @@ class ListArticles extends ListRecords
         }
 
         return ArticleResource::panelUrl('index').'?'.http_build_query($params);
+    }
+
+    /**
+     * Badge Sync Queue — số bài chưa sync thành công (cùng scope với tab).
+     */
+    public function getSyncQueueBadgeCount(): int
+    {
+        $query = ArticleResource::getEloquentQuery();
+        ArticleResource::applyContentTabScope($query, self::TAB_QUEUE);
+        ArticleResource::applyExcludeSkipSeoAuditScope($query);
+
+        return (int) $query->count();
     }
 
     public function getArticlesFilterUrlForCategory(int $categoryWpId, ?int $siteId = null): string

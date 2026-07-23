@@ -8,6 +8,7 @@ use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
 use App\Addons\SeoContentAi\Http\Requests\ArticleEditorActionRequest;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use Illuminate\Support\Facades\Validator;
+use ReflectionClass;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -15,7 +16,10 @@ final class ArticleEditorSyncConflictInputTest extends TestCase
 {
     public function test_build_content_update_input_includes_expected_conflict_fields(): void
     {
-        $controller = app(ArticleEditorSyncController::class);
+        // Avoid container: BusinessActionDispatcher / ManualSync not bound in unit suite.
+        $controller = (new ReflectionClass(ArticleEditorSyncController::class))
+            ->newInstanceWithoutConstructor();
+
         $method = new ReflectionMethod($controller, 'buildContentUpdateInput');
         $method->setAccessible(true);
 
@@ -46,5 +50,33 @@ final class ArticleEditorSyncConflictInputTest extends TestCase
         ], $request->rules());
 
         self::assertFalse($validator->fails());
+    }
+
+    public function test_update_action_skips_conflict_when_force_overwrite_allowed(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Automation/Actions/Article/UpdateArticleContentAction.php',
+        );
+        $access = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Support/SeoAccessControl.php',
+        );
+        $controller = (string) file_get_contents(
+            dirname(__DIR__, 2).'/Http/Controllers/ArticleEditorSyncController.php',
+        );
+
+        self::assertStringContainsString('canForceArticleContentOverwrite', $source);
+        self::assertStringContainsString('force_overwrite', $source);
+        self::assertStringContainsString('function canForceArticleContentOverwrite', $access);
+        self::assertStringContainsString(
+            'self::rank(self::actualRole()) > self::rank(self::ROLE_CONTENT_MANAGER)',
+            $access,
+        );
+        self::assertStringContainsString('User::ROLE_OWNER', $access);
+        // Content write before bundle side-effects.
+        $dispatchPos = strpos($controller, "dispatch(\n            'article.content.update'");
+        $bundlePos = strpos($controller, '$this->bundleApply->apply(');
+        self::assertNotFalse($dispatchPos);
+        self::assertNotFalse($bundlePos);
+        self::assertLessThan($bundlePos, $dispatchPos);
     }
 }

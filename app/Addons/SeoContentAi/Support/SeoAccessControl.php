@@ -41,7 +41,8 @@ final class SeoAccessControl
         /** @var User|null $user */
         $user = auth()->user();
 
-        if (($user?->role ?? null) === User::ROLE_ADMIN) {
+        // Admin / Owner luôn rank manager — không fallback content_manager khi seo_role trống.
+        if (in_array((string) ($user?->role ?? ''), [User::ROLE_ADMIN, User::ROLE_OWNER], true)) {
             return self::ROLE_MANAGER;
         }
 
@@ -110,6 +111,19 @@ final class SeoAccessControl
     public static function canAccessPlannerFeatures(): bool
     {
         return self::rank(self::effectiveRole()) >= self::rank(self::ROLE_PLANNER);
+    }
+
+    /**
+     * Planner / manager / owner / admin (actual rank > content_manager) được ghi đè
+     * bài writer khi conflict token lệch — không phụ thuộc VIEW AS giả lập.
+     */
+    public static function canForceArticleContentOverwrite(): bool
+    {
+        if (! self::canMutateInSeoPanel()) {
+            return false;
+        }
+
+        return self::rank(self::actualRole()) > self::rank(self::ROLE_CONTENT_MANAGER);
     }
 
     public static function canViewAutomationRules(): bool

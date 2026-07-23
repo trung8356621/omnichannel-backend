@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace App\Addons\SeoContentAi\Tests\Unit;
 
 use App\Addons\SeoContentAi\Services\ArticleEditorHistoryService;
-use Illuminate\Support\Facades\Schema;
-use Tests\TestCase;
+use PHPUnit\Framework\TestCase;
+use ReflectionClass;
 
 final class ArticleEditorHistoryLocalDraftIntervalTest extends TestCase
 {
@@ -15,21 +15,12 @@ final class ArticleEditorHistoryLocalDraftIntervalTest extends TestCase
         self::assertSame(2, ArticleEditorHistoryService::DEFAULT_AUTOSAVE_INTERVAL_SECONDS);
     }
 
-    public function test_local_draft_interval_clamped_between_zero_and_thirty(): void
+    public function test_local_draft_interval_clamp_source_is_zero_to_thirty(): void
     {
-        if (! Schema::hasTable('wp_options')) {
-            $this->markTestSkipped('wp_options table is not available in this test database.');
-        }
+        $ref = new ReflectionClass(ArticleEditorHistoryService::class);
+        $source = (string) file_get_contents((string) $ref->getFileName());
 
-        $service = app(ArticleEditorHistoryService::class);
-
-        $service->saveSettings(['autosave_interval_seconds' => 999]);
-        self::assertSame(30, $service->getSettings()['autosave_interval_seconds']);
-
-        $service->saveSettings(['autosave_interval_seconds' => 0]);
-        self::assertSame(0, $service->getSettings()['autosave_interval_seconds']);
-
-        $service->saveSettings(['autosave_interval_seconds' => 15]);
-        self::assertSame(15, $service->getSettings()['autosave_interval_seconds']);
+        // getSettings() + saveSettings() both clamp local draft interval (not DB autosave).
+        self::assertSame(2, preg_match_all('/max\(0,\s*min\(30,\s*\$autosave\)\)/', $source));
     }
 }

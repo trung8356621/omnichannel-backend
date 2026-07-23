@@ -244,6 +244,22 @@ final class ArticleProductReviewStoreService
             ->all();
     }
 
+    /**
+     * Cheap existence check (no row hydration) — for mount-time "should we flip
+     * is_reviewed" checks that don't need the full row payload (Phase 2 perf).
+     */
+    public function hasPendingReviews(SeoArticle $article): bool
+    {
+        return ArticleProductReview::query()
+            ->where('article_id', (int) $article->id)
+            ->whereIn('status', [
+                ArticleProductReviewStatus::Pending->value,
+                ArticleProductReviewStatus::Syncing->value,
+                ArticleProductReviewStatus::Failed->value,
+            ])
+            ->exists();
+    }
+
     public function isPublishAutomationEnabled(): bool
     {
         try {

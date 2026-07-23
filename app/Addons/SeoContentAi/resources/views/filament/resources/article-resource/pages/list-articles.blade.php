@@ -13,7 +13,12 @@
         <style>{!! file_get_contents($overviewCss) !!}</style>
     @endif
 
-    <div class="seo-internal-tabs mb-4">
+    <div
+        class="seo-internal-tabs mb-4"
+        @if ($this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE)
+            wire:poll.15s
+        @endif
+    >
         <a
             href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS) }}"
             @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_POSTS])
@@ -31,6 +36,10 @@
             @class(['is-active' => $this->contentTab === \App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_QUEUE])
         >
             {{ __('seo-content-ai::filament.article_list.tab_queue') }}
+            @php($syncQueueBadge = $this->getSyncQueueBadgeCount())
+            @if ($syncQueueBadge > 0)
+                <span class="ml-1 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-warning-500 px-1.5 text-[11px] font-semibold text-white">{{ $syncQueueBadge }}</span>
+            @endif
         </a>
         <a
             href="{{ $this->getContentTabUrl(\App\Addons\SeoContentAi\Filament\Resources\ArticleResource\Pages\ListArticles::TAB_REVIEWED) }}"

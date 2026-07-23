@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ProductReview\ProductReviewAutomationSettingsResolver;
+use App\Addons\SeoContentAi\Services\ProductReview\ProductReviewCreationPolicy;
 use App\Addons\SeoContentAi\Services\ProductReview\WordPressProductReviewStatusService;
 use App\Addons\SeoContentAi\Services\WordPress\ArticleWordPressBusinessSequence;
 use App\Addons\SeoContentAi\Services\WordPress\ManualSyncContext;

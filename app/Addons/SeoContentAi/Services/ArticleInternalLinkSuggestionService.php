@@ -20,9 +20,58 @@ final class ArticleInternalLinkSuggestionService
 
     private const MAX_EXTERNAL_SUGGESTION_DISPLAY = 10;
 
+    /**
+     * Request-scoped cache: same (article, content, links) collectCandidates() call
+     * repeated by suggest()/suggestCatalog()/suggestExternal()/suggestExternalCatalog()
+     * within one request only pays the query cost once (Phase 2 perf).
+     *
+     * @var array<string, array{internal: list<array<string, mixed>>, external: list<array<string, mixed>>}>
+     */
+    private array $candidatesCache = [];
+
+    /**
+     * Request-scoped cache of the site keyword catalog, keyed by site id + excluded
+     * keyword ids — avoids re-running the full `Keyword::forSite()` scan per call.
+     *
+     * @var array<string, \Illuminate\Support\Collection<int, Keyword>>
+     */
+    private array $keywordsBySite = [];
+
     public function __construct(
         private readonly KeywordLinkTargetResolver $linkTargetResolver,
     ) {}
+
+    /**
+     * All four suggestion shapes (display + catalog, internal + external) from a
+     * single collectCandidates() call — replaces 4 separate service calls that each
+     * re-ran the same keyword scan (used by ArticleEditorSeoPayloadService::forArticle
+     * and ArticleEditorLinksPayloadService::withSuggestions).
+     *
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
+     * @return array{
+     *     internal: list<array<string, mixed>>,
+     *     internal_catalog: list<array<string, mixed>>,
+     *     external: list<array<string, mixed>>,
+     *     external_catalog: list<array<string, mixed>>
+     * }
+     */
+    public function suggestBundle(SeoArticle $article, string $content, array $internalLinks, array $externalLinks = []): array
+    {
+        $candidates = $this->collectCandidates($article, $content, $internalLinks, $externalLinks);
+
+        $internalCatalog = $candidates['internal'];
+        $externalCatalog = $candidates['external'];
+
+        return [
+            'internal' => count($internalLinks) >= self::MAX_INTERNAL_LINKS
+                ? []
+                : array_slice($internalCatalog, 0, self::MAX_SUGGESTION_DISPLAY),
+            'internal_catalog' => $internalCatalog,
+            'external' => array_slice($externalCatalog, 0, self::MAX_EXTERNAL_SUGGESTION_DISPLAY),
+            'external_catalog' => $externalCatalog,
+        ];
+    }
 
     /**
      * Gợi ý từ khóa focus có trong bài nhưng chưa là link nội bộ (khi số link nội bộ &lt; 10).
@@ -105,6 +154,11 @@ final class ArticleInternalLinkSuggestionService
             return $empty;
         }
 
+        $cacheKey = $this->candidatesCacheKey((int) $article->id, $content, $internalLinks, $externalLinks);
+        if (isset($this->candidatesCache[$cacheKey])) {
+            return $this->candidatesCache[$cacheKey];
+        }
+
         $article->loadMissing('site');
         $siteDomain = SeoLinkMapLinkTypeClassifier::normalizeDomainHost((string) ($article->site?->domain ?? ''));
 
@@ -122,19 +176,7 @@ final class ArticleInternalLinkSuggestionService
             $excludeKeywordIds->push((int) $focusKeywordId);
         }
 
-        $keywordsQuery = Keyword::query()
-            ->forSite($siteId)
-            ->where('type', Keyword::TYPE_NORMAL)
-            ->where('review_status', KeywordReviewStatus::Active->value)
-            ->whereNotNull('phrase')
-            ->where('phrase', '!=', '')
-            ->orderByRaw('CHAR_LENGTH(phrase) DESC');
-
-        if ($excludeKeywordIds->isNotEmpty()) {
-            $keywordsQuery->whereNotIn('id', $excludeKeywordIds);
-        }
-
-        $keywords = $keywordsQuery->get(['id', 'phrase']);
+        $keywords = $this->keywordsForSite($siteId, $excludeKeywordIds->all());
 
         $internalSuggestions = [];
         $externalSuggestions = [];
@@ -216,10 +258,52 @@ final class ArticleInternalLinkSuggestionService
             }
         }
 
-        return [
+        $result = [
             'internal' => $internalSuggestions,
             'external' => $externalSuggestions,
         ];
+
+        $this->candidatesCache[$cacheKey] = $result;
+
+        return $result;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $internalLinks
+     * @param  array<int, array<string, mixed>>  $externalLinks
+     */
+    private function candidatesCacheKey(int $articleId, string $content, array $internalLinks, array $externalLinks): string
+    {
+        return $articleId.':'.md5($content).':'.md5(serialize($internalLinks)).':'.md5(serialize($externalLinks));
+    }
+
+    /**
+     * @param  list<int>  $excludeKeywordIds
+     * @return \Illuminate\Support\Collection<int, Keyword>
+     */
+    private function keywordsForSite(int $siteId, array $excludeKeywordIds): \Illuminate\Support\Collection
+    {
+        $cacheKey = $siteId.':'.implode(',', $excludeKeywordIds);
+        if (isset($this->keywordsBySite[$cacheKey])) {
+            return $this->keywordsBySite[$cacheKey];
+        }
+
+        $keywordsQuery = Keyword::query()
+            ->forSite($siteId)
+            ->where('type', Keyword::TYPE_NORMAL)
+            ->where('review_status', KeywordReviewStatus::Active->value)
+            ->whereNotNull('phrase')
+            ->where('phrase', '!=', '')
+            ->orderByRaw('CHAR_LENGTH(phrase) DESC');
+
+        if ($excludeKeywordIds !== []) {
+            $keywordsQuery->whereNotIn('id', $excludeKeywordIds);
+        }
+
+        $keywords = $keywordsQuery->get(['id', 'phrase']);
+        $this->keywordsBySite[$cacheKey] = $keywords;
+
+        return $keywords;
     }
 
     /**

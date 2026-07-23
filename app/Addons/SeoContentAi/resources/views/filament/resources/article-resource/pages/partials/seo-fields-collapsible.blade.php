@@ -24,7 +24,7 @@
         </button>
 
         <div class="wp-seo-fields-toolbar-end">
-            {{-- Shortcuts dưới Outline (article-editor-shortcuts-rail) — không tạo slot trùng --}}
+            {{-- Keyboard shortcuts panel đã gỡ — không tạo slot trùng --}}
             <div class="seo-editor-page-actions seo-editor-page-actions--seo-fields-legacy" aria-hidden="true"></div>
         </div>
     </div>

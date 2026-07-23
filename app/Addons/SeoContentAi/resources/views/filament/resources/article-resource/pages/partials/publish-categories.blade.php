@@ -17,7 +17,8 @@
         'currentTermWpId' => (int) ($this->record->wp_post_id ?? 0),
         'isTaxonomy' => $this->isTaxonomyEntityForPublish(),
         'categoryTaxonomy' => $this->resolvePublishCategoryTaxonomy($resolvedPostType),
-        'options' => $this->getPublishCategoryOptions(),
+        // Phase 2: empty on SSR — Alpine loads via $wire.getPublishCategoryOptions() (no publishing taxonomy query on editor shell).
+        'options' => ['category' => [], 'product_category' => []],
     ];
 @endphp
 
@@ -38,6 +39,7 @@
                 wpFetchedAt: '',
                 wpFetchedCount: 0,
                 _saveTimer: null,
+                _optionsLoaded: false,
 
                 init() {
                     window.__seoPushPublishCategoriesToWire = () => this.pushCategoriesToWire();
@@ -58,6 +60,30 @@
                     this.syncCategoryTaxonomyFromPostType();
                     this.restoreWpCategoriesFromStorage();
                     window.addEventListener('seo-wp-categories-fetched', (event) => this.onWpCategoriesFetched(event));
+                    window.addEventListener('seo-assistant-open-publishing', () => {
+                        void this.ensurePublishCategoryOptions();
+                    });
+                    window.addEventListener('seo-sidebar-open-publish-tab', () => {
+                        void this.ensurePublishCategoryOptions();
+                    });
+                    window.addEventListener('seo-publish-tab-request-sync', () => {
+                        void this.ensurePublishCategoryOptions();
+                    });
+                },
+
+                async ensurePublishCategoryOptions() {
+                    if (this._optionsLoaded) {
+                        return;
+                    }
+                    this._optionsLoaded = true;
+                    try {
+                        const opts = await this.$wire.getPublishCategoryOptions();
+                        if (opts && typeof opts === 'object') {
+                            this.optionsByTaxonomy = opts;
+                        }
+                    } catch (e) {
+                        this._optionsLoaded = false;
+                    }
                 },
 
                 syncCategoryTaxonomyFromPostType() {
@@ -313,6 +339,7 @@
                 },
 
                 async ensureCategoriesBeforeSync() {
+                    await this.ensurePublishCategoryOptions();
                     this.syncPostTypeFromWire();
                     await this.pushCategoriesToWire();
 

@@ -27,19 +27,29 @@ import {
     saveExcludedLinkSuggestions,
 } from '../utils/articleExcludedLinkSuggestionsStorage';
 import { csrfToken, seoArticleApiFetch } from '../utils/seoArticleApi';
+import {
+    normalizeLinksPayload,
+    readCoreArticleIdentity,
+} from '../utils/articleEditorPayloadAdapters';
 
 /**
- * On-demand full SEO/links payload (not part of editor bootstrap).
+ * Links panel base payload (extracted + domain lists) — no keyword suggestion scan.
  * @param {number} articleId
+ * @param {AbortSignal} [signal]
  */
-async function fetchEditorSeoPayload(articleId) {
+async function fetchEditorLinksBase(articleId, signal) {
     const id = Number(articleId ?? 0);
     if (!Number.isFinite(id) || id <= 0) {
-        return null;
+        throw new Error('Invalid article id');
     }
 
-    const { response, data } = await seoArticleApiFetch(`/api/seo/articles/${id}/editor-seo-payload`, {
+    const url =
+        window.__SEO_EDITOR_LAZY_ENDPOINTS__?.links
+        || `/api/seo/articles/${id}/editor/links`;
+
+    const { response, data } = await seoArticleApiFetch(url, {
         method: 'GET',
+        signal,
         headers: {
             Accept: 'application/json',
             ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
@@ -47,10 +57,41 @@ async function fetchEditorSeoPayload(articleId) {
     });
 
     if (!response.ok || data?.success === false) {
-        return null;
+        throw new Error(String(data?.message ?? 'links_base_failed'));
     }
 
-    return data?.data && typeof data.data === 'object' ? data.data : null;
+    return normalizeLinksPayload(data);
+}
+
+/**
+ * Keyword suggestion catalogs — only after explicit Generate Suggestions.
+ * @param {number} articleId
+ * @param {AbortSignal} [signal]
+ */
+async function fetchEditorLinksSuggestions(articleId, signal) {
+    const id = Number(articleId ?? 0);
+    if (!Number.isFinite(id) || id <= 0) {
+        throw new Error('Invalid article id');
+    }
+
+    const url =
+        window.__SEO_EDITOR_LAZY_ENDPOINTS__?.linksSuggestions
+        || `/api/seo/articles/${id}/editor/links/suggestions`;
+
+    const { response, data } = await seoArticleApiFetch(url, {
+        method: 'GET',
+        signal,
+        headers: {
+            Accept: 'application/json',
+            ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+        },
+    });
+
+    if (!response.ok || data?.success === false) {
+        throw new Error(String(data?.message ?? 'links_suggestions_failed'));
+    }
+
+    return normalizeLinksPayload(data);
 }
 
 /**
@@ -452,6 +493,8 @@ function InternalLinksSection({
     hiddenRowKeys,
     excludedCount = 0,
     onClearExcluded,
+    onGenerateSuggestions,
+    suggestionsLoading = false,
     reviewLoadingKey = '',
     reviewPopoverItemKey = '',
     onKeywordClick,
@@ -464,8 +507,9 @@ function InternalLinksSection({
 }) {
     const showSuggestions = internal.length < 10 && suggestedInternal.length > 0;
     const showExcludedClear = excludedCount > 0;
+    const showGenerate = typeof onGenerateSuggestions === 'function';
 
-    if (internal.length === 0 && !showSuggestions && !showExcludedClear) {
+    if (internal.length === 0 && !showSuggestions && !showExcludedClear && !showGenerate) {
         return (
             <KeywordList
                 items={[]}
@@ -495,6 +539,19 @@ function InternalLinksSection({
             ) : (
                 <p className="wp-article-links-empty">{t('links_internal_empty')}</p>
             )}
+            {showGenerate ? (
+                <button
+                    type="button"
+                    className="wp-article-links-clear-excluded-btn"
+                    disabled={suggestionsLoading}
+                    onClick={onGenerateSuggestions}
+                >
+                    {suggestionsLoading ? <Loader2 size={13} className="animate-spin" aria-hidden /> : <RotateCcw size={13} aria-hidden />}
+                    {suggestionsLoading
+                        ? t('links_suggestions_loading')
+                        : t('links_generate_suggestions')}
+                </button>
+            ) : null}
             {showSuggestions || showExcludedClear ? (
                 <div className="wp-article-links-suggestions-head">
                     {showSuggestions ? (
@@ -550,7 +607,23 @@ function readEditorSeoBootstrap() {
     }
 }
 
-function readArticleMetaIds() {
+function readArticleMetaIds(propArticleId = null, propSiteId = null) {
+    const fromPropId = Number(propArticleId ?? 0);
+    const fromPropSite = Number(propSiteId ?? 0);
+    if (Number.isFinite(fromPropId) && fromPropId > 0) {
+        const core = readCoreArticleIdentity();
+        return {
+            articleId: fromPropId,
+            siteId: Number.isFinite(fromPropSite) && fromPropSite > 0 ? fromPropSite : core.siteId,
+        };
+    }
+
+    const core = readCoreArticleIdentity();
+    if (core.articleId > 0) {
+        return core;
+    }
+
+    // Legacy fallback (older cached HTML).
     try {
         const el = document.getElementById('seo-article-meta');
         const raw = el?.textContent?.trim();
@@ -583,11 +656,13 @@ function readSuggestionCatalogBootstrap() {
 }
 
 export default function ArticleLinksSidebar({
+    articleId: articleIdProp = null,
+    siteId: siteIdProp = null,
     initialDomainLinkList = [],
     initialDomainLinkCatalog = [],
     initialDomainCtaList = [],
 }) {
-    const articleMetaRef = useRef(readArticleMetaIds());
+    const articleMetaRef = useRef(readArticleMetaIds(articleIdProp, siteIdProp));
     const [reviewPopover, setReviewPopover] = useState(null);
     const [reviewLoadingKey, setReviewLoadingKey] = useState('');
     const [reviewedKeywordIds, setReviewedKeywordIds] = useState(() => new Set());
@@ -619,8 +694,9 @@ export default function ArticleLinksSidebar({
         external: (editorSeoBootstrap.current?.extracted_links?.external ?? []).filter(
             (item) => !isSpecialOrContactHref(item?.href),
         ),
-        faq: [],
     }));
+    const linksRef = useRef(links);
+    linksRef.current = links;
     const [articlePlainText, setArticlePlainText] = useState('');
     const [excludedSuggestionLabels, setExcludedSuggestionLabels] = useState(() => {
         const { articleId, siteId } = articleMetaRef.current;
@@ -632,10 +708,19 @@ export default function ArticleLinksSidebar({
     const [cycleByKey, setCycleByKey] = useState({});
     const [internalCollapsed, setInternalCollapsed] = useState(true);
     const [externalCollapsed, setExternalCollapsed] = useState(true);
-    const [faqCollapsed, setFaqCollapsed] = useState(true);
     const [domainLinksCollapsed, setDomainLinksCollapsed] = useState(true);
     const [ctaCollapsed, setCtaCollapsed] = useState(true);
     const [linkSectionFilter, setLinkSectionFilter] = useState('all');
+    const [baseLoading, setBaseLoading] = useState(true);
+    const [baseError, setBaseError] = useState(null);
+    const [suggestionsError, setSuggestionsError] = useState(null);
+    const [suggestionsEmpty, setSuggestionsEmpty] = useState(false);
+    const suggestionsAbortRef = useRef(null);
+
+    useEffect(() => {
+        // Lazy mount often misses prior client-document scans — ask editor to republish.
+        window.dispatchEvent(new CustomEvent('seo-editor-links-rescan-request'));
+    }, []);
 
     useEffect(() => {
         const onLinkSection = (event) => {
@@ -649,11 +734,6 @@ export default function ArticleLinksSidebar({
                 return;
             }
 
-            if (section === 'faq') {
-                setFaqCollapsed(false);
-                return;
-            }
-
             if (section === 'cta') {
                 setCtaCollapsed(false);
             }
@@ -664,43 +744,105 @@ export default function ArticleLinksSidebar({
         return () => window.removeEventListener('seo-assistant-link-section', onLinkSection);
     }, []);
 
-    // Perf Phase 1: Links mount đã deferred — lúc mount mới fetch full SEO/link catalogs.
+    // Phase 2: Links open → base payload only (no collectCandidates / Keyword::forSite).
+    // Suggestions load only via explicit "Generate suggestions" button.
     useEffect(() => {
         const { articleId } = articleMetaRef.current;
-        let cancelled = false;
+        const controller = new AbortController();
+        setBaseLoading(true);
+        setBaseError(null);
 
         void (async () => {
             try {
-                const payload = await fetchEditorSeoPayload(articleId);
-                if (cancelled || !payload) {
+                const payload = await fetchEditorLinksBase(articleId, controller.signal);
+                if (controller.signal.aborted) {
                     return;
                 }
 
                 window.dispatchEvent(
-                    new CustomEvent('seo-editor-seo-payload-updated', { detail: payload }),
-                );
-                window.dispatchEvent(
                     new CustomEvent('seo-editor-links-updated', {
                         detail: {
-                            internal: payload.extracted_links?.internal ?? [],
-                            external: payload.extracted_links?.external ?? [],
-                            suggested_internal: payload.suggested_internal_links ?? [],
-                            suggested_internal_links_catalog: payload.suggested_internal_links_catalog ?? [],
-                            suggested_external_links: payload.suggested_external_links ?? [],
-                            suggested_external_links_catalog: payload.suggested_external_links_catalog ?? [],
-                            domain_link_list_catalog: payload.domain_link_list_catalog ?? [],
+                            // Existing links come from client document scan — do not overwrite with server body.
+                            source: 'links-base',
+                            suggested_internal: [],
+                            suggested_internal_links_catalog: [],
+                            suggested_external_links: [],
+                            suggested_external_links_catalog: [],
+                            domain_link_list: payload.domainLinkList,
+                            domain_link_list_catalog: payload.domainLinkListCatalog,
+                            domain_cta_list: payload.domainCtaList,
                         },
                     }),
                 );
-            } catch {
-                // Panel vẫn mở với bootstrap rỗng; user có thể refresh sau.
+                setBaseError(null);
+            } catch (error) {
+                if (error?.name === 'AbortError' || controller.signal.aborted) {
+                    return;
+                }
+                setBaseError(t('editor_links_load_error'));
+            } finally {
+                if (!controller.signal.aborted) {
+                    setBaseLoading(false);
+                }
             }
         })();
 
         return () => {
-            cancelled = true;
+            controller.abort();
+            suggestionsAbortRef.current?.abort();
         };
     }, []);
+
+    const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+    const loadLinkSuggestions = async () => {
+        const { articleId } = articleMetaRef.current;
+        if (suggestionsLoading) {
+            return;
+        }
+        suggestionsAbortRef.current?.abort();
+        const controller = new AbortController();
+        suggestionsAbortRef.current = controller;
+        setSuggestionsLoading(true);
+        setSuggestionsError(null);
+        setSuggestionsEmpty(false);
+        try {
+            const payload = await fetchEditorLinksSuggestions(articleId, controller.signal);
+            if (controller.signal.aborted) {
+                return;
+            }
+            const empty =
+                payload.suggestedInternalLinks.length === 0
+                && payload.suggestedExternalLinks.length === 0
+                && payload.suggestedInternalLinksCatalog.length === 0
+                && payload.suggestedExternalLinksCatalog.length === 0;
+            setSuggestionsEmpty(empty);
+            window.dispatchEvent(
+                new CustomEvent('seo-editor-links-updated', {
+                    detail: {
+                        source: 'links-suggestions',
+                        // Keep client existing links — suggestions only.
+                        suggested_internal: payload.suggestedInternalLinks,
+                        suggested_internal_links_catalog: payload.suggestedInternalLinksCatalog,
+                        suggested_external_links: payload.suggestedExternalLinks,
+                        suggested_external_links_catalog: payload.suggestedExternalLinksCatalog,
+                        domain_link_list: payload.domainLinkList,
+                        domain_link_list_catalog: payload.domainLinkListCatalog,
+                        domain_cta_list: payload.domainCtaList,
+                    },
+                }),
+            );
+        } catch (error) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) {
+                return;
+            }
+            setSuggestionsError(t('editor_links_suggestions_error'));
+        } finally {
+            if (!controller.signal.aborted) {
+                setSuggestionsLoading(false);
+            }
+        }
+    };
+
     const [hiddenRowKeys, setHiddenRowKeys] = useState(() => new Set());
     const allDomainLinksRef = useRef(
         initialDomainLinkCatalog.length > 0 ? initialDomainLinkCatalog : initialDomainLinkList,
@@ -814,8 +956,98 @@ export default function ArticleLinksSidebar({
 
     useEffect(() => {
         const onLinksUpdate = (event) => {
-            const payload = event.detail?.links ?? event.detail?.extracted_links;
-            const articlePlain = String(event.detail?.article_plain_text ?? '');
+            const detail = event.detail ?? {};
+            // Server base/catalog events must not wipe client existing-link scan.
+            if (detail.source === 'links-base' || detail.source === 'links-suggestions') {
+                setArticlePlainText(String(detail.article_plain_text ?? ''));
+                if (Array.isArray(detail.domain_link_list_catalog) && detail.domain_link_list_catalog.length > 0) {
+                    allDomainLinksRef.current = detail.domain_link_list_catalog;
+                    setDomainLinkCatalogCount(detail.domain_link_list_catalog.length);
+                } else if (Array.isArray(detail.domain_link_list)) {
+                    allDomainLinksRef.current = detail.domain_link_list;
+                    setDomainLinkCatalogCount(detail.domain_link_list.length);
+                }
+                if (
+                    Array.isArray(detail.domain_link_list_catalog)
+                    || Array.isArray(detail.domain_link_list)
+                ) {
+                    setDomainLinks(
+                        applyDomainLinkFilters(
+                            allDomainLinksRef.current,
+                            String(detail.article_plain_text ?? ''),
+                            linksRef.current.internal ?? [],
+                            linksRef.current.external ?? [],
+                        ),
+                    );
+                }
+                if (Array.isArray(detail.domain_cta_list)) {
+                    setDomainCtas(
+                        detail.domain_cta_list.map((item) => ({
+                            ...item,
+                            can_insert: true,
+                        })),
+                    );
+                }
+
+                if (detail.source === 'links-suggestions') {
+                    const incomingSuggested = Array.isArray(detail.suggested_internal)
+                        ? detail.suggested_internal
+                        : [];
+                    const incomingKeywordCatalog = Array.isArray(detail.suggested_internal_links_catalog)
+                        ? detail.suggested_internal_links_catalog
+                        : [];
+                    const incomingExternalSuggested = Array.isArray(detail.suggested_external)
+                        ? detail.suggested_external
+                        : Array.isArray(detail.suggested_external_links)
+                          ? detail.suggested_external_links
+                          : [];
+                    const incomingExternalCatalog = Array.isArray(detail.suggested_external_links_catalog)
+                        ? detail.suggested_external_links_catalog
+                        : [];
+                    if (incomingKeywordCatalog.length > 0) {
+                        const partitioned = partitionSuggestionCatalogBySite(
+                            mergeSuggestionCatalog(incomingKeywordCatalog, incomingSuggested),
+                            siteDomainRef.current,
+                        );
+                        keywordCatalogRef.current = mergeSuggestionCatalog(
+                            keywordCatalogRef.current,
+                            partitioned.internal,
+                        );
+                        externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                            externalKeywordCatalogRef.current,
+                            partitioned.external,
+                            incomingExternalCatalog,
+                            incomingExternalSuggested,
+                        );
+                    } else if (incomingSuggested.length > 0) {
+                        const partitioned = partitionSuggestionCatalogBySite(
+                            incomingSuggested,
+                            siteDomainRef.current,
+                        );
+                        keywordCatalogRef.current = mergeSuggestionCatalog(
+                            keywordCatalogRef.current,
+                            partitioned.internal,
+                        );
+                        externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                            externalKeywordCatalogRef.current,
+                            partitioned.external,
+                        );
+                    }
+                    if (incomingExternalCatalog.length > 0 || incomingExternalSuggested.length > 0) {
+                        externalKeywordCatalogRef.current = mergeSuggestionCatalog(
+                            externalKeywordCatalogRef.current,
+                            incomingExternalCatalog,
+                            incomingExternalSuggested,
+                        );
+                    }
+                    setCatalogVersion((value) => value + 1);
+                    setHiddenRowKeys(new Set());
+                }
+                return;
+            }
+
+            const payload = detail.links ?? detail.extracted_links;
+            const articlePlain = String(detail.article_plain_text ?? '');
             if (payload && typeof payload === 'object') {
                 setLinks((prev) => ({
                     ...prev,
@@ -839,7 +1071,6 @@ export default function ArticleLinksSidebar({
                 : Array.isArray(event.detail?.extracted_links?.external)
                   ? event.detail.extracted_links.external
                   : [];
-            setDomainLinks(applyDomainLinkFilters(allDomainLinksRef.current, articlePlain, internal, external));
 
             const incomingSuggested = Array.isArray(event.detail?.suggested_internal)
                 ? event.detail.suggested_internal
@@ -858,6 +1089,9 @@ export default function ArticleLinksSidebar({
             const incomingCatalog = Array.isArray(event.detail?.domain_link_list_catalog)
                 ? event.detail.domain_link_list_catalog
                 : [];
+            const incomingDomainList = Array.isArray(event.detail?.domain_link_list)
+                ? event.detail.domain_link_list
+                : null;
             const incomingSiteDomain = String(event.detail?.site_domain ?? '').trim();
             if (incomingSiteDomain !== '') {
                 siteDomainRef.current = incomingSiteDomain;
@@ -905,6 +1139,41 @@ export default function ArticleLinksSidebar({
                 domainCatalogRef.current = mergeSuggestionCatalog(domainCatalogRef.current, incomingCatalog);
             }
             setCatalogVersion((version) => version + 1);
+
+            // Catalog/list first — never filter against empty plain before refs update.
+            if (incomingCatalog.length > 0) {
+                allDomainLinksRef.current = incomingCatalog;
+                setDomainLinkCatalogCount(incomingCatalog.length);
+            } else if (incomingDomainList) {
+                allDomainLinksRef.current = incomingDomainList;
+                setDomainLinkCatalogCount(incomingDomainList.length);
+            }
+
+            // domain_link_list from /editor/links is already forArticle — use when no plain text yet.
+            if (incomingDomainList && incomingDomainList.length > 0 && articlePlain.trim() === '') {
+                setDomainLinks(
+                    incomingDomainList
+                        .filter((item) => !isSpecialOrContactHref(item?.href ?? item?.target_url))
+                        .map((item) => ({
+                            ...item,
+                            can_insert: item.can_insert !== false,
+                        })),
+                );
+                setDomainLinksCollapsed(false);
+            } else {
+                setDomainLinks(
+                    applyDomainLinkFilters(allDomainLinksRef.current, articlePlain, internal, external),
+                );
+            }
+
+            if (Array.isArray(event.detail?.domain_cta_list)) {
+                setDomainCtas(
+                    event.detail.domain_cta_list.map((item) => ({
+                        ...item,
+                        can_insert: true,
+                    })),
+                );
+            }
         };
 
         const onSeoPayload = (event) => {
@@ -962,17 +1231,6 @@ export default function ArticleLinksSidebar({
             setDomainHiddenRowKeys(new Set());
         };
 
-        const onFaqUpdate = (event) => {
-            const faq = event.detail?.faq;
-            if (!Array.isArray(faq)) {
-                return;
-            }
-            setLinks((prev) => ({
-                ...prev,
-                faq,
-            }));
-        };
-
         const onInserted = () => {
             setHiddenRowKeys(new Set());
             setDomainHiddenRowKeys(new Set());
@@ -980,14 +1238,12 @@ export default function ArticleLinksSidebar({
 
         window.addEventListener('seo-editor-links-updated', onLinksUpdate);
         window.addEventListener('seo-editor-seo-payload-updated', onSeoPayload);
-        window.addEventListener('seo-editor-faqs-updated', onFaqUpdate);
         window.addEventListener('seo-editor-suggested-link-inserted', onInserted);
         window.addEventListener('seo-editor-suggested-link-inserted', onDomainInserted);
 
         return () => {
             window.removeEventListener('seo-editor-links-updated', onLinksUpdate);
             window.removeEventListener('seo-editor-seo-payload-updated', onSeoPayload);
-            window.removeEventListener('seo-editor-faqs-updated', onFaqUpdate);
             window.removeEventListener('seo-editor-suggested-link-inserted', onInserted);
             window.removeEventListener('seo-editor-suggested-link-inserted', onDomainInserted);
         };
@@ -995,7 +1251,6 @@ export default function ArticleLinksSidebar({
 
     const internal = links.internal ?? [];
     const external = links.external ?? [];
-    const faq = links.faq ?? [];
 
     const suggestedInternal = useMemo(() => {
         const plain = articlePlainText.trim();
@@ -1311,7 +1566,6 @@ export default function ArticleLinksSidebar({
     const linkCountBadge = internal.length + external.length + domainLinks.length;
     const showAllLinkSections = linkSectionFilter === 'all';
     const showLinksCluster = showAllLinkSections || linkSectionFilter === 'links';
-    const showFaqSection = showAllLinkSections || linkSectionFilter === 'faq';
     const showCtaSection = showAllLinkSections || linkSectionFilter === 'cta';
 
     useEffect(() => {
@@ -1319,12 +1573,11 @@ export default function ArticleLinksSidebar({
             new CustomEvent('seo-assistant-navigator-badges', {
                 detail: {
                     links: linkCountBadge > 0 ? linkCountBadge : null,
-                    faq: faq.length > 0 ? faq.length : null,
                     cta: domainCtas.length > 0 ? domainCtas.length : null,
                 },
             }),
         );
-    }, [linkCountBadge, faq.length, domainCtas.length]);
+    }, [linkCountBadge, domainCtas.length]);
 
     return (
         <ArticleAssistantWidget
@@ -1336,6 +1589,24 @@ export default function ArticleLinksSidebar({
             className="seo-assistant-widget--links"
         >
             <div className="seo-link-assistant">
+                {baseLoading ? (
+                    <div className="seo-module-loading p-3 text-sm text-gray-500 dark:text-gray-400">
+                        {t('editor_module_loading')}
+                    </div>
+                ) : null}
+                {baseError ? (
+                    <div className="seo-module-error p-3 text-sm text-rose-600 dark:text-rose-400">
+                        <p>{baseError}</p>
+                    </div>
+                ) : null}
+                {suggestionsError ? (
+                    <div className="seo-module-error p-2 text-sm text-rose-600 dark:text-rose-400">
+                        <p>{suggestionsError}</p>
+                    </div>
+                ) : null}
+                {suggestionsEmpty && !suggestionsLoading && !suggestionsError ? (
+                    <p className="wp-article-links-empty px-2">{t('editor_links_suggestions_empty')}</p>
+                ) : null}
                 {showLinksCluster ? (
                     <>
                 <LinkAssistantSection
@@ -1352,6 +1623,8 @@ export default function ArticleLinksSidebar({
                         hiddenRowKeys={hiddenRowKeys}
                         excludedCount={excludedSuggestionLabels.size}
                         onClearExcluded={clearExcludedSuggestions}
+                        onGenerateSuggestions={loadLinkSuggestions}
+                        suggestionsLoading={suggestionsLoading}
                         onKeywordClick={(item, index, itemKey) =>
                             scrollToKeyword(item, 'internal', index, itemKey)
                         }
@@ -1453,27 +1726,6 @@ export default function ArticleLinksSidebar({
                     />
                 </LinkAssistantSection>
                     </>
-                ) : null}
-
-                {showFaqSection ? (
-                <LinkAssistantSection
-                    title={`FAQ (${faq.length})`}
-                    count={faq.length}
-                    collapsed={faqCollapsed}
-                    onToggle={() => setFaqCollapsed((value) => !value)}
-                    sectionKey="faq"
-                >
-                    <KeywordList
-                        items={faq}
-                        title={t('links_faq_title', { count: faq.length })}
-                        activeKey={activeKey}
-                        target="faq"
-                        hideTitle
-                        interactive={false}
-                        onKeywordClick={() => {}}
-                        onCopyKeyword={copyKeyword}
-                    />
-                </LinkAssistantSection>
                 ) : null}
 
                 {showCtaSection ? (

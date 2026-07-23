@@ -1,10 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import SeoArticleEditor from './components/SeoArticleEditor';
-import ArticleAiChatPanel from './components/ArticleAiChatPanel';
-import ArticleFaqEditor from './components/ArticleFaqEditor';
-import ArticleLinksSidebar from './components/ArticleLinksSidebar';
 import ArticleAiFloatingLauncher from './components/ArticleAiFloatingLauncher';
+import ArticleEditorModuleHost from './components/ArticleEditorModuleHost';
 import '../css/article-editor.css';
 import '../css/seo-select.css';
 import '../css/image-splitter.css';
@@ -17,6 +15,8 @@ import {
 import { clearArticleLocalState } from './utils/articleLocalState';
 import { loadFaqDraft } from './utils/articleEditorStorage';
 import { registerFilamentHeaderActionsPersistence } from './utils/articleEditorHeaderActions';
+import { installArticleEditorStickyHeaderBridge } from './utils/articleEditorStickyHeader';
+import ArticleEditorHelpModal from './components/ArticleEditorHelpModal';
 import { normalizeArticleSlug } from './utils/articleSlugUtils';
 import {
     buildArticleEditorApiPayload,
@@ -26,6 +26,7 @@ import {
     patchPermalinkDisplay,
     syncArticleToWordPressViaApi,
 } from './utils/articleEditorApi';
+import { seoArticleApiFetch } from './utils/seoArticleApi';
 import { saveArticleViaApiSingleFlight } from './utils/articleEditorSaveQueue';
 import {
     loadFeaturedImage,
@@ -54,6 +55,26 @@ import {
 } from './utils/articleWpCategoriesStorage';
 installArticleAutosaveLock();
 installArticleOperationTracker();
+window.__ARTICLE_EDITOR_UI_REVISION__ = 'sticky-help-v1';
+window.__ARTICLE_EDITOR_HELP__ = { revision: 'sticky-help-v1' };
+
+function installArticleEditorPageBodyClass() {
+    const page = document.querySelector('.seo-article-edit-page, .article-editor-page, [data-article-editor-page]');
+    if (!page) {
+        return () => {};
+    }
+
+    document.body.classList.add('article-editor-page');
+    document.documentElement.classList.add('article-editor-page');
+
+    return () => {
+        if (!document.querySelector('.seo-article-edit-page, .article-editor-page, [data-article-editor-page]')) {
+            document.body.classList.remove('article-editor-page');
+            document.documentElement.classList.remove('article-editor-page');
+        }
+    };
+}
+
 queueMicrotask(() => {
     const activeOp = window.__SEO_ACTIVE_ARTICLE_OPERATION__;
     const articleId = Number(activeOp?.article_id ?? 0);
@@ -149,7 +170,7 @@ window.__seoExecuteHeavyArticleAction = async function executeHeavyArticleAction
 
         if (normalizedAction === 'sync') {
             window.__seoArticleHeavyActionOverlay?.setStatusMessage?.(
-                'Đang đưa bài vào hàng đợi đồng bộ WordPress…',
+                'Đang đưa vào hàng đợi…',
             );
             const apiPayload = buildArticleEditorApiPayload(editorBundle, wire);
             const result = await syncArticleToWordPressViaApi(articleId, apiPayload);
@@ -537,7 +558,7 @@ function getOrCreateReactRoot(element) {
 function readArticleEditorBootstrap() {
     let initialHtml = '';
     let initialSeo = null;
-    let editorSettings = { history_step: 20, autosave_interval_seconds: 60 };
+    let editorSettings = { history_step: 20, autosave_interval_seconds: 2 };
     let initialPostImages = [];
     let initialSupplementalImages = [];
     let articleId = null;
@@ -557,12 +578,86 @@ function readArticleEditorBootstrap() {
     let initialFaqs = [];
     let initialLoaiSanPham = '';
     let initialGalleryDescription = '';
+    let lazyEndpoints = {};
 
+    // Phase 2 primary: single core bootstrap.
     try {
-        const htmlEl = document.getElementById('seo-article-initial-html');
-        const raw = htmlEl?.textContent?.trim();
-        if (raw) {
-            initialHtml = JSON.parse(raw);
+        const coreEl = document.getElementById('seo-article-core-bootstrap');
+        const rawCore = coreEl?.textContent?.trim();
+        if (rawCore) {
+            const core = JSON.parse(rawCore);
+            articleId = core?.articleId ?? core?.id ?? null;
+            siteId = core?.siteId ?? core?.site_id ?? null;
+            articleTitle = String(core?.title ?? '');
+            articlePostType = String(core?.postType ?? core?.post_type ?? '').trim();
+            contentRevision = String(core?.contentRevision ?? core?.content_revision ?? '').trim();
+            connectionHash = String(core?.connectionHash ?? core?.seo_connection_hash ?? '').trim();
+            expectedUpdatedAt = String(core?.expectedUpdatedAt ?? core?.expected_updated_at ?? '').trim();
+            expectedContentHash = String(core?.expectedContentHash ?? core?.expected_content_hash ?? '').trim();
+            supportsProductGallery = Boolean(core?.supportsProductGallery ?? core?.supports_product_gallery);
+            initialHtml = typeof core?.content === 'string' ? core.content : '';
+            if (core?.settings && typeof core.settings === 'object') {
+                editorSettings = { ...editorSettings, ...core.settings };
+            }
+            if (core?.endpoints && typeof core.endpoints === 'object') {
+                lazyEndpoints = core.endpoints;
+            }
+            if (typeof core?.featuredImageUrl === 'string' && core.featuredImageUrl.trim() !== '') {
+                // Featured URL available; images catalog still lazy.
+            }
+            // Light SERP / SEO identity from core — never wait for seo-summary to paint preview.
+            if (!initialSeo) {
+                const title = String(core?.title ?? '').trim();
+                const slug = String(core?.slug ?? '').trim();
+                const metaDescription = String(core?.metaDescription ?? core?.meta_description ?? '').trim();
+                const permalinkBase = String(core?.permalinkBase ?? core?.permalink_base ?? '').trim();
+                const permalinkSuffix = String(core?.permalinkSuffix ?? core?.permalink_suffix ?? '').trim();
+                const siteDomain = String(core?.siteDomain ?? core?.site_domain ?? '').trim();
+                const path = [slug, permalinkSuffix.replace(/^\//, '')].filter(Boolean).join('/');
+                const url = permalinkBase !== ''
+                    ? `${permalinkBase.replace(/\/$/, '')}/${path}`
+                    : (siteDomain !== '' ? `https://${siteDomain.replace(/^https?:\/\//i, '')}/${path}` : '#');
+                let displayHost = siteDomain;
+                try {
+                    if (permalinkBase) {
+                        displayHost = new URL(
+                            permalinkBase.includes('://') ? permalinkBase : `https://${permalinkBase}`,
+                        ).hostname;
+                    }
+                } catch {
+                    displayHost = siteDomain || permalinkBase;
+                }
+                initialSeo = {
+                    google_serp_preview: {
+                        title,
+                        description: metaDescription,
+                        url,
+                        display_url: displayHost
+                            ? (path ? `${displayHost} › ${path.replace(/\//g, ' › ')}` : displayHost)
+                            : '#',
+                    },
+                    article_slug: slug,
+                    site_domain: siteDomain,
+                    permalink_base: permalinkBase,
+                    permalink_suffix: permalinkSuffix,
+                    focus_keyword: core?.focusKeyword ?? core?.focus_keyword ?? null,
+                    meta_description: metaDescription,
+                    skip_seo_score: false,
+                };
+            }
+        }
+    } catch (e) {
+        console.warn('Invalid seo-article-core-bootstrap JSON', e);
+    }
+
+    // Legacy fallbacks (older cached HTML) — only fill gaps, do not prefer over core.
+    try {
+        if (!initialHtml) {
+            const htmlEl = document.getElementById('seo-article-initial-html');
+            const raw = htmlEl?.textContent?.trim();
+            if (raw) {
+                initialHtml = JSON.parse(raw);
+            }
         }
     } catch (e) {
         console.warn('Invalid article HTML JSON', e);
@@ -582,20 +677,10 @@ function readArticleEditorBootstrap() {
         const settingsEl = document.getElementById('seo-article-editor-settings');
         const rawSettings = settingsEl?.textContent?.trim();
         if (rawSettings) {
-            editorSettings = JSON.parse(rawSettings);
+            editorSettings = { ...editorSettings, ...JSON.parse(rawSettings) };
         }
     } catch (e) {
         console.warn('Invalid editor settings JSON', e);
-    }
-
-    try {
-        const imagesEl = document.getElementById('seo-article-initial-images');
-        const rawImages = imagesEl?.textContent?.trim();
-        if (rawImages) {
-            initialPostImages = JSON.parse(rawImages);
-        }
-    } catch (e) {
-        console.warn('Invalid article images JSON', e);
     }
 
     try {
@@ -603,15 +688,15 @@ function readArticleEditorBootstrap() {
         const rawMeta = metaEl?.textContent?.trim();
         if (rawMeta) {
             const meta = JSON.parse(rawMeta);
-            articleId = meta?.id ?? null;
-            siteId = meta?.site_id ?? meta?.siteId ?? null;
-            articleTitle = meta?.title ?? '';
-            articlePostType = String(meta?.post_type ?? '').trim();
-            contentRevision = String(meta?.content_revision ?? '').trim();
-            connectionHash = String(meta?.seo_connection_hash ?? '').trim();
-            expectedUpdatedAt = String(meta?.expected_updated_at ?? '').trim();
-            expectedContentHash = String(meta?.expected_content_hash ?? '').trim();
-            supportsProductGallery = Boolean(meta?.supports_product_gallery);
+            articleId = articleId ?? meta?.id ?? null;
+            siteId = siteId ?? meta?.site_id ?? meta?.siteId ?? null;
+            if (!articleTitle) articleTitle = meta?.title ?? '';
+            if (!articlePostType) articlePostType = String(meta?.post_type ?? '').trim();
+            if (!contentRevision) contentRevision = String(meta?.content_revision ?? '').trim();
+            if (!connectionHash) connectionHash = String(meta?.seo_connection_hash ?? '').trim();
+            if (!expectedUpdatedAt) expectedUpdatedAt = String(meta?.expected_updated_at ?? '').trim();
+            if (!expectedContentHash) expectedContentHash = String(meta?.expected_content_hash ?? '').trim();
+            supportsProductGallery = supportsProductGallery || Boolean(meta?.supports_product_gallery);
             productCategoryOptions = Array.isArray(meta?.product_category_options)
                 ? meta.product_category_options
                 : [];
@@ -631,14 +716,9 @@ function readArticleEditorBootstrap() {
         console.warn('Invalid article meta JSON', e);
     }
 
-    try {
-        const faqsEl = document.getElementById('seo-article-initial-faqs');
-        const rawFaqs = faqsEl?.textContent?.trim();
-        if (rawFaqs) {
-            initialFaqs = JSON.parse(rawFaqs);
-        }
-    } catch (e) {
-        console.warn('Invalid article FAQs JSON for editor', e);
+    window.__SEO_EDITOR_LAZY_ENDPOINTS__ = lazyEndpoints;
+    if (connectionHash) {
+        window.__SEO_CONNECTION_HASH__ = connectionHash;
     }
 
     return {
@@ -664,6 +744,7 @@ function readArticleEditorBootstrap() {
         initialFaqs,
         initialLoaiSanPham,
         initialGalleryDescription,
+        lazyEndpoints,
     };
 }
 
@@ -672,6 +753,32 @@ function mountArticleEditorPage() {
     if (!rootElement) {
         return;
     }
+
+    const livewireId = String(window.__SEO_EDIT_ARTICLE_LIVEWIRE_ID__ ?? '');
+    // One React root per DOM node — skip identical remount for same Livewire page id.
+    if (
+        rootElement.__seoArticleReactRoot
+        && rootElement.__seoMountedLivewireId === livewireId
+        && livewireId !== ''
+    ) {
+        return;
+    }
+
+    // Phase 3: cleanup idle timers/fetches from previous navigate before remount.
+    const previousCleanups = window.__seoArticleEditorPageCleanups;
+    if (Array.isArray(previousCleanups)) {
+        while (previousCleanups.length > 0) {
+            const fn = previousCleanups.pop();
+            try {
+                fn?.();
+            } catch {
+                // ignore cleanup errors
+            }
+        }
+    }
+    const pageCleanups = [];
+    window.__seoArticleEditorPageCleanups = pageCleanups;
+    rootElement.__seoMountedLivewireId = livewireId;
 
     const bootstrap = readArticleEditorBootstrap();
     const {
@@ -697,6 +804,7 @@ function mountArticleEditorPage() {
         initialFaqs,
         initialLoaiSanPham,
         initialGalleryDescription,
+        lazyEndpoints,
     } = bootstrap;
 
     window.__SEO_EDITOR_CONFLICT__ = {
@@ -704,6 +812,7 @@ function mountArticleEditorPage() {
         expected_content_hash: expectedContentHash || null,
     };
     window.__SEO_EDITOR_CONNECTION_HASH__ = connectionHash || '';
+    window.__SEO_EDITOR_LAZY_ENDPOINTS__ = lazyEndpoints || window.__SEO_EDITOR_LAZY_ENDPOINTS__ || {};
 
     const perfDebugEnabled = Boolean(window.__SEO_ARTICLE_EDITOR_PERF_DEBUG__ || editorSettings?.perf_debug);
     if (perfDebugEnabled && typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -730,31 +839,50 @@ function mountArticleEditorPage() {
     }
 
     getOrCreateReactRoot(rootElement).render(
-        <SeoArticleEditor
-            articleId={articleId}
-            siteId={siteId}
-            initialHtml={initialHtml}
-            initialSeo={initialSeo}
-            initialPostImages={initialPostImages}
-            initialSupplementalImages={initialSupplementalImages}
-            initialPostType={articlePostType}
-            contentRevision={contentRevision}
-            connectionHash={connectionHash}
-            expectedUpdatedAt={expectedUpdatedAt}
-            expectedContentHash={expectedContentHash}
-            supportsProductGallery={supportsProductGallery}
-            productCategoryOptions={productCategoryOptions}
-            initialProductGallery={initialProductGallery}
-            initialFaqs={initialFaqs}
-            initialVirtualReviews={initialVirtualReviews}
-            articleTitle={articleTitle}
-            editorSettings={editorSettings}
-            mediaPickerUrl={mediaPickerUrl}
-            initialLoaiSanPham={initialLoaiSanPham}
-            initialGalleryDescription={initialGalleryDescription}
-            perfDebug={perfDebugEnabled}
-        />,
+        <>
+            <SeoArticleEditor
+                articleId={articleId}
+                siteId={siteId}
+                initialHtml={initialHtml}
+                initialSeo={initialSeo}
+                initialPostImages={initialPostImages}
+                initialSupplementalImages={initialSupplementalImages}
+                initialPostType={articlePostType}
+                contentRevision={contentRevision}
+                connectionHash={connectionHash}
+                expectedUpdatedAt={expectedUpdatedAt}
+                expectedContentHash={expectedContentHash}
+                supportsProductGallery={supportsProductGallery}
+                productCategoryOptions={productCategoryOptions}
+                initialProductGallery={initialProductGallery}
+                initialFaqs={[]}
+                initialVirtualReviews={[]}
+                articleTitle={articleTitle}
+                editorSettings={editorSettings}
+                mediaPickerUrl={mediaPickerUrl}
+                initialLoaiSanPham={initialLoaiSanPham}
+                initialGalleryDescription={initialGalleryDescription}
+                perfDebug={perfDebugEnabled}
+            />
+            <ArticleEditorModuleHost
+                articleId={articleId}
+                siteId={siteId}
+                aiDebug={aiDebug}
+                canGenerateImage={editorSettings?.can_generate_image !== false}
+                canGenerateVideo={editorSettings?.can_generate_video === true}
+                showLinkWidgets={editorSettings?.show_link_widgets !== false}
+            />
+            <ArticleEditorHelpModal />
+        </>,
     );
+
+    pageCleanups.push(installArticleEditorStickyHeaderBridge());
+    pageCleanups.push(installArticleEditorPageBodyClass());
+
+    const launcherRoot = document.getElementById('seo-article-ai-launcher-root');
+    if (launcherRoot) {
+        getOrCreateReactRoot(launcherRoot).render(<ArticleAiFloatingLauncher />);
+    }
 
     if (perfDebugEnabled && typeof performance !== 'undefined' && typeof performance.mark === 'function') {
         performance.mark('seo-article-editor-mount-end');
@@ -769,127 +897,108 @@ function mountArticleEditorPage() {
         }
     }
 
-    const showLinkWidgets = editorSettings?.show_link_widgets !== false;
+    // Phase 2/3: light SEO summary + settings idle — abortable; no heavy module fetch.
+    if (articleId) {
+        const seoSummaryUrl =
+            bootstrap.lazyEndpoints?.seoSummary
+            || `/api/seo/articles/${articleId}/editor/seo-summary`;
+        const settingsUrl =
+            bootstrap.lazyEndpoints?.settings
+            || `/api/seo/articles/${articleId}/editor/settings`;
 
-    // Perf Phase 1: Links sidebar + AI chat panel đều nặng (network + nhiều state) —
-    // chỉ mount React khi người dùng thật sự mở panel tương ứng, không mount lúc mở trang.
-    const linksRoot = document.getElementById('seo-article-links-root');
-    if (showLinkWidgets && linksRoot && !linksRoot.__seoDeferredMountBound) {
-        linksRoot.__seoDeferredMountBound = true;
-        const mountLinksSidebar = () => {
-            getOrCreateReactRoot(linksRoot).render(
-                <ArticleLinksSidebar
-                    initialDomainLinkList={initialSeo?.domain_link_list ?? []}
-                    initialDomainLinkCatalog={initialSeo?.domain_link_list_catalog ?? []}
-                    initialDomainCtaList={initialSeo?.domain_cta_list ?? []}
-                />,
-            );
-        };
-        const onSwitchPanelForLinks = (event) => {
-            const panel = String(event?.detail?.panel ?? event?.detail?.widgetId ?? '').trim();
-            if (panel !== 'links' && panel !== 'faq' && panel !== 'cta') {
+        const idleController = new AbortController();
+        pageCleanups.push(() => idleController.abort());
+
+        const schedule = typeof requestIdleCallback === 'function'
+            ? (cb) => {
+                const id = requestIdleCallback(cb, { timeout: 2500 });
+                pageCleanups.push(() => {
+                    if (typeof cancelIdleCallback === 'function') {
+                        cancelIdleCallback(id);
+                    }
+                });
+            }
+            : (cb) => {
+                const id = setTimeout(cb, 400);
+                pageCleanups.push(() => clearTimeout(id));
+            };
+
+        schedule(() => {
+            if (idleController.signal.aborted) {
                 return;
             }
-            mountLinksSidebar();
-            window.removeEventListener('seo-assistant-switch-panel', onSwitchPanelForLinks);
-        };
-        window.addEventListener('seo-assistant-switch-panel', onSwitchPanelForLinks);
-    }
-
-    const launcherRoot = document.getElementById('seo-article-ai-launcher-root');
-    if (launcherRoot) {
-        getOrCreateReactRoot(launcherRoot).render(<ArticleAiFloatingLauncher />);
-    }
-
-    const chatRoot = document.getElementById('seo-article-ai-chat-root');
-    if (chatRoot && !chatRoot.__seoDeferredMountBound) {
-        chatRoot.__seoDeferredMountBound = true;
-        const mountAiChatPanel = () => {
-            getOrCreateReactRoot(chatRoot).render(
-                <ArticleAiChatPanel
-                    articleId={articleId}
-                    aiDebug={aiDebug}
-                    canGenerateImage={editorSettings?.can_generate_image !== false}
-                    canGenerateVideo={editorSettings?.can_generate_video === true}
-                />,
-            );
-        };
-        const onAiChatOpen = () => {
-            mountAiChatPanel();
-            window.removeEventListener('seo-article-ai-chat-open', onAiChatOpen);
-        };
-        window.addEventListener('seo-article-ai-chat-open', onAiChatOpen);
-    }
-
-    const faqRoot = document.getElementById('seo-article-faq-root');
-    if (faqRoot) {
-        let faqInitialFaqs = initialFaqs;
-        let initialExtractDebug = null;
-        let canGenerateFaq = false;
-        let canImportMarkdownFaq = false;
-        try {
-            const configEl = document.getElementById('seo-article-faq-config');
-            const rawConfig = configEl?.textContent?.trim();
-            if (rawConfig) {
-                const config = JSON.parse(rawConfig);
-                canGenerateFaq = Boolean(config?.can_generate_faq);
-                canImportMarkdownFaq = Boolean(config?.can_import_markdown_faq);
-            }
-        } catch (e) {
-            console.warn('Invalid article FAQ config JSON', e);
-        }
-        try {
-            const faqsEl = document.getElementById('seo-article-initial-faqs');
-            const rawFaqs = faqsEl?.textContent?.trim();
-            if (rawFaqs) {
-                faqInitialFaqs = JSON.parse(rawFaqs);
-            }
-        } catch (e) {
-            console.warn('Invalid article FAQs JSON', e);
-        }
-        try {
-            const debugEl = document.getElementById('seo-article-faq-extract-debug');
-            const rawDebug = debugEl?.textContent?.trim();
-            if (rawDebug && rawDebug !== 'null') {
-                initialExtractDebug = JSON.parse(rawDebug);
-            }
-        } catch (e) {
-            console.warn('Invalid FAQ extract debug JSON', e);
-        }
-
-        getOrCreateReactRoot(faqRoot).render(
-            <ArticleFaqEditor
-                articleId={articleId}
-                initialFaqs={faqInitialFaqs}
-                initialExtractDebug={initialExtractDebug}
-                canGenerateFaq={canGenerateFaq}
-                canImportMarkdownFaq={canImportMarkdownFaq}
-            />,
-        );
+            void (async () => {
+                try {
+                    const [seoRes, settingsRes] = await Promise.all([
+                        seoArticleApiFetch(seoSummaryUrl, { signal: idleController.signal }),
+                        seoArticleApiFetch(settingsUrl, { signal: idleController.signal }),
+                    ]);
+                    if (idleController.signal.aborted) {
+                        return;
+                    }
+                    if (settingsRes.response.ok && settingsRes.data?.success !== false) {
+                        const settingsData = settingsRes.data?.data ?? {};
+                        if (Array.isArray(settingsData.seo_scoring_rules)) {
+                            window.__SEO_SCORING_RULES__ = settingsData.seo_scoring_rules;
+                        }
+                        if (settingsData.seo_rule_messages && typeof settingsData.seo_rule_messages === 'object') {
+                            window.__SEO_RULE_MESSAGES__ = settingsData.seo_rule_messages;
+                        }
+                        window.dispatchEvent(
+                            new CustomEvent('seo-editor-settings-loaded', { detail: settingsData }),
+                        );
+                    }
+                    if (seoRes.response.ok && seoRes.data?.success !== false) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-editor-seo-summary-loaded', {
+                                detail: seoRes.data?.data ?? {},
+                            }),
+                        );
+                    }
+                } catch (e) {
+                    if (e?.name === 'AbortError') {
+                        return;
+                    }
+                    console.warn('Failed to load SEO summary/settings', e);
+                }
+            })();
+        });
     }
 }
 
 mountArticleEditorPage();
 mountArticleTitlePromptHook();
 registerFilamentHeaderActionsPersistence();
-document.addEventListener('livewire:navigated', () => {
-    mountArticleEditorPage();
-    mountArticleTitlePromptHook();
-});
+
+if (!window.__seoArticleEditorNavigatedBound) {
+    window.__seoArticleEditorNavigatedBound = true;
+    document.addEventListener('livewire:navigated', () => {
+        // Force remount on navigate — clear same-id guard so new DOM gets a fresh root.
+        const rootElement = document.getElementById('seo-article-editor-root');
+        if (rootElement) {
+            rootElement.__seoMountedLivewireId = null;
+        }
+        if (!document.querySelector('.seo-article-edit-page, [data-article-editor-page]')) {
+            document.body.classList.remove('article-editor-page');
+            document.documentElement.classList.remove('article-editor-page');
+        }
+        mountArticleEditorPage();
+        mountArticleTitlePromptHook();
+    });
+}
 
 if (typeof window !== 'undefined') {
-    document.addEventListener('livewire:init', () => {
-        if (typeof Livewire === 'undefined' || typeof Livewire.hook !== 'function') {
-            return;
-        }
-        Livewire.hook('morph.updated', () => {
-            mountArticleTitlePromptHook();
-        });
-    });
-    // Livewire đã boot trước bundle
-    if (typeof Livewire !== 'undefined' && typeof Livewire.hook === 'function') {
-        Livewire.hook('morph.updated', () => {
-            mountArticleTitlePromptHook();
-        });
+    if (!window.__seoArticleEditorMorphBound) {
+        window.__seoArticleEditorMorphBound = true;
+        const bindMorph = () => {
+            if (typeof Livewire === 'undefined' || typeof Livewire.hook !== 'function') {
+                return;
+            }
+            Livewire.hook('morph.updated', () => {
+                mountArticleTitlePromptHook();
+            });
+        };
+        document.addEventListener('livewire:init', bindMorph);
+        bindMorph();
     }
 }

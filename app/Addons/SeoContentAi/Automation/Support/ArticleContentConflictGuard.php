@@ -46,14 +46,21 @@ final class ArticleContentConflictGuard
             }
 
             if ($actual->getTimestamp() !== $expected->getTimestamp()) {
-                return ActionResult::failure(
-                    'conflict_updated_at',
-                    'Article was modified by another writer (updated_at mismatch).',
-                    error: [
-                        'expected_updated_at' => $expected->toIso8601String(),
-                        'actual_updated_at' => $actual->toIso8601String(),
-                    ],
-                );
+                // updated_at lệch nhưng body hash vẫn khớp → meta/touch lệch, không phải writer khác đổi nội dung.
+                $hashMatches = is_string($expectedHash)
+                    && $expectedHash !== ''
+                    && hash_equals($this->contentHash((string) ($article->body ?? '')), $expectedHash);
+
+                if (! $hashMatches) {
+                    return ActionResult::failure(
+                        'conflict_updated_at',
+                        'Article was modified by another writer (updated_at mismatch).',
+                        error: [
+                            'expected_updated_at' => $expected->toIso8601String(),
+                            'actual_updated_at' => $actual->toIso8601String(),
+                        ],
+                    );
+                }
             }
         }
 

@@ -52,5 +52,16 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // HTTP → web_app only. Returning false skips default channel (laravel.log),
+        // which may be root-owned on production while PHP-FPM runs as www.
+        // CLI/cron/queue keep framework default reporting unchanged.
+        $exceptions->report(function (\Throwable $e): ?bool {
+            if (app()->runningInConsole()) {
+                return null;
+            }
+
+            \App\Support\RuntimeLogger::report($e);
+
+            return false;
+        });
     })->create();

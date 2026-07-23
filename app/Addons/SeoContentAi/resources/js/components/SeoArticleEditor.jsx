@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import BlockFormatToolbar from './BlockFormatToolbar';
@@ -20,6 +20,8 @@ import {
     scrollToKeywordAnchor,
     scrollToPlainTextInBlock,
 } from '../utils/articleLinkScroll';
+import { scanExistingLinksCompat } from '../utils/existingLinkScanner';
+import FeaturedSnippetPromptModal from './FeaturedSnippetPromptModal';
 import {
     wrapFirstPlainTextWithLink,
     wrapPlainTextWithLinkInBlocks,
@@ -39,20 +41,34 @@ import {
     normalizeLinkLabel,
 } from '../utils/articleLinkSuggestionFilter';
 import { articleShortcutActionFromEvent } from '../utils/articleEditorShortcuts';
-import SeoScorePanel from './SeoScorePanel';
-import ArticleImagesTab from './ArticleImagesTab';
 import ArticleAssistantWidget from './ArticleAssistantWidget';
 import ArticleGoogleSerpPreview from './ArticleGoogleSerpPreview';
 import ArticleOutlineTab from './ArticleOutlineTab';
-import ArticleReviewsTab from './ArticleReviewsTab';
+import ArticleEditorModuleErrorBoundary from './ArticleEditorModuleErrorBoundary';
 import { callEditArticleLivewire } from '../utils/articleEditorLivewire';
 import { fetchWordPressProductReviews } from '../utils/articleEditorApi';
-import { csrfToken, seoArticleApiHeaders } from '../utils/seoArticleApi';
+import { csrfToken, seoArticleApiHeaders, seoArticleApiFetch } from '../utils/seoArticleApi';
 import {
     buildSeoAnalysisPayload,
     computeSeoAnalysis,
 } from '../utils/seoAnalyzer';
 import { sanitizeViolations, scoreFromViolations, buildFailedViolationItems } from '../utils/seoScoreCalculator';
+import {
+    dispatchActiveModule,
+    isAbortError,
+    isEditorHostedModule,
+    LINKS_RESCAN_REQUEST_EVENT,
+    MODULE_EVENT_ACTIVE,
+    MODULE_EVENT_OPEN,
+    MODULE_EVENT_SWITCH,
+    normalizeHeavyModuleId,
+} from '../utils/articleEditorModules';
+import { normalizeSeoSummary, readCoreBootstrap } from '../utils/articleEditorPayloadAdapters';
+import { t } from '../utils/i18n';
+
+const SeoModule = lazy(() => import('../modules/SeoModule'));
+const ImagesModule = lazy(() => import('../modules/ImagesModule'));
+const ReviewsModule = lazy(() => import('../modules/ReviewsModule'));
 import { DEFAULT_WIKI_TRUST_DOMAINS } from '../utils/wikiTrustDomains';
 import { setArticleAutosaveLock } from '../utils/articleAutosaveLock';
 import {
@@ -114,7 +130,6 @@ import {
     showArticleOperationOverlay,
     scheduleArticleEditorReload,
 } from '../utils/articleOperationTracker';
-import { t } from '../utils/i18n';
 import { articleEditorExtensions } from '../utils/editorExtensions';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { useArticleEditorHistory } from '../hooks/useArticleEditorHistory';
@@ -125,6 +140,15 @@ import {
     loadDraft,
     saveDraft,
 } from '../utils/articleEditorStorage';
+import {
+    buildClientOutlineTree,
+    extractOutlineHeadingFromBlock,
+    flattenClientOutlineNodes,
+    normalizeOutlineHeadingText,
+    outlineHeadingFingerprint,
+} from '../utils/articleEditorClientOutline';
+import { createArticleEditorUtilityScheduler } from '../utils/articleEditorUtilityScheduler';
+import { countWordsFromHtmlLight } from '../utils/articleEditorMetrics';
 import {
     htmlToPlainText,
     isMeaningfulHtml,
@@ -310,8 +334,6 @@ const blockHasOutlineHeading = (block) => {
     return doc.body.querySelector('h2, h3, h4') !== null;
 };
 
-const normalizeOutlineHeadingText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
-
 const OUTLINE_HEADING_TEXT_MAX = 255;
 
 /** Khớp server Str::limit(..., 255) / cột heading_text — tránh lệch key DB truncated vs editor full. */
@@ -346,6 +368,11 @@ const extractOutlineApiErrorMessage = (data, response) => {
 const outlineApiCsrfToken = () => csrfToken();
 
 async function outlineApiRequest(articleId, path, options = {}) {
+    // Phase 4: client outline ids are not server resources.
+    if (/\/(?:client:|pending-)/.test(String(path ?? ''))) {
+        return { success: true };
+    }
+
     const response = await fetch(`/api/seo/articles/${articleId}/outline${path}`, {
         credentials: 'same-origin',
         ...options,
@@ -366,36 +393,7 @@ async function outlineApiRequest(articleId, path, options = {}) {
     return data;
 }
 
-const flattenOutlineNodes = (nodes, result = []) => {
-    for (const node of nodes ?? []) {
-        result.push(node);
-        flattenOutlineNodes(node.children, result);
-    }
-
-    return result;
-};
-
-const extractOutlineHeadingFromBlock = (block) => {
-    if (!block || block.type === 'image' || typeof block.content !== 'string' || !block.content.trim()) {
-        return null;
-    }
-
-    const doc = new DOMParser().parseFromString(block.content, 'text/html');
-    const heading = doc.body.querySelector('h2, h3, h4');
-    if (!heading) {
-        return null;
-    }
-
-    const text = normalizeOutlineHeadingText(heading.textContent);
-    if (text === '') {
-        return null;
-    }
-
-    return {
-        level: Number.parseInt(heading.tagName.charAt(1), 10),
-        headingText: text,
-    };
-};
+const flattenOutlineNodes = (nodes, result = []) => flattenClientOutlineNodes(nodes, result);
 
 const findBlockIdForOutlineHeading = (blocks, level, headingText) => {
     const target = truncateOutlineHeadingText(headingText);
@@ -596,7 +594,7 @@ const buildSectionStats = (editorSections, blockById) => {
             const html = typeof block.content === 'string' ? block.content : '';
             if (!html) continue;
 
-            wordCount += countWordsFromHtml(html);
+            wordCount += countWordsFromHtmlLight(html);
 
             const imageStats = countImagesFromHtml(html);
             imageCount += imageStats.withSrc;
@@ -1960,6 +1958,10 @@ function BlockEditor({
     siteId,
     supportsProductGallery = false,
     panelFaqs,
+    faqCount = null,
+    canGenerateFaq = false,
+    onEditFaq,
+    onCreateFaq,
     introImagesLocked = false,
     outlineHeadingsLocked = false,
     isSectionHeadingBlock = false,
@@ -2040,17 +2042,27 @@ function BlockEditor({
                 ) : null}
                 <div
                     className="seo-faq-shortcode-block__body"
-                    onClick={onActivate}
+                    onClick={() => {
+                        onActivate();
+                        onEditFaq?.();
+                    }}
                     onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                             onActivate();
+                            onEditFaq?.();
                         }
                     }}
                     role="button"
                     tabIndex={0}
                     title={t('editor_faq_shortcode_hint')}
                 >
-                    <FaqAccordionPreview faqs={panelFaqs} />
+                    <FaqAccordionPreview
+                        faqs={panelFaqs}
+                        faqCount={faqCount}
+                        canGenerateFaq={canGenerateFaq}
+                        onEditFaq={onEditFaq}
+                        onCreateFaq={onCreateFaq}
+                    />
                 </div>
             </div>
         );
@@ -2178,29 +2190,146 @@ export default function SeoArticleEditor({
         image: null,
         reviews: null,
     });
-    // Perf Phase 1 (J): panel nào đã được người dùng mở ít nhất 1 lần —
-    // Images/Reviews tab (nặng) chỉ mount nội dung thật khi đã "activated".
-    const [activatedPanels, setActivatedPanels] = useState(() => new Set());
+    // Phase 3: only ONE heavy editor-hosted module mounted at a time (seo|images|reviews).
+    // Default SEO so right-rail SEO Assistant is not stuck on inactive placeholder.
+    const [activeHeavyModule, setActiveHeavyModule] = useState('seo');
+    const activeHeavyModuleRef = useRef(null);
+    activeHeavyModuleRef.current = activeHeavyModule;
+    const imagesAbortRef = useRef(null);
+    const reviewsAbortRef = useRef(null);
+    const seoSummaryAbortRef = useRef(null);
+    const [seoSummaryLoading, setSeoSummaryLoading] = useState(false);
+    const [seoSummaryError, setSeoSummaryError] = useState(null);
+    const seoSummaryLoadedRef = useRef(false);
+
     useEffect(() => {
         const onSwitchPanel = (event) => {
-            const panel = String(event?.detail?.panel ?? event?.detail?.widgetId ?? '').trim();
-            if (!panel) {
+            if (event?.detail?.closed === true || event?.detail?.panel == null || event?.detail?.panel === '') {
+                setActiveHeavyModule(null);
+                dispatchActiveModule(null);
+
                 return;
             }
-            setActivatedPanels((prev) => {
-                if (prev.has(panel)) {
-                    return prev;
-                }
-                const next = new Set(prev);
-                next.add(panel);
-                return next;
-            });
+
+            const panel = normalizeHeavyModuleId(
+                event?.detail?.panel ?? event?.detail?.widgetId ?? event?.detail?.module,
+            );
+            if (!panel) {
+                // Alpine-only slots (featured / album / article / publishing).
+                setActiveHeavyModule(null);
+                dispatchActiveModule(null);
+
+                return;
+            }
+
+            if (isEditorHostedModule(panel)) {
+                setActiveHeavyModule(panel);
+                dispatchActiveModule(panel);
+                return;
+            }
+
+            // External module (links/faq/ai) or publishing — unmount editor-hosted heavy body.
+            setActiveHeavyModule(null);
         };
 
-        window.addEventListener('seo-assistant-switch-panel', onSwitchPanel);
+        const onActive = (event) => {
+            const moduleId = normalizeHeavyModuleId(event?.detail?.module);
+            if (!moduleId) {
+                setActiveHeavyModule(null);
+                return;
+            }
+            if (isEditorHostedModule(moduleId)) {
+                setActiveHeavyModule(moduleId);
+                return;
+            }
+            setActiveHeavyModule(null);
+        };
 
-        return () => window.removeEventListener('seo-assistant-switch-panel', onSwitchPanel);
+        window.addEventListener(MODULE_EVENT_SWITCH, onSwitchPanel);
+        window.addEventListener(MODULE_EVENT_ACTIVE, onActive);
+
+        return () => {
+            window.removeEventListener(MODULE_EVENT_SWITCH, onSwitchPanel);
+            window.removeEventListener(MODULE_EVENT_ACTIVE, onActive);
+            imagesAbortRef.current?.abort();
+            reviewsAbortRef.current?.abort();
+        };
     }, []);
+
+    // Phase 3: fetch images only while Images is the active heavy module; abort on leave.
+    useEffect(() => {
+        if (activeHeavyModule !== 'images' || !articleId) {
+            imagesAbortRef.current?.abort();
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        imagesAbortRef.current = controller;
+        let cancelled = false;
+        const imagesUrl =
+            window.__SEO_EDITOR_LAZY_ENDPOINTS__?.images
+            || `/api/seo/articles/${articleId}/editor/images`;
+        const metaUrl =
+            window.__SEO_EDITOR_LAZY_ENDPOINTS__?.meta
+            || `/api/seo/articles/${articleId}/editor/meta`;
+
+        void (async () => {
+            try {
+                const headers = {
+                    Accept: 'application/json',
+                    ...(csrfToken() ? { 'X-CSRF-TOKEN': csrfToken() } : {}),
+                };
+                const [imagesRes, metaRes] = await Promise.all([
+                    seoArticleApiFetch(imagesUrl, { headers, signal: controller.signal }),
+                    seoArticleApiFetch(metaUrl, { headers, signal: controller.signal }),
+                ]);
+                if (cancelled || controller.signal.aborted || activeHeavyModuleRef.current !== 'images') {
+                    return;
+                }
+                if (imagesRes.response.ok && imagesRes.data?.success !== false) {
+                    const images = Array.isArray(imagesRes.data?.data) ? imagesRes.data.data : [];
+                    window.dispatchEvent(
+                        new CustomEvent('article-post-images-synced', {
+                            detail: { images },
+                        }),
+                    );
+                }
+                if (metaRes.response.ok && metaRes.data?.success !== false) {
+                    const meta = metaRes.data?.data ?? {};
+                    if (Array.isArray(meta.product_gallery) && meta.product_gallery.length > 0) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-product-gallery-updated', {
+                                detail: {
+                                    gallery: meta.product_gallery,
+                                    article_id: articleId,
+                                },
+                            }),
+                        );
+                    }
+                    if (Array.isArray(meta.supplemental_images)) {
+                        window.dispatchEvent(
+                            new CustomEvent('seo-editor-meta-loaded', {
+                                detail: meta,
+                            }),
+                        );
+                    }
+                }
+            } catch (error) {
+                if (isAbortError(error) || controller.signal.aborted) {
+                    return;
+                }
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            controller.abort();
+            if (imagesAbortRef.current === controller) {
+                imagesAbortRef.current = null;
+            }
+        };
+    }, [activeHeavyModule, articleId]);
+
     const [virtualReviews, setVirtualReviews] = useState(() =>
         Array.isArray(initialVirtualReviews) ? initialVirtualReviews : [],
     );
@@ -2242,15 +2371,22 @@ export default function SeoArticleEditor({
 
     const [reviewsLoadWarning, setReviewsLoadWarning] = useState(null);
     const [reviewsLoading, setReviewsLoading] = useState(false);
-    const productReviewsLoadOnceRef = useRef(false);
-    const reviewsPanelActive = activatedPanels.has('reviews');
+    const reviewsPanelActive = activeHeavyModule === 'reviews';
+    const imagesPanelActive = activeHeavyModule === 'images';
+    const seoPanelActive = activeHeavyModule === 'seo';
     useEffect(() => {
-        // Perf Phase 1 (H): defer — chỉ gọi WordPress product reviews khi panel Reviews
-        // đã được người dùng mở (không fetch ngay lúc mount trang).
-        if (!showReviewsTab || !isProductPost || !articleId || !reviewsPanelActive || productReviewsLoadOnceRef.current) {
+        // Phase 3: fetch reviews only while Reviews is active; abort + drop heavy list on leave.
+        if (!showReviewsTab || !isProductPost || !articleId || !reviewsPanelActive) {
+            reviewsAbortRef.current?.abort();
+            if (!reviewsPanelActive) {
+                setVirtualReviews([]);
+                setReviewsLoading(false);
+            }
             return undefined;
         }
-        productReviewsLoadOnceRef.current = true;
+
+        const controller = new AbortController();
+        reviewsAbortRef.current = controller;
         let cancelled = false;
 
         (async () => {
@@ -2258,7 +2394,7 @@ export default function SeoArticleEditor({
             setReviewsLoadWarning(null);
             try {
                 const result = await fetchWordPressProductReviews(articleId);
-                if (cancelled) {
+                if (cancelled || controller.signal.aborted || activeHeavyModuleRef.current !== 'reviews') {
                     return;
                 }
                 if (!result.success) {
@@ -2274,11 +2410,12 @@ export default function SeoArticleEditor({
                     setReviewsLoadWarning(String(data.warning));
                 }
             } catch (error) {
-                if (!cancelled) {
-                    setReviewsLoadWarning(String(error?.message ?? 'Không thể tải đánh giá từ WordPress.'));
+                if (isAbortError(error) || cancelled || controller.signal.aborted) {
+                    return;
                 }
+                setReviewsLoadWarning(String(error?.message ?? 'Không thể tải đánh giá từ WordPress.'));
             } finally {
-                if (!cancelled) {
+                if (!cancelled && !controller.signal.aborted) {
                     setReviewsLoading(false);
                 }
             }
@@ -2286,6 +2423,10 @@ export default function SeoArticleEditor({
 
         return () => {
             cancelled = true;
+            controller.abort();
+            if (reviewsAbortRef.current === controller) {
+                reviewsAbortRef.current = null;
+            }
         };
     }, [articleId, isProductPost, showReviewsTab, reviewsPanelActive]);
 
@@ -2332,6 +2473,14 @@ export default function SeoArticleEditor({
     const [outlineTreeSync, setOutlineTreeSync] = useState(null);
     const [sectionTitleEditRequest, setSectionTitleEditRequest] = useState(null);
     const [outlineHeadingKeys, setOutlineHeadingKeys] = useState(() => new Set());
+    const [clientOutline, setClientOutline] = useState(() => []);
+    const outlineFingerprintRef = useRef('');
+    const utilitySchedulerRef = useRef(null);
+    if (utilitySchedulerRef.current == null) {
+        utilitySchedulerRef.current = createArticleEditorUtilityScheduler({
+            perfDebug: Boolean(perfDebug || editorSettings?.perf_debug),
+        });
+    }
     const outlineHeadingIdsByBlockIdRef = useRef(new Map());
     const outlineHeadingIdsByKeyRef = useRef(new Map());
     const outlineAppendInflightRef = useRef(new Set());
@@ -2362,6 +2511,17 @@ export default function SeoArticleEditor({
     const panelFaqsRef = useRef(Array.isArray(initialFaqs) ? initialFaqs : []);
     const [panelFaqs, setPanelFaqs] = useState(Array.isArray(initialFaqs) ? initialFaqs : []);
     panelFaqsRef.current = panelFaqs;
+    const [faqCount, setFaqCount] = useState(() => {
+        const core = readCoreBootstrap();
+        const fromCore = Number(core?.faqCount ?? core?.faq_count ?? 0);
+        return Number.isFinite(fromCore) ? fromCore : 0;
+    });
+    const canGenerateFaq = editorSettings?.can_generate_faq === true;
+    const [featuredSnippetPromptOpen, setFeaturedSnippetPromptOpen] = useState(false);
+    const [featuredSnippetPreviewHtml, setFeaturedSnippetPreviewHtml] = useState('');
+    const [featuredSnippetPromptContext, setFeaturedSnippetPromptContext] = useState(null);
+    const [seoAnalyzeError, setSeoAnalyzeError] = useState(null);
+    const pendingFaqGenerateRef = useRef(false);
     const pendingQuickFixKeywordRef = useRef('');
     const pendingLocalRenameResultsRef = useRef([]);
     const pendingLocalRenameQueueRef = useRef([]);
@@ -2375,51 +2535,67 @@ export default function SeoArticleEditor({
     const [featuredSnippetGenerating, setFeaturedSnippetGenerating] = useState(false);
     const featuredSnippetTargetRef = useRef(null);
 
+    // Phase 4: outline status derived from client blocks — no GET /outline on open/interact.
     useEffect(() => {
-        // Perf Phase 1 (I): defer — không gọi /outline ngay lúc mount. Chỉ tải khi outline
-        // rail vào viewport, hoặc người dùng tương tác với outline (mở rail / sửa heading).
-        if (!articleId) {
+        const scheduler = utilitySchedulerRef.current;
+        return () => {
+            scheduler?.destroy();
+            utilitySchedulerRef.current = null;
+        };
+    }, []);
+
+    useEffect(() => {
+        const scheduler = utilitySchedulerRef.current;
+        if (!scheduler) {
             return undefined;
         }
 
-        let cancelled = false;
-        let triggered = false;
-
-        const loadOutlineStatus = async () => {
-            if (triggered) {
-                return;
-            }
-            triggered = true;
-            try {
-                const response = await fetch(`/api/seo/articles/${articleId}/outline`, {
-                    headers: { Accept: 'application/json' },
-                    credentials: 'same-origin',
-                });
-                const data = await response.json().catch(() => ({}));
-                if (cancelled || !response.ok || data.success === false) {
+        scheduler.bumpVersion();
+        scheduler.schedule({
+            id: 'outline',
+            debounceMs: 400,
+            priority: 'idle',
+            run: ({ version, signal }) => {
+                if (signal.aborted || version !== scheduler.getVersion()) {
                     return;
                 }
+                const nextBlocks = blocksRef.current;
+                const fingerprint = outlineHeadingFingerprint(nextBlocks);
+                if (fingerprint === outlineFingerprintRef.current) {
+                    return;
+                }
+                outlineFingerprintRef.current = fingerprint;
+                const tree = buildClientOutlineTree(nextBlocks);
+                if (signal.aborted || version !== scheduler.getVersion()) {
+                    return;
+                }
+                setClientOutline(tree);
+                const flat = flattenClientOutlineNodes(tree);
+                setOutlineHasSavedHeadings(flat.length > 0);
+                setOutlineHeadingKeys(
+                    new Set(
+                        flat.map((node) =>
+                            outlineHeadingKey(Number(node.level), normalizeOutlineHeadingText(node.heading_text)),
+                        ),
+                    ),
+                );
+                const byKey = new Map();
+                for (const node of flat) {
+                    const level = Number(node?.level ?? 0);
+                    const text = normalizeOutlineHeadingText(node?.heading_text);
+                    if (level >= 2 && text !== '' && node?.id != null) {
+                        byKey.set(outlineHeadingKey(level, text), node.id);
+                    }
+                    if (node?.block_id) {
+                        outlineHeadingIdsByBlockIdRef.current.set(String(node.block_id), node.id);
+                    }
+                }
+                outlineHeadingIdsByKeyRef.current = byKey;
+            },
+        });
 
-                setOutlineHasSavedHeadings(Array.isArray(data.outline) && data.outline.length > 0);
-            } catch {
-                // Không khóa editor nếu không đọc được trạng thái outline.
-            }
-        };
-
-        // Không IntersectionObserver / không fetch khi rail chỉ đang hiện trong layout —
-        // chỉ khi user chủ động mở/tương tác outline (event).
-        const onOutlineOpened = () => {
-            void loadOutlineStatus();
-        };
-        window.addEventListener('seo-outline-rail-opened', onOutlineOpened);
-        window.addEventListener('seo-outline-interact', onOutlineOpened);
-
-        return () => {
-            cancelled = true;
-            window.removeEventListener('seo-outline-rail-opened', onOutlineOpened);
-            window.removeEventListener('seo-outline-interact', onOutlineOpened);
-        };
-    }, [articleId]);
+        return undefined;
+    }, [blocks]);
 
     const parseGalleryItems = useCallback((items) => normalizeProductAlbumList(items), []);
 
@@ -2488,13 +2664,130 @@ export default function SeoArticleEditor({
           : [];
     const seoMetaRef = useRef({
         seoTitle: String(articleTitle ?? initialSeo?.google_serp_preview?.title ?? '').trim(),
-        metaDescription: String(initialSeo?.google_serp_preview?.description ?? '').trim(),
+        metaDescription: String(
+            initialSeo?.google_serp_preview?.description
+            ?? initialSeo?.meta_description
+            ?? '',
+        ).trim(),
         slug: String(initialSeo?.article_slug ?? '').trim(),
     });
     const lastSeoAnalysisRef = useRef(null);
     const hasHydratedSeoFromServerRef = useRef(false);
     const [focusKeyword, setFocusKeyword] = useState(initialSeo?.focus_keyword ?? null);
     const [analysis, setAnalysis] = useState(initialSeo?.analysis ?? null);
+
+    useEffect(() => {
+        const onSeoSummary = (event) => {
+            const detail = event?.detail ?? {};
+            if (!detail || typeof detail !== 'object') {
+                return;
+            }
+            const summary = normalizeSeoSummary(detail);
+            seoSummaryLoadedRef.current = true;
+            setSeoSummaryError(null);
+            setSeoSummaryLoading(false);
+            if (summary.focusKeyword != null) {
+                setFocusKeyword(summary.focusKeyword);
+            }
+            setAnalysis({
+                score: summary.score,
+                violations: summary.violations,
+            });
+            if (summary.seoTitle || summary.metaDescription || summary.articleSlug) {
+                seoMetaRef.current = {
+                    ...seoMetaRef.current,
+                    seoTitle: summary.seoTitle || seoMetaRef.current.seoTitle,
+                    metaDescription: summary.metaDescription || seoMetaRef.current.metaDescription,
+                    slug: summary.articleSlug || seoMetaRef.current.slug,
+                };
+            }
+            if (summary.siteDomain) {
+                siteDomainRef.current = summary.siteDomain;
+                // Domain arrived after first scan — republish classification for Links panel.
+                window.dispatchEvent(new CustomEvent(LINKS_RESCAN_REQUEST_EVENT));
+            }
+        };
+        window.addEventListener('seo-editor-seo-summary-loaded', onSeoSummary);
+        return () => window.removeEventListener('seo-editor-seo-summary-loaded', onSeoSummary);
+    }, []);
+
+    // SEO Assistant: fetch summary when panel active if not yet loaded; always terminate loading.
+    useEffect(() => {
+        if (!seoPanelActive || !articleId) {
+            seoSummaryAbortRef.current?.abort();
+            setSeoSummaryLoading(false);
+            return undefined;
+        }
+
+        if (seoSummaryLoadedRef.current || analysis != null) {
+            setSeoSummaryLoading(false);
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        seoSummaryAbortRef.current = controller;
+        setSeoSummaryLoading(true);
+        setSeoSummaryError(null);
+
+        void (async () => {
+            let settled = false;
+            try {
+                const url =
+                    window.__SEO_EDITOR_LAZY_ENDPOINTS__?.seoSummary
+                    || `/api/seo/articles/${articleId}/editor/seo-summary`;
+                const settingsUrl =
+                    window.__SEO_EDITOR_LAZY_ENDPOINTS__?.settings
+                    || `/api/seo/articles/${articleId}/editor/settings`;
+                const [seoRes, settingsRes] = await Promise.all([
+                    seoArticleApiFetch(url, { signal: controller.signal }),
+                    seoArticleApiFetch(settingsUrl, { signal: controller.signal }),
+                ]);
+                if (controller.signal.aborted || activeHeavyModuleRef.current !== 'seo') {
+                    return;
+                }
+                if (settingsRes.response.ok && settingsRes.data?.success !== false) {
+                    const settingsData = settingsRes.data?.data ?? {};
+                    window.dispatchEvent(
+                        new CustomEvent('seo-editor-settings-loaded', { detail: settingsData }),
+                    );
+                }
+                if (!seoRes.response.ok || seoRes.data?.success === false) {
+                    settled = true;
+                    setSeoSummaryError(t('editor_seo_load_error'));
+                    return;
+                }
+                const summary = normalizeSeoSummary(seoRes.data);
+                settled = true;
+                seoSummaryLoadedRef.current = true;
+                window.dispatchEvent(
+                    new CustomEvent('seo-editor-seo-summary-loaded', { detail: summary.raw }),
+                );
+            } catch (error) {
+                if (isAbortError(error) || controller.signal.aborted) {
+                    return;
+                }
+                if (activeHeavyModuleRef.current === 'seo') {
+                    settled = true;
+                    setSeoSummaryError(t('editor_seo_load_error'));
+                }
+            } finally {
+                if (!controller.signal.aborted && activeHeavyModuleRef.current === 'seo') {
+                    setSeoSummaryLoading(false);
+                    if (!settled && !seoSummaryLoadedRef.current) {
+                        setSeoSummaryError(t('editor_seo_load_error'));
+                    }
+                }
+            }
+        })();
+
+        return () => {
+            controller.abort();
+            if (seoSummaryAbortRef.current === controller) {
+                seoSummaryAbortRef.current = null;
+            }
+        };
+    }, [seoPanelActive, articleId, analysis]);
+
     const [extractedLinks, setExtractedLinks] = useState(() => {
         const source = initialSeo?.extracted_links ?? { internal: [], external: [] };
 
@@ -2692,6 +2985,7 @@ export default function SeoArticleEditor({
         window.dispatchEvent(
             new CustomEvent('seo-editor-links-updated', {
                 detail: {
+                    source: 'client-document',
                     links: enrichedLinks,
                     suggested_internal: filteredSuggested,
                     suggested_external: filteredExternalSuggested,
@@ -3031,10 +3325,121 @@ export default function SeoArticleEditor({
     ]);
 
     const requestAnalyze = useCallback(() => {
-        runLocalSeoAnalysis();
-        analyzedBlocksRef.current = blocksRef.current;
-        setSeoStale(false);
+        try {
+            setAnalyzing(true);
+            setSeoAnalyzeError(null);
+            runLocalSeoAnalysis();
+            analyzedBlocksRef.current = blocksRef.current;
+            setSeoStale(false);
+            setAnalyzing(false);
+        } catch (error) {
+            setAnalyzing(false);
+            setSeoAnalyzeError(error?.message ?? 'seo_analyze_failed');
+        }
     }, [runLocalSeoAnalysis]);
+
+    const scheduleIdleSeoAnalysis = useCallback(() => {
+        const scheduler = utilitySchedulerRef.current;
+        if (!scheduler) {
+            return;
+        }
+        setSeoStale(true);
+        setSeoAnalyzeError(null);
+        scheduler.schedule({
+            id: 'seo-idle-analyze',
+            debounceMs: 4000,
+            priority: 'normal',
+            run: ({ version, signal }) => {
+                if (signal.aborted || version !== scheduler.getVersion()) {
+                    return;
+                }
+                if (blocksRef.current === analyzedBlocksRef.current) {
+                    setSeoStale(false);
+                    return;
+                }
+                try {
+                    setAnalyzing(true);
+                    setSeoAnalyzeError(null);
+                    runLocalSeoAnalysis();
+                    if (signal.aborted || version !== scheduler.getVersion()) {
+                        return;
+                    }
+                    analyzedBlocksRef.current = blocksRef.current;
+                    setSeoStale(false);
+                    setAnalyzing(false);
+                } catch (error) {
+                    if (signal.aborted || version !== scheduler.getVersion()) {
+                        return;
+                    }
+                    setAnalyzing(false);
+                    setSeoAnalyzeError(error?.message ?? 'seo_analyze_failed');
+                }
+            },
+        });
+    }, [runLocalSeoAnalysis]);
+
+    const openFaqModule = useCallback((options = {}) => {
+        if (options?.autoGenerate) {
+            pendingFaqGenerateRef.current = true;
+        }
+        // Defer past TipTap activate / shortcode mousedown — tránh race mount FAQ lần đầu.
+        window.setTimeout(() => {
+            window.dispatchEvent(
+                new CustomEvent(MODULE_EVENT_OPEN, {
+                    detail: {
+                        module: 'faq',
+                        source: options?.source ?? 'faq-shortcode',
+                        autoGenerate: Boolean(options?.autoGenerate),
+                    },
+                }),
+            );
+        }, 0);
+    }, []);
+
+    const createFaqFromShortcode = useCallback(() => {
+        openFaqModule({ autoGenerate: canGenerateFaq });
+        if (canGenerateFaq) {
+            window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent('generate-article-faqs'));
+            }, 400);
+        }
+    }, [canGenerateFaq, openFaqModule]);
+
+    const openFeaturedSnippetPrompt = useCallback(() => {
+        const outline = flattenClientOutlineNodes(clientOutline ?? [])
+            .map((node) => `${'#'.repeat(Math.max(1, Number(node.level) || 2))} ${String(node.heading_text ?? '').trim()}`)
+            .filter((line) => line.replace(/#/g, '').trim() !== '')
+            .join('\n');
+        const sectionContent = String(getExportHtml?.() ?? '').slice(0, 8000);
+        setFeaturedSnippetPreviewHtml('');
+        setFeaturedSnippetPromptContext({
+            title: articleTitle,
+            focusKeyword,
+            outline,
+            sectionContent,
+            language: window.__SEO_I18N_LOCALE__ ?? 'vi',
+            domain: siteDomainRef.current,
+        });
+        setFeaturedSnippetPromptOpen(true);
+    }, [articleTitle, clientOutline, focusKeyword, getExportHtml]);
+
+    const handleSeoViolationAction = useCallback((action) => {
+        if (!action?.action) {
+            return;
+        }
+        if (action.action === 'open-faq-generator') {
+            openFaqModule({ autoGenerate: canGenerateFaq });
+            if (canGenerateFaq) {
+                window.setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('generate-article-faqs'));
+                }, 500);
+            }
+            return;
+        }
+        if (action.action === 'open-featured-snippet-prompt') {
+            openFeaturedSnippetPrompt();
+        }
+    }, [canGenerateFaq, openFaqModule, openFeaturedSnippetPrompt]);
 
     const autosaveIntervalSecondsRaw = Number(editorSettings?.autosave_interval_seconds);
     const autosaveIntervalSeconds = Number.isFinite(autosaveIntervalSecondsRaw)
@@ -5363,27 +5768,77 @@ export default function SeoArticleEditor({
 
     useEffect(() => {
         if (blocks.length === 0) {
-            return;
+            return undefined;
         }
 
-        const freshLinks = extractLinksFromBlocks(blocks, siteDomain);
-        setExtractedLinks((prev) => {
-            const prevInternal = JSON.stringify(prev?.internal ?? []);
-            const prevExternal = JSON.stringify(prev?.external ?? []);
-            const nextInternal = JSON.stringify(freshLinks.internal ?? []);
-            const nextExternal = JSON.stringify(freshLinks.external ?? []);
+        const domain = siteDomainRef.current || siteDomain;
+        const scheduler = utilitySchedulerRef.current;
+        if (!scheduler) {
+            const freshLinks = scanExistingLinksCompat(blocks, domain);
+            setExtractedLinks((prev) => {
+                const prevInternal = JSON.stringify(prev?.internal ?? []);
+                const prevExternal = JSON.stringify(prev?.external ?? []);
+                const nextInternal = JSON.stringify(freshLinks.internal ?? []);
+                const nextExternal = JSON.stringify(freshLinks.external ?? []);
+                if (prevInternal === nextInternal && prevExternal === nextExternal) {
+                    return prev;
+                }
+                return freshLinks;
+            });
+            return undefined;
+        }
 
-            if (prevInternal === nextInternal && prevExternal === nextExternal) {
-                return prev;
-            }
-
-            return freshLinks;
+        scheduler.schedule({
+            id: 'existing-links-scan',
+            debounceMs: 750,
+            priority: 'normal',
+            run: ({ version, signal }) => {
+                if (signal.aborted || version !== scheduler.getVersion()) {
+                    return;
+                }
+                const freshLinks = scanExistingLinksCompat(
+                    blocksRef.current,
+                    siteDomainRef.current || siteDomain,
+                );
+                if (signal.aborted || version !== scheduler.getVersion()) {
+                    return;
+                }
+                setExtractedLinks((prev) => {
+                    const prevInternal = JSON.stringify(prev?.internal ?? []);
+                    const prevExternal = JSON.stringify(prev?.external ?? []);
+                    const nextInternal = JSON.stringify(freshLinks.internal ?? []);
+                    const nextExternal = JSON.stringify(freshLinks.external ?? []);
+                    if (prevInternal === nextInternal && prevExternal === nextExternal) {
+                        return prev;
+                    }
+                    return freshLinks;
+                });
+            },
         });
+
+        return undefined;
     }, [blocks, siteDomain]);
 
     useEffect(() => {
         publishExtractedLinks(extractedLinks, suggestedInternalLinks, suggestedExternalLinks);
     }, [extractedLinks, suggestedInternalLinks, suggestedExternalLinks, publishExtractedLinks]);
+
+    useEffect(() => {
+        const republishExistingLinks = () => {
+            const freshLinks = scanExistingLinksCompat(
+                blocksRef.current,
+                siteDomainRef.current || siteDomain,
+            );
+            setExtractedLinks(freshLinks);
+            publishExtractedLinks(freshLinks, suggestedInternalLinks, suggestedExternalLinks);
+        };
+
+        window.addEventListener(LINKS_RESCAN_REQUEST_EVENT, republishExistingLinks);
+
+        return () => {
+            window.removeEventListener(LINKS_RESCAN_REQUEST_EVENT, republishExistingLinks);
+        };
+    }, [publishExtractedLinks, siteDomain, suggestedExternalLinks, suggestedInternalLinks]);
 
     useEffect(() => {
         const onScrollToLink = (event) => {
@@ -7459,7 +7914,8 @@ export default function SeoArticleEditor({
             if (Array.isArray(fromExtract)) {
                 panelFaqsRef.current = fromExtract;
                 setPanelFaqs(fromExtract);
-                requestAnalyze();
+                setFaqCount(fromExtract.length);
+                scheduleIdleSeoAnalysis();
             }
         };
 
@@ -7471,7 +7927,8 @@ export default function SeoArticleEditor({
 
             panelFaqsRef.current = rows;
             setPanelFaqs(rows);
-            requestAnalyze();
+            setFaqCount(rows.length);
+            scheduleIdleSeoAnalysis();
         };
 
         window.addEventListener('article-faqs-extracted', syncPanelFaqs);
@@ -8075,6 +8532,7 @@ export default function SeoArticleEditor({
         insertImageAfterBlock,
         insertVideoAfterBlock,
         requestAnalyze,
+        scheduleIdleSeoAnalysis,
         runLocalSeoAnalysis,
         scheduleAutosave,
         startMediaStatusPolling,
@@ -8123,19 +8581,17 @@ export default function SeoArticleEditor({
     ]);
 
     useEffect(() => {
-        // Perf Phase 1 (D): không analyze tự động khi blocks đổi (kể cả lần hydrate đầu tiên) —
-        // chỉ đánh dấu seoStale nếu blocks hiện tại khác lần analyze gần nhất (so theo tham chiếu,
-        // tránh nhấp nháy khi 1 hành động vừa setBlocks() vừa gọi requestAnalyze() cùng lượt).
+        // Idle SEO auto-analysis (3–5s) — not 150ms loop. Typing cancels via bumpVersion.
         if (blocks.length === 0) return;
         if (skipNextAutosave.current) {
             skipNextAutosave.current = false;
             return;
         }
         if (blocks !== analyzedBlocksRef.current) {
-            setSeoStale(true);
+            scheduleIdleSeoAnalysis();
         }
         scheduleAutosave();
-    }, [blocks, scheduleAutosave]);
+    }, [blocks, scheduleAutosave, scheduleIdleSeoAnalysis]);
 
     useEffect(() => {
         const onGenerateImage = (event) => {
@@ -8165,6 +8621,14 @@ export default function SeoArticleEditor({
             : saveStatus === 'pending'
               ? t('editor_draft_pending')
               : t('editor_draft_saved_local');
+
+    useEffect(() => {
+        window.dispatchEvent(
+            new CustomEvent('article-editor:save-status', {
+                detail: { status: saveStatus, label: saveLabel },
+            }),
+        );
+    }, [saveStatus, saveLabel]);
 
     const mergedDisplay =
         tempMerge && activeBlockId === tempMerge.anchorId ? tempMerge.mergedHtml : undefined;
@@ -8425,74 +8889,39 @@ export default function SeoArticleEditor({
 
             outlineAppendInflightRef.current.add(id);
 
-            const afterHeadingId = Number(options.afterHeadingId ?? 0) || null;
-            const optimisticId = `pending-${id}`;
-
-            setOutlineTreeSync({
-                token: Date.now(),
-                action: afterHeadingId !== null ? 'insertAfter' : 'append',
-                afterHeadingId,
-                heading: {
-                    id: optimisticId,
-                    heading_text: meta.headingText,
-                    level: meta.level ?? 2,
-                    children: [],
-                },
-                focusEdit: options.focusEdit === true,
-            });
+            // Phase 4: outline is client-derived — no POST /outline on section add.
+            const clientHeadingId = `client:${id}`;
+            const heading = {
+                id: clientHeadingId,
+                heading_text: meta.headingText,
+                level: meta.level ?? 2,
+                block_id: id,
+                children: [],
+            };
 
             try {
-                const payload = {
-                    heading_text: truncateOutlineHeadingText(meta.headingText),
-                    level: meta.level,
-                };
-                if (afterHeadingId !== null) {
-                    payload.after_heading_id = afterHeadingId;
-                }
-
-                const data = await outlineApiRequest(articleId, '', {
-                    method: 'POST',
-                    body: JSON.stringify(payload),
-                });
-
-                const heading = data.heading ?? null;
-                if (!heading?.id) {
-                    throw new Error('Không tạo được heading trong outline.');
-                }
-
                 handleOutlineHeadingAppended({
                     blockId: id,
-                    headingId: heading.id,
+                    headingId: clientHeadingId,
                     heading,
                 });
-                setOutlineTreeSync({
-                    token: Date.now(),
-                    action: 'confirmHeading',
-                    tempHeadingId: optimisticId,
-                    afterHeadingId,
-                    heading,
-                    focusEdit: options.focusEdit === true,
-                });
-            } catch (error) {
-                setOutlineTreeSync({
-                    token: Date.now(),
-                    action: 'remove',
-                    headingId: optimisticId,
-                });
-                window.dispatchEvent(
-                    new CustomEvent('seo-article-editor-notify', {
-                        detail: {
-                            title: 'Outline',
-                            body: error?.message || 'Không thêm được heading vào outline.',
-                            status: 'danger',
-                        },
-                    }),
-                );
+                outlineFingerprintRef.current = '';
+                const tree = buildClientOutlineTree(blocksRef.current);
+                outlineFingerprintRef.current = outlineHeadingFingerprint(blocksRef.current);
+                setClientOutline(tree);
+                if (options.focusEdit === true) {
+                    setOutlineTreeSync({
+                        token: Date.now(),
+                        action: 'focus',
+                        headingId: clientHeadingId,
+                        focusEdit: true,
+                    });
+                }
             } finally {
                 outlineAppendInflightRef.current.delete(id);
             }
         },
-        [articleId, handleOutlineHeadingAppended],
+        [handleOutlineHeadingAppended],
     );
 
     const syncOutlineForNewSectionBlock = useCallback(
@@ -8717,11 +9146,16 @@ export default function SeoArticleEditor({
                 headingId: node?.id ?? null,
             };
 
-            const blockId = findBlockIdForOutlineHeading(
-                blocksRef.current,
-                Number(node?.level ?? 0),
-                String(node?.heading_text ?? ''),
-            );
+            const fromBlockId = String(node?.block_id ?? '').trim();
+            const clientId = String(node?.id ?? '');
+            const blockId =
+                fromBlockId
+                || (clientId.startsWith('client:') ? clientId.slice('client:'.length) : '')
+                || findBlockIdForOutlineHeading(
+                    blocksRef.current,
+                    Number(node?.level ?? 0),
+                    String(node?.heading_text ?? ''),
+                );
             if (!blockId) {
                 window.dispatchEvent(
                     new CustomEvent('seo-article-editor-notify', {
@@ -8990,6 +9424,87 @@ export default function SeoArticleEditor({
         ],
     );
 
+    const runFeaturedSnippetPromptGenerate = useCallback(async () => {
+        if (!canGenerateFeaturedSnippet || featuredSnippetGenerating) {
+            return;
+        }
+        const keyword = (focusKeyword || articleTitle || '').trim();
+        if (!keyword) {
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_generate_featured_snippet'),
+                        body: t('editor_featured_snippet_no_keyword'),
+                        status: 'warning',
+                    },
+                }),
+            );
+            return;
+        }
+
+        const sections = buildEditorSections(blocksRef.current);
+        const anchorSection = [...sections].reverse().find((item) => !item.isIntro) ?? sections[0] ?? null;
+        const anchorLastBlockId = anchorSection?.blockIds?.[anchorSection.blockIds.length - 1]
+            ?? blocksRef.current[blocksRef.current.length - 1]?.id
+            ?? null;
+        if (!anchorLastBlockId) {
+            return;
+        }
+
+        featuredSnippetTargetRef.current = {
+            mode: 'prompt-preview',
+            anchorSectionId: anchorSection?.id ?? null,
+            anchorLastBlockId,
+        };
+        setFeaturedSnippetGenerating(true);
+        setArticleAutosaveLock('generate-featured-snippet', true);
+
+        try {
+            await callEditArticleLivewire(
+                'generateFeaturedSnippetFromEditor',
+                anchorLastBlockId,
+                'after',
+            );
+        } catch (error) {
+            featuredSnippetTargetRef.current = null;
+            setFeaturedSnippetGenerating(false);
+            window.dispatchEvent(
+                new CustomEvent('seo-article-editor-notify', {
+                    detail: {
+                        title: t('editor_generate_featured_snippet'),
+                        body: error?.message ?? t('editor_featured_snippet_failed'),
+                        status: 'danger',
+                    },
+                }),
+            );
+        } finally {
+            setArticleAutosaveLock('generate-featured-snippet', false);
+        }
+    }, [articleTitle, canGenerateFeaturedSnippet, featuredSnippetGenerating, focusKeyword]);
+
+    const confirmFeaturedSnippetPromptInsert = useCallback(() => {
+        const pending = featuredSnippetTargetRef.current;
+        const html = String(featuredSnippetPreviewHtml || pending?.previewHtml || '').trim();
+        if (!html || !pending?.anchorLastBlockId) {
+            return;
+        }
+        featuredSnippetTargetRef.current = null;
+        setFeaturedSnippetPromptOpen(false);
+        setFeaturedSnippetGenerating(true);
+        void insertFeaturedSnippetAsNewSectionAfter(
+            {
+                mode: 'new-section-after',
+                anchorSectionId: pending.anchorSectionId,
+                anchorLastBlockId: pending.anchorLastBlockId,
+            },
+            html,
+        ).finally(() => {
+            setFeaturedSnippetGenerating(false);
+            setFeaturedSnippetPreviewHtml('');
+            scheduleIdleSeoAnalysis();
+        });
+    }, [featuredSnippetPreviewHtml, insertFeaturedSnippetAsNewSectionAfter, scheduleIdleSeoAnalysis]);
+
     const requestGenerateFeaturedSnippetAfterSection = useCallback(
         async (section) => {
             if (
@@ -9055,10 +9570,26 @@ export default function SeoArticleEditor({
             const html = String(detail.html ?? '').trim();
             const pending = featuredSnippetTargetRef.current;
 
-            if (!html || pending?.mode !== 'new-section-after') {
+            if (!html) {
                 featuredSnippetTargetRef.current = null;
                 setFeaturedSnippetGenerating(false);
+                return;
+            }
 
+            if (pending?.mode === 'prompt-preview') {
+                featuredSnippetTargetRef.current = {
+                    ...pending,
+                    mode: 'prompt-insert',
+                    previewHtml: html,
+                };
+                setFeaturedSnippetPreviewHtml(html);
+                setFeaturedSnippetGenerating(false);
+                return;
+            }
+
+            if (pending?.mode !== 'new-section-after') {
+                featuredSnippetTargetRef.current = null;
+                setFeaturedSnippetGenerating(false);
                 return;
             }
 
@@ -9340,7 +9871,12 @@ export default function SeoArticleEditor({
                 <div className="seo-article-editor-left-rail">
                     <ArticleGoogleSerpPreview
                         articleId={articleId}
-                        initialPreview={initialSeo?.google_serp_preview ?? null}
+                        initialPreview={initialSeo?.google_serp_preview ?? {
+                            title: String(articleTitle ?? '').trim(),
+                            description: String(initialSeo?.meta_description ?? '').trim(),
+                            url: '#',
+                            display_url: '#',
+                        }}
                         fallbackUrl={String(initialSeo?.google_serp_preview?.url ?? initialSeo?.site_domain ?? '#')}
                         skipSeoScore={Boolean(initialSeo?.skip_seo_score)}
                         initialFocusKeyword={String(initialSeo?.focus_keyword ?? '')}
@@ -9362,6 +9898,15 @@ export default function SeoArticleEditor({
                             outlineTreeSync={outlineTreeSync}
                             canGenerateOutlineHeading={canGenerateOutlineHeading}
                             resolveHeadingInnerHtml={resolveHeadingInnerHtml}
+                            preferClientSource
+                            clientOutline={clientOutline}
+                            onClientRefresh={() => {
+                                outlineFingerprintRef.current = '';
+                                const tree = buildClientOutlineTree(blocksRef.current);
+                                outlineFingerprintRef.current = outlineHeadingFingerprint(blocksRef.current);
+                                setClientOutline(tree);
+                                return tree;
+                            }}
                             onOutlineLoaded={handleOutlineLoaded}
                             onHeadingTextChange={applyOutlineHeadingText}
                             onHeadingHtmlChange={applyOutlineHeadingHtml}
@@ -9377,10 +9922,6 @@ export default function SeoArticleEditor({
                             onRequestEditorHtml={getExportHtml}
                         />
                     </aside>
-                    <div
-                        className="seo-article-editor-shortcuts-host"
-                        data-seo-outline-shortcuts-host
-                    />
                 </div>
 
                 <div className="seo-article-editor-mainpane">
@@ -9413,8 +9954,21 @@ export default function SeoArticleEditor({
                     >
                         <Redo2 size={15} />
                     </button>
-                    <span className="seo-autosave-status">{saveLabel}</span>
-                    {seoStale && (
+                    <span className="seo-autosave-status seo-autosave-status--toolbar-hidden" aria-hidden="true">
+                        {saveLabel}
+                    </span>
+                    {analyzing ? (
+                        <span className="seo-analyze-stale-hint">{t('editor_seo_analyzing')}</span>
+                    ) : seoAnalyzeError ? (
+                        <button
+                            type="button"
+                            className="seo-analyze-stale-hint"
+                            onClick={requestAnalyze}
+                            title={t('editor_seo_analyze_failed')}
+                        >
+                            {t('editor_seo_analyze_failed')} — {t('editor_seo_analyze_retry')}
+                        </button>
+                    ) : seoStale ? (
                         <button
                             type="button"
                             className="seo-analyze-stale-hint"
@@ -9423,7 +9977,7 @@ export default function SeoArticleEditor({
                         >
                             {t('editor_seo_stale')}
                         </button>
-                    )}
+                    ) : null}
                 </div>
             </div>
 
@@ -9766,6 +10320,10 @@ export default function SeoArticleEditor({
                                                                 }
                                                                 setGlobalEditor={setGlobalEditor}
                                                                 panelFaqs={panelFaqs}
+                                                                faqCount={faqCount}
+                                                                canGenerateFaq={canGenerateFaq}
+                                                                onEditFaq={openFaqModule}
+                                                                onCreateFaq={createFaqFromShortcode}
                                                                 outlineHeadingsLocked={
                                                                     sectionHeadingBlockIds.has(block.id) ||
                                                                     (outlineHasSavedHeadings &&
@@ -9830,6 +10388,24 @@ export default function SeoArticleEditor({
                 siteId={siteId}
                 productGalleryItems={productGalleryItems}
             />
+            <FeaturedSnippetPromptModal
+                open={featuredSnippetPromptOpen}
+                canGenerate={canGenerateFeaturedSnippet}
+                generating={featuredSnippetGenerating}
+                previewHtml={featuredSnippetPreviewHtml}
+                context={featuredSnippetPromptContext}
+                onClose={() => {
+                    setFeaturedSnippetPromptOpen(false);
+                    if (featuredSnippetTargetRef.current?.mode === 'prompt-preview'
+                        || featuredSnippetTargetRef.current?.mode === 'prompt-insert') {
+                        featuredSnippetTargetRef.current = null;
+                    }
+                }}
+                onGenerate={() => {
+                    void runFeaturedSnippetPromptGenerate();
+                }}
+                onConfirmInsert={confirmFeaturedSnippetPromptInsert}
+            />
                 </div>
             </div>
 
@@ -9843,16 +10419,47 @@ export default function SeoArticleEditor({
                           defaultCollapsed={false}
                           className="seo-assistant-widget--seo"
                       >
-                          <SeoScorePanel
-                              focusKeyword={focusKeyword}
-                              analysis={analysis}
-                              seoScoringRules={seoScoringRules}
-                              seoRuleMessages={scoringMessages}
-                              loading={false}
-                              analyzing={analyzing}
-                              stale={seoStale}
-                              onAnalyzeClick={requestAnalyze}
-                          />
+                          {seoPanelActive ? (
+                              <ArticleEditorModuleErrorBoundary>
+                                  <Suspense fallback={<div className="seo-module-loading p-3 text-sm">{t('editor_module_loading')}</div>}>
+                                      {seoSummaryError ? (
+                                          <div className="seo-module-error p-3 text-sm">
+                                              <p className="mb-2">{seoSummaryError}</p>
+                                              <button
+                                                  type="button"
+                                                  className="rounded bg-primary-600 px-3 py-1.5 text-white"
+                                                  onClick={() => {
+                                                      seoSummaryLoadedRef.current = false;
+                                                      setSeoSummaryError(null);
+                                                      setAnalysis(null);
+                                                  }}
+                                              >
+                                                  {t('editor_module_error_retry')}
+                                              </button>
+                                          </div>
+                                      ) : (
+                                          <SeoModule
+                                              focusKeyword={focusKeyword}
+                                              analysis={analysis}
+                                              seoScoringRules={seoScoringRules}
+                                              seoRuleMessages={scoringMessages}
+                                              loading={seoSummaryLoading}
+                                              analyzing={analyzing}
+                                              stale={seoStale}
+                                              analyzeError={seoAnalyzeError}
+                                              onAnalyzeClick={requestAnalyze}
+                                              onViolationAction={handleSeoViolationAction}
+                                              canGenerateFaq={canGenerateFaq}
+                                              canGenerateFeaturedSnippet={canGenerateFeaturedSnippet}
+                                          />
+                                      )}
+                                  </Suspense>
+                              </ArticleEditorModuleErrorBoundary>
+                          ) : (
+                              <div className="seo-assistant-widget__lazy-placeholder">
+                                  {t('editor_panel_lazy_placeholder')}
+                              </div>
+                          )}
                       </ArticleAssistantWidget>,
                       assistantPortalRoots.seo,
                   )
@@ -9868,33 +10475,37 @@ export default function SeoArticleEditor({
                           defaultCollapsed={false}
                           className="seo-assistant-widget--images"
                       >
-                          {activatedPanels.has('images') ? (
-                              <ArticleImagesTab
-                                  key={imagesReloadKey}
-                                  blocks={blocks}
-                                  extraImages={supplementalImages}
-                                  siteId={siteId}
-                                  articleId={articleId}
-                                  jumpTarget={imagesTabJumpTarget}
-                                  focusKeyword={focusKeyword}
-                                  articleTitle={articleTitle}
-                                  onPatchImage={patchImageInBlocks}
-                                  onFocusBlock={focusImageBlock}
-                                  onQuickFixSlugAll={quickFixSlugAllImages}
-                                  quickFixSlugAllBusy={quickFixSlugAllBusy}
-                                  onQuickFixSlugOne={quickFixSlugSingleImage}
-                                  onQuickFixAltTitleAll={quickFixAltTitleAllImages}
-                                  onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
-                                  onRemoveImage={removeImageBlock}
-                                  onRemoveSupplementalImage={removeSupplementalImage}
-                                  onAltTitleChange={handleImageAltTitleChange}
-                                  onMakeFeatured={makeImageFeatured}
-                                  onNotify={(payload) => {
-                                      window.dispatchEvent(
-                                          new CustomEvent('seo-article-editor-notify', { detail: payload }),
-                                      );
-                                  }}
-                              />
+                          {imagesPanelActive ? (
+                              <ArticleEditorModuleErrorBoundary>
+                                  <Suspense fallback={<div className="seo-module-loading p-3 text-sm">{t('editor_module_loading')}</div>}>
+                                      <ImagesModule
+                                          key={imagesReloadKey}
+                                          blocks={blocks}
+                                          extraImages={supplementalImages}
+                                          siteId={siteId}
+                                          articleId={articleId}
+                                          jumpTarget={imagesTabJumpTarget}
+                                          focusKeyword={focusKeyword}
+                                          articleTitle={articleTitle}
+                                          onPatchImage={patchImageInBlocks}
+                                          onFocusBlock={focusImageBlock}
+                                          onQuickFixSlugAll={quickFixSlugAllImages}
+                                          quickFixSlugAllBusy={quickFixSlugAllBusy}
+                                          onQuickFixSlugOne={quickFixSlugSingleImage}
+                                          onQuickFixAltTitleAll={quickFixAltTitleAllImages}
+                                          onQuickFixAltTitleOne={quickFixAltTitleSingleImage}
+                                          onRemoveImage={removeImageBlock}
+                                          onRemoveSupplementalImage={removeSupplementalImage}
+                                          onAltTitleChange={handleImageAltTitleChange}
+                                          onMakeFeatured={makeImageFeatured}
+                                          onNotify={(payload) => {
+                                              window.dispatchEvent(
+                                                  new CustomEvent('seo-article-editor-notify', { detail: payload }),
+                                              );
+                                          }}
+                                      />
+                                  </Suspense>
+                              </ArticleEditorModuleErrorBoundary>
                           ) : (
                               <div className="seo-assistant-widget__lazy-placeholder">
                                   {t('editor_panel_lazy_placeholder')}
@@ -9915,18 +10526,22 @@ export default function SeoArticleEditor({
                           defaultCollapsed
                           className="seo-assistant-widget--reviews"
                       >
-                          {activatedPanels.has('reviews') ? (
-                              <ArticleReviewsTab
-                                  articleId={articleId}
-                                  initialReviews={virtualReviews}
-                                  onRefresh={refreshVirtualReviews}
-                                  loading={reviewsLoading}
-                                  warning={reviewsLoadWarning}
-                                  canQuickCreate={canQuickCreateReviews}
-                                  showConfigureReviews={showConfigureReviewsLink}
-                                  quickCreateConfigUrl={quickCreateReviewsConfigUrl}
-                                  onQuickCreate={canQuickCreateReviews ? generateQuickPostReviews : undefined}
-                              />
+                          {reviewsPanelActive ? (
+                              <ArticleEditorModuleErrorBoundary>
+                                  <Suspense fallback={<div className="seo-module-loading p-3 text-sm">{t('editor_module_loading')}</div>}>
+                                      <ReviewsModule
+                                          articleId={articleId}
+                                          initialReviews={virtualReviews}
+                                          onRefresh={refreshVirtualReviews}
+                                          loading={reviewsLoading}
+                                          warning={reviewsLoadWarning}
+                                          canQuickCreate={canQuickCreateReviews}
+                                          showConfigureReviews={showConfigureReviewsLink}
+                                          quickCreateConfigUrl={quickCreateReviewsConfigUrl}
+                                          onQuickCreate={canQuickCreateReviews ? generateQuickPostReviews : undefined}
+                                      />
+                                  </Suspense>
+                              </ArticleEditorModuleErrorBoundary>
                           ) : (
                               <div className="seo-assistant-widget__lazy-placeholder">
                                   {t('editor_panel_lazy_placeholder')}

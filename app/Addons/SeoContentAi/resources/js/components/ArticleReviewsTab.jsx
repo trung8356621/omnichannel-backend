@@ -5,6 +5,7 @@ import {
     fetchProductReviewStatus,
     syncProductReviewsForArticle,
 } from '../utils/articleEditorApi';
+import { normalizeReviewStatus } from '../utils/articleEditorPayloadAdapters';
 import { t } from '../utils/i18n';
 
 function normalizeReviewsPayload(result) {
@@ -175,15 +176,41 @@ export default function ArticleReviewsTab({
         try {
             const result = await fetchProductReviewStatus(id);
             if (result.success && result.data) {
-                setStatus(result.data);
+                const normalized = normalizeReviewStatus(result.data);
+                setStatus({
+                    ...result.data,
+                    ...normalized,
+                    can_create_reviews: normalized.canCreateReviews,
+                    create_block_reason: normalized.createBlockReason,
+                    warning: normalized.warning,
+                });
                 return result.data;
             }
+            if (!result.success) {
+                setStatus((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    applicable: false,
+                    status: null,
+                    count: 0,
+                    warning: String(result.message ?? 'Không thể tải trạng thái đánh giá.'),
+                }));
+            }
+            return null;
+        } catch (error) {
+            setStatus((prev) => ({
+                ...(prev && typeof prev === 'object' ? prev : {}),
+                applicable: false,
+                status: null,
+                count: 0,
+                warning: String(error?.message ?? 'Không thể tải trạng thái đánh giá.'),
+            }));
             return null;
         } finally {
             setStatusLoading(false);
         }
     }, [articleId]);
 
+    // Status fetch only while Reviews module is mounted (parent gates by activeHeavyModule).
     useEffect(() => {
         loadStatus();
     }, [loadStatus]);

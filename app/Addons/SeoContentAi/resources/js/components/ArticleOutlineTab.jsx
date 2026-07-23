@@ -774,9 +774,13 @@ export default function ArticleOutlineTab({
     onOutlineAddSection,
     onNotify,
     onRequestEditorHtml = null,
+    /** Phase 4: prefer ProseMirror/blocks-derived outline; skip GET /outline on mount. */
+    preferClientSource = false,
+    clientOutline = null,
+    onClientRefresh = null,
 }) {
-    const [tree, setTree] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [tree, setTree] = useState(() => (preferClientSource && Array.isArray(clientOutline) ? clientOutline : []));
+    const [loading, setLoading] = useState(!preferClientSource);
     const [error, setError] = useState('');
     const [activeGroupId, setActiveGroupId] = useState(null);
     const [activeHeadingId, setActiveHeadingId] = useState(null);
@@ -830,6 +834,38 @@ export default function ArticleOutlineTab({
     );
 
     const loadOutline = useCallback(async ({ reextract = false } = {}) => {
+        // Phase 4: client-first outline — rebuild from editor blocks, no GET /outline.
+        if (preferClientSource && !reextract) {
+            const outline = Array.isArray(clientOutline) ? clientOutline : [];
+            setTree(outline);
+            setError('');
+            setLoading(false);
+            onOutlineLoaded?.(outline);
+            return;
+        }
+
+        if (preferClientSource && reextract) {
+            setLoading(true);
+            setError('');
+            try {
+                if (typeof onClientRefresh === 'function') {
+                    const outline = await onClientRefresh();
+                    const next = Array.isArray(outline) ? outline : (Array.isArray(clientOutline) ? clientOutline : []);
+                    setTree(next);
+                    onOutlineLoaded?.(next);
+                } else {
+                    const outline = Array.isArray(clientOutline) ? clientOutline : [];
+                    setTree(outline);
+                    onOutlineLoaded?.(outline);
+                }
+            } catch (e) {
+                setError(e.message || 'Không tải được outline.');
+            } finally {
+                setLoading(false);
+            }
+            return;
+        }
+
         setLoading(true);
         setError('');
         // Outline đổi -> thoát chế độ dò trùng.
@@ -864,11 +900,26 @@ export default function ArticleOutlineTab({
         } finally {
             setLoading(false);
         }
-    }, [articleId, onOutlineLoaded, onRequestEditorHtml]);
+    }, [articleId, clientOutline, onClientRefresh, onOutlineLoaded, onRequestEditorHtml, preferClientSource]);
 
     useEffect(() => {
+        if (preferClientSource) {
+            const outline = Array.isArray(clientOutline) ? clientOutline : [];
+            setTree(outline);
+            setLoading(false);
+            onOutlineLoaded?.(outline);
+            return;
+        }
         void loadOutline();
-    }, [loadOutline]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- mount / source-mode only; clientOutline sync below
+    }, [preferClientSource, articleId]);
+
+    useEffect(() => {
+        if (!preferClientSource || !Array.isArray(clientOutline)) {
+            return;
+        }
+        setTree(clientOutline);
+    }, [preferClientSource, clientOutline]);
 
     const exitDuplicateMode = useCallback(() => {
         setIsDuplicateModeActive(false);

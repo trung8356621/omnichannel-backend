@@ -127,6 +127,24 @@ return [
             'path' => storage_path('logs/laravel.log'),
         ],
 
+        /*
+        |--------------------------------------------------------------------------
+        | Web / PHP-FPM (www) — never stack onto laravel.log
+        |--------------------------------------------------------------------------
+        |
+        | Cron/queue/root keep writing laravel.log / queue-cron.log / watchdog.log.
+        | HTTP requests (editor, SEO panel, REST) must use this channel so the
+        | file is created/owned by the PHP-FPM user (www), not root.
+        |
+        */
+        'web_app' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/web-app.log'),
+            'level' => env('WEB_APP_LOG_LEVEL', 'warning'),
+            'days' => (int) env('WEB_APP_LOG_DAYS', 14),
+            'replace_placeholders' => true,
+        ],
+
     ],
 
 ];

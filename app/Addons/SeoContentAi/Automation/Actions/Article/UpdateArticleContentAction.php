@@ -16,6 +16,7 @@ use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Services\ArticleEditorPersistService;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -55,6 +56,7 @@ final class UpdateArticleContentAction implements BusinessAction
                 'focus_keyword' => ['type' => 'string', 'required' => false],
                 'expected_updated_at' => ['type' => 'string', 'required' => false],
                 'expected_content_hash' => ['type' => 'string', 'required' => false],
+                'force_overwrite' => ['type' => 'boolean', 'required' => false],
             ],
             outputSchema: [
                 'article_id' => ['type' => 'integer'],
@@ -80,8 +82,13 @@ final class UpdateArticleContentAction implements BusinessAction
             return ActionResult::failure('article_not_found', "Article [{$articleId}] not found.");
         }
 
-        if ($conflict = $this->conflictGuard->assertCompatible($article, $input)) {
-            return $conflict;
+        $forceOverwrite = SeoAccessControl::canForceArticleContentOverwrite()
+            || filter_var($input['force_overwrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+        if (! $forceOverwrite) {
+            if ($conflict = $this->conflictGuard->assertCompatible($article, $input)) {
+                return $conflict;
+            }
         }
 
         $content = (string) ($input['content'] ?? '');
@@ -97,6 +104,7 @@ final class UpdateArticleContentAction implements BusinessAction
                     'dry_run' => true,
                     'content_hash' => $this->conflictGuard->contentHash((string) ($article->body ?? '')),
                     'updated_at' => $article->updated_at?->toIso8601String(),
+                    'force_overwrite' => $forceOverwrite,
                 ],
                 status: \App\Addons\SeoContentAi\Automation\Enums\ActionRunStatus::DryRun,
             );
@@ -105,14 +113,16 @@ final class UpdateArticleContentAction implements BusinessAction
         $saveContext = ArticleEditorSaveContext::fromBundle($article, $this->buildEditorBundle($article, $title, $slugInput, $input));
 
         try {
-            $result = ActionSupport::withArticleLock($articleId, function () use ($article, $saveContext, $content, $input) {
-                return DB::connection('omi_seo_ai')->transaction(function () use ($article, $saveContext, $content, $input) {
+            $result = ActionSupport::withArticleLock($articleId, function () use ($article, $saveContext, $content, $input, $forceOverwrite) {
+                return DB::connection('omi_seo_ai')->transaction(function () use ($article, $saveContext, $content, $input, $forceOverwrite) {
                     $fresh = $article->fresh();
                     if ($fresh === null) {
                         throw new \RuntimeException('Article disappeared during lock.');
                     }
-                    if ($conflict = $this->conflictGuard->assertCompatible($fresh, $input)) {
-                        throw new ArticleContentConflictException($conflict);
+                    if (! $forceOverwrite) {
+                        if ($conflict = $this->conflictGuard->assertCompatible($fresh, $input)) {
+                            throw new ArticleContentConflictException($conflict);
+                        }
                     }
 
                     return $this->persistService->persistLocal($fresh, $saveContext, $content, deferSeoAnalysis: true);

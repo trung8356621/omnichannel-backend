@@ -18,6 +18,25 @@ final class KeywordPhraseMatcherTest extends TestCase
         $this->assertSame('túi đeo chéo kids club', KeywordPhraseMatcher::normalize("Túi Đeo Chéo KID'S CLUB"));
     }
 
+    public function test_keyword_missing_in_meta_is_case_insensitive(): void
+    {
+        $meta = 'Mô tả sản phẩm túi đeo chéo kids club chính hãng.';
+
+        $this->assertTrue(KeywordPhraseMatcher::contains($meta, 'TÚI ĐEO CHÉO KIDS CLUB'));
+        $this->assertTrue(KeywordPhraseMatcher::contains($meta, mb_strtolower('TÚI ĐEO CHÉO KIDS CLUB', 'UTF-8')));
+    }
+
+    public function test_seo_analyzer_lowercases_keyword_before_meta_check(): void
+    {
+        $source = (string) file_get_contents(
+            dirname(__DIR__, 2).'/resources/js/utils/seoAnalyzer.js',
+        );
+
+        self::assertStringContainsString('toLocaleLowerCase()', $source);
+        self::assertStringContainsString('keywordForMatch', $source);
+        self::assertStringContainsString('containsKeywordPhrase(metaDescription, keywordForMatch)', $source);
+    }
+
     public function test_count_occurrences_ignores_punctuation(): void
     {
         $content = <<<'TEXT'

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace App\Addons\SeoContentAi\Support;
 
-use Illuminate\Support\Facades\Log;
+use App\Support\RuntimeLogger;
 
 /**
  * Lightweight Article Editor mount/SEO bootstrap timing (no content/secrets in logs).
@@ -18,6 +18,13 @@ final class ArticleEditorPerfDebug
     private array $durationsMs = [];
 
     private int $wpHttpCount = 0;
+
+    private ArticleEditorBootstrapSizer $sizer;
+
+    public function __construct()
+    {
+        $this->sizer = new ArticleEditorBootstrapSizer;
+    }
 
     public function enabled(): bool
     {
@@ -58,6 +65,63 @@ final class ArticleEditorPerfDebug
     }
 
     /**
+     * Record JSON byte size of a bootstrap piece (blade script / lazy endpoint payload).
+     * No-op when perf debug is disabled — never pays json_encode cost in production.
+     */
+    public function recordBootstrapSize(string $key, mixed $data): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $this->sizer->record($key, $data);
+    }
+
+    public function bootstrapSizer(): ArticleEditorBootstrapSizer
+    {
+        return $this->sizer;
+    }
+
+    /**
+     * Log accumulated bootstrap sizes recorded via recordBootstrapSize() this request.
+     */
+    public function logBootstrapSizes(string $context): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $this->sizer->log($context);
+    }
+
+    /**
+     * Estimate Livewire public property payload sizes (Phase 2 snapshot budget).
+     *
+     * @param  array<string, mixed>  $properties
+     */
+    public function logLivewireSnapshotEstimate(string $context, array $properties): void
+    {
+        if (! $this->enabled()) {
+            return;
+        }
+
+        $sizes = [];
+        foreach ($properties as $name => $value) {
+            $sizes[$name] = ArticleEditorBootstrapSizer::bytes($value);
+        }
+        arsort($sizes);
+
+        $total = array_sum($sizes);
+        RuntimeLogger::warning('article_editor_livewire_snapshot_estimate', [
+            'context' => $context,
+            'sizes_bytes' => $sizes,
+            'total_bytes' => $total,
+            'total_kb' => round($total / 1024, 2),
+            'under_100kb' => $total < 100 * 1024,
+        ]);
+    }
+
+    /**
      * @param  array<string, scalar|null>  $extra
      */
     public function logSummary(string $context, array $extra = []): void
@@ -66,7 +130,7 @@ final class ArticleEditorPerfDebug
             return;
         }
 
-        Log::debug('article_editor_perf', array_merge([
+        RuntimeLogger::warning('article_editor_perf', array_merge([
             'context' => $context,
             'durations_ms' => $this->durationsMs,
             'wp_http_count' => $this->wpHttpCount,

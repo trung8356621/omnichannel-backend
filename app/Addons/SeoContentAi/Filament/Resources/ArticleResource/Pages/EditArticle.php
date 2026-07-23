@@ -71,6 +71,7 @@ use App\Addons\SeoContentAi\Support\KeywordFocusAttach;
 use App\Addons\SeoContentAi\Support\RankMathSeoValueNormalizer;
 use App\Addons\SeoContentAi\Automation\Support\ArticleContentConflictGuard;
 use App\Addons\SeoContentAi\Support\ArticleEditorPerfDebug;
+use App\Addons\SeoContentAi\Support\ArticleMetaMap;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Addons\SeoContentAi\Support\SeoConnectionContext;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
@@ -281,6 +282,38 @@ class EditArticle extends SeoEditRecord
 
         $perf->stop('edit_article_mount');
         $perf->logSummary('edit_article_mount', ['article_id' => (int) $this->record->getKey()]);
+    }
+
+    /**
+     * Livewire lifecycle hook — runs after the Blade view (and therefore every
+     * getEditorXPayload() bootstrap getter it called) has rendered. Cheap no-op unless
+     * ARTICLE_EDITOR_PERF_DEBUG=true (Phase 2 sizer).
+     */
+    public function dehydrate(): void
+    {
+        $perf = app(ArticleEditorPerfDebug::class);
+        $perf->logBootstrapSizes('edit_article_render');
+        $perf->logLivewireSnapshotEstimate('edit_article_dehydrate', [
+            'articleTitle' => $this->articleTitle,
+            'articleSlug' => $this->articleSlug,
+            'seoTitle' => $this->seoTitle,
+            'seoMetaDescription' => $this->seoMetaDescription,
+            'seoTitleHydrated' => $this->seoTitleHydrated,
+            'seoMetaDescriptionHydrated' => $this->seoMetaDescriptionHydrated,
+            'focusKeyword' => $this->focusKeyword,
+            'articleStatus' => $this->articleStatus,
+            'visibility' => $this->visibility,
+            'articlePostType' => $this->articlePostType,
+            'featuredImageUrl' => $this->featuredImageUrl,
+            'productGallery' => $this->productGallery,
+            'mediaPickerImages' => $this->mediaPickerImages,
+            'mediaPickerArticleCatalog' => $this->mediaPickerArticleCatalog,
+            'wpSyncContext' => $this->wpSyncContext,
+            'wpSyncPrepared' => $this->wpSyncPrepared,
+            'wpSyncDecoded' => $this->wpSyncDecoded,
+            'articleCategoryIds' => $this->articleCategoryIds,
+            'editorPreparingMessage' => $this->editorPreparingMessage,
+        ]);
     }
 
     public function pollEditorReadiness(): void
@@ -697,6 +730,18 @@ class EditArticle extends SeoEditRecord
         return MaxWidth::Full;
     }
 
+    /**
+     * Page-scoped body class — ẩn Filament topbar chỉ trên Article Editor.
+     *
+     * @return array<string, string>
+     */
+    public function getExtraBodyAttributes(): array
+    {
+        return [
+            'class' => 'article-editor-page',
+        ];
+    }
+
     protected function getHeaderActions(): array
     {
         // Prompts / Assign / Open project render in More menu (page-actions Blade).
@@ -780,27 +825,33 @@ class EditArticle extends SeoEditRecord
         $this->record->refresh();
 
         $flags = app(ArticleWordPressSyncFlagService::class);
+        $metaMap = ArticleMetaMap::for($this->record);
 
         $this->articleTitle = $flags->decodeWordPressText((string) ($this->record->title ?? ''));
         $this->articleSlug = $service->resolveSlug($this->record);
         $this->articlePostType = SeoProjectTask::normalizePostType(ArticlePostTypeResolver::resolve($this->record));
         $this->articleStatus = (string) ($this->record->status ?? 'draft');
         $this->visibility = $this->articleStatus === 'private' ? 'private' : 'public';
-        $this->featuredImageUrl = $service->resolveFeaturedImageUrl($this->record);
-        $this->productGallery = $this->isProduct()
-            ? app(ArticleMediaLocalService::class)->resolveProductAlbum($this->record)
-            : [];
-        if ($this->supportsProductGallery()) {
-            $this->featuredImageUrl = $this->productGallery[0]['url'] ?? null;
+
+        // Phase 2: featured URL from local meta only — never WordPress HTTP on shell open.
+        $featuredFromMeta = trim((string) $metaMap->get('wp_featured_image_url', ''));
+        $this->featuredImageUrl = $featuredFromMeta !== '' ? $featuredFromMeta : null;
+
+        // Phase 2: album stays out of Livewire snapshot until Images/gallery actions load it.
+        $this->productGallery = [];
+
+        // Phase 2: editor HTML from local body/meta only — no resolveEditorHtml() WP fallback on mount.
+        $localBody = trim((string) ($this->record->body ?? ''));
+        if ($localBody === '') {
+            $localBody = trim((string) $metaMap->get('wp_post_content', ''));
         }
         $this->bootstrapEditorHtml = app(ArticleCtaPlaceholderService::class)->highlightBlankPlaceholdersInHtml(
-            $service->resolveEditorHtml($this->record),
+            $localBody,
             (int) ($this->record->site_id ?? 0) > 0 ? (int) $this->record->site_id : null,
         );
         $this->hydrateSeoMetaState();
         $this->loadArticleCategoryIdsFromMeta();
         $this->syncPublishDatePartsFromRecord();
-        $this->syncProductGalleryToEditor();
     }
 
     private function restoreArticleBodyFromWordPressCacheIfMissing(): void
@@ -809,9 +860,7 @@ class EditArticle extends SeoEditRecord
             return;
         }
 
-        $cached = trim((string) ($this->record->articleMetas()
-            ->where('meta_key', 'wp_post_content')
-            ->value('meta_value') ?? ''));
+        $cached = trim((string) (ArticleMetaMap::for($this->record)->get('wp_post_content', '')));
 
         if ($cached === '') {
             return;
@@ -827,9 +876,7 @@ class EditArticle extends SeoEditRecord
             return true;
         }
 
-        $cached = trim((string) ($this->record->articleMetas()
-            ->where('meta_key', 'wp_post_content')
-            ->value('meta_value') ?? ''));
+        $cached = trim((string) (ArticleMetaMap::for($this->record)->get('wp_post_content', '')));
 
         if (strlen($cached) >= 200) {
             return true;
@@ -850,9 +897,7 @@ class EditArticle extends SeoEditRecord
             return $existingBody;
         }
 
-        $wpCached = trim((string) ($this->record->articleMetas()
-            ->where('meta_key', 'wp_post_content')
-            ->value('meta_value') ?? ''));
+        $wpCached = trim((string) (ArticleMetaMap::for($this->record)->get('wp_post_content', '')));
 
         if (strlen($wpCached) >= 200) {
             return $wpCached;
@@ -864,24 +909,19 @@ class EditArticle extends SeoEditRecord
     /** Không đặt tên hydrate{Property} — Livewire sẽ coi là lifecycle hook và gọi từ ngoài. */
     private function loadArticleCategoryIdsFromMeta(): void
     {
+        $metaMap = ArticleMetaMap::for($this->record);
+
         if ($this->isTaxonomyEntityForPublish()) {
-            $parentId = max(0, (int) ($this->record->articleMetas()
-                ->where('meta_key', 'wp_parent_id')
-                ->value('meta_value') ?? 0));
+            $parentId = max(0, (int) $metaMap->get('wp_parent_id', '0'));
             $parentId = $this->filterPublishParentId($parentId);
             $this->articleCategoryIds = $parentId > 0 ? [$parentId] : [];
 
             return;
         }
 
-        $raw = (string) ($this->record->articleMetas()
-            ->where('meta_key', 'category_ids')
-            ->value('meta_value') ?? '');
-
+        $raw = (string) $metaMap->get('category_ids', '');
         if ($raw === '') {
-            $raw = (string) ($this->record->articleMetas()
-                ->where('meta_key', 'wp_category_ids')
-                ->value('meta_value') ?? '');
+            $raw = (string) $metaMap->get('wp_category_ids', '');
         }
 
         $decoded = json_decode($raw, true);
@@ -2762,12 +2802,18 @@ class EditArticle extends SeoEditRecord
      */
     private function syncReviewedStatusFromExistingReviews(?array $reviews = null): void
     {
-        $rows = $reviews ?? $this->getVirtualReviewsPayload();
-        if (count($rows) <= 0) {
+        if ((bool) $this->record->is_reviewed) {
             return;
         }
 
-        if ((bool) $this->record->is_reviewed) {
+        // Mount path (Phase 2 perf): only need to know "any pending review at all?" —
+        // exists() avoids hydrating + mapping every row via getVirtualReviewsPayload().
+        $hasPending = $reviews !== null
+            ? count($reviews) > 0
+            : app(\App\Addons\SeoContentAi\Services\ProductReview\ArticleProductReviewStoreService::class)
+                ->hasPendingReviews($this->record);
+
+        if (! $hasPending) {
             return;
         }
 
@@ -3450,7 +3496,117 @@ class EditArticle extends SeoEditRecord
 
     public function getBootstrapEditorHtml(): string
     {
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('content', $this->bootstrapEditorHtml);
+
         return $this->bootstrapEditorHtml;
+    }
+
+    /**
+     * Phase 2 core bootstrap — the ONLY blade script tag the editor strictly needs to
+     * boot: identity, content, save/conflict tokens and lazy endpoint URLs. SEO summary,
+     * images, FAQs, links (with suggestions) and scoring settings all move behind the
+     * `endpoints` map and are fetched by the client after mount / on panel open.
+     *
+     * @return array<string, mixed>
+     */
+    public function getEditorCoreBootstrap(): array
+    {
+        $metaMap = ArticleMetaMap::for($this->record);
+        $conflictGuard = app(ArticleContentConflictGuard::class);
+        $projectRunRevision = (string) $metaMap->get('content_project_run', '');
+        $bodyHash = $conflictGuard->contentHash($this->bootstrapEditorHtml);
+        $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
+        $articleId = (int) $this->record->id;
+        $this->record->loadMissing('site');
+
+        $payload = [
+            'articleId' => $articleId,
+            'connectionHash' => SeoConnectionContext::hash(),
+            'siteId' => (int) $this->record->site_id,
+            'title' => (string) $this->articleTitle,
+            'slug' => trim($this->articleSlug),
+            // Light SERP fields — Google Preview paints from core, not seo-summary.
+            'metaDescription' => trim($this->seoMetaDescription),
+            'focusKeyword' => trim($this->focusKeyword),
+            'permalinkBase' => rtrim($this->getPermalinkBase(), '/'),
+            'permalinkSuffix' => $this->getPermalinkSuffix(),
+            'siteDomain' => trim((string) ($this->record->site?->domain ?? '')),
+            'content' => $this->bootstrapEditorHtml,
+            'status' => (string) $this->articleStatus,
+            'postType' => SeoProjectTask::normalizePostType($this->articlePostType),
+            'contentRevision' => hash('sha256', $contentRevisionSource),
+            'updatedAt' => $this->record->updated_at?->copy()->utc()->toIso8601String(),
+            'expectedUpdatedAt' => $this->record->updated_at?->copy()->utc()->toIso8601String(),
+            'expectedContentHash' => $bodyHash,
+            'featuredImageUrl' => $this->featuredImageUrl,
+            'supportsProductGallery' => $this->supportsProductGallery(),
+            'authorUserId' => $this->record->user_id !== null ? (int) $this->record->user_id : null,
+            'authorName' => $this->resolveArticleAuthorName(),
+            'currentUserId' => auth()->id() !== null ? (int) auth()->id() : null,
+            'authorIsCurrentUser' => $this->record->user_id !== null
+                && auth()->id() !== null
+                && (int) $this->record->user_id === (int) auth()->id(),
+            'endpoints' => [
+                'seoSummary' => route('seo.articles.editor.seo-summary', ['article' => $articleId]),
+                'images' => route('seo.articles.editor.images', ['article' => $articleId]),
+                'faqs' => route('seo.articles.editor.faqs', ['article' => $articleId]),
+                'faqsCount' => route('seo.articles.editor.faqs-count', ['article' => $articleId]),
+                'meta' => route('seo.articles.editor.meta', ['article' => $articleId]),
+                'links' => route('seo.articles.editor.links', ['article' => $articleId]),
+                'linksSuggestions' => route('seo.articles.editor.links-suggestions', ['article' => $articleId]),
+                'settings' => route('seo.articles.editor.settings', ['article' => $articleId]),
+                'mediaPickerConfig' => route('seo.articles.editor.media-picker-config', ['article' => $articleId]),
+            ],
+            'faqCount' => (int) $this->record->faqs()->count(),
+            'settings' => $this->getEditorCoreSettingsPayload(),
+        ];
+
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('core', $payload);
+
+        return $payload;
+    }
+
+    private function resolveArticleAuthorName(): string
+    {
+        if ($this->record->user_id === null) {
+            return __('seo-content-ai::filament.article_list.system');
+        }
+
+        $this->record->loadMissing('user');
+
+        return trim((string) (
+            $this->record->user?->display_name
+            ?? $this->record->user?->email
+            ?? __('seo-content-ai::filament.article_list.system')
+        ));
+    }
+
+    /**
+     * Minimal settings the editor needs synchronously at boot (autosave interval,
+     * permission flags). No `seo_scoring_rules` / `seo_rule_messages` / messages —
+     * those load with the SEO summary / settings lazy endpoint (Phase 2).
+     *
+     * @return array<string, mixed>
+     */
+    private function getEditorCoreSettingsPayload(): array
+    {
+        $editorSettings = app(ArticleEditorHistoryService::class)->getSettings();
+
+        return [
+            'history_step' => $editorSettings['history_step'] ?? 20,
+            'autosave_interval_seconds' => $editorSettings['autosave_interval_seconds'] ?? 60,
+            'wiki_trust_domains' => $editorSettings['wiki_trust_domains'] ?? [],
+            'show_reviews_tab' => true,
+            'show_link_widgets' => true,
+            'allow_wp_sync' => ! SeoAccessControl::isContentManager(),
+            'can_generate_featured_snippet' => $this->canGenerateFeaturedSnippet(),
+            'can_generate_outline_heading' => $this->canGenerateOutlineHeading(),
+            'can_generate_image' => $this->canGenerateEditorImage(),
+            'can_generate_video' => $this->canGenerateEditorVideo(),
+            'can_generate_faq' => app(SeoCreateArticleSettingsService::class)->getRenewFaqPromptId() !== null,
+            'prompt_hooks' => $this->getPromptHooksEditorPayload(),
+            'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
+        ];
     }
 
     /**
@@ -3470,6 +3626,7 @@ class EditArticle extends SeoEditRecord
         );
 
         $perf->stop('editor_seo_bootstrap');
+        $perf->recordBootstrapSize('seo', $payload);
         $perf->logSummary('editor_seo_bootstrap', ['article_id' => (int) $this->record->getKey()]);
 
         return $payload;
@@ -3562,7 +3719,7 @@ class EditArticle extends SeoEditRecord
         $featuredSnippetThresholds = app(SeoPromptSettingsService::class)->getFeaturedSnippetThresholds();
         $promptSettings = app(SeoPromptSettingsService::class);
 
-        return [
+        $payload = [
             ...$editorSettings,
             'wiki_trust_domains' => $editorSettings['wiki_trust_domains'],
             'featured_snippet_thresholds' => $featuredSnippetThresholds,
@@ -3584,6 +3741,10 @@ class EditArticle extends SeoEditRecord
             'prompt_hooks' => $this->getPromptHooksEditorPayload(),
             'perf_debug' => (bool) config('seo-content-ai.article_editor_perf_debug', false),
         ];
+
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('settings', $payload);
+
+        return $payload;
     }
 
     /**
@@ -3591,7 +3752,8 @@ class EditArticle extends SeoEditRecord
      *
      * @return array{
      *     title_suggestion: array{configured: bool, hook_key: string},
-     *     meta_description_suggestion: array{configured: bool, hook_key: string}
+     *     meta_description_suggestion: array{configured: bool, hook_key: string},
+     *     featured_snippet_generation: array{configured: bool, hook_key: string}
      * }
      */
     private function getPromptHooksEditorPayload(): array
@@ -3606,6 +3768,10 @@ class EditArticle extends SeoEditRecord
             'meta_description_suggestion' => [
                 'configured' => $settings->getArticleMetaDescriptionSuggestionPromptId() !== null,
                 'hook_key' => 'article.meta_description_suggestion',
+            ],
+            'featured_snippet_generation' => [
+                'configured' => $settings->getFeaturedSnippetPromptId() !== null,
+                'hook_key' => 'article.featured_snippet.generate',
             ],
         ];
     }
@@ -3641,10 +3807,9 @@ class EditArticle extends SeoEditRecord
     public function getEditorMetaPayload(): array
     {
         $siteId = (int) $this->record->site_id;
+        $metaMap = ArticleMetaMap::for($this->record);
         $conflictGuard = app(ArticleContentConflictGuard::class);
-        $projectRunRevision = (string) ($this->record->articleMetas()
-            ->where('meta_key', 'content_project_run')
-            ->value('meta_value') ?? '');
+        $projectRunRevision = (string) $metaMap->get('content_project_run', '');
         $bodyHash = $conflictGuard->contentHash($this->bootstrapEditorHtml);
         $contentRevisionSource = $projectRunRevision."\0".$bodyHash;
         $productCategoryOptions = $siteId > 0
@@ -3652,7 +3817,7 @@ class EditArticle extends SeoEditRecord
                 ->productCategoryOptionsForSite($siteId)
             : [];
 
-        return [
+        $payload = [
             'id' => (int) $this->record->id,
             'site_id' => $siteId,
             'seo_connection_hash' => SeoConnectionContext::hash(),
@@ -3682,18 +3847,42 @@ class EditArticle extends SeoEditRecord
             'preview_url' => $this->getArticlePreviewUrl(),
             'can_sync_wp' => filled($this->record->wp_post_id),
             'loai_san_pham' => $this->supportsProductGallery()
-                ? trim((string) ($this->record->articleMetas()
-                    ->where('meta_key', 'loai_san_pham')
-                    ->value('meta_value') ?? ''))
+                ? trim((string) $metaMap->get('loai_san_pham', ''))
                 : '',
             'gallery_description' => $this->supportsProductGallery()
-                ? trim((string) ($this->record->articleMetas()
-                    ->where('meta_key', 'gallery_description')
-                    ->value('meta_value') ?? ''))
+                ? trim((string) $metaMap->get('gallery_description', ''))
                 : '',
             'ai_debug' => $this->getEditorAiDebugPayload(),
             'supplemental_images' => $this->getEditorSupplementalImagesPayload(),
         ];
+
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('meta', $payload);
+
+        return $payload;
+    }
+
+    /**
+     * Minimal media picker config for initial page — no focus-keyword DB resolve.
+     *
+     * @return array{articleId: int, siteId: int, articleDomain: string, endpoint: string, wordPressLinked: bool, defaultSearchKeyword: string, cacheScope: string}
+     */
+    public function getArticleMediaPickerMinimalPayload(): array
+    {
+        $payload = [
+            'articleId' => (int) $this->record->id,
+            'siteId' => (int) $this->record->site_id,
+            'articleDomain' => $this->normalizeArticleMediaPickerDomain(
+                (string) ($this->record->site?->domain ?? ''),
+            ),
+            'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
+            'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
+            'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
+            'defaultSearchKeyword' => trim($this->focusKeyword),
+        ];
+
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('media_picker_minimal', $payload);
+
+        return $payload;
     }
 
     /**
@@ -3703,18 +3892,7 @@ class EditArticle extends SeoEditRecord
      */
     public function getArticleMediaPickerPayload(): array
     {
-        return [
-            'articleId' => (int) $this->record->id,
-            'siteId' => (int) $this->record->site_id,
-            'articleDomain' => $this->normalizeArticleMediaPickerDomain(
-                (string) ($this->record->site?->domain ?? ''),
-            ),
-            'cacheScope' => 'u:'.(int) (auth()->id() ?? 0),
-            'endpoint' => route('seo.articles.media-picker', ['article' => $this->record->id]),
-            'wordPressLinked' => (int) ($this->record->wp_post_id ?? 0) > 0,
-            'defaultSearchKeyword' => trim($this->focusKeyword) !== ''
-                ? trim($this->focusKeyword)
-                : (app(SeoAnalyzerService::class)->resolveFocusKeywordForArticle($this->record) ?? ''),
+        $payload = array_merge($this->getArticleMediaPickerMinimalPayload(), [
             'i18n' => [
                 'upload_success_one' => __('seo-content-ai::filament.media_tools.upload_success_one'),
                 'upload_success_many' => __('seo-content-ai::filament.media_tools.upload_success_many'),
@@ -3722,7 +3900,11 @@ class EditArticle extends SeoEditRecord
                 'upload_failed' => __('seo-content-ai::filament.media_tools.upload_failed'),
                 'upload_failed_body' => __('seo-content-ai::filament.media_tools.upload_failed_body'),
             ],
-        ];
+        ]);
+
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('media_picker', $payload);
+
+        return $payload;
     }
 
     /**
@@ -3752,104 +3934,8 @@ class EditArticle extends SeoEditRecord
      */
     private function getEditorSupplementalImagesPayload(): array
     {
-        $rows = [];
-        $seen = [];
-
-        $append = static function (array &$rows, array &$seen, array $row): void {
-            $src = trim((string) ($row['src'] ?? ''));
-            if ($src === '') {
-                return;
-            }
-
-            $wpId = (int) ($row['wp_attachment_id'] ?? 0);
-            $seoId = (int) ($row['seo_media_id'] ?? 0);
-            $identity = $wpId > 0
-                ? 'wp:'.$wpId
-                : ($seoId > 0 ? 'seo:'.$seoId : 'src:'.mb_strtolower($src));
-            if (isset($seen[$identity])) {
-                return;
-            }
-            $seen[$identity] = true;
-            $rows[] = $row;
-        };
-
-        $featuredUrl = trim((string) ($this->featuredImageUrl ?? ''));
-        $featuredId = (int) ($this->record->articleMetas->firstWhere('meta_key', ArticleMediaLocalService::META_FEATURED_ATTACHMENT_ID)?->meta_value ?? 0);
-        if ($featuredUrl !== '') {
-            $featuredRefs = $this->resolveSupplementalImageRefIds($featuredUrl, $featuredId);
-            $append($rows, $seen, [
-                'key' => $featuredId > 0 ? 'featured_wp_'.$featuredId : 'featured_src_'.md5($featuredUrl),
-                'block_id' => '',
-                'wp_attachment_id' => $featuredRefs['wp_attachment_id'],
-                'seo_media_id' => $featuredRefs['seo_media_id'],
-                'src' => $featuredUrl,
-                'wp_url' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? '' : $featuredUrl,
-                'local_src' => str_contains($featuredUrl, '/storage/uploads/seo_media/') ? $featuredUrl : '',
-                'slug' => trim((string) pathinfo(parse_url($featuredUrl, PHP_URL_PATH) ?? $featuredUrl, PATHINFO_FILENAME)),
-                'alt' => '',
-                'title' => '',
-                'caption' => '',
-                'align' => 'none',
-                'origin' => 'featured',
-                'origin_label' => 'Anh dai dien',
-            ]);
-        }
-
-        foreach ($this->productGallery as $idx => $item) {
-            $url = trim((string) ($item['url'] ?? ''));
-            $id = (int) ($item['id'] ?? 0);
-            if ($url === '') {
-                continue;
-            }
-
-            $refs = $this->resolveSupplementalImageRefIds($url, $id);
-            $append($rows, $seen, [
-                'key' => $id > 0 ? 'gallery_wp_'.$id : 'gallery_src_'.md5($url),
-                'block_id' => '',
-                'wp_attachment_id' => $refs['wp_attachment_id'],
-                'seo_media_id' => $refs['seo_media_id'],
-                'src' => $url,
-                'wp_url' => str_contains($url, '/storage/uploads/seo_media/') ? '' : $url,
-                'local_src' => str_contains($url, '/storage/uploads/seo_media/') ? $url : '',
-                'slug' => trim((string) pathinfo(parse_url($url, PHP_URL_PATH) ?? $url, PATHINFO_FILENAME)),
-                'alt' => '',
-                'title' => '',
-                'caption' => '',
-                'align' => 'none',
-                'origin' => 'gallery',
-                'origin_label' => $idx === 0 ? 'Anh dai dien' : 'Album san pham',
-            ]);
-        }
-
-        return $rows;
-    }
-
-    /**
-     * @return array{wp_attachment_id: int|null, seo_media_id: int|null}
-     */
-    private function resolveSupplementalImageRefIds(string $url, int $refId): array
-    {
-        $url = trim($url);
-        $refId = max(0, $refId);
-        $isLocal = str_contains($url, '/storage/uploads/seo_media/');
-
-        if ($isLocal) {
-            $seoId = $refId;
-            if ($seoId <= 0) {
-                $seoId = app(ArticleMediaLocalService::class)
-                    ->resolveLocalRefIdFromImageUrl((int) ($this->record->site_id ?? 0), $url);
-            }
-
-            return [
-                'wp_attachment_id' => null,
-                'seo_media_id' => $seoId > 0 ? $seoId : null,
-            ];
-        }
-
-        return [
-            'wp_attachment_id' => $refId > 0 ? $refId : null,
-            'seo_media_id' => null,
-        ];
+        return app(\App\Addons\SeoContentAi\Services\ArticleEditorSupplementalImagesService::class)
+            ->forArticle($this->record, (string) ($this->featuredImageUrl ?? ''), $this->productGallery);
     }
 
     /**
@@ -3966,7 +4052,10 @@ class EditArticle extends SeoEditRecord
      */
     public function getEditorImagesPayload(): array
     {
-        return app(ArticlePostImagesService::class)->resolveForArticle($this->record);
+        $payload = app(ArticlePostImagesService::class)->resolveForArticle($this->record);
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('images', $payload);
+
+        return $payload;
     }
 
     /**
@@ -3974,7 +4063,10 @@ class EditArticle extends SeoEditRecord
      */
     public function getEditorFaqsPayload(): array
     {
-        return app(ArticleFaqEditorService::class)->payloadForArticle($this->record);
+        $payload = app(ArticleFaqEditorService::class)->payloadForArticle($this->record);
+        app(ArticleEditorPerfDebug::class)->recordBootstrapSize('faqs', $payload);
+
+        return $payload;
     }
 
     /**

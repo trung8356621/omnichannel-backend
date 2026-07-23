@@ -35,6 +35,15 @@
     $articleRevisionCount = app(\App\Addons\SeoContentAi\Services\SeoArticleRevisionService::class)
         ->countForArticle((int) $record->getKey());
     $publishBoxInitial['revisionCount'] = $articleRevisionCount;
+
+    $record->loadMissing('user');
+    $articleAuthorName = $record->user_id === null
+        ? __('seo-content-ai::filament.article_list.system')
+        : trim((string) ($record->user?->display_name ?? $record->user?->email ?? __('seo-content-ai::filament.article_list.system')));
+    $articleAuthorIsCurrentUser = $record->user_id !== null
+        && auth()->id() !== null
+        && (int) $record->user_id === (int) auth()->id();
+    $currentUserLabel = trim((string) (auth()->user()?->display_name ?? auth()->user()?->email ?? ''));
 @endphp
 
 @once
@@ -439,6 +448,16 @@
                     <strong class="text-gray-800 dark:text-gray-100">{{ $record->wp_post_id }}</strong>
                 </div>
             @endif
+
+            <div class="text-xs">
+                <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.author') }}:</span>
+                <strong class="text-gray-800 dark:text-gray-100">{{ $articleAuthorName }}</strong>
+                @if ($articleAuthorIsCurrentUser)
+                    <span class="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">Bạn</span>
+                @elseif ($currentUserLabel !== '')
+                    <span class="ml-1 text-[10px] text-amber-700 dark:text-amber-300">(login: {{ $currentUserLabel }})</span>
+                @endif
+            </div>
 
             <div class="text-xs">
                 <span class="text-gray-500 dark:text-gray-400">{{ __('seo-content-ai::filament.article_list.post_type') }}:</span>

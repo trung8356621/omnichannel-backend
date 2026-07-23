@@ -2,8 +2,87 @@
 
 **Date:** 2026-07-22  
 **Scope:** `/seo/{connection_hash}/articles/{id}/edit` (`EditArticle` + React `SeoArticleEditor`)  
-**Status:** Phase 1 **implemented** (PHP + JS) — production numeric baseline still pending ops measurement  
-**Source of truth:** runtime code
+**Status:** Phase 1–4 code path + **post-Phase-4 stabilization** (regression fixes). Not Phase 5.
+
+**Docs split:**
+
+- **Baseline architecture before Phase 1** — historical audit below (sections that describe eager SSR / multi-root / mount WP). Treat as archive, not runtime.
+- **Current architecture after Phase 4 stabilization** — see §Current (top) + `docs/MAP_SEO_EDITOR.md` §2.5.2 + `docs/audits/ARTICLE_EDITOR_POST_PHASE4_REGRESSIONS.md`.
+
+---
+
+## Current architecture after Phase 4 stabilization
+
+```text
+EditArticle mount (no WP HTTP)
+  → Blade: #seo-article-core-bootstrap only (identity + content + light SERP fields + endpoints)
+  → Main React root: SeoArticleEditor + ArticleEditorModuleHost (+ optional AI FAB root)
+  → Google Preview: core + local title/slug/meta (no seo-summary wait)
+  → One SEO widget: SeoModule in SEO Assistant portal (default activeHeavyModule=seo)
+  → Lazy modules: Links/CTA, FAQ, AI Chat, Images, Reviews
+  → Lazy endpoints: /editor/seo-summary|faqs|links|links/suggestions|images|meta|settings
+  → Adapters: articleEditorPayloadAdapters.js
+  → Reviews status: GET product-review-status only when Reviews mounted; non-product → 200 applicable:false
+  → Web logs: RuntimeLogger → storage/logs/web-app-YYYY-MM-DD.log (not laravel.log)
+```
+
+**Logging split:** HTTP/editor → `web_app` (`web-app-*.log`, PHP-FPM/www). Cron/queue/watchdog → existing root-owned `laravel.log` / `queue-cron.log` / `watchdog.log` — unchanged. Chi tiết: [MAP_SEO_EDITOR.md](../MAP_SEO_EDITOR.md) §2.5.3b (`RuntimeLogger`, env `WEB_APP_LOG_*`, exception handler).
+
+| Contract | Behavior |
+|----------|----------|
+| SEO widget | Single owner — `SeoModule` portal; loading ends success/error/empty |
+| FAQ | `{cached,items,count}` (+ legacy `faqs`); normalize never reads null.cached |
+| Links / CTA | `/editor/links` on open; Generate → `/editor/links/suggestions`; CTA = Links section |
+| Preview | coreBootstrap light fields |
+| Review status | applicable / status / count; missing import fixed |
+
+### Phase 4 checklist (client utilities / outline / cleanup)
+
+- [x] **A** Audit utility paths (outline API, word count DOMParser, find/replace, SERP, hash on draft boundary)
+- [x] **B** Canonical session document = editor **blocks** (HTML strings per block); export HTML only at draft/save/preview/sync boundaries
+- [x] **C** `articleEditorClientOutline.js` — H2–H4 tree from blocks; fingerprint skip rebuild
+- [x] **D** `ArticleOutlineTab` `preferClientSource` — skip GET `/outline` on mount; refresh = client rebuild
+- [x] **E** Remove SeoArticleEditor GET `/outline` on rail open; section-add no longer POST outline
+- [x] **F** `articleEditorUtilityScheduler.js` — versioned debounce/idle + cancelAll on destroy
+- [x] **G** `articleEditorMetrics.js` — light word count (strip tags, no DOMParser loop)
+- [x] **H** Find already client + 350ms debounce; SERP preview remains local state
+- [x] **I** `hashContent` only via draft/save paths (not per keystroke)
+- [x] **J** Outline API **kept** for AI generate / check-duplicates / compare-other-article (explicit actions)
+- [x] **Tests** `ArticleEditorPhase4ClientUtilitiesTest`
+- [x] **Docs** MAP §2.5.2 + audit Phase 4 checklist
+- [x] **Stabilization** Post-Phase-4 regressions — `ArticleEditorPostPhase4RegressionTest` + `ARTICLE_EDITOR_POST_PHASE4_REGRESSIONS.md`
+- [ ] **Ops** Client benchmark (outline build ms, getHTML count, long tasks)
+
+### Phase 3 checklist (module host / unmount / dynamic import)
+
+- [x] **A** Audit: multiple roots → consolidate to main root + light FAB root
+- [x] **B** `ArticleEditorModuleHost` — Links/FAQ/AI one-at-a-time; portals; AbortController; error boundary
+- [x] **C** `SeoArticleEditor.activeHeavyModule` replaces forever-`activatedPanels` Set (true unmount)
+- [x] **D** Dynamic import chunks: `modules/{Seo,Images,Reviews,Links,Faq,AiChat}Module.jsx`
+- [x] **E** FAQ / AI / Links not mounted on initial page open
+- [x] **F** Images/Reviews fetch abort on leave; reviews list cleared when inactive
+- [x] **G** Duplicate mount guards: navigated / Livewire bridge / `__seoMountedLivewireId` / pageCleanups
+- [x] **H** Tests `ArticleEditorPhase3ModuleHostTest` (static source contracts)
+- [x] **Docs** `MAP_SEO_EDITOR.md` §2.5.2 Phase 3 architecture
+- [ ] **Ops** Client benchmark (roots, heap, chunks, long tasks) on staging
+
+### Phase 2 checklist (bootstrap slimming + lazy endpoints)
+
+- [x] **A** `Support/ArticleEditorBootstrapSizer` (+ `ArticleEditorPerfDebug::recordBootstrapSize()` / `logBootstrapSizes()` / `logLivewireSnapshotEstimate()`)
+- [x] **B** `EditArticle::getEditorCoreBootstrap()` — single `#seo-article-core-bootstrap`
+- [x] **C** Blade: **removed** eager `initial-seo` / `settings` / `meta` / `images` / `faqs` embeds; FAQ placeholder only
+- [x] **D** `forEditorSeoSummary()` — meta score/keyword/title/desc only (no catalogs / SERP rebuild / suggest)
+- [x] **E** `ArticleEditorLinksPayloadService` — Links open = `base()`; Generate = `withSuggestions()`
+- [x] **F** `suggestBundle()` + request-scoped keyword/candidates cache
+- [x] **G** `ArticleMetaMap` — one metas load / reuse
+- [x] **H** `ArticleEditorLazyPayloadController` routes under `api/seo/articles/{article}/editor/*`
+- [x] **I** FAQ mount only on `seo-faq-panel-activate` (no IntersectionObserver); Images+meta fetch only when Images panel activates
+- [x] **J** Links never calls `forArticle()` / never suggestions on panel open
+- [x] **K** Reviews: mount uses `exists()` / pending flag only
+- [x] **L** Hydrate: no `resolveEditorHtml` / `resolveFeaturedImageUrl` / `resolveProductAlbum` (local meta/body only; `productGallery=[]`)
+- [x] **Tests** BootstrapSizer, MetaMap, LinksPayload, Keyword cache, CoreBootstrap, BladeLazy, MountNoRemoteWp (hydrate local-only asserts)
+- [x] **Docs** `ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md`, `MAP_SEO_EDITOR.md` §2.5.3
+- [ ] **Ops** Fill production before/after (Blade HTML KB, snapshot KB, query count, mount ms, peak memory)
 
 ### Phase 1 checklist
 
@@ -24,22 +103,19 @@
 
 ---
 
-## 0. Docs reviewed
+## Baseline architecture before Phase 1
+
+> Archive — describes pre-refactor eager SSR / multi-root / mount WP. **Not** current runtime.
+
+### 0. Docs reviewed
 
 | Doc | Relevance | Notes vs code |
 |-----|-----------|---------------|
 | `docs/SUPER_MAP_INDEX.md` | Index → MAP_SEO_EDITOR | OK |
-| `docs/MAP_SEO_EDITOR.md` | Primary editor map | Mostly accurate; says local draft không hit server — **correct for typing**. Understates initial WP fetch + SEO payload cost. |
+| `docs/MAP_SEO_EDITOR.md` | Primary editor map | Updated for Phase 3/4 + stabilization |
 | `docs/MAP_SEO_SETTINGS.md` | Editor settings | Label «auto-save» vẫn mô tả **DB save** — **sai so với runtime** (chỉ localStorage). |
-| `docs/MAP_SEO_WP.md` | Sync / lease / poll | Sync path OK; initial mount WP fetch không nhấn mạnh đủ. |
-| `docs/MAP_SEO_PROJECTS.md` | Approve / project | Peripheral |
-| `docs/MAP_SEO_MEDIA.md` | Media picker / AI image | Flow đúng |
-| `docs/MAP_SEO_FRONTEND.md` | Bundle / roots | Mentions 5–6 React roots — matches `article-editor.jsx` |
-| `docs/MAP_SEO_AUDIT.md` | Review UI | Peripheral |
-| `docs/automation/AUTOMATION_SERVICE_INVENTORY.md` | Persist / sync services | OK |
-| `docs/automation/AUTOMATION_BOUNDARIES.md` | Content vs WP boundary | OK |
-| `docs/automation/AUTOMATION_ACTION_CATALOG.md` | `article.content.update` conflict | Catalog có expected_updated_at/hash; editor save UI chưa surface 409 restore flow |
-| `docs/prompt-hooks/article-title-suggestion.md` | Title ngoài React hub | OK |
+| `docs/MAP_SEO_WP.md` | Sync / lease / poll | Sync path OK |
+| `docs/MAP_SEO_FRONTEND.md` | Bundle / roots | Historical multi-root notes superseded by Phase 3 |
 
 **Docs ≠ code (must fix after refactor):**
 
@@ -49,7 +125,7 @@
 
 ---
 
-## 1. Current architecture
+## 1. Baseline architecture (before Phase 1)
 
 ```text
 Filament route EditArticle
@@ -66,7 +142,7 @@ Filament route EditArticle
   → Manual Save/Sync → REST `/api/seo/articles/{id}/save|sync-wp` (không sync content theo keystroke)
 ```
 
-### Ownership (as-is)
+### Ownership (as-is baseline)
 
 | Concern | Owner today | Problem |
 |---------|-------------|---------|
@@ -79,7 +155,7 @@ Filament route EditArticle
 
 ---
 
-## 2. Runtime paths traced
+## 2. Runtime paths traced (baseline)
 
 ### 2.1 Entry / mount (PHP)
 
@@ -388,8 +464,8 @@ Ownership split:
 
 | Phase | Scope | Gate |
 |-------|-------|------|
-| **1** | Audit (this doc) + isolate local draft + stop Livewire content sync paths that remain + restore UI + save single-flight + tests | **Start here after audit sign-off** |
-| **2** | Core query cut: remove WP from mount; slim SEO bootstrap; drop `editorHtml` from Livewire snapshot if possible | After Phase 1 |
+| **1** | Audit (this doc) + isolate local draft + stop Livewire content sync paths that remain + restore UI + save single-flight + tests | **Done** |
+| **2** | Core query cut: remove WP from mount; slim SEO bootstrap; drop `editorHtml` from Livewire snapshot if possible → implemented as `getEditorCoreBootstrap()` + lazy `/editor/*` endpoints (see Phase 2 checklist above) | **Done** |
 | **3** | On-demand modules one-by-one (SEO → AI → Images → Links → Reviews → FAQ → CTA → Publishing) | Per-module commits |
 | **4** | Client utilities (outline/wordcount/find/preview already partly client — finish isolation) | |
 | **5** | Benchmark fill-in + dead bridge removal + docs | Must use real numbers |
@@ -426,5 +502,6 @@ Ownership split:
 - [x] Bottlenecks classified (Critical/High/Medium/Low)
 - [ ] Production numeric baseline (ops) — pending manual measurement
 - [x] Phase 1 PHP implementation started (2026-07-22)
+- [x] Phase 2 core bootstrap + lazy `/editor/*` endpoints implemented (2026-07-22) — fixture-measured 94% reduction of non-content bootstrap bytes (25.2 KB → 1.5 KB); see `ARTICLE_EDITOR_PHASE2_BOOTSTRAP_SIZES.md`
 
-**Audit complete. Phase 1 PHP in progress; JS/React next.**
+**Audit complete. Phase 1 + Phase 2 implemented; production ops baseline still pending manual measurement.**

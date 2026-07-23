@@ -16,6 +16,20 @@ enum WpSyncJobStatus: string
     /**
      * @return list<string>
      */
+    public static function unfinishedValues(): array
+    {
+        // Badge + Sync Queue tab: chưa hoàn tất thành công (failed vẫn giữ để retry).
+        return [
+            self::Pending->value,
+            self::Processing->value,
+            self::Failed->value,
+            self::Stale->value,
+        ];
+    }
+
+    /**
+     * @return list<string>
+     */
     public static function activeValues(): array
     {
         return [self::Pending->value, self::Processing->value];

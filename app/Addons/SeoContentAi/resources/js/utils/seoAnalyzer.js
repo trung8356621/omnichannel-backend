@@ -47,16 +47,22 @@ export function resolveScoringMessage(key, messages = {}, params = {}) {
 }
 
 function normalizeFocusKeyword(raw) {
-    const value = String(raw ?? '').trim();
+    let source = raw;
+    if (source && typeof source === 'object') {
+        source = source.phrase ?? source.focus_keyword ?? source.keyword ?? source.label ?? '';
+    }
+
+    const value = String(source ?? '').trim();
     if (value === '') {
         return '';
     }
 
-    if (value.includes(',')) {
-        return value.split(',')[0]?.trim() ?? '';
-    }
+    // Matching always case-insensitive — lowercase early for meta/title/intro checks.
+    const primary = value.includes(',')
+        ? (value.split(',')[0]?.trim() ?? '')
+        : value;
 
-    return value;
+    return primary.toLocaleLowerCase();
 }
 
 function slugContainsFocusKeyword(slug, focusKeyword) {
@@ -428,17 +434,19 @@ function resolveImageRatioViolations(html) {
 
 function resolveKeywordViolations({ html, keyword, seoTitle, metaDescription, slug }) {
     const violations = [];
+    // Explicit lowercase before meta compare (defense in depth; normalizePhrase also lowercases).
+    const keywordForMatch = String(keyword ?? '').toLocaleLowerCase();
 
-    if (!containsKeywordPhrase(seoTitle, keyword)) {
+    if (!containsKeywordPhrase(seoTitle, keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInTitle);
     }
-    if (!containsKeywordPhrase(metaDescription, keyword)) {
+    if (!containsKeywordPhrase(metaDescription, keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInMeta);
     }
-    if (!slugContainsFocusKeyword(slug, keyword)) {
+    if (!slugContainsFocusKeyword(slug, keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInSlug);
     }
-    if (!containsKeywordPhrase(sliceFirstWords(html, 100), keyword)) {
+    if (!containsKeywordPhrase(sliceFirstWords(html, 100), keywordForMatch)) {
         violations.push(RULE_KEYS.keywordMissingInIntro);
     }
 

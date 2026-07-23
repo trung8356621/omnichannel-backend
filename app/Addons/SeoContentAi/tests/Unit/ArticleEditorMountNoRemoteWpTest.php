@@ -16,28 +16,22 @@ final class ArticleEditorMountNoRemoteWpTest extends TestCase
         $path = dirname(__DIR__, 2).'/Filament/Resources/ArticleResource/Pages/EditArticle.php';
         $source = (string) file_get_contents($path);
 
-        $mountPos = strpos($source, 'public function mount(int|string $record): void');
-        $hydratePos = strpos($source, 'protected function hydrateArticleState(): void');
-        $pollPos = strpos($source, 'public function pollEditorReadiness(): void');
+        $mountBlock = $this->extractMethodBody($source, 'public function mount(int|string $record): void');
+        $pollBlock = $this->extractMethodBody($source, 'public function pollEditorReadiness(): void');
+        $hydrateBlock = $this->extractMethodBody($source, 'protected function hydrateArticleState(): void');
 
-        self::assertNotFalse($mountPos);
-        self::assertNotFalse($hydratePos);
-        self::assertNotFalse($pollPos);
-
-        $mountBlock = substr($source, $mountPos, $hydratePos - $mountPos);
-        $pollEnd = strpos($source, 'public function updatedArticleSlug', $pollPos);
-        $pollBlock = substr($source, $pollPos, ($pollEnd !== false ? $pollEnd : $pollPos + 800) - $pollPos);
-        $hydrateEnd = strpos($source, 'private function restoreArticleBodyFromWordPressCacheIfMissing', $hydratePos);
-        $hydrateBlock = substr($source, $hydratePos, ($hydrateEnd !== false ? $hydrateEnd : $hydratePos + 1200) - $hydratePos);
+        self::assertNotSame('', $mountBlock);
+        self::assertNotSame('', $pollBlock);
+        self::assertNotSame('', $hydrateBlock);
 
         foreach (['syncTitleFromWordPressWhenAllowed', 'syncWordPressCategoriesOnLoad', 'importFaqsFromWordPressOnLoad'] as $forbidden) {
             self::assertStringNotContainsString(
-                $forbidden.'(',
+                '$this->'.$forbidden.'(',
                 $mountBlock,
                 "mount() must not call {$forbidden}",
             );
             self::assertStringNotContainsString(
-                $forbidden.'(',
+                '$this->'.$forbidden.'(',
                 $pollBlock,
                 "pollEditorReadiness() must not call {$forbidden}",
             );
@@ -48,9 +42,58 @@ final class ArticleEditorMountNoRemoteWpTest extends TestCase
             $hydrateBlock,
             'hydrateArticleState() must not call healTaxonomyMetaFromWordPress (remote HTTP)',
         );
+        self::assertStringNotContainsString(
+            'resolveEditorHtml',
+            $hydrateBlock,
+            'hydrateArticleState() must not call resolveEditorHtml (WP HTTP fallback)',
+        );
+        self::assertStringNotContainsString(
+            'resolveFeaturedImageUrl',
+            $hydrateBlock,
+            'hydrateArticleState() must not call resolveFeaturedImageUrl (WP HTTP fallback)',
+        );
+        self::assertStringNotContainsString(
+            'resolveProductAlbum',
+            $hydrateBlock,
+            'hydrateArticleState() must not load product album into Livewire snapshot',
+        );
+        self::assertStringContainsString('productGallery = []', $hydrateBlock);
 
         self::assertStringContainsString('protected string $bootstrapEditorHtml', $source);
         self::assertStringNotContainsString('public string $editorHtml', $source);
         self::assertStringContainsString('forEditorBootstrap', $source);
+    }
+
+    /**
+     * Extract one method body only (until next method at same indentation level).
+     * Avoids swallowing later private method definitions that share the forbidden names.
+     */
+    private function extractMethodBody(string $source, string $signature): string
+    {
+        $pos = strpos($source, $signature);
+        if ($pos === false) {
+            return '';
+        }
+
+        $brace = strpos($source, '{', $pos);
+        if ($brace === false) {
+            return '';
+        }
+
+        $depth = 0;
+        $len = strlen($source);
+        for ($i = $brace; $i < $len; $i++) {
+            $ch = $source[$i];
+            if ($ch === '{') {
+                $depth++;
+            } elseif ($ch === '}') {
+                $depth--;
+                if ($depth === 0) {
+                    return substr($source, $brace, $i - $brace + 1);
+                }
+            }
+        }
+
+        return '';
     }
 }

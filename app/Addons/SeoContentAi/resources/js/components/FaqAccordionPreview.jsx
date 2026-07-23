@@ -1,67 +1,72 @@
 import React from 'react';
-
-function questionLabel(question, index) {
-    const text = String(question ?? '').trim();
-    if (text === '') {
-        return `${index + 1}.`;
-    }
-
-    if (/^\d+[\.\)]\s/.test(text)) {
-        return text;
-    }
-
-    return `${index + 1}. ${text}`;
-}
-
-function FaqItem({ faq, index, defaultOpen }) {
-    const question = questionLabel(faq.question, index);
-    const answerHtml = String(faq.answer ?? '').trim();
-    const moreHtml = String(faq.more ?? '').trim();
-
-    if (answerHtml === '') {
-        return null;
-    }
-
-    return (
-        <details className="omi-faq-item" open={defaultOpen || undefined}>
-            <summary className="omi-faq-item__summary">
-                <span className="omi-faq-item__chevron" aria-hidden="true" />
-                <span className="omi-faq-item__question">{question}</span>
-            </summary>
-            <div className="omi-faq-item__body">
-                {moreHtml ? (
-                    <div className="omi-faq-item__more" dangerouslySetInnerHTML={{ __html: moreHtml }} />
-                ) : null}
-                <div className="omi-faq-item__answer" dangerouslySetInnerHTML={{ __html: answerHtml }} />
-            </div>
-        </details>
-    );
-}
+import { t } from '../utils/i18n';
 
 /**
- * @param {{ faqs?: Array<{ question?: string, answer?: string, more?: string, id?: number }>, showHint?: boolean }} props
+ * Compact FAQ shortcode surface — count + Edit/Create. Full rows stay lazy in FAQ module.
+ *
+ * @param {{
+ *   faqs?: Array<{ question?: string, answer?: string, more?: string, id?: number }>,
+ *   faqCount?: number|null,
+ *   canGenerateFaq?: boolean,
+ *   onEditFaq?: () => void,
+ *   onCreateFaq?: () => void,
+ *   showHint?: boolean,
+ * }} props
  */
-export default function FaqAccordionPreview({ faqs = [], showHint = true }) {
+export default function FaqAccordionPreview({
+    faqs = [],
+    faqCount = null,
+    canGenerateFaq = false,
+    onEditFaq,
+    onCreateFaq,
+    showHint = true,
+}) {
     const rows = (faqs ?? []).filter((row) => String(row?.answer ?? '').trim() !== '');
-
-    if (rows.length === 0) {
-        return (
-            <div className="omi-faq-placeholder" data-omi-faq="1">
-                [omi_faq]
-            </div>
-        );
-    }
+    const countFromRows = rows.length;
+    const resolvedCount = Number.isFinite(Number(faqCount)) && Number(faqCount) > 0
+        ? Number(faqCount)
+        : countFromRows;
+    const hasFaq = resolvedCount > 0 || countFromRows > 0;
 
     return (
-        <div className="omi-faq-editor-preview">
-            <div className="omi-faq-container seo-article-preview-faq">
-                {rows.map((row, index) => (
-                    <FaqItem key={row.id ?? `faq-${index}`} faq={row} index={index} defaultOpen={index === 0} />
-                ))}
+        <div className="omi-faq-editor-preview omi-faq-editor-preview--compact" data-omi-faq="1">
+            <div className="omi-faq-placeholder omi-faq-shortcode-card">
+                <div className="omi-faq-shortcode-card__title">{t('faq_shortcode_title')}</div>
+                <div className="omi-faq-shortcode-card__body">
+                    {hasFaq
+                        ? t('faq_shortcode_count', { count: resolvedCount })
+                        : t('faq_shortcode_empty')}
+                </div>
+                <div className="omi-faq-shortcode-card__actions">
+                    {hasFaq ? (
+                        <button
+                            type="button"
+                            className="omi-faq-shortcode-card__btn"
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onEditFaq?.();
+                            }}
+                        >
+                            {t('faq_shortcode_edit')}
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            className="omi-faq-shortcode-card__btn"
+                            disabled={!canGenerateFaq && !onCreateFaq}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onCreateFaq?.();
+                            }}
+                        >
+                            {t('faq_shortcode_create')}
+                        </button>
+                    )}
+                </div>
             </div>
-            {showHint ? (
+            {showHint && hasFaq && countFromRows > 0 ? (
                 <p className="omi-faq-editor-preview__hint">
-                    Shortcode [omi_faq] — chỉnh câu hỏi / trả lời tại panel FAQ bên dưới.
+                    Shortcode [omi_faq] — {t('faq_shortcode_count', { count: countFromRows })}
                 </p>
             ) : null}
         </div>

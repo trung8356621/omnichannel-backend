@@ -13,6 +13,7 @@ use App\Addons\SeoContentAi\Services\KeywordReviewReasonService;
 use App\Addons\SeoContentAi\Services\KeywordReviewService;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
+use App\Support\RuntimeLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Throwable;
@@ -88,7 +89,7 @@ final class KeywordReviewController extends Controller
                 'keyword' => $this->serializeKeyword($result['keyword']),
             ]);
         } catch (Throwable $exception) {
-            report($exception);
+            RuntimeLogger::report($exception);
 
             return response()->json([
                 'success' => false,
@@ -119,7 +120,7 @@ final class KeywordReviewController extends Controller
                 'keyword' => $this->serializeKeyword($restored),
             ]);
         } catch (Throwable $exception) {
-            report($exception);
+            RuntimeLogger::report($exception);
 
             return response()->json([
                 'success' => false,

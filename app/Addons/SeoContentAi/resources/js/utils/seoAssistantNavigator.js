@@ -82,7 +82,8 @@ export function createSeoAssistantNavigator() {
         searchOpen: false,
         searchHighlightIndex: 0,
         activePanel: '',
-        panelFilterActive: false,
+        // Exclusive accordion from first paint — never stack every assistant panel.
+        panelFilterActive: true,
         badges: {},
 
         get filteredSearchResults() {
@@ -179,17 +180,8 @@ export function createSeoAssistantNavigator() {
 
             const linksIndex = chips.findIndex((chip) => chip.id === 'links');
             if (linksIndex >= 0) {
+                // FAQ mở từ shortcode block — không còn chip FAQ trên assistant dock.
                 chips.splice(linksIndex + 1, 0, {
-                    id: 'faq',
-                    label: 'FAQ',
-                    fullLabel: 'FAQ Assistant',
-                    keywords: ['faq', 'question'],
-                    panelSlot: false,
-                    linkSection: 'faq',
-                    order: linksIndex * 10 + 5,
-                    element: chips[linksIndex].element,
-                });
-                chips.splice(linksIndex + 2, 0, {
                     id: 'cta',
                     label: 'CTA',
                     fullLabel: 'CTA Assistant',
@@ -203,12 +195,26 @@ export function createSeoAssistantNavigator() {
 
             this.chips = chips;
             this.searchCatalog = buildSearchCatalog(chips);
-            this.activePanel = chips[0]?.id ?? '';
+            const defaultId = chips[0]?.id ?? '';
+            this.panelFilterActive = true;
+            this.activePanel = defaultId;
+            if (defaultId) {
+                // Sync React mount gate with Alpine exclusive default (seo / first chip).
+                window.dispatchEvent(
+                    new CustomEvent('seo-assistant-switch-panel', {
+                        detail: { panel: defaultId, source: 'discover' },
+                    }),
+                );
+            }
         },
 
         isWidgetVisible(widgetId) {
             if (!this.panelFilterActive) {
                 return true;
+            }
+
+            if (!this.activePanel) {
+                return false;
             }
 
             if (this.activePanel === widgetId) {
@@ -287,6 +293,19 @@ export function createSeoAssistantNavigator() {
         },
 
         selectChip(panelId) {
+            // Exclusive accordion toggle: same chip closes all panels.
+            if (this.panelFilterActive && this.activePanel === panelId) {
+                this.activePanel = '';
+                this.panelFilterActive = true;
+                window.dispatchEvent(
+                    new CustomEvent('seo-assistant-switch-panel', {
+                        detail: { panel: null, closed: true },
+                    }),
+                );
+
+                return;
+            }
+
             // Dispatch trước — _onSwitchPanel (listener chính nó) sẽ gọi switchPanel().
             // Nhờ vậy React (SeoArticleEditor) cũng biết panel nào vừa được người dùng mở
             // (mount lazy Images/Reviews/Links — Phase 1 perf).
@@ -319,7 +338,15 @@ export function createSeoAssistantNavigator() {
                 return;
             }
 
-            this.switchPanel(item.panelId);
+            // Force-open via selectChip path so React receives the same switch event.
+            if (this.panelFilterActive && this.activePanel === item.panelId) {
+                this.closeSearch();
+                this.searchQuery = '';
+
+                return;
+            }
+
+            this.selectChip(item.panelId);
             this.searchQuery = '';
             this.closeSearch();
         },
@@ -394,17 +421,14 @@ export function createSeoAssistantNavigator() {
                 }
             });
 
-            const faqBadge = document.querySelector('[data-assistant-link-section="faq"] .seo-assistant-widget__badge');
             const ctaBadge = document.querySelector('[data-assistant-link-section="cta"] .seo-assistant-widget__badge');
-
-            if (faqBadge?.textContent?.trim()) {
-                const next = Number(faqBadge.textContent.trim());
-                this.badges.faq = Number.isFinite(next) && next > 0 ? next : null;
-            }
-
             if (ctaBadge?.textContent?.trim()) {
                 const next = Number(ctaBadge.textContent.trim());
                 this.badges.cta = Number.isFinite(next) && next > 0 ? next : null;
+            }
+            // FAQ badge removed — FAQ opens from shortcode, not assistant dock.
+            if (this.badges.faq !== undefined) {
+                delete this.badges.faq;
             }
         },
     };

@@ -190,7 +190,9 @@ final class SeoScoringEngine
             $violations[] = SeoScoringRulesRegistry::KEY_KEYWORD_MISSING_IN_TITLE;
         }
 
-        if (! KeywordPhraseMatcher::contains($metaDescription, $keyword)) {
+        // Keyword always lowercased before meta compare (matcher also normalizes).
+        $keywordForMeta = mb_strtolower(trim($keyword), 'UTF-8');
+        if (! KeywordPhraseMatcher::contains($metaDescription, $keywordForMeta)) {
             $violations[] = SeoScoringRulesRegistry::KEY_KEYWORD_MISSING_IN_META;
         }
 

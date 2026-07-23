@@ -82,6 +82,19 @@ final class AutomationPhase4MigrationTest extends TestCase
         self::assertSame('conflict_updated_at', $fail->error['code'] ?? null);
     }
 
+    public function test_content_conflict_guard_updated_at_soft_when_hash_matches(): void
+    {
+        $guard = new ArticleContentConflictGuard;
+        $article = new SeoArticle;
+        $article->body = 'same-body';
+        $article->updated_at = Carbon::parse('2026-07-01T10:00:00+00:00');
+
+        self::assertNull($guard->assertCompatible($article, [
+            'expected_updated_at' => '2026-07-01T09:00:00+00:00',
+            'expected_content_hash' => $guard->contentHash('same-body'),
+        ]));
+    }
+
     public function test_content_hash_stable(): void
     {
         $guard = new ArticleContentConflictGuard;

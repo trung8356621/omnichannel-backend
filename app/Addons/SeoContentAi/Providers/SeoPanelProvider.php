@@ -6,6 +6,7 @@ namespace App\Addons\SeoContentAi\Providers;
 
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoChangePassword;
 use App\Addons\SeoContentAi\Filament\Pages\Auth\SeoEditProfile;
+use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorLazyPayloadController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorSyncController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleEditorOperationController;
 use App\Addons\SeoContentAi\Http\Controllers\ArticleProductReviewReconcileController;
@@ -329,6 +330,34 @@ class SeoPanelProvider extends PanelProvider
                 Route::get('/{article}/editor-seo-payload', [ArticleEditorSyncController::class, 'seoPayload'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.seo-payload');
+                // Phase 2 lazy bootstrap endpoints — fetched by the client after core mount / on panel open.
+                Route::get('/{article}/editor/seo-summary', [ArticleEditorLazyPayloadController::class, 'seoSummary'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.seo-summary');
+                Route::get('/{article}/editor/images', [ArticleEditorLazyPayloadController::class, 'images'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.images');
+                Route::get('/{article}/editor/faqs', [ArticleEditorLazyPayloadController::class, 'faqs'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faqs');
+                Route::get('/{article}/editor/faqs/count', [ArticleEditorLazyPayloadController::class, 'faqsCount'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.faqs-count');
+                Route::get('/{article}/editor/meta', [ArticleEditorLazyPayloadController::class, 'meta'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.meta');
+                Route::get('/{article}/editor/links', [ArticleEditorLazyPayloadController::class, 'links'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.links');
+                Route::get('/{article}/editor/links/suggestions', [ArticleEditorLazyPayloadController::class, 'linksSuggestions'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.links-suggestions');
+                Route::get('/{article}/editor/settings', [ArticleEditorLazyPayloadController::class, 'settings'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.settings');
+                Route::get('/{article}/editor/media-picker-config', [ArticleEditorLazyPayloadController::class, 'mediaPickerConfig'])
+                    ->whereNumber('article')
+                    ->name('seo.articles.editor.media-picker-config');
                 Route::post('/{article}/sync-wp', [ArticleEditorSyncController::class, 'syncWp'])
                     ->whereNumber('article')
                     ->name('seo.articles.editor.sync-wp');

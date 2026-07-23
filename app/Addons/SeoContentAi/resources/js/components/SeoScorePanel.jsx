@@ -8,6 +8,7 @@ import {
     scoreFromViolations,
     scoreQualityLabel,
 } from '../utils/seoScoreCalculator';
+import { resolveSeoViolationAction } from '../utils/seoViolationActions';
 
 function scoreColor(score) {
     if (score >= 70) return 'text-emerald-600 dark:text-emerald-400';
@@ -21,6 +22,29 @@ function scoreBadgeClass(score) {
     return 'seo-assistant-score__badge--poor';
 }
 
+function ViolationActionButton({ item, onViolationAction, canGenerateFaq = true, canGenerateFeaturedSnippet = true }) {
+    const action = resolveSeoViolationAction(item.key);
+    if (!action || typeof onViolationAction !== 'function') {
+        return null;
+    }
+    if (action.action === 'open-faq-generator' && !canGenerateFaq) {
+        return null;
+    }
+    if (action.action === 'open-featured-snippet-prompt' && !canGenerateFeaturedSnippet) {
+        return null;
+    }
+
+    return (
+        <button
+            type="button"
+            className="seo-assistant-score__issue-action"
+            onClick={() => onViolationAction(action)}
+        >
+            {t(action.labelKey)}
+        </button>
+    );
+}
+
 export default function SeoScorePanel({
     focusKeyword,
     analysis,
@@ -29,7 +53,11 @@ export default function SeoScorePanel({
     loading,
     analyzing,
     stale = false,
+    analyzeError = null,
     onAnalyzeClick,
+    onViolationAction,
+    canGenerateFaq = true,
+    canGenerateFeaturedSnippet = true,
 }) {
     const [passedOpen, setPassedOpen] = useState(true);
     const rules = Array.isArray(seoScoringRules) && seoScoringRules.length > 0
@@ -64,10 +92,24 @@ export default function SeoScorePanel({
             </div>
 
             <p className="seo-assistant-score__hint">
-                {analyzing ? t('seo_score_analyzing') : t('seo_score_updated_by_content')}
+                {analyzing
+                    ? t('editor_seo_analyzing')
+                    : analyzeError
+                      ? t('editor_seo_analyze_failed')
+                      : t('editor_seo_updated_by_content')}
             </p>
 
-            {stale && !analyzing ? (
+            {analyzeError && !analyzing ? (
+                <button
+                    type="button"
+                    className="seo-assistant-score__stale-hint"
+                    onClick={onAnalyzeClick}
+                >
+                    {t('editor_seo_analyze_retry')}
+                </button>
+            ) : null}
+
+            {stale && !analyzing && !analyzeError ? (
                 <button
                     type="button"
                     className="seo-assistant-score__stale-hint"
@@ -95,6 +137,12 @@ export default function SeoScorePanel({
                             <AlertCircle size={14} className="seo-assistant-score__issue-icon" aria-hidden />
                             <span className="seo-assistant-score__issue-label">{item.label}</span>
                             <span className="seo-assistant-score__issue-deduction">(-{item.deduction})</span>
+                            <ViolationActionButton
+                                item={item}
+                                onViolationAction={onViolationAction}
+                                canGenerateFaq={canGenerateFaq}
+                                canGenerateFeaturedSnippet={canGenerateFeaturedSnippet}
+                            />
                         </li>
                     ))}
                 </ul>

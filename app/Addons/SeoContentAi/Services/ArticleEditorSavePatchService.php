@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Services;
 use App\Addons\SeoContentAi\Models\SeoArticle;
 use App\Addons\SeoContentAi\Models\SeoProjectTask;
 use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
+use App\Addons\SeoContentAi\Support\ArticlePostTypeResolver;
 use App\Addons\SeoContentAi\Support\SeoDisplayTimezone;
 use Illuminate\Support\Carbon;
 
@@ -31,28 +32,36 @@ final class ArticleEditorSavePatchService
         $article->loadMissing('articleMetas');
 
         $status = (string) ($article->status ?? 'draft');
-        $publishedAt = $article->published_at instanceof Carbon
-            ? $article->published_at->copy()->timezone(SeoDisplayTimezone::name())
-            : null;
-        $updatedAt = $article->updated_at instanceof Carbon
+        $updatedAtUtc = $article->updated_at instanceof Carbon
+            ? $article->updated_at->copy()->utc()
+            : SeoDisplayTimezone::now()->utc();
+        $updatedAtDisplay = $article->updated_at instanceof Carbon
             ? $article->updated_at->copy()->timezone(SeoDisplayTimezone::name())
             : SeoDisplayTimezone::now();
+        $publishedAtDisplay = $article->published_at instanceof Carbon
+            ? $article->published_at->copy()->timezone(SeoDisplayTimezone::name())
+            : null;
 
         $postType = SeoProjectTask::normalizePostType(
             (string) ($article->type ?? ArticlePostTypeResolver::resolve($article)),
         );
 
         $publishWhenLabel = '';
-        if ($status === 'scheduled' && $publishedAt instanceof Carbon) {
-            $publishWhenLabel = $this->formatScheduleLabel($publishedAt);
+        if ($status === 'scheduled' && $publishedAtDisplay instanceof Carbon) {
+            $publishWhenLabel = $this->formatScheduleLabel($publishedAtDisplay);
         }
 
         $publishedAtSidebarLabel = null;
         if ($this->scheduleReconcile->shouldShowPublishedAtLabel($status, $article->published_at)) {
-            $publishedAtSidebarLabel = $publishedAt instanceof Carbon
-                ? $this->formatScheduleLabel($publishedAt)
+            $publishedAtSidebarLabel = $publishedAtDisplay instanceof Carbon
+                ? $this->formatScheduleLabel($publishedAtDisplay)
                 : null;
         }
+
+        $article->loadMissing('user');
+        $authorName = $article->user_id === null
+            ? ''
+            : trim((string) ($article->user?->display_name ?? $article->user?->email ?? ''));
 
         return [
             'article' => [
@@ -62,10 +71,13 @@ final class ArticleEditorSavePatchService
                 'status' => $status,
                 'post_type' => $postType,
                 'visibility' => $context->visibility,
-                'updated_at' => $updatedAt->toIso8601String(),
-                'updated_at_label' => $updatedAt->format('d/m/Y H:i'),
-                'published_at' => $publishedAt?->toIso8601String(),
+                // Conflict token: luôn UTC ISO — khớp bootstrap expectedUpdatedAt.
+                'updated_at' => $updatedAtUtc->toIso8601String(),
+                'updated_at_label' => $updatedAtDisplay->format('d/m/Y H:i'),
+                'published_at' => $publishedAtDisplay?->toIso8601String(),
                 'seo_score' => $article->seo_score !== null ? (float) $article->seo_score : null,
+                'user_id' => $article->user_id !== null ? (int) $article->user_id : null,
+                'author' => $authorName !== '' ? $authorName : null,
             ],
             'publish_box' => [
                 'status' => $status,
@@ -80,7 +92,7 @@ final class ArticleEditorSavePatchService
                 'published_at_sidebar_label' => $publishedAtSidebarLabel,
                 'show_publish_schedule_row' => $this->scheduleReconcile->shouldShowScheduleLabel($status),
                 'status_label' => $this->statusLabel($status),
-                'saved_at_label' => 'Đã lưu lúc '.$updatedAt->format('H:i:s'),
+                'saved_at_label' => 'Đã lưu lúc '.$updatedAtDisplay->format('H:i:s'),
             ],
             'flags' => [
                 'local_edit_pending' => $this->syncFlags->hasLocalEditPending($article),

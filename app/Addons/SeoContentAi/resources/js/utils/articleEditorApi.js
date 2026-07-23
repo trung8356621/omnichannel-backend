@@ -414,6 +414,7 @@ export async function syncArticleToWordPressViaApi(articleId, payload) {
     // Gate blocked / fail: server đã gắn notification — phải toast trước khi throw.
     if (payloadData.notification) {
         showArticleEditorFilamentToast(payloadData.notification);
+        payloadData.notificationShown = true;
     }
 
     if (!response.ok || payloadData.success === false) {
@@ -647,14 +648,40 @@ export function handleArticleSaveConflict(error) {
 }
 
 /**
- * Hoàn tất Sync WP — giữ overlay + poll; reload khi backend báo terminal.
+ * Optional helper — navigate to Sync Queue list (no forced close).
+ * Kept for manual "View queue" actions; enqueue success stays on editor + poll.
  *
- * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, notification?: Record<string, string>, operation?: object }} result
+ * @returns {string}
+ */
+export function resolveSyncQueueListUrl() {
+    const configured = typeof window.__SEO_ARTICLES_SYNC_QUEUE_URL__ === 'string'
+        ? window.__SEO_ARTICLES_SYNC_QUEUE_URL__.trim()
+        : '';
+    if (configured !== '') {
+        return configured;
+    }
+
+    const indexUrl = typeof window.__SEO_ARTICLES_LIST_URL__ === 'string'
+        ? window.__SEO_ARTICLES_LIST_URL__.trim()
+        : '';
+    if (indexUrl !== '') {
+        const joiner = indexUrl.includes('?') ? '&' : '?';
+
+        return `${indexUrl}${joiner}tab=queue`;
+    }
+
+    return '/seo/articles?tab=queue';
+}
+
+/**
+ * Hoàn tất Sync WP — toast, overlay, poll tới terminal. Không đóng tab / không redirect.
+ *
+ * @param {{ reload?: boolean, clear_local_state?: boolean, queued?: boolean, notification?: Record<string, string>, operation?: object, notificationShown?: boolean }} result
  * @param {number} articleId
  * @param {number} siteId
  */
 export function finishArticleSyncFromApi(result, articleId, siteId) {
-    if (result.notification) {
+    if (result.notification && result.notificationShown !== true) {
         showArticleEditorFilamentToast(result.notification);
     }
 

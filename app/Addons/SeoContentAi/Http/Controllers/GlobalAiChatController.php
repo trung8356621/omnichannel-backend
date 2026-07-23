@@ -7,6 +7,7 @@ namespace App\Addons\SeoContentAi\Http\Controllers;
 use App\Addons\SeoContentAi\Exceptions\PromptRunException;
 use App\Addons\SeoContentAi\Services\GlobalAiChatService;
 use App\Http\Controllers\Controller;
+use App\Support\RuntimeLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rules\File;
@@ -51,7 +52,7 @@ final class GlobalAiChatController extends Controller
                 'message' => $exception->getMessage(),
             ], 422);
         } catch (Throwable $exception) {
-            report($exception);
+            RuntimeLogger::report($exception);
 
             return response()->json([
                 'message' => 'Không thể kết nối trợ lý AI. Vui lòng thử lại.',

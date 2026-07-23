@@ -540,7 +540,7 @@ function deduplicateLinksByHrefAndText(links) {
     return unique;
 }
 
-function isInternalLinkHref(href, domain) {
+export function isInternalLinkHref(href, domain) {
     const value = String(href ?? '').trim();
     if (value === '') {
         return false;

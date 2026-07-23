@@ -188,6 +188,9 @@ final class WordPressProductReviewStatusService
             'article_id' => $articleId,
             'post_type' => $postType,
             'wp_post_id' => $wpPostId,
+            'applicable' => $postType === 'product',
+            'status' => $this->resolvePublicStatus($postType, $wpPostId, $connected),
+            'count' => $total,
             'wordpress_connected' => $connected,
             'wordpress_review_count' => $total,
             'wordpress_real_review_count' => $real,
@@ -205,5 +208,25 @@ final class WordPressProductReviewStatusService
             'warning' => $warning,
             'policy' => $decision->toArray(),
         ];
+    }
+
+    private function resolvePublicStatus(
+        string $postType,
+        ?int $wpPostId,
+        bool $connected,
+    ): ?string {
+        if ($postType !== 'product') {
+            return null;
+        }
+
+        if ($wpPostId === null || $wpPostId <= 0) {
+            return 'not_synced';
+        }
+
+        if (! $connected) {
+            return 'wordpress_unavailable';
+        }
+
+        return 'ok';
     }
 }

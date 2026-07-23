@@ -134,6 +134,26 @@ export default function ArticleGoogleSerpPreview({
     }, []);
 
     useEffect(() => {
+        // Prefer Livewire / DOM meta description when SSR SEO embed is gone.
+        try {
+            const meta = readArticleMetaFromDom();
+            const description = String(meta?.seo_meta_description ?? '').trim();
+            const slug = String(meta?.slug ?? '').trim();
+            if (description !== '') {
+                setPreview((prev) => ({
+                    ...(prev && typeof prev === 'object' ? prev : {}),
+                    description,
+                }));
+            }
+            if (slug !== '') {
+                setArticleSlug(slug);
+            }
+        } catch {
+            /* ignore */
+        }
+    }, []);
+
+    useEffect(() => {
         applyPreview(initialPreview);
     }, [initialPreview, applyPreview]);
 
@@ -218,17 +238,28 @@ export default function ArticleGoogleSerpPreview({
     );
 
     const sidebarPreviewProps = useMemo(
-        () => ({
-            device,
-            title: previewTitle(preview),
-            url: previewUrl(preview, fallbackUrl),
-            description: previewDescription(preview),
-            lineScores: sidebarLineScores,
-            showScore,
-            previewMeta: preview?.meta,
-            previewType: preview?.type,
-        }),
-        [device, preview, fallbackUrl, sidebarLineScores, showScore],
+        () => {
+            const titleFromArticle = String(articleTitle ?? '').trim();
+            const title = titleFromArticle !== '' ? titleFromArticle : previewTitle(preview);
+            const liveUrl = buildLiveDisplayUrl(slugPrefix, articleSlug, slugSuffix, fallbackUrl);
+
+            return {
+                device,
+                title,
+                url: liveUrl !== '#' ? liveUrl : previewUrl(preview, fallbackUrl),
+                description: previewDescription(preview),
+                lineScores: computeGoogleSerpLineScores({
+                    title,
+                    description: previewDescription(preview),
+                    slug: articleSlug,
+                    focusKeyword,
+                }),
+                showScore,
+                previewMeta: preview?.meta,
+                previewType: preview?.type,
+            };
+        },
+        [device, articleTitle, preview, fallbackUrl, slugPrefix, articleSlug, slugSuffix, focusKeyword, showScore],
     );
 
     const modalPreviewProps = useMemo(

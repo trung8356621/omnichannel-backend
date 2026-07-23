@@ -43,6 +43,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        // HTTP/PHP-FPM → web_app only. Cron/queue giữ LOG_CHANNEL (laravel.log).
+        // Phải set TRƯỚC mọi logger()/Log:: — tránh Permission denied trên laravel.log root-owned.
+        if (! $this->app->runningInConsole()) {
+            config(['logging.default' => 'web_app']);
+        }
+
         $this->logImageDriverSelection();
 
         // Nếu đang ở môi trường local, tắt kiểm tra SSL cho mọi request outbound
@@ -71,7 +77,9 @@ class AppServiceProvider extends ServiceProvider
     private function logImageDriverSelection(): void
     {
         if (! ImageDriverResolver::hasAnyDriver()) {
-            logger()->warning('Không có extension imagick/gd — xử lý ảnh sẽ thất bại khi resize/upload.');
+            \App\Support\RuntimeLogger::warning(
+                'Không có extension imagick/gd — xử lý ảnh sẽ thất bại khi resize/upload.',
+            );
 
             return;
         }
@@ -83,7 +91,9 @@ class AppServiceProvider extends ServiceProvider
             && ! ImageDriverResolver::supportsImagick()
             && ImageDriverResolver::supportsGd()
         ) {
-            logger()->info('IMAGE_DRIVER=imagick nhưng host không có imagick — tự fallback sang GD.');
+            \App\Support\RuntimeLogger::info(
+                'IMAGE_DRIVER=imagick nhưng host không có imagick — tự fallback sang GD.',
+            );
         }
     }
 
@@ -106,7 +116,7 @@ class AppServiceProvider extends ServiceProvider
                 }
             }
         } catch (\Throwable $e) {
-            report($e);
+            \App\Support\RuntimeLogger::report($e);
         }
     }
 }

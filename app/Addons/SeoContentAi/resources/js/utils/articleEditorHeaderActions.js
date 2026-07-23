@@ -92,7 +92,9 @@ function isPersistentToolbarChild(child) {
         || child.classList.contains('seo-editor-restore-action')
         || child.classList.contains('seo-editor-menu-item')
         || child.classList.contains('seo-editor-menu-divider')
-        || child.classList.contains('seo-editor-preview-split');
+        || child.classList.contains('seo-editor-preview-split')
+        || child.classList.contains('seo-article-editor-help-btn')
+        || child.getAttribute('data-seo-page-action') === 'help';
 }
 
 function findDeleteAction(host) {
@@ -304,51 +306,6 @@ export function mountFilamentHeaderActionsToToolbar() {
     return true;
 }
 
-export function mountShortcutsBelowOutline() {
-    const host = document.querySelector('[data-seo-outline-shortcuts-host]');
-    const panel = document.querySelector('[data-seo-shortcuts-rail]');
-    if (!(host instanceof HTMLElement) || !(panel instanceof HTMLElement)) {
-        return false;
-    }
-
-    if (host.contains(panel)) {
-        return true;
-    }
-
-    host.appendChild(panel);
-
-    return true;
-}
-
-export function observeShortcutsBelowOutline() {
-    let attempts = 0;
-    const maxAttempts = 60;
-
-    const tryMount = () => {
-        attempts += 1;
-        if (mountShortcutsBelowOutline() || attempts >= maxAttempts) {
-            return true;
-        }
-
-        return false;
-    };
-
-    if (tryMount()) {
-        return () => {};
-    }
-
-    const root = document.getElementById('seo-article-editor-root') ?? document.body;
-    const observer = new MutationObserver(() => {
-        if (tryMount()) {
-            observer.disconnect();
-        }
-    });
-
-    observer.observe(root, { childList: true, subtree: true });
-
-    return () => observer.disconnect();
-}
-
 let mountTimer = null;
 
 export function scheduleMountFilamentHeaderActionsToToolbar() {
@@ -360,7 +317,6 @@ export function scheduleMountFilamentHeaderActionsToToolbar() {
         mountTimer = null;
 
         const attempt = (retriesLeft) => {
-            mountShortcutsBelowOutline();
             if (mountFilamentHeaderActionsToToolbar() || retriesLeft <= 0) {
                 return;
             }
@@ -419,6 +375,5 @@ export function registerFilamentHeaderActionsPersistence() {
         observer.observe(header, { childList: true, subtree: true });
     }
 
-    observeShortcutsBelowOutline();
     scheduleMountFilamentHeaderActionsToToolbar();
 }

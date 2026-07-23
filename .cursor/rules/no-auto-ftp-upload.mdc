@@ -1,0 +1,26 @@
+---
+description: Cấm agent tự upload FTP/SFTP — dùng plugin uploadOnSave của user
+alwaysApply: true
+---
+
+# Không tự upload FTP / SFTP
+
+User đã cài plugin SFTP/FTP (`uploadOnSave`). Agent **không** tự đẩy file lên remote.
+
+## Cấm
+
+- `ftplib` / FTP login / `STOR` / `RETR` để deploy
+- Script Python/PowerShell upload production
+- `scp`, `rsync`, `sftp` CLI để sync code
+- Tự sửa / đọc `.vscode/sftp.json` password để upload
+- Xóa `storage/framework/views` trên remote qua FTP
+
+## Đúng
+
+- Chỉ sửa file local trong workspace
+- Plugin SFTP tự upload khi save (hoặc user tự sync)
+- Nếu cần verify remote: hỏi user, không tự FTP
+
+## Ngoại lệ
+
+Chỉ khi user **explicit** bảo upload / sync FTP / kiểm tra remote qua FTP.

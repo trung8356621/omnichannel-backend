@@ -87,6 +87,29 @@ final class ArticleWpSyncQueueService
         return $this->lease->toOperationPayload($job);
     }
 
+    /**
+     * Status còn trong Sync Queue badge / tab (chưa sync xong thành công).
+     * Single source — badge count và list scope phải dùng chung.
+     *
+     * @return list<string>
+     */
+    public static function unfinishedStatuses(): array
+    {
+        return WpSyncJobStatus::unfinishedValues();
+    }
+
+    /**
+     * @param  \Illuminate\Database\Query\Builder|\Illuminate\Database\Eloquent\Builder  $statusQuery
+     */
+    public static function applyUnfinishedMetaStatusConstraints($statusQuery): void
+    {
+        $statuses = self::unfinishedStatuses();
+        foreach ($statuses as $index => $status) {
+            $method = $index === 0 ? 'where' : 'orWhere';
+            $statusQuery->{$method}('meta_value', 'like', '%"status":"'.$status.'"%');
+        }
+    }
+
     public function isActive(SeoArticle $article): bool
     {
         $job = $this->lease->activeJobForArticle((int) $article->id);

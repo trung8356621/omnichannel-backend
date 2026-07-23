@@ -3,14 +3,28 @@
     --seo-article-edit-header-gap: 0.75rem;
     --wp-article-sidebar-width: 300px;
     --wp-article-sidebar-gap: 1rem;
+    /* Sticky editor header (~3.25rem) — no Filament topbar */
+    --wp-article-sidebar-top: 3.75rem;
 }
 
 /* Edit Article dùng canvas riêng: ẩn heading và sidebar trái toàn cục của Filament. */
+body.article-editor-page .fi-sidebar,
+body.article-editor-page .fi-sidebar-close-overlay,
+body:has(.article-editor-page) .fi-sidebar,
+body:has(.article-editor-page) .fi-sidebar-close-overlay,
 body:has(.seo-article-edit-page) .fi-sidebar,
 body:has(.seo-article-edit-page) .fi-sidebar-close-overlay {
     display: none !important;
 }
 
+body.article-editor-page .fi-main-ctn,
+body.article-editor-page .fi-main,
+body.article-editor-page .fi-page,
+body.article-editor-page .fi-page-content,
+body:has(.article-editor-page) .fi-main-ctn,
+body:has(.article-editor-page) .fi-main,
+body:has(.article-editor-page) .fi-page,
+body:has(.article-editor-page) .fi-page-content,
 body:has(.seo-article-edit-page) .fi-main-ctn,
 body:has(.seo-article-edit-page) .fi-main,
 body:has(.seo-article-edit-page) .fi-page,
@@ -19,21 +33,23 @@ body:has(.seo-article-edit-page) .fi-page-content {
     width: 100% !important;
 }
 
+body.article-editor-page .fi-main,
+body:has(.article-editor-page) .fi-main,
 body:has(.seo-article-edit-page) .fi-main {
-    padding-inline: 0.75rem !important;
+    padding-inline: 0 !important;
+    padding-top: 0 !important;
 }
 
+body.article-editor-page .fi-header,
+body:has(.article-editor-page) .fi-header,
 body:has(.seo-article-edit-page) .fi-header {
     display: none !important;
 }
 
-body:has(.seo-article-edit-page) .fi-topbar {
-    left: 0 !important;
-}
-
-/* User bar (Filament topbar z-20) must sit above fixed article sidebar rail (z-index: 20) */
-body:has(.seo-article-edit-page) .fi-topbar {
-    z-index: 30;
+body.article-editor-page .fi-topbar,
+body:has(.article-editor-page) .fi-topbar,
+html.article-editor-page .fi-topbar {
+    display: none !important;
 }
 
 .seo-article-edit-page .fi-header {
@@ -77,22 +93,175 @@ body:has(.seo-article-edit-page) .fi-topbar {
     line-height: 1.25rem;
 }
 
-.seo-article-edit-back {
+/* Full-bleed sticky topbar — thay Filament .fi-topbar */
+body.article-editor-page .fi-main,
+body:has(.article-editor-page) .fi-main,
+body:has(.seo-article-edit-page) .fi-main {
+    padding-inline: 0 !important;
+    padding-top: 0 !important;
+}
+
+.seo-article-edit-page .fi-page-content,
+.seo-article-edit-page .fi-main > section,
+body.article-editor-page .fi-page-content {
+    padding-inline: 0 !important;
+}
+
+.seo-article-edit-content.wp-article-edit {
+    padding-inline: 0;
+    padding-top: 0;
+}
+
+.seo-article-edit-back,
+.seo-article-editor-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.25rem;
+    flex-wrap: nowrap;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0.55rem 1rem;
+    border: 0;
+    border-bottom: 1px solid #e2e8f0;
+    border-radius: 0;
+    background: rgb(255 255 255 / 97%);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 1px 0 rgb(15 23 42 / 4%);
+    overflow: visible;
 }
 
-.seo-article-edit-back .seo-editor-page-actions {
-    flex: 0 0 auto;
+.dark .seo-article-edit-back,
+.dark .seo-article-editor-sticky-header {
+    border-bottom-color: #334155;
+    background: rgb(15 23 42 / 96%);
+}
+
+.seo-article-editor-sticky-header__left {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+.seo-article-editor-sticky-header__save-status {
+    display: block;
+    max-width: min(14rem, 28vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #64748b;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.2;
+}
+
+.seo-article-editor-sticky-header__save-status[data-status="saving"],
+.seo-article-editor-sticky-header__save-status[data-status="pending"] {
+    color: #b45309;
+}
+
+.seo-article-editor-sticky-header__save-status[data-status="conflict"],
+.seo-article-editor-sticky-header__save-status[data-status="failed"] {
+    color: #dc2626;
+}
+
+.seo-article-editor-sticky-header__right {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.seo-article-edit-back .seo-editor-page-actions,
+.seo-article-editor-sticky-header .seo-editor-page-actions {
+    flex: 0 1 auto;
     margin-left: auto;
     display: inline-flex;
     align-items: center;
     flex-wrap: wrap;
     gap: 0.35rem;
+    max-width: 100%;
+    overflow: visible;
+}
+
+.seo-article-editor-help-btn {
+    flex-shrink: 0 !important;
+    order: 99;
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+.seo-article-editor-help-btn.seo-editor-toolbar-btn--labeled {
+    max-width: none !important;
+    width: auto !important;
+    min-width: 2.75rem !important;
+    padding-inline: 0.55rem !important;
+}
+
+.seo-article-editor-help-btn .seo-editor-toolbar-btn__label {
+    display: inline !important;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+/* Nội dung editor giữ gutter dưới topbar full-bleed */
+.wp-article-edit-layout {
+    padding-inline: 0.75rem;
+    padding-top: 0.75rem;
+    box-sizing: border-box;
+}
+
+/* Dropdowns must escape sticky header overflow */
+.seo-article-editor-sticky-header .seo-editor-page-actions__more-panel,
+.seo-article-editor-sticky-header .seo-editor-preview-split__menu {
+    z-index: 60;
+}
+
+@media (max-width: 1024px) {
+    .seo-editor-page-actions .seo-editor-page-actions__desktop-only {
+        display: none !important;
+    }
+
+    .seo-editor-page-actions__compact-only {
+        display: flex !important;
+    }
+}
+
+@media (max-width: 640px) {
+    .seo-article-editor-sticky-header {
+        flex-wrap: nowrap;
+        gap: 0.4rem;
+        padding: 0.45rem 0.65rem;
+    }
+
+    .seo-article-editor-sticky-header__save-status {
+        display: none;
+    }
+
+    .seo-editor-page-actions [data-seo-page-action="sync"],
+    .seo-editor-page-actions .seo-editor-preview-split {
+        display: none !important;
+    }
+
+    .seo-editor-page-actions .seo-editor-toolbar-btn--labeled .seo-editor-toolbar-btn__label {
+        display: none;
+    }
+}
+
+.seo-editor-page-actions__compact-only {
+    display: none;
 }
 
 .seo-article-edit-back-link {

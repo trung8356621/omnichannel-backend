@@ -73,7 +73,7 @@
             </button>
         @endif
 
-        <div class="seo-editor-preview-split" data-seo-page-action="preview">
+        <div class="seo-editor-preview-split seo-editor-page-actions__desktop-only" data-seo-page-action="preview">
             @if ($hasWpPreview)
                 <a
                     href="{{ $wpPreviewUrl }}"
@@ -188,7 +188,7 @@
             wire:loading.attr="disabled"
             wire:target="toggleArticleReview,approveArticle"
             @if (! $this->canToggleArticleReview()) disabled @endif
-            class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success seo-editor-toolbar-btn--labeled @if ($reviewButtonActive) is-active @endif"
+            class="seo-editor-toolbar-btn seo-editor-toolbar-btn--success seo-editor-toolbar-btn--labeled seo-editor-page-actions__desktop-only @if ($reviewButtonActive) is-active @endif"
             title="{{ $reviewButtonActive
                 ? ($isContentManager
                     ? __('seo-content-ai::filament.article_list.staff_mark_editing_done_already')
@@ -231,6 +231,77 @@
             role="menu"
             data-seo-page-actions-more-panel
         >
+            {{-- Compact: Preview / Approve (tablet+) — cùng handler, chỉ hiện khi desktop primary ẩn --}}
+            @if ($hasWpPreview)
+                <a
+                    href="{{ $wpPreviewUrl }}"
+                    target="_blank"
+                    rel="noopener"
+                    class="seo-editor-menu-item seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    data-seo-page-action="preview"
+                    x-on:click="moreOpen = false"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                    <span>{{ $previewLabel }}</span>
+                </a>
+            @elseif ($hasInternalPreview)
+                <a
+                    href="{{ $internalPreviewUrl }}"
+                    target="_blank"
+                    rel="noopener"
+                    class="seo-editor-menu-item seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    data-seo-page-action="preview"
+                    x-on:click="moreOpen = false"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                    <span>{{ $previewLabel }}</span>
+                </a>
+            @else
+                <button
+                    type="button"
+                    class="seo-editor-menu-item seo-editor-page-actions__compact-only"
+                    role="menuitem"
+                    data-seo-page-action="preview"
+                    x-on:click="moreOpen = false; window.dispatchEvent(new CustomEvent('article-editor-shortcut', { detail: { action: 'preview' } }))"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.964-7.178Z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                    <span>{{ $previewLabel }}</span>
+                </button>
+            @endif
+
+            <button
+                type="button"
+                wire:click="toggleArticleReview"
+                @if (! $reviewButtonActive) wire:confirm="{{ $reviewConfirm }}" @endif
+                wire:loading.attr="disabled"
+                wire:target="toggleArticleReview,approveArticle"
+                @if (! $this->canToggleArticleReview()) disabled @endif
+                class="seo-editor-menu-item seo-editor-page-actions__compact-only @if ($reviewButtonActive) is-active @endif"
+                role="menuitem"
+                title="{{ $approveLabel }}"
+                aria-label="{{ $approveLabel }}"
+                data-seo-page-action="review"
+                x-on:click="moreOpen = false"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+                <span>{{ $approveLabel }}</span>
+            </button>
+
+            <div class="seo-editor-menu-divider seo-editor-page-actions__compact-only" aria-hidden="true"></div>
+
             <a
                 href="{{ $historyUrl }}"
                 target="_blank"
@@ -307,4 +378,18 @@
             </div>
         </div>
     </div>
+
+    <button
+        type="button"
+        class="seo-editor-toolbar-btn seo-editor-toolbar-btn--labeled seo-article-editor-help-btn"
+        title="{{ __('seo-content-ai::filament.article_list.page_action_help') }}"
+        aria-label="{{ __('seo-content-ai::filament.article_list.page_action_help_aria') }}"
+        data-seo-page-action="help"
+        x-on:click="window.dispatchEvent(new CustomEvent('article-editor:help-open', { detail: { topic: 'article-editor.overview' } }))"
+    >
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z" />
+        </svg>
+        <span class="seo-editor-toolbar-btn__label">Help</span>
+    </button>
 </div>

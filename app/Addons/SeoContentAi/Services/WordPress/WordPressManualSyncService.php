@@ -241,17 +241,23 @@ final class WordPressManualSyncService
                 syncJobId: (int) $syncJob->id,
                 settings: $settings,
                 auditMeta: $manual->toAuditMeta(),
-            );
+            )->afterCommit();
 
             Log::info('manual_wordpress_sync.queued', array_merge($manual->toAuditMeta(), [
+                'article_id' => (int) $article->id,
+                'sync_id' => (int) $syncJob->id,
                 'sync_job_id' => (int) $syncJob->id,
-                'queue_status' => $syncJob->status?->value ?? null,
+                'site_id' => $siteId,
+                'queue_name' => ArticleWpSyncQueueService::QUEUE_NAME,
+                'status' => $syncJob->status?->value ?? 'pending',
+                'endpoint' => 'manual_wordpress_sync.enqueue',
             ]));
 
             return [
                 'success' => true,
                 'status' => 'dispatched',
                 'queued' => true,
+                'already_queued' => false,
                 'message' => __('seo-content-ai::filament.automation.manual_sync_queued'),
                 'manual' => true,
                 'request_id' => $manual->requestId,
@@ -260,7 +266,13 @@ final class WordPressManualSyncService
                 'initiated_by' => $manual->initiatedBy,
                 'execution_id' => null,
                 'rule_code' => null,
+                'sync_id' => (int) $syncJob->id,
                 'sync_job_id' => (int) $syncJob->id,
+                'data' => [
+                    'sync_id' => (int) $syncJob->id,
+                    'status' => 'queued',
+                    'already_queued' => false,
+                ],
                 'operation' => $this->lease->toOperationPayload($syncJob),
                 'notification' => [
                     'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
@@ -283,17 +295,27 @@ final class WordPressManualSyncService
      */
     private function deduplicated(array $active, SeoArticle $article): array
     {
-        $message = __('seo-content-ai::filament.automation.manual_sync_in_progress');
+        $message = __('seo-content-ai::filament.automation.manual_sync_already_queued');
+        $operation = $active !== [] ? $active : ($this->syncQueue->activeOperation($article) ?? []);
+        $syncId = (int) ($operation['sync_job_id'] ?? $operation['id'] ?? 0);
 
         return [
             'success' => true,
             'status' => 'deduplicated',
             'queued' => true,
+            'already_queued' => true,
             'message' => $message,
             'manual' => true,
-            'operation' => $active !== [] ? $active : $this->syncQueue->activeOperation($article),
-            'request_id' => $active['request_id'] ?? null,
-            'correlation_id' => $active['correlation_id'] ?? null,
+            'sync_id' => $syncId > 0 ? $syncId : null,
+            'sync_job_id' => $syncId > 0 ? $syncId : null,
+            'data' => [
+                'sync_id' => $syncId > 0 ? $syncId : null,
+                'status' => (string) ($operation['status'] ?? 'queued'),
+                'already_queued' => true,
+            ],
+            'operation' => $operation !== [] ? $operation : null,
+            'request_id' => $active['request_id'] ?? $operation['request_id'] ?? null,
+            'correlation_id' => $active['correlation_id'] ?? $operation['correlation_id'] ?? null,
             'notification' => [
                 'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
                 'body' => $message,
@@ -312,6 +334,7 @@ final class WordPressManualSyncService
             'status' => 'blocked',
             'queued' => false,
             'message' => $message,
+            'data' => null,
             'error_code' => $code,
             'manual' => true,
             'notification' => [

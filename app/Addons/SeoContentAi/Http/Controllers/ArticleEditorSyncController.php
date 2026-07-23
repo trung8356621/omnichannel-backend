@@ -18,6 +18,7 @@ use App\Addons\SeoContentAi\Support\ArticleEditorSaveContext;
 use App\Addons\SeoContentAi\Support\SeoAccessControl;
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\RuntimeLogger;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -48,11 +49,10 @@ final class ArticleEditorSyncController extends Controller
 
         $bundle = $request->editorBundle();
         $context = ArticleEditorSaveContext::fromBundle($article, $bundle);
-        $this->bundleApply->apply($article, $bundle, $context);
-
         $html = (string) ($bundle['html'] ?? '');
         $seoAnalysis = is_array($bundle['seo_analysis'] ?? null) ? $bundle['seo_analysis'] : null;
 
+        // Conflict-gated content write first — avoid side-effect writes when 409.
         $result = $this->actions->dispatch(
             'article.content.update',
             $this->buildContentUpdateInput($article, $bundle, $html),
@@ -87,6 +87,9 @@ final class ArticleEditorSyncController extends Controller
             ], 422);
         }
 
+        $savedArticle = $article->fresh() ?? $article;
+        $this->bundleApply->apply($savedArticle, $bundle, $context);
+
         $message = (string) ($result->output['message'] ?? 'Article saved');
 
         return response()->json([
@@ -94,7 +97,7 @@ final class ArticleEditorSyncController extends Controller
             'message' => $message,
             'reload' => false,
             'patch' => $this->savePatch->build(
-                $article->fresh() ?? $article,
+                $savedArticle->fresh() ?? $savedArticle,
                 $context,
                 $seoAnalysis,
             ),
@@ -124,6 +127,7 @@ final class ArticleEditorSyncController extends Controller
         $dispatchStatus = (string) ($result['status'] ?? (($result['success'] ?? false) ? 'dispatched' : 'blocked'));
 
         if ($dispatchStatus === 'blocked') {
+            $result['data'] = null;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.automation.wp_sync_blocked_title'),
                 'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.wp_sync_blocked_body')),
@@ -132,20 +136,24 @@ final class ArticleEditorSyncController extends Controller
         } elseif ($dispatchStatus === 'deduplicated') {
             $result['queued'] = true;
             $result['reload'] = false;
+            $result['close_editor'] = false;
+            $result['already_queued'] = true;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
-                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.manual_sync_in_progress')),
+                'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.manual_sync_already_queued')),
                 'status' => 'info',
             ];
         } else {
             $historyUrl = (string) ($result['automation_history_url'] ?? '');
             $result['queued'] = true;
             $result['reload'] = false;
+            $result['close_editor'] = false;
+            $result['already_queued'] = false;
             $result['notification'] = [
                 'title' => __('seo-content-ai::filament.automation.manual_sync_queued_title'),
                 'body' => (string) ($result['message'] ?? __('seo-content-ai::filament.automation.manual_sync_queued'))
                     .($historyUrl !== '' ? ' '.__('seo-content-ai::filament.automation.view_progress').': '.$historyUrl : ''),
-                'status' => 'info',
+                'status' => 'success',
             ];
         }
 
@@ -195,13 +203,28 @@ final class ArticleEditorSyncController extends Controller
             ], 422);
         }
 
+        $output = is_array($result->output) ? $result->output : [];
         $fresh = $article->fresh(['articleMetas', 'site']) ?? $article;
-        $payload = $this->seoMeta->buildResponse(
-            $fresh,
-            (string) $result->output['focus_keyword'],
-            (string) $result->output['meta_description'],
-            (string) $result->output['slug'],
-        );
+
+        try {
+            $payload = $this->seoMeta->buildResponse(
+                $fresh,
+                (string) ($output['focus_keyword'] ?? $request->focusKeyword()),
+                (string) ($output['meta_description'] ?? $request->metaDescription()),
+                (string) ($output['slug'] ?? $request->slug()),
+            );
+        } catch (\Throwable $exception) {
+            RuntimeLogger::report($exception, [
+                'action' => 'article.seo_meta.update',
+                'article_id' => (int) $article->id,
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'SEO fields đã lưu nhưng không dựng được preview response.',
+                'error_code' => 'seo_meta_response_failed',
+            ], 500);
+        }
 
         return response()->json([
             'success' => true,
@@ -252,7 +275,7 @@ final class ArticleEditorSyncController extends Controller
         return ActionContext::fromArray([
             'origin' => 'article_editor',
             'actor_id' => $actor instanceof User ? (int) $actor->id : null,
-            'site_id' => $article->site_id,
+            'site_id' => $article->site_id !== null ? (int) $article->site_id : null,
             'correlation_id' => (string) ($request->header('X-Correlation-Id') ?: Str::uuid()->toString()),
         ]);
     }
